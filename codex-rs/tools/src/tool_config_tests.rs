@@ -184,6 +184,39 @@ fn subagents_keep_request_user_input_config_and_agent_jobs_workers_opt_in_by_lab
 }
 
 #[test]
+fn spine_task_tree_tracks_feature_flag() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let default_features = Features::with_defaults();
+    let mut enabled_features = Features::with_defaults();
+    enabled_features.enable(Feature::SpineTaskTree);
+
+    let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &default_features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let enabled_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &enabled_features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    assert!(!default_tools_config.spine_task_tree);
+    assert!(enabled_tools_config.spine_task_tree);
+}
+
+#[test]
 fn image_generation_requires_feature_and_supported_model() {
     let supported_model_info = model_info();
     let mut unsupported_model_info = supported_model_info.clone();

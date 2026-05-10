@@ -164,6 +164,7 @@ impl SpineRuntime {
             op,
             from_node: transition.from,
             to_node: transition.to,
+            visible_spine: validation_state.visible_spine(),
             summary,
             worklog,
         });
@@ -273,6 +274,7 @@ pub(crate) struct StagedTransition {
     pub(crate) op: SpineOperation,
     pub(crate) from_node: NodeId,
     pub(crate) to_node: NodeId,
+    pub(crate) visible_spine: Vec<NodeId>,
     pub(crate) summary: String,
     pub(crate) worklog: String,
 }

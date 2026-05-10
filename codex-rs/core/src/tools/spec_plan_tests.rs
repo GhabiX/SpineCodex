@@ -22,6 +22,7 @@ use crate::tools::handlers::shell_spec::create_exec_command_tool;
 use crate::tools::handlers::shell_spec::create_request_permissions_tool;
 use crate::tools::handlers::shell_spec::create_write_stdin_tool;
 use crate::tools::handlers::shell_spec::request_permissions_tool_description;
+use crate::tools::handlers::spine_spec::create_spine_tool;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolRegistry;
@@ -184,6 +185,58 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         strip_descriptions_tool(&mut expected_spec);
         assert_eq!(actual_spec, expected_spec, "spec mismatch for {name}");
     }
+}
+
+#[test]
+fn spine_tool_is_feature_gated() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    let available_models = Vec::new();
+
+    let default_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (default_tools, default_registry) = build_specs(
+        &default_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_lacks_tool_name(&default_tools, "spine");
+    assert!(!default_registry.has_handler(&ToolName::plain("spine")));
+
+    features.enable(Feature::SpineTaskTree);
+    let enabled_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (enabled_tools, enabled_registry) = build_specs(
+        &enabled_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_contains_tool_names(&enabled_tools, &["spine"]);
+    assert!(enabled_registry.has_handler(&ToolName::plain("spine")));
+
+    let spine_tool = find_tool(&enabled_tools, "spine");
+    assert_eq!(spine_tool.spec, create_spine_tool());
+    assert_lacks_tool_name(&enabled_tools, "read_spine");
+    assert_lacks_tool_name(&enabled_tools, "spine_state");
+    assert_lacks_tool_name(&enabled_tools, "spine_trajs");
 }
 
 #[test]

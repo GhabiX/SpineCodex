@@ -20,6 +20,7 @@ use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::ShellHandler;
+use crate::tools::handlers::SpineHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandler;
 use crate::tools::handlers::UpdateGoalHandler;
@@ -195,6 +196,9 @@ pub fn build_tool_registry_builder(
     }
 
     builder.register_handler(Arc::new(PlanHandler));
+    if config.spine_task_tree {
+        builder.register_handler(Arc::new(SpineHandler));
+    }
     if config.goal_tools {
         builder.register_handler(Arc::new(GetGoalHandler));
         builder.register_handler(Arc::new(CreateGoalHandler));
