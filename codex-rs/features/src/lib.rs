@@ -201,6 +201,8 @@ pub enum Feature {
     GuardianApproval,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
+    /// Enable SpineJIT task-tree support.
+    SpineTaskTree,
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
@@ -1043,6 +1045,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Set a persistent goal Codex can continue over time",
             announcement: "",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpineTaskTree,
+        key: "spine_task_tree",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

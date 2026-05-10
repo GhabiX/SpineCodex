@@ -130,6 +130,20 @@ fn remote_compaction_v2_is_under_development() {
 }
 
 #[test]
+fn spine_task_tree_is_under_development() {
+    assert_eq!(Feature::SpineTaskTree.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::SpineTaskTree.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("spine_task_tree"),
+        Some(Feature::SpineTaskTree)
+    );
+    assert_eq!(
+        Features::with_defaults().enabled(Feature::SpineTaskTree),
+        false
+    );
+}
+
+#[test]
 fn responses_websocket_response_processed_is_under_development() {
     assert_eq!(
         Feature::ResponsesWebsocketResponseProcessed.stage(),
