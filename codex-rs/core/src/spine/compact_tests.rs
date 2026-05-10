@@ -107,10 +107,12 @@ fn codex_builtin_prompt_contains_suffix_but_not_prefix_items() {
         sidecar_root: Path::new("/tmp/spine").to_path_buf(),
     };
 
-    let prompt = build_codex_builtin_prompt_input(&input);
+    let prompt = build_codex_builtin_prompt_input(&input).expect("build prompt");
     let rendered = format!("{prompt:?}");
 
     assert!(rendered.contains("suffix goes to compactor"));
     assert!(rendered.contains("durable handoff"));
     assert!(!rendered.contains("prefix must stay local"));
+    assert_eq!(prompt.len(), 1);
+    assert!(rendered.contains("quoted_suffix_response_items_json"));
 }
