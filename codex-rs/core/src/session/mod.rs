@@ -2850,17 +2850,6 @@ impl Session {
             replacement_history: Some(replacement_history.clone()),
         };
         let message_hash = sha1_digest(&compact_output.compact_message);
-        store
-            .append_raw_mirror_compact_checkpoint(
-                &compact_id,
-                &message_hash,
-                replacement_history.len(),
-            )
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "failed to record spine raw mirror checkpoint: {err}"
-                ))
-            })?;
         if let Err(err) = self
             .try_replace_compacted_history(replacement_history.clone(), None, compacted_item)
             .await
@@ -2882,6 +2871,17 @@ impl Session {
                 })?;
             return Err(err);
         }
+        store
+            .append_raw_mirror_compact_checkpoint(
+                &compact_id,
+                &message_hash,
+                replacement_history.len(),
+            )
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to record spine raw mirror checkpoint: {err}"
+                ))
+            })?;
         store
             .append_compact_installed(
                 compact_id,
