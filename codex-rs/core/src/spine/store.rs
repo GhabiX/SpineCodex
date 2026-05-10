@@ -29,6 +29,7 @@ const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
+const GENERATED_WORKLOG_SECTION_MARKER: &str = "\n\n<!-- spine:auto-compact-generated -->\n";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SpineSidecarStore {
@@ -421,6 +422,33 @@ impl SpineSidecarStore {
         self.append_json_line(&path, &event)
     }
 
+    pub(crate) fn append_worklog_section(
+        &self,
+        node_id: &NodeId,
+        section: &str,
+    ) -> Result<(), SpineStoreError> {
+        self.ensure_node_dir(node_id)?;
+        let path = self.worklog_path(node_id);
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.write_all(GENERATED_WORKLOG_SECTION_MARKER.as_bytes())
+            .map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.write_all(section.as_bytes())
+            .map_err(|source| SpineStoreError::Io { path, source })
+    }
+
+    pub(crate) fn read_worklog(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
+        self.read_worklog_file(node_id)
+    }
+
     fn replay_tree(&self) -> Result<SpineState, SpineStoreError> {
         let events = self.read_tree_events()?;
         let mut state = None;
@@ -467,11 +495,11 @@ impl SpineSidecarStore {
                     let to_node = NodeId::parse(&to_node)?;
                     let to_parent_id = to_parent_id.as_deref().map(NodeId::parse).transpose()?;
                     let worklog = self.read_worklog_file(&from_node)?;
-                    let actual_worklog_hash = worklog_hash(&worklog);
+                    let actual_worklog_hash = worklog_hash(direct_worklog_body(&worklog));
                     if expected_worklog_hash != actual_worklog_hash {
                         return Err(SpineStoreError::WorklogHashMismatch { node_id: from_node });
                     }
-                    let transition = op.apply(state, summary, worklog)?;
+                    let transition = op.apply(state, summary, direct_worklog_body(&worklog))?;
                     if transition.from != from_node || transition.to != to_node {
                         return Err(SpineStoreError::InvalidLedger(format!(
                             "transition replay mismatch: expected {} -> {}, got {} -> {}",
@@ -963,6 +991,13 @@ fn worklog_hash(worklog: &str) -> String {
     let mut hasher = sha1::Sha1::new();
     hasher.update(worklog.as_bytes());
     format!("sha1:{:x}", hasher.finalize())
+}
+
+fn direct_worklog_body(worklog: &str) -> &str {
+    worklog
+        .split_once(GENERATED_WORKLOG_SECTION_MARKER)
+        .map(|(direct, _)| direct)
+        .unwrap_or(worklog)
 }
 
 #[cfg(test)]

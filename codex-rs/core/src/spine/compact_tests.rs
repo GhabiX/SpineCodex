@@ -19,7 +19,7 @@ fn text_item(text: &str) -> ResponseItem {
 }
 
 #[test]
-fn raw_ordinals_map_through_synthetic_spine_ir_ranges() {
+fn raw_ordinals_map_to_synthetic_spine_ir_boundaries_only() {
     let ir_item = render_spine_ir_item(
         &id(&[1, 2]),
         SpineOperation::Next,
@@ -33,8 +33,8 @@ fn raw_ordinals_map_through_synthetic_spine_ir_ranges() {
 
     assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
     assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 2), Some(1));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 3), Some(1));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 2), None);
+    assert_eq!(effective_index_for_raw_ordinal(&history, 3), None);
     assert_eq!(effective_index_for_raw_ordinal(&history, 4), Some(2));
 }
 
@@ -88,4 +88,29 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
     assert!(text.contains("fold_end=\"17\""));
     assert!(text.contains("Worklog path: nodes/1/2/worklog.md"));
     assert!(text.contains("scope body"));
+}
+
+#[test]
+fn codex_builtin_prompt_contains_suffix_but_not_prefix_items() {
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[1]),
+        scope_node_id: None,
+        cut_ordinal: 1,
+        fold_end_ordinal: 3,
+        prefix_items: vec![text_item("prefix must stay local")],
+        suffix_items: vec![text_item("suffix goes to compactor")],
+        transition_summary: "leaf done".to_string(),
+        transition_worklog: "durable handoff".to_string(),
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let prompt = build_codex_builtin_prompt_input(&input);
+    let rendered = format!("{prompt:?}");
+
+    assert!(rendered.contains("suffix goes to compactor"));
+    assert!(rendered.contains("durable handoff"));
+    assert!(!rendered.contains("prefix must stay local"));
 }

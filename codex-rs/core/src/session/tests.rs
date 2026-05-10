@@ -262,6 +262,14 @@ fn write_rollout_items_for_test(path: &Path, items: &[RolloutItem]) -> anyhow::R
     Ok(())
 }
 
+fn read_json_lines_for_test(path: &Path) -> anyhow::Result<Vec<serde_json::Value>> {
+    let contents = std::fs::read_to_string(path)?;
+    contents
+        .lines()
+        .map(|line| serde_json::from_str(line).map_err(Into::into))
+        .collect()
+}
+
 fn skill_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -1350,6 +1358,75 @@ async fn spine_resume_ordinal_counts_raw_rollout_items_not_filtered_history() ->
         crate::session::session::initial_spine_response_item_count(&initial_history).await?,
         3
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_raw_mirror_is_not_written_without_runtime() -> anyhow::Result<()> {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let sidecar =
+        crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?.raw_rollout_path();
+
+    session
+        .try_persist_rollout_response_items(&[user_message("raw item")])
+        .await?;
+
+    assert!(!sidecar.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_raw_mirror_tracks_persisted_response_items() -> anyhow::Result<()> {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let spine =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    let raw_mirror_path = spine.store().raw_rollout_path();
+    session.spine = Some(Arc::new(Mutex::new(spine)));
+
+    session
+        .try_persist_rollout_response_items(&[user_message("raw item")])
+        .await?;
+
+    let raw_mirror = read_json_lines_for_test(&raw_mirror_path)?;
+    assert_eq!(raw_mirror.len(), 1);
+    assert_eq!(raw_mirror[0]["type"], "response_item");
+    Ok(())
+}
+
+#[tokio::test]
+async fn try_replace_compacted_history_persists_checkpoint_before_replacing_history()
+-> anyhow::Result<()> {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let replacement = vec![assistant_message("compacted history")];
+    let compacted_item = CompactedItem {
+        message: "spine checkpoint".to_string(),
+        replacement_history: Some(replacement.clone()),
+    };
+
+    session
+        .try_replace_compacted_history(replacement.clone(), None, compacted_item)
+        .await?;
+    session.flush_rollout().await?;
+
+    assert_eq!(session.clone_history().await.raw_items(), replacement);
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert!(resumed.history.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::Compacted(CompactedItem {
+                message,
+                replacement_history: Some(history),
+            }) if message == "spine checkpoint" && history == &replacement
+        )
+    }));
     Ok(())
 }
 

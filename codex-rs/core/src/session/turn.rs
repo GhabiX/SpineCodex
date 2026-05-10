@@ -2125,6 +2125,8 @@ async fn try_run_sampling_request(
                     in_flight.push_back(tool_future);
                     if drain_after_dispatch {
                         drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+                        sess.compact_pending_spine_transition(turn_context.as_ref())
+                            .await?;
                     }
                 }
                 if let Some(agent_message) = output_result.last_agent_message {

@@ -96,6 +96,11 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
                 ev_completed("resp-next"),
             ]),
             sse(vec![
+                ev_response_created("resp-spine-compact"),
+                ev_assistant_message("msg-spine-compact", "Compacted child findings."),
+                ev_completed("resp-spine-compact"),
+            ]),
+            sse(vec![
                 ev_response_created("resp-done"),
                 ev_assistant_message("msg-done", "done"),
                 ev_completed("resp-done"),
@@ -139,12 +144,16 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
     let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
     let tree_path = sidecar_dir.join("tree.jsonl");
     let index_path = sidecar_dir.join("trajs.index.jsonl");
+    let compact_index_path = sidecar_dir.join("compact.index.jsonl");
     let tree_text = std::fs::read_to_string(&tree_path)
         .with_context(|| format!("read {}", tree_path.display()))?;
     let index_text = std::fs::read_to_string(&index_path)
         .with_context(|| format!("read {}", index_path.display()))?;
+    let compact_index_text = std::fs::read_to_string(&compact_index_path)
+        .with_context(|| format!("read {}", compact_index_path.display()))?;
     let tree = parse_json_lines(&tree_text)?;
     let index = parse_json_lines(&index_text)?;
+    let compact_index = parse_json_lines(&compact_index_text)?;
 
     assert_root_created(&tree);
     assert_transition(&tree, "open", "1", "1.1", OPEN_SUMMARY);
@@ -159,10 +168,11 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
         std::fs::read_to_string(sidecar_dir.join("nodes/1/worklog.md"))?,
         OPEN_WORKLOG
     );
-    assert_eq!(
-        std::fs::read_to_string(sidecar_dir.join("nodes/1/1/worklog.md"))?,
-        NEXT_WORKLOG
-    );
+    let child_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/worklog.md"))?;
+    assert!(child_worklog.starts_with(NEXT_WORKLOG));
+    assert!(child_worklog.contains("spine:auto-compact-generated"));
+    assert!(child_worklog.contains("Compacted child findings."));
+    assert_compact_installed(&compact_index, "1.1", "next");
     let plan_snapshot = read_json(sidecar_dir.join("nodes/1/1/plan.json"))?;
     assert_eq!(plan_snapshot["node_id"], "1.1");
     assert_eq!(plan_snapshot["revision"], 1);
@@ -190,7 +200,7 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
         rollout_text.contains(SIBLING_SHELL_CALL_ID) && rollout_text.contains("sibling-spine"),
         "rollout should remain the raw traj source for sibling shell output"
     );
-    assert_rollout_has_no_compaction_items(&rollout_text)?;
+    assert_rollout_has_spine_compaction_checkpoint(&rollout_text)?;
 
     Ok(())
 }
@@ -495,17 +505,58 @@ fn assert_raw_range_for_node_after_transition(index: &[Value], call_id: &str, no
     );
 }
 
-fn assert_rollout_has_no_compaction_items(rollout_text: &str) -> anyhow::Result<()> {
+fn assert_compact_installed(index: &[Value], node_id: &str, op: &str) {
+    assert!(
+        index.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("compact_started")
+                && event.get("node_id").and_then(Value::as_str) == Some(node_id)
+                && event.get("op").and_then(Value::as_str) == Some(op)
+        }),
+        "compact index should contain start for {node_id} {op}: {index:?}"
+    );
+    assert!(
+        index.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("compact_installed")
+                && event.get("node_id").and_then(Value::as_str) == Some(node_id)
+                && event.get("op").and_then(Value::as_str) == Some(op)
+                && event
+                    .get("replacement_history_len")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|len| len > 0)
+        }),
+        "compact index should contain install for {node_id} {op}: {index:?}"
+    );
+}
+
+fn assert_rollout_has_spine_compaction_checkpoint(rollout_text: &str) -> anyhow::Result<()> {
+    let mut compacted = 0;
     for line in rollout_text.lines().filter(|line| !line.trim().is_empty()) {
         let entry: RolloutLine = serde_json::from_str(line).context("parse rollout line")?;
-        match entry.item {
-            RolloutItem::Compacted(_)
-            | RolloutItem::ResponseItem(ResponseItem::Compaction { .. })
-            | RolloutItem::ResponseItem(ResponseItem::ContextCompaction { .. }) => {
-                panic!("Plan1 smoke should not introduce compaction rollout items: {line}")
-            }
-            _ => {}
+        if let RolloutItem::Compacted(item) = entry.item {
+            compacted += 1;
+            assert!(
+                item.replacement_history
+                    .as_ref()
+                    .is_some_and(|history| !history.is_empty()),
+                "spine compact checkpoint should include replacement_history: {line}"
+            );
+            assert!(
+                item.message.contains("Spine compacted"),
+                "unexpected spine compact message: {line}"
+            );
+        } else if matches!(
+            entry.item,
+            RolloutItem::ResponseItem(ResponseItem::Compaction { .. })
+                | RolloutItem::ResponseItem(ResponseItem::ContextCompaction { .. })
+        ) {
+            panic!(
+                "spine compact should use rollout checkpoint items, not raw compact response items: {line}"
+            );
         }
     }
+    assert_eq!(
+        compacted, 1,
+        "expected exactly one spine compact checkpoint"
+    );
     Ok(())
 }

@@ -148,6 +148,7 @@ use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json::Value;
+use sha1::Digest;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -174,6 +175,13 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
+use crate::spine::compact::SpineCompactBoundary;
+use crate::spine::compact::SpineCompactInput;
+use crate::spine::compact::build_suffix_replacement_history;
+use crate::spine::compact::compact_suffix_with_codex_builtin_text;
+use crate::spine::compact::plan_suffix_fold;
+use crate::spine::compact::render_spine_ir_item;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -2586,6 +2594,35 @@ impl Session {
         self.services.model_client.advance_window_generation();
     }
 
+    pub(crate) async fn try_replace_compacted_history(
+        &self,
+        items: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+        compacted_item: CompactedItem,
+    ) -> CodexResult<()> {
+        let Some(live_thread) = self.live_thread() else {
+            return Err(CodexErr::Fatal(
+                "compacted history checkpoint requires rollout persistence".to_string(),
+            ));
+        };
+        let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
+        if let Some(turn_context_item) = reference_context_item.clone() {
+            rollout_items.push(RolloutItem::TurnContext(turn_context_item));
+        }
+        live_thread
+            .append_items(&rollout_items)
+            .await
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to record compacted history checkpoint: {err:#}"
+                ))
+            })?;
+
+        self.replace_history(items, reference_context_item).await;
+        self.services.model_client.advance_window_generation();
+        Ok(())
+    }
+
     async fn try_persist_rollout_response_items(&self, items: &[ResponseItem]) -> CodexResult<()> {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
@@ -2605,7 +2642,18 @@ impl Session {
         live_thread
             .append_items(&rollout_items)
             .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to record rollout items: {err:#}")))
+            .map_err(|err| CodexErr::Fatal(format!("failed to record rollout items: {err:#}")))?;
+        if let Some(spine) = self.spine.as_ref() {
+            spine
+                .lock()
+                .await
+                .store()
+                .append_raw_mirror_items(&rollout_items)
+                .map_err(|err| {
+                    CodexErr::Fatal(format!("failed to mirror raw spine rollout items: {err}"))
+                })?;
+        }
+        Ok(())
     }
 
     async fn spine_current_ordinal(&self) -> Option<u64> {
@@ -2635,12 +2683,199 @@ impl Session {
             .lock()
             .await
             .after_response_items_recorded(&turn_context.sub_id, items, start_ordinal, end_ordinal)
-            .map(|_| ())
             .map_err(|err| {
                 CodexErr::Fatal(format!(
                     "Spine transition failed after response items were recorded. The turn was aborted before the next model request; spine cursor was not advanced. Cause: {err}"
                 ))
-            })
+            })?;
+        Ok(())
+    }
+
+    pub(crate) async fn compact_pending_spine_transition(
+        &self,
+        turn_context: &TurnContext,
+    ) -> CodexResult<()> {
+        let Some(spine) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let boundary = {
+            let mut runtime = spine.lock().await;
+            let Some(committed) = runtime.take_last_committed_transition() else {
+                return Ok(());
+            };
+            runtime
+                .plan_compaction_after_transition(&committed)
+                .map_err(|err| {
+                    CodexErr::Fatal(format!(
+                        "Spine compact planning failed after transition commit: {err}"
+                    ))
+                })?
+        };
+        if let Some(boundary) = boundary {
+            Box::pin(self.compact_spine_suffix_after_transition(turn_context, boundary)).await?;
+        }
+        Ok(())
+    }
+
+    async fn compact_spine_suffix_after_transition(
+        &self,
+        turn_context: &TurnContext,
+        boundary: SpineCompactBoundary,
+    ) -> CodexResult<()> {
+        let spine = self
+            .spine
+            .as_ref()
+            .ok_or_else(|| CodexErr::Fatal("spine runtime is not initialized".to_string()))?;
+        let store = { spine.lock().await.store().clone() };
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to resolve rollout path: {err:#}")))?
+            .ok_or_else(|| {
+                CodexErr::Fatal("spine compact requires a local rollout path".to_string())
+            })?;
+        let history = self.clone_history().await.raw_items().to_vec();
+        let input = SpineCompactInput {
+            op: boundary.op,
+            node_id: boundary.node_id.clone(),
+            scope_node_id: boundary.scope_node_id.clone(),
+            cut_ordinal: boundary.cut_ordinal,
+            fold_end_ordinal: boundary.fold_end_ordinal,
+            prefix_items: Vec::new(),
+            suffix_items: Vec::new(),
+            transition_summary: boundary.transition_summary.clone(),
+            transition_worklog: boundary.transition_worklog.clone(),
+            rollout_path,
+            raw_mirror_path: store.raw_rollout_path(),
+            sidecar_root: store.root().to_path_buf(),
+        };
+        let plan = plan_suffix_fold(
+            &history,
+            boundary.cut_ordinal,
+            boundary.fold_end_ordinal,
+            input,
+        )?;
+        let compact_id = Uuid::new_v4().to_string();
+        store
+            .append_compact_started(
+                &compact_id,
+                &boundary.node_id,
+                boundary.op,
+                boundary.cut_ordinal,
+                boundary.fold_end_ordinal,
+                CODEX_BUILTIN_TEXT_STRATEGY,
+            )
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to record spine compact start: {err}"))
+            })?;
+
+        let compact_output = match Box::pin(compact_suffix_with_codex_builtin_text(
+            self,
+            turn_context,
+            plan.input.clone(),
+        ))
+        .await
+        {
+            Ok(output) => output,
+            Err(err) => {
+                store
+                    .append_compact_failed(
+                        &compact_id,
+                        &boundary.node_id,
+                        boundary.op,
+                        boundary.cut_ordinal,
+                        boundary.fold_end_ordinal,
+                        CODEX_BUILTIN_TEXT_STRATEGY,
+                        err.to_string(),
+                    )
+                    .map_err(|store_err| {
+                        CodexErr::Fatal(format!(
+                            "failed to record spine compact failure after strategy error {err}: {store_err}"
+                        ))
+                    })?;
+                return Err(err);
+            }
+        };
+        store
+            .append_worklog_section(&boundary.node_id, &compact_output.worklog_markdown)
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to append spine compact worklog: {err}"))
+            })?;
+        let worklog_body = store.read_worklog(&boundary.node_id).map_err(|err| {
+            CodexErr::Fatal(format!("failed to read spine compact worklog: {err}"))
+        })?;
+        let worklog_rel_path = plan
+            .worklog_path
+            .strip_prefix(store.root())
+            .unwrap_or(plan.worklog_path.as_path())
+            .to_path_buf();
+        let rendered_ir_items = vec![render_spine_ir_item(
+            &boundary.node_id,
+            boundary.op,
+            &boundary.transition_summary,
+            &worklog_rel_path,
+            &worklog_body,
+            boundary.cut_ordinal,
+            boundary.fold_end_ordinal,
+        )];
+        let replacement_history = build_suffix_replacement_history(
+            &history,
+            plan.cut_index,
+            plan.fold_end_index,
+            rendered_ir_items,
+        );
+        let compacted_item = CompactedItem {
+            message: compact_output.compact_message.clone(),
+            replacement_history: Some(replacement_history.clone()),
+        };
+        let message_hash = sha1_digest(&compact_output.compact_message);
+        store
+            .append_raw_mirror_compact_checkpoint(
+                &compact_id,
+                &message_hash,
+                replacement_history.len(),
+            )
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to record spine raw mirror checkpoint: {err}"
+                ))
+            })?;
+        if let Err(err) = self
+            .try_replace_compacted_history(replacement_history.clone(), None, compacted_item)
+            .await
+        {
+            store
+                .append_compact_failed(
+                    &compact_id,
+                    &boundary.node_id,
+                    boundary.op,
+                    boundary.cut_ordinal,
+                    boundary.fold_end_ordinal,
+                    CODEX_BUILTIN_TEXT_STRATEGY,
+                    err.to_string(),
+                )
+                .map_err(|store_err| {
+                    CodexErr::Fatal(format!(
+                        "failed to record spine compact install failure after error {err}: {store_err}"
+                    ))
+                })?;
+            return Err(err);
+        }
+        store
+            .append_compact_installed(
+                compact_id,
+                &boundary.node_id,
+                boundary.op,
+                boundary.cut_ordinal,
+                boundary.fold_end_ordinal,
+                replacement_history.len(),
+                worklog_rel_path.to_string_lossy().into_owned(),
+                message_hash,
+            )
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to record installed spine compact: {err}"))
+            })?;
+        Ok(())
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {
@@ -3461,6 +3696,12 @@ async fn build_hooks_for_config(
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
     })
+}
+
+fn sha1_digest(value: &str) -> String {
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(value.as_bytes());
+    format!("sha1:{:x}", hasher.finalize())
 }
 
 #[cfg(test)]

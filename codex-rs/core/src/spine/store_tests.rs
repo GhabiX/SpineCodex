@@ -169,6 +169,40 @@ fn records_transition_worklog_and_replays_from_tree() {
 }
 
 #[test]
+fn generated_worklog_sections_do_not_break_transition_replay_hash() {
+    let (_temp, store) = temp_store();
+    let mut state = store.create().expect("create sidecar");
+    store
+        .record_transition(
+            &mut state,
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+            8,
+        )
+        .expect("record transition");
+
+    store
+        .append_worklog_section(&id(&[1]), "\n\n## Auto Compact\n\ngenerated summary\n")
+        .expect("append generated section");
+
+    let worklog = std::fs::read_to_string(store.worklog_path(&id(&[1]))).expect("read worklog");
+    assert!(worklog.contains("Root handoff."));
+    assert!(worklog.contains("spine:auto-compact-generated"));
+    assert!(worklog.contains("generated summary"));
+
+    let loaded = store.load().expect("load sidecar");
+
+    assert_eq!(loaded, state);
+    assert_eq!(
+        loaded
+            .node(&id(&[1]))
+            .and_then(|node| node.worklog.as_deref()),
+        Some("Root handoff.")
+    );
+}
+
+#[test]
 fn state_cache_mismatch_fails_fast() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");

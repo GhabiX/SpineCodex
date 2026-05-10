@@ -1,12 +1,23 @@
 use super::ids::NodeId;
 use super::store::SpineOperation;
+use crate::Prompt;
+use crate::client_common::ResponseEvent;
+use crate::compact::SUMMARIZATION_PROMPT;
+use crate::session::session::Session;
+use crate::session::turn::get_last_assistant_message_from_turn;
+use crate::session::turn_context::TurnContext;
+use crate::util::backoff;
 use async_trait::async_trait;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_rollout_trace::InferenceTraceContext;
+use futures::StreamExt;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::warn;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpineCompactInput {
@@ -57,6 +68,144 @@ pub(crate) trait SpineCompactStrategy: Send + Sync {
     async fn compact_suffix(&self, input: SpineCompactInput) -> CodexResult<SpineCompactOutput>;
 }
 
+pub(crate) const CODEX_BUILTIN_TEXT_STRATEGY: &str = "codex_builtin_text";
+
+pub(crate) async fn compact_suffix_with_codex_builtin_text(
+    sess: &Session,
+    turn_context: &TurnContext,
+    input: SpineCompactInput,
+) -> CodexResult<SpineCompactOutput> {
+    let prompt_input = build_codex_builtin_prompt_input(&input);
+    let prompt = Prompt {
+        input: prompt_input,
+        base_instructions: BaseInstructions {
+            text: format!(
+                "{SUMMARIZATION_PROMPT}\n\nYou are compacting a SpineJIT suffix. Only summarize the target suffix provided in this request. Do not infer or rewrite any unseen prefix context."
+            ),
+        },
+        personality: turn_context.personality,
+        ..Default::default()
+    };
+    let mut client_session = sess.services.model_client.new_session();
+    let max_retries = turn_context.provider.info().stream_max_retries();
+    let mut retries = 0;
+    let compacted_suffix = loop {
+        match collect_compaction_response(sess, turn_context, &mut client_session, &prompt).await {
+            Ok(text) => break text,
+            Err(err) if err.is_retryable() && retries < max_retries => {
+                retries += 1;
+                let delay = backoff(retries);
+                warn!("spine compact stream failed; retrying ({retries}/{max_retries})");
+                tokio::time::sleep(delay).await;
+            }
+            Err(err) => return Err(err),
+        }
+    };
+
+    let worklog_markdown = render_auto_compact_worklog(&input, &compacted_suffix);
+    let rendered_ir_items = vec![render_spine_ir_item(
+        &input.node_id,
+        input.op,
+        &input.transition_summary,
+        &relative_worklog_path(&input.node_id),
+        &worklog_markdown,
+        input.cut_ordinal,
+        input.fold_end_ordinal,
+    )];
+    Ok(SpineCompactOutput {
+        compact_message: format!(
+            "Spine compacted {} [{} , {})",
+            input.node_id, input.cut_ordinal, input.fold_end_ordinal
+        ),
+        worklog_markdown,
+        rendered_ir_items,
+        strategy_name: CODEX_BUILTIN_TEXT_STRATEGY,
+    })
+}
+
+fn build_codex_builtin_prompt_input(input: &SpineCompactInput) -> Vec<ResponseItem> {
+    let mut prompt_input = Vec::with_capacity(input.suffix_items.len() + 1);
+    prompt_input.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!(
+                "SpineJIT compact target suffix follows this message. Compact only response ordinals [{}, {}) for node {}.\nTransition summary: {}\nTransition worklog:\n{}",
+                input.cut_ordinal,
+                input.fold_end_ordinal,
+                input.node_id,
+                input.transition_summary,
+                input.transition_worklog
+            ),
+        }],
+        phase: None,
+    });
+    prompt_input.extend(input.suffix_items.clone());
+    prompt_input
+}
+
+async fn collect_compaction_response(
+    sess: &Session,
+    turn_context: &TurnContext,
+    client_session: &mut crate::client::ModelClientSession,
+    prompt: &Prompt,
+) -> CodexResult<String> {
+    let mut stream = client_session
+        .stream(
+            prompt,
+            &turn_context.model_info,
+            &turn_context.session_telemetry,
+            turn_context.reasoning_effort,
+            turn_context.reasoning_summary,
+            turn_context.config.service_tier.clone(),
+            turn_context
+                .turn_metadata_state
+                .current_header_value()
+                .as_deref(),
+            &InferenceTraceContext::disabled(),
+        )
+        .await?;
+    let mut output_items = Vec::new();
+    loop {
+        let Some(event) = stream.next().await else {
+            return Err(CodexErr::Stream(
+                "stream closed before spine compact response.completed".into(),
+                None,
+            ));
+        };
+        match event {
+            Ok(ResponseEvent::OutputItemDone(item)) => output_items.push(item),
+            Ok(ResponseEvent::ServerReasoningIncluded(included)) => {
+                sess.set_server_reasoning_included(included).await;
+            }
+            Ok(ResponseEvent::RateLimits(snapshot)) => {
+                sess.update_rate_limits(turn_context, snapshot).await;
+            }
+            Ok(ResponseEvent::Completed { token_usage, .. }) => {
+                sess.update_token_usage_info(turn_context, token_usage.as_ref())
+                    .await;
+                return get_last_assistant_message_from_turn(&output_items).ok_or_else(|| {
+                    CodexErr::Fatal("spine compact produced no assistant summary".to_string())
+                });
+            }
+            Ok(_) => {}
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn render_auto_compact_worklog(input: &SpineCompactInput, compacted_suffix: &str) -> String {
+    format!(
+        "\n\n## Auto Compact\n\nStrategy: {CODEX_BUILTIN_TEXT_STRATEGY}\nFold: response ordinals [{}, {})\nRaw trajs: {}\nRollout: {}\nIndex: trajs.index.jsonl\n\n{}\n\n## Node Summary\n\n{}\n",
+        input.cut_ordinal,
+        input.fold_end_ordinal,
+        input.raw_mirror_path.display(),
+        input.rollout_path.display(),
+        compacted_suffix,
+        input.transition_summary
+    )
+}
+
 pub(crate) fn build_suffix_replacement_history(
     old_history: &[ResponseItem],
     cut_index: usize,
@@ -98,6 +247,9 @@ pub(crate) fn plan_suffix_fold(
             "spine compact fold range is empty after mapping".to_string(),
         ));
     }
+    let mut input = input;
+    input.prefix_items = history[..cut_index].to_vec();
+    input.suffix_items = history[cut_index..fold_end_index].to_vec();
 
     Ok(SpineCompactPlan {
         worklog_path: input
@@ -165,8 +317,11 @@ pub(crate) fn effective_index_for_raw_ordinal(
     let mut raw_cursor = 0_u64;
     for (index, item) in history.iter().enumerate() {
         if let Some(meta) = parse_spine_ir_metadata(item) {
-            if target_raw_ordinal >= meta.fold_start && target_raw_ordinal < meta.fold_end {
+            if target_raw_ordinal == meta.fold_start {
                 return Some(index);
+            }
+            if target_raw_ordinal > meta.fold_start && target_raw_ordinal < meta.fold_end {
+                return None;
             }
             raw_cursor = meta.fold_end;
             continue;
