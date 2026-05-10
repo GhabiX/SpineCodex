@@ -1,4 +1,5 @@
 use super::ids::NodeId;
+use super::plan_bridge::PlanSnapshot;
 use super::state::SpineState;
 use super::state::SpineStateError;
 use super::store::SpineOperation;
@@ -6,6 +7,7 @@ use super::store::SpineSidecarStore;
 use super::store::SpineStoreError;
 use super::trajs::RawOrdinalRange;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use std::path::Path;
 use thiserror::Error;
 
@@ -82,6 +84,31 @@ impl SpineRuntime {
 
     pub(crate) fn staged_transition(&self) -> Option<&StagedTransition> {
         self.staged_transition.as_ref()
+    }
+
+    pub(crate) fn record_plan_update(
+        &mut self,
+        turn_id: impl Into<String>,
+        args: UpdatePlanArgs,
+    ) -> Result<PlanSnapshot, SpineRuntimeError> {
+        let previous = self.store.read_plan_snapshot(self.cursor())?;
+        let revision = self
+            .store
+            .read_plan_revision(self.cursor())?
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(SpineRuntimeError::PlanRevisionOverflow)?;
+        let event_seq = self.store.next_tree_event_seq()?;
+        let snapshot = PlanSnapshot::from_update(
+            self.cursor(),
+            revision,
+            event_seq,
+            turn_id,
+            args,
+            previous.as_ref(),
+        );
+        self.store.write_plan_snapshot(self.cursor(), &snapshot)?;
+        Ok(snapshot)
     }
 
     pub(crate) fn after_response_items_recorded(
@@ -308,6 +335,8 @@ pub(crate) enum SpineRuntimeError {
     },
     #[error("spine transition boundary mismatch: expected {expected}, got {actual}")]
     TransitionBoundaryMismatch { expected: u64, actual: u64 },
+    #[error("spine plan revision overflow")]
+    PlanRevisionOverflow,
     #[error(
         "staged spine transition mismatch: expected {expected_from} -> {expected_to}, got {actual_from} -> {actual_to}"
     )]

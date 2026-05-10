@@ -1,5 +1,7 @@
 use super::ids::NodeId;
 use super::ids::NodeIdParseError;
+use super::plan_bridge::PlanSnapshot;
+use super::plan_bridge::PlanSnapshotItem;
 use super::state::NodeStatus;
 use super::state::SpineState;
 use super::state::SpineStateError;
@@ -11,6 +13,7 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::io::ErrorKind;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -194,6 +197,69 @@ impl SpineSidecarStore {
         Ok(path)
     }
 
+    pub(crate) fn write_plan_snapshot(
+        &self,
+        node_id: &NodeId,
+        snapshot: &PlanSnapshot,
+    ) -> Result<PathBuf, SpineStoreError> {
+        let event = TreeEvent::TaskPlanUpdated {
+            seq: snapshot.event_seq,
+            node_id: node_id.to_string(),
+            revision: snapshot.revision,
+            explanation: snapshot.explanation.clone(),
+            items: snapshot.items.clone(),
+            source_turn_id: snapshot.source_turn_id.clone(),
+        };
+        self.append_json_line(&self.tree_path(), &event)?;
+        self.write_plan(node_id, snapshot)
+    }
+
+    pub(crate) fn read_plan_snapshot(
+        &self,
+        node_id: &NodeId,
+    ) -> Result<Option<PlanSnapshot>, SpineStoreError> {
+        let path = self.plan_path(node_id);
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(SpineStoreError::Io {
+                    path: path.clone(),
+                    source,
+                });
+            }
+        };
+        let snapshot = serde_json::from_str::<PlanSnapshot>(&contents).map_err(|source| {
+            SpineStoreError::Json {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        Ok(Some(snapshot))
+    }
+
+    pub(crate) fn read_plan_revision(
+        &self,
+        node_id: &NodeId,
+    ) -> Result<Option<u64>, SpineStoreError> {
+        let node_id = node_id.to_string();
+        let mut latest_revision = None;
+        for event in self.read_tree_events()? {
+            let TreeEvent::TaskPlanUpdated {
+                node_id: event_node_id,
+                revision,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if event_node_id == node_id {
+                latest_revision = Some(revision);
+            }
+        }
+        Ok(latest_revision)
+    }
+
     pub(crate) fn append_raw_items_recorded(
         &self,
         node_id: &NodeId,
@@ -305,6 +371,27 @@ impl SpineSidecarStore {
                         )));
                     }
                 }
+                TreeEvent::TaskPlanUpdated {
+                    node_id, revision, ..
+                } => {
+                    if revision == 0 {
+                        return Err(SpineStoreError::InvalidLedger(
+                            "task_plan_updated revision must be non-zero".to_string(),
+                        ));
+                    }
+                    let state = state.as_ref().ok_or_else(|| {
+                        SpineStoreError::InvalidLedger(
+                            "task_plan_updated appeared before root node creation".to_string(),
+                        )
+                    })?;
+                    let node_id = NodeId::parse(&node_id)?;
+                    if state.node(&node_id).is_none() {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "task_plan_updated references unknown node {}",
+                            node_id.bracketed()
+                        )));
+                    }
+                }
             }
         }
 
@@ -359,6 +446,10 @@ impl SpineSidecarStore {
         let len = self.read_tree_events()?.len();
         u64::try_from(len + 1)
             .map_err(|_| SpineStoreError::InvalidLedger("tree.jsonl has too many events".into()))
+    }
+
+    pub(crate) fn next_tree_event_seq(&self) -> Result<u64, SpineStoreError> {
+        self.next_tree_seq()
     }
 
     fn next_jsonl_seq(&self, path: &Path) -> Result<u64, SpineStoreError> {
@@ -531,12 +622,22 @@ enum TreeEvent {
         worklog_hash: String,
         raw_start_ordinal: u64,
     },
+    TaskPlanUpdated {
+        seq: u64,
+        node_id: String,
+        revision: u64,
+        explanation: Option<String>,
+        items: Vec<PlanSnapshotItem>,
+        source_turn_id: String,
+    },
 }
 
 impl TreeEvent {
     fn seq(&self) -> u64 {
         match self {
-            TreeEvent::NodeCreated { seq, .. } | TreeEvent::TransitionApplied { seq, .. } => *seq,
+            TreeEvent::NodeCreated { seq, .. }
+            | TreeEvent::TransitionApplied { seq, .. }
+            | TreeEvent::TaskPlanUpdated { seq, .. } => *seq,
         }
     }
 }

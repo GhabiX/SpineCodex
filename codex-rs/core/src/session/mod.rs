@@ -1521,6 +1521,8 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        self.maybe_record_spine_plan_update(turn_context, &legacy_source)
+            .await;
         self.services
             .rollout_thread_trace
             .record_codex_turn_event(&turn_context.sub_id, &legacy_source);
@@ -1546,6 +1548,23 @@ impl Session {
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
+        }
+    }
+
+    async fn maybe_record_spine_plan_update(&self, turn_context: &TurnContext, msg: &EventMsg) {
+        let EventMsg::PlanUpdate(args) = msg else {
+            return;
+        };
+        let Some(spine) = self.spine.as_ref() else {
+            return;
+        };
+
+        let mut spine = spine.lock().await;
+        if let Err(err) = spine.record_plan_update(&turn_context.sub_id, args.clone()) {
+            error!(
+                "failed to record spine plan snapshot for turn {}: {err}",
+                turn_context.sub_id
+            );
         }
     }
 

@@ -117,7 +117,7 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
         .clone()
         .expect("session should expose rollout path");
 
-    submit_turn_and_assert_plan_update(&test).await?;
+    let plan_turn_id = submit_turn_and_assert_plan_update(&test).await?;
 
     let requests = responses.requests();
     let base_instructions = model_base_instructions(&test).await;
@@ -148,6 +148,7 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
 
     assert_root_created(&tree);
     assert_transition(&tree, "open", "1", "1.1", OPEN_SUMMARY);
+    assert_plan_updated(&tree, "1.1", 1, &plan_turn_id);
     assert_transition(&tree, "next", "1.1", "1.2", NEXT_SUMMARY);
     assert_transition_committed(&index, OPEN_CALL_ID, "1", "1.1");
     assert_transition_committed(&index, NEXT_CALL_ID, "1.1", "1.2");
@@ -162,6 +163,18 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
         std::fs::read_to_string(sidecar_dir.join("nodes/1/1/worklog.md"))?,
         NEXT_WORKLOG
     );
+    let plan_snapshot = read_json(sidecar_dir.join("nodes/1/1/plan.json"))?;
+    assert_eq!(plan_snapshot["node_id"], "1.1");
+    assert_eq!(plan_snapshot["revision"], 1);
+    assert_eq!(plan_snapshot["source_turn_id"], plan_turn_id);
+    assert_eq!(plan_snapshot["event_seq"], 3);
+    assert_eq!(plan_snapshot["explanation"], "plan still works");
+    assert_eq!(plan_snapshot["items"][0]["stable_task_id"], "step-1");
+    assert_eq!(plan_snapshot["items"][0]["step"], "Exercise child node");
+    assert_eq!(plan_snapshot["items"][0]["status"], "completed");
+    assert_eq!(plan_snapshot["items"][1]["stable_task_id"], "step-2");
+    assert_eq!(plan_snapshot["items"][1]["step"], "Exercise sibling node");
+    assert_eq!(plan_snapshot["items"][1]["status"], "in_progress");
     assert!(
         !index_text.contains("child-spine") && !index_text.contains("sibling-spine"),
         "sidecar index must not duplicate raw shell output: {index_text}"
@@ -246,7 +259,7 @@ async fn model_base_instructions(test: &core_test_support::test_codex::TestCodex
 
 async fn submit_turn_and_assert_plan_update(
     test: &core_test_support::test_codex::TestCodex,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let cwd_path = test.cwd.path().to_path_buf();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
@@ -298,7 +311,7 @@ async fn submit_turn_and_assert_plan_update(
     .await;
     assert!(saw_plan_update, "expected normal PlanUpdate event");
 
-    Ok(())
+    Ok(turn_id)
 }
 
 fn shell_args(command: &str) -> String {
@@ -346,6 +359,13 @@ fn parse_json_lines(contents: &str) -> anyhow::Result<Vec<Value>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse jsonl line"))
         .collect()
+}
+
+fn read_json(path: impl AsRef<Path>) -> anyhow::Result<Value> {
+    let path = path.as_ref();
+    let contents =
+        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_str(&contents).with_context(|| format!("parse {}", path.display()))
 }
 
 fn tool_names(req: &ResponsesRequest) -> Vec<String> {
@@ -407,6 +427,30 @@ fn assert_transition(tree: &[Value], op: &str, from_node: &str, to_node: &str, s
             .and_then(Value::as_str)
             .is_some_and(|hash| hash.starts_with("sha1:")),
         "transition should contain a worklog hash: {event:?}"
+    );
+}
+
+fn assert_plan_updated(tree: &[Value], node_id: &str, revision: u64, source_turn_id: &str) {
+    let event = tree
+        .iter()
+        .find(|event| {
+            event.get("type").and_then(Value::as_str) == Some("task_plan_updated")
+                && event.get("node_id").and_then(Value::as_str) == Some(node_id)
+                && event.get("revision").and_then(Value::as_u64) == Some(revision)
+        })
+        .unwrap_or_else(|| panic!("missing plan update for {node_id} rev {revision}: {tree:?}"));
+
+    assert_eq!(
+        event.get("source_turn_id").and_then(Value::as_str),
+        Some(source_turn_id)
+    );
+    assert_eq!(
+        event.get("explanation").and_then(Value::as_str),
+        Some("plan still works")
+    );
+    assert_eq!(
+        event.get("items").and_then(Value::as_array).map(Vec::len),
+        Some(2)
     );
 }
 

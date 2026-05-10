@@ -6,6 +6,9 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -30,6 +33,28 @@ fn read_json_lines(path: impl AsRef<Path>) -> Vec<Value> {
         .lines()
         .map(|line| serde_json::from_str(line).expect("parse json line"))
         .collect()
+}
+
+fn read_json(path: impl AsRef<Path>) -> Value {
+    let contents = std::fs::read_to_string(path).expect("read json");
+    serde_json::from_str(&contents).expect("parse json")
+}
+
+fn plan_args(step: &str, status: StepStatus) -> UpdatePlanArgs {
+    plan_args_many(&[(step, status)])
+}
+
+fn plan_args_many(items: &[(&str, StepStatus)]) -> UpdatePlanArgs {
+    UpdatePlanArgs {
+        explanation: Some("PlanBridge test".to_string()),
+        plan: items
+            .iter()
+            .map(|(step, status)| PlanItemArg {
+                step: (*step).to_string(),
+                status: status.clone(),
+            })
+            .collect(),
+    }
 }
 
 fn spine_call(call_id: &str) -> ResponseItem {
@@ -61,6 +86,84 @@ fn assistant_message(text: &str) -> ResponseItem {
         }],
         phase: None,
     }
+}
+
+#[test]
+fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
+    let (_temp, mut runtime) = temp_runtime();
+    let initial_state = runtime.state().clone();
+
+    let snapshot = runtime
+        .record_plan_update("turn-1", plan_args("Inspect root", StepStatus::InProgress))
+        .expect("record plan update");
+
+    assert_eq!(runtime.state(), &initial_state);
+    assert_eq!(snapshot.node_id, "1");
+    assert_eq!(snapshot.revision, 1);
+    assert_eq!(snapshot.source_turn_id, "turn-1");
+    assert_eq!(snapshot.event_seq, 2);
+    assert_eq!(snapshot.items.len(), 1);
+    assert_eq!(snapshot.items[0].stable_task_id, "step-1");
+    assert_eq!(snapshot.items[0].step, "Inspect root");
+    assert_eq!(snapshot.items[0].status, "in_progress");
+
+    let plan = read_json(runtime.store().plan_path(&id(&[1])));
+    assert_eq!(plan["node_id"], "1");
+    assert_eq!(plan["revision"], 1);
+    assert_eq!(plan["event_seq"], 2);
+    assert_eq!(plan["source_turn_id"], "turn-1");
+    assert_eq!(plan["items"][0]["stable_task_id"], "step-1");
+    assert_eq!(plan["items"][0]["status"], "in_progress");
+    let tree = read_json_lines(runtime.store().tree_path());
+    assert_eq!(tree[1]["type"], "task_plan_updated");
+    assert_eq!(tree[1]["seq"], 2);
+    assert_eq!(tree[1]["node_id"], "1");
+    assert_eq!(tree[1]["revision"], 1);
+    assert_eq!(tree[1]["items"][0]["stable_task_id"], "step-1");
+    assert_eq!(tree[1]["items"][0]["step"], "Inspect root");
+
+    let second = runtime
+        .record_plan_update("turn-2", plan_args("Inspect root", StepStatus::Completed))
+        .expect("record second plan update");
+    assert_eq!(second.revision, 2);
+    assert_eq!(second.event_seq, 3);
+    assert_eq!(second.items[0].stable_task_id, "step-1");
+    assert_eq!(runtime.state(), &initial_state);
+}
+
+#[test]
+fn record_plan_update_reuses_task_ids_after_insert_and_reorder() {
+    let (_temp, mut runtime) = temp_runtime();
+
+    let first = runtime
+        .record_plan_update(
+            "turn-1",
+            plan_args_many(&[
+                ("Inspect root", StepStatus::Pending),
+                ("Verify root", StepStatus::InProgress),
+            ]),
+        )
+        .expect("record first plan update");
+    assert_eq!(first.items[0].stable_task_id, "step-1");
+    assert_eq!(first.items[1].stable_task_id, "step-2");
+
+    let second = runtime
+        .record_plan_update(
+            "turn-2",
+            plan_args_many(&[
+                ("Verify root", StepStatus::InProgress),
+                ("Document root", StepStatus::Pending),
+                ("Inspect root", StepStatus::Completed),
+            ]),
+        )
+        .expect("record second plan update");
+
+    assert_eq!(second.revision, 2);
+    assert_eq!(second.event_seq, 3);
+    assert_eq!(second.items[0].stable_task_id, "step-2");
+    assert_eq!(second.items[1].stable_task_id, "step-3");
+    assert_eq!(second.items[2].stable_task_id, "step-1");
+    assert_eq!(runtime.cursor(), &id(&[1]));
 }
 
 #[test]
