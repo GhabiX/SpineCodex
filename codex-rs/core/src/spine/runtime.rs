@@ -1,4 +1,5 @@
 use super::compact::SpineCompactBoundary;
+use super::compact::render_context_compacted_outline;
 use super::ids::NodeId;
 use super::plan_bridge::PlanSnapshot;
 use super::state::SpineState;
@@ -95,6 +96,56 @@ impl SpineRuntime {
 
     pub(crate) fn raw_start_ordinal(&self, node_id: &NodeId) -> Option<u64> {
         self.state.node(node_id)?.raw_start_ordinal
+    }
+
+    pub(crate) fn render_context_compacted_outline(
+        &self,
+        scope_node_id: &NodeId,
+    ) -> Result<String, SpineRuntimeError> {
+        let scope = self
+            .state
+            .node(scope_node_id)
+            .ok_or_else(|| SpineRuntimeError::UnknownNode(scope_node_id.clone()))?;
+        let scope_summary =
+            scope
+                .summary
+                .as_deref()
+                .ok_or_else(|| SpineRuntimeError::MissingSummary {
+                    node_id: scope_node_id.clone(),
+                })?;
+        let scope_worklog_path = self.store.worklog_path(scope_node_id);
+        let scope_worklog_path = scope_worklog_path
+            .strip_prefix(self.store.root())
+            .unwrap_or(scope_worklog_path.as_path())
+            .to_path_buf();
+        let mut child_rows = Vec::new();
+        for child in self
+            .state
+            .nodes()
+            .values()
+            .filter(|node| node.parent_id.as_ref() == Some(scope_node_id))
+        {
+            let summary =
+                child
+                    .summary
+                    .as_deref()
+                    .ok_or_else(|| SpineRuntimeError::MissingSummary {
+                        node_id: child.node_id.clone(),
+                    })?;
+            let worklog_path = self.store.worklog_path(&child.node_id);
+            let worklog_path = worklog_path
+                .strip_prefix(self.store.root())
+                .unwrap_or(worklog_path.as_path())
+                .to_string_lossy()
+                .into_owned();
+            child_rows.push((format!("[{}] {summary}", child.node_id), worklog_path));
+        }
+        Ok(render_context_compacted_outline(
+            scope_node_id,
+            scope_summary,
+            &scope_worklog_path,
+            &child_rows,
+        ))
     }
 
     pub(crate) fn plan_compaction_after_transition(
@@ -417,6 +468,10 @@ pub(crate) enum SpineRuntimeError {
     MissingRawStartOrdinal { node_id: NodeId },
     #[error("spine close transition from {node_id} has no parent scope")]
     MissingCloseScope { node_id: NodeId },
+    #[error("spine node {node_id} is missing summary for compact outline")]
+    MissingSummary { node_id: NodeId },
+    #[error("unknown spine node {0}")]
+    UnknownNode(NodeId),
     #[error("spine plan revision overflow")]
     PlanRevisionOverflow,
     #[error(

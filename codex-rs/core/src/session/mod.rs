@@ -182,6 +182,7 @@ use crate::spine::compact::build_suffix_replacement_history;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
 use crate::spine::compact::plan_suffix_fold;
 use crate::spine::compact::render_spine_ir_item;
+use crate::spine::store::SpineOperation;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -2727,6 +2728,21 @@ impl Session {
             .as_ref()
             .ok_or_else(|| CodexErr::Fatal("spine runtime is not initialized".to_string()))?;
         let store = { spine.lock().await.store().clone() };
+        let close_outline = if boundary.op == SpineOperation::Close {
+            Some(
+                spine
+                    .lock()
+                    .await
+                    .render_context_compacted_outline(&boundary.node_id)
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!(
+                            "failed to render spine compact scope outline: {err}"
+                        ))
+                    })?,
+            )
+        } else {
+            None
+        };
         let rollout_path = self
             .current_rollout_path()
             .await
@@ -2796,8 +2812,13 @@ impl Session {
                 return Err(err);
             }
         };
+        let mut worklog_markdown = compact_output.worklog_markdown.clone();
+        if let Some(outline) = close_outline {
+            worklog_markdown.push_str("\n\n");
+            worklog_markdown.push_str(&outline);
+        }
         store
-            .append_worklog_section(&boundary.node_id, &compact_output.worklog_markdown)
+            .append_worklog_section(&boundary.node_id, &worklog_markdown)
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to append spine compact worklog: {err}"))
             })?;

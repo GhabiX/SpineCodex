@@ -475,6 +475,75 @@ fn close_compact_boundary_uses_parent_scope_raw_start() {
 }
 
 #[test]
+fn close_context_outline_lists_scope_and_direct_children_only() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage open");
+    runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[spine_call("open-1"), function_call_output("open-1")],
+            0,
+            2,
+        )
+        .expect("commit open");
+    runtime.take_last_committed_transition();
+    runtime
+        .stage_transition(
+            "next-1",
+            "turn-2",
+            SpineOperation::Next,
+            "first child done",
+            "First child handoff.",
+        )
+        .expect("stage next");
+    runtime
+        .after_response_items_recorded(
+            "turn-2",
+            &[spine_call("next-1"), function_call_output("next-1")],
+            2,
+            4,
+        )
+        .expect("commit next");
+    runtime.take_last_committed_transition();
+    runtime
+        .stage_transition(
+            "close-1",
+            "turn-3",
+            SpineOperation::Close,
+            "second child done",
+            "Second child handoff.",
+        )
+        .expect("stage close");
+    runtime
+        .after_response_items_recorded(
+            "turn-3",
+            &[spine_call("close-1"), function_call_output("close-1")],
+            4,
+            6,
+        )
+        .expect("commit close");
+
+    let outline = runtime
+        .render_context_compacted_outline(&id(&[1]))
+        .expect("render outline");
+
+    assert!(outline.contains("## Context Compacted"));
+    assert!(outline.contains("[1] root scope (nodes/1/worklog.md)"));
+    assert!(outline.contains("|-- [1.1] first child done (nodes/1/1/worklog.md)"));
+    assert!(outline.contains("|-- [1.2] second child done (nodes/1/2/worklog.md)"));
+    assert!(!outline.contains("First child handoff."));
+    assert!(!outline.contains("Second child handoff."));
+}
+
+#[test]
 fn raw_items_after_commit_are_owned_by_new_cursor() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
