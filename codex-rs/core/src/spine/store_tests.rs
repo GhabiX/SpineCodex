@@ -95,6 +95,8 @@ fn create_writes_root_ledger_and_state_cache() {
     );
     assert!(store.root().join("nodes").join("1").is_dir());
     assert!(store.trajs_index_path().exists());
+    assert!(store.compact_index_path().exists());
+    assert!(store.raw_rollout_path().exists());
 }
 
 #[test]
@@ -259,5 +261,90 @@ fn appends_trajs_index_without_raw_rollout_payload() {
         events
             .iter()
             .all(|event| event.get("raw_payload").is_none())
+    );
+}
+
+#[test]
+fn appends_compact_index_and_raw_mirror_events() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+
+    store
+        .append_raw_mirror_items(&[RolloutItem::ResponseItem(
+            codex_protocol::models::ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![codex_protocol::models::ContentItem::OutputText {
+                    text: "raw item".to_string(),
+                }],
+                phase: None,
+            },
+        )])
+        .expect("append raw mirror item");
+    store
+        .append_compact_started(
+            "compact-1",
+            &id(&[1, 2]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+        )
+        .expect("append compact started");
+    store
+        .append_compact_installed(
+            "compact-1",
+            &id(&[1, 2]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "nodes/1/2/worklog.md",
+            "sha1:abc",
+        )
+        .expect("append compact installed");
+    store
+        .append_raw_mirror_compact_checkpoint("compact-1", "sha1:abc", 7)
+        .expect("append raw mirror checkpoint");
+
+    assert_eq!(
+        read_json_lines(store.compact_index_path()),
+        vec![
+            json!({
+                "type": "compact_started",
+                "seq": 1,
+                "compact_id": "compact-1",
+                "node_id": "1.2",
+                "op": "next",
+                "cut_ordinal": 4,
+                "fold_end_ordinal": 9,
+                "strategy": "codex_builtin_text",
+                "raw_trajs": "raw/rollout.raw.jsonl",
+            }),
+            json!({
+                "type": "compact_installed",
+                "seq": 2,
+                "compact_id": "compact-1",
+                "node_id": "1.2",
+                "op": "next",
+                "cut_ordinal": 4,
+                "fold_end_ordinal": 9,
+                "replacement_history_len": 7,
+                "worklog_path": "nodes/1/2/worklog.md",
+                "message_hash": "sha1:abc",
+            }),
+        ]
+    );
+
+    let raw_mirror = read_json_lines(store.raw_rollout_path());
+    assert_eq!(raw_mirror[0]["type"], "response_item");
+    assert_eq!(
+        raw_mirror[1],
+        json!({
+            "type": "raw_mirror_event",
+            "compact_id": "compact-1",
+            "message_hash": "sha1:abc",
+            "replacement_history_len": 7,
+        })
     );
 }

@@ -6,6 +6,7 @@ use super::state::NodeStatus;
 use super::state::SpineState;
 use super::state::SpineStateError;
 use super::state::Transition;
+use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
 use serde::Serialize;
 use sha1::Digest;
@@ -25,6 +26,9 @@ const NODES_DIR: &str = "nodes";
 const WORKLOG_FILE: &str = "worklog.md";
 const PLAN_FILE: &str = "plan.json";
 const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
+const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
+const RAW_DIR: &str = "raw";
+const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SpineSidecarStore {
@@ -85,6 +89,14 @@ impl SpineSidecarStore {
         self.root.join(TRAJS_INDEX_FILE)
     }
 
+    pub(crate) fn compact_index_path(&self) -> PathBuf {
+        self.root.join(COMPACT_INDEX_FILE)
+    }
+
+    pub(crate) fn raw_rollout_path(&self) -> PathBuf {
+        self.root.join(RAW_DIR).join(RAW_ROLLOUT_FILE)
+    }
+
     pub(crate) fn node_dir(&self, node_id: &NodeId) -> PathBuf {
         let mut path = self.root.join(NODES_DIR);
         for segment in node_id.segments() {
@@ -112,6 +124,8 @@ impl SpineSidecarStore {
         self.ensure_sidecar_dir()?;
         self.ensure_node_dir(&NodeId::root())?;
         self.create_trajs_index_file()?;
+        self.create_compact_index_file()?;
+        self.create_raw_rollout_file()?;
 
         let event = TreeEvent::NodeCreated {
             seq: 1,
@@ -304,6 +318,105 @@ impl SpineSidecarStore {
             to_node: to_node.to_string(),
             call_start_ordinal,
             boundary_end,
+        };
+        self.append_json_line(&path, &event)
+    }
+
+    pub(crate) fn append_raw_mirror_items(
+        &self,
+        items: &[RolloutItem],
+    ) -> Result<(), SpineStoreError> {
+        for item in items {
+            self.append_json_line(&self.raw_rollout_path(), item)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn append_raw_mirror_compact_checkpoint(
+        &self,
+        compact_id: impl Into<String>,
+        message_hash: impl Into<String>,
+        replacement_history_len: usize,
+    ) -> Result<(), SpineStoreError> {
+        let event = RawMirrorEvent::RawMirrorEvent {
+            compact_id: compact_id.into(),
+            message_hash: message_hash.into(),
+            replacement_history_len,
+        };
+        self.append_json_line(&self.raw_rollout_path(), &event)
+    }
+
+    pub(crate) fn append_compact_started(
+        &self,
+        compact_id: impl Into<String>,
+        node_id: &NodeId,
+        op: SpineOperation,
+        cut_ordinal: u64,
+        fold_end_ordinal: u64,
+        strategy: impl Into<String>,
+    ) -> Result<(), SpineStoreError> {
+        let path = self.compact_index_path();
+        let event = CompactIndexEvent::CompactStarted {
+            seq: self.next_jsonl_seq(&path)?,
+            compact_id: compact_id.into(),
+            node_id: node_id.to_string(),
+            op,
+            cut_ordinal,
+            fold_end_ordinal,
+            strategy: strategy.into(),
+            raw_trajs: format!("{RAW_DIR}/{RAW_ROLLOUT_FILE}"),
+        };
+        self.append_json_line(&path, &event)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn append_compact_installed(
+        &self,
+        compact_id: impl Into<String>,
+        node_id: &NodeId,
+        op: SpineOperation,
+        cut_ordinal: u64,
+        fold_end_ordinal: u64,
+        replacement_history_len: usize,
+        worklog_path: impl Into<String>,
+        message_hash: impl Into<String>,
+    ) -> Result<(), SpineStoreError> {
+        let path = self.compact_index_path();
+        let event = CompactIndexEvent::CompactInstalled {
+            seq: self.next_jsonl_seq(&path)?,
+            compact_id: compact_id.into(),
+            node_id: node_id.to_string(),
+            op,
+            cut_ordinal,
+            fold_end_ordinal,
+            replacement_history_len,
+            worklog_path: worklog_path.into(),
+            message_hash: message_hash.into(),
+        };
+        self.append_json_line(&path, &event)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn append_compact_failed(
+        &self,
+        compact_id: impl Into<String>,
+        node_id: &NodeId,
+        op: SpineOperation,
+        cut_ordinal: u64,
+        fold_end_ordinal: u64,
+        strategy: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Result<(), SpineStoreError> {
+        let path = self.compact_index_path();
+        let event = CompactIndexEvent::CompactFailed {
+            seq: self.next_jsonl_seq(&path)?,
+            compact_id: compact_id.into(),
+            node_id: node_id.to_string(),
+            op,
+            cut_ordinal,
+            fold_end_ordinal,
+            strategy: strategy.into(),
+            error: error.into(),
         };
         self.append_json_line(&path, &event)
     }
@@ -531,6 +644,38 @@ impl SpineSidecarStore {
         Ok(())
     }
 
+    fn create_compact_index_file(&self) -> Result<(), SpineStoreError> {
+        let path = self.compact_index_path();
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        Ok(())
+    }
+
+    fn create_raw_rollout_file(&self) -> Result<(), SpineStoreError> {
+        let path = self.raw_rollout_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| SpineStoreError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        Ok(())
+    }
+
     fn write_worklog_file(&self, node_id: &NodeId, worklog: &str) -> Result<(), SpineStoreError> {
         self.ensure_node_dir(node_id)?;
         let path = self.worklog_path(node_id);
@@ -668,6 +813,52 @@ enum TrajsIndexEvent {
         to_node: String,
         call_start_ordinal: u64,
         boundary_end: u64,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum CompactIndexEvent {
+    CompactStarted {
+        seq: u64,
+        compact_id: String,
+        node_id: String,
+        op: SpineOperation,
+        cut_ordinal: u64,
+        fold_end_ordinal: u64,
+        strategy: String,
+        raw_trajs: String,
+    },
+    CompactInstalled {
+        seq: u64,
+        compact_id: String,
+        node_id: String,
+        op: SpineOperation,
+        cut_ordinal: u64,
+        fold_end_ordinal: u64,
+        replacement_history_len: usize,
+        worklog_path: String,
+        message_hash: String,
+    },
+    CompactFailed {
+        seq: u64,
+        compact_id: String,
+        node_id: String,
+        op: SpineOperation,
+        cut_ordinal: u64,
+        fold_end_ordinal: u64,
+        strategy: String,
+        error: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum RawMirrorEvent {
+    RawMirrorEvent {
+        compact_id: String,
+        message_hash: String,
+        replacement_history_len: usize,
     },
 }
 
