@@ -307,6 +307,12 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
         "cursor moves after the FunctionCallOutput is recorded"
     );
     assert!(runtime.staged_transition().is_none());
+    let committed = runtime
+        .take_last_committed_transition()
+        .expect("transition should be tracked");
+    assert_eq!(committed.op, SpineOperation::Open);
+    assert_eq!(committed.call_start_ordinal, 0);
+    assert_eq!(committed.boundary_end, 2);
     assert_eq!(
         read_json_lines(runtime.store().tree_path()),
         vec![
@@ -345,8 +351,10 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
                 "type": "transition_committed",
                 "seq": 2,
                 "call_id": "call-1",
+                "op": "open",
                 "from_node": "1",
                 "to_node": "1.1",
+                "call_start_ordinal": 0,
                 "boundary_end": 2,
             }),
         ]
@@ -443,6 +451,7 @@ fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
     );
     assert_eq!(runtime.cursor(), &id(&[1, 1]));
     assert_eq!(runtime.current_ordinal(), 3);
+    assert_eq!(runtime.raw_start_ordinal(&id(&[1, 1])), Some(2));
     assert_eq!(
         read_json_lines(runtime.store().trajs_index_path()),
         vec![
@@ -458,8 +467,10 @@ fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
                 "type": "transition_committed",
                 "seq": 2,
                 "call_id": "call-1",
+                "op": "open",
                 "from_node": "1",
                 "to_node": "1.1",
+                "call_start_ordinal": 0,
                 "boundary_end": 2,
             }),
             json!({

@@ -14,6 +14,7 @@ pub(crate) enum NodeStatus {
 pub(crate) struct NodeRecord {
     pub(crate) node_id: NodeId,
     pub(crate) parent_id: Option<NodeId>,
+    pub(crate) raw_start_ordinal: Option<u64>,
     pub(crate) status: NodeStatus,
     pub(crate) summary: Option<String>,
     pub(crate) worklog: Option<String>,
@@ -31,6 +32,7 @@ impl SpineState {
         let root_record = NodeRecord {
             node_id: root.clone(),
             parent_id: None,
+            raw_start_ordinal: Some(0),
             status: NodeStatus::Live,
             summary: None,
             worklog: None,
@@ -51,6 +53,19 @@ impl SpineState {
 
     pub(crate) fn nodes(&self) -> &BTreeMap<NodeId, NodeRecord> {
         &self.nodes
+    }
+
+    pub(crate) fn set_raw_start_ordinal(
+        &mut self,
+        node_id: &NodeId,
+        raw_start_ordinal: u64,
+    ) -> Result<(), SpineStateError> {
+        let node = self
+            .nodes
+            .get_mut(node_id)
+            .ok_or_else(|| SpineStateError::UnknownNode(node_id.clone()))?;
+        node.raw_start_ordinal = Some(raw_start_ordinal);
+        Ok(())
     }
 
     pub(crate) fn visible_spine(&self) -> Vec<NodeId> {
@@ -164,6 +179,7 @@ impl SpineState {
         let node = NodeRecord {
             node_id: node_id.clone(),
             parent_id,
+            raw_start_ordinal: None,
             status: NodeStatus::Live,
             summary: None,
             worklog: None,

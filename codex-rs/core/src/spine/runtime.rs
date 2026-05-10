@@ -17,6 +17,7 @@ pub(crate) struct SpineRuntime {
     state: SpineState,
     next_raw_ordinal: u64,
     staged_transition: Option<StagedTransition>,
+    last_committed_transition: Option<CommittedTransition>,
 }
 
 impl SpineRuntime {
@@ -63,6 +64,7 @@ impl SpineRuntime {
             state,
             next_raw_ordinal,
             staged_transition: None,
+            last_committed_transition: None,
         }
     }
 
@@ -84,6 +86,14 @@ impl SpineRuntime {
 
     pub(crate) fn staged_transition(&self) -> Option<&StagedTransition> {
         self.staged_transition.as_ref()
+    }
+
+    pub(crate) fn take_last_committed_transition(&mut self) -> Option<CommittedTransition> {
+        self.last_committed_transition.take()
+    }
+
+    pub(crate) fn raw_start_ordinal(&self, node_id: &NodeId) -> Option<u64> {
+        self.state.node(node_id)?.raw_start_ordinal
     }
 
     pub(crate) fn record_plan_update(
@@ -147,6 +157,11 @@ impl SpineRuntime {
                     start: item_start,
                 });
             }
+            if let Some(staged) = self.staged_transition.as_mut()
+                && matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == &staged.call_id)
+            {
+                staged.call_start_ordinal = Some(item_start);
+            }
             self.next_raw_ordinal = item_end;
 
             if let Some(call_id) = staged_function_call_output_id(item, self.staged_transition()) {
@@ -194,6 +209,7 @@ impl SpineRuntime {
             visible_spine: validation_state.visible_spine(),
             summary,
             worklog,
+            call_start_ordinal: None,
         });
         Ok(self
             .staged_transition
@@ -243,8 +259,10 @@ impl SpineRuntime {
 
         self.store.append_transition_committed(
             &staged.call_id,
+            staged.op,
             &staged.from_node,
             &staged.to_node,
+            staged.call_start_ordinal.unwrap_or(boundary_end_ordinal),
             boundary_end_ordinal,
         )?;
 
@@ -267,12 +285,16 @@ impl SpineRuntime {
 
         self.state = next_state;
         self.staged_transition = None;
-        Ok(CommittedTransition {
+        let committed = CommittedTransition {
+            op: staged.op,
             call_id: call_id.to_string(),
             from_node: staged.from_node,
             to_node: staged.to_node,
+            call_start_ordinal: staged.call_start_ordinal.unwrap_or(boundary_end_ordinal),
             boundary_end: boundary_end_ordinal,
-        })
+        };
+        self.last_committed_transition = Some(committed.clone());
+        Ok(committed)
     }
 
     fn append_raw_range(
@@ -304,13 +326,16 @@ pub(crate) struct StagedTransition {
     pub(crate) visible_spine: Vec<NodeId>,
     pub(crate) summary: String,
     pub(crate) worklog: String,
+    pub(crate) call_start_ordinal: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CommittedTransition {
+    pub(crate) op: SpineOperation,
     pub(crate) call_id: String,
     pub(crate) from_node: NodeId,
     pub(crate) to_node: NodeId,
+    pub(crate) call_start_ordinal: u64,
     pub(crate) boundary_end: u64,
 }
 

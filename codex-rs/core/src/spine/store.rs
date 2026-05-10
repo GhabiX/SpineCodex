@@ -151,6 +151,7 @@ impl SpineSidecarStore {
         let worklog = worklog.into();
         let mut next_state = state.clone();
         let transition = op.apply(&mut next_state, summary.clone(), worklog.clone())?;
+        next_state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
         let to_parent_id = next_state
             .node(&transition.to)
             .ok_or_else(|| SpineStoreError::InvalidLedger("transition target missing".to_string()))?
@@ -281,8 +282,10 @@ impl SpineSidecarStore {
     pub(crate) fn append_transition_committed(
         &self,
         call_id: impl Into<String>,
+        op: SpineOperation,
         from_node: &NodeId,
         to_node: &NodeId,
+        call_start_ordinal: u64,
         boundary_end: u64,
     ) -> Result<(), SpineStoreError> {
         let path = self.trajs_index_path();
@@ -296,8 +299,10 @@ impl SpineSidecarStore {
         let event = TrajsIndexEvent::TransitionCommitted {
             seq: self.next_jsonl_seq(&path)?,
             call_id,
+            op,
             from_node: from_node.to_string(),
             to_node: to_node.to_string(),
+            call_start_ordinal,
             boundary_end,
         };
         self.append_json_line(&path, &event)
@@ -312,7 +317,7 @@ impl SpineSidecarStore {
                 TreeEvent::NodeCreated {
                     node_id,
                     parent_id,
-                    raw_start_ordinal: _,
+                    raw_start_ordinal,
                     ..
                 } => {
                     if state.is_some() {
@@ -326,7 +331,9 @@ impl SpineSidecarStore {
                             "first node_created event must create the root node".to_string(),
                         ));
                     }
-                    state = Some(SpineState::new());
+                    let mut root_state = SpineState::new();
+                    root_state.set_raw_start_ordinal(&node_id, raw_start_ordinal)?;
+                    state = Some(root_state);
                 }
                 TreeEvent::TransitionApplied {
                     op,
@@ -335,7 +342,7 @@ impl SpineSidecarStore {
                     to_parent_id,
                     summary,
                     worklog_hash: expected_worklog_hash,
-                    raw_start_ordinal: _,
+                    raw_start_ordinal,
                     ..
                 } => {
                     let state = state.as_mut().ok_or_else(|| {
@@ -370,6 +377,7 @@ impl SpineSidecarStore {
                             transition.to.bracketed()
                         )));
                     }
+                    state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
                 }
                 TreeEvent::TaskPlanUpdated {
                     node_id, revision, ..
@@ -655,8 +663,10 @@ enum TrajsIndexEvent {
     TransitionCommitted {
         seq: u64,
         call_id: String,
+        op: SpineOperation,
         from_node: String,
         to_node: String,
+        call_start_ordinal: u64,
         boundary_end: u64,
     },
 }
@@ -677,6 +687,7 @@ impl StateSnapshot {
                 .map(|node| NodeSnapshot {
                     node_id: node.node_id.to_string(),
                     parent_id: node.parent_id.as_ref().map(ToString::to_string),
+                    raw_start_ordinal: node.raw_start_ordinal,
                     status: status_label(&node.status).to_string(),
                     summary: node.summary.clone(),
                     worklog_hash: node.worklog.as_deref().map(worklog_hash),
@@ -695,6 +706,7 @@ impl StateSnapshot {
 struct NodeSnapshot {
     node_id: String,
     parent_id: Option<String>,
+    raw_start_ordinal: Option<u64>,
     status: String,
     summary: Option<String>,
     worklog_hash: Option<String>,

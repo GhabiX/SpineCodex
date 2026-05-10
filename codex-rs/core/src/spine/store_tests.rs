@@ -84,6 +84,7 @@ fn create_writes_root_ledger_and_state_cache() {
             "nodes": [{
                 "node_id": "1",
                 "parent_id": null,
+                "raw_start_ordinal": 0,
                 "status": "live",
                 "summary": null,
                 "worklog_hash": null,
@@ -157,6 +158,12 @@ fn records_transition_worklog_and_replays_from_tree() {
             .and_then(|node| node.worklog.as_deref()),
         Some("Root handoff.")
     );
+    assert_eq!(
+        loaded
+            .node(&id(&[1, 1]))
+            .and_then(|node| node.raw_start_ordinal),
+        Some(8)
+    );
 }
 
 #[test]
@@ -213,7 +220,14 @@ fn appends_trajs_index_without_raw_rollout_payload() {
         .append_raw_items_recorded(&id(&[1]), "turn-1", 0, 3)
         .expect("append raw items index");
     store
-        .append_transition_committed("call-1", &id(&[1]), &id(&[1, 1]), 8)
+        .append_transition_committed(
+            "call-1",
+            SpineOperation::Open,
+            &id(&[1]),
+            &id(&[1, 1]),
+            0,
+            8,
+        )
         .expect("append transition index");
 
     let events = read_json_lines(store.trajs_index_path());
@@ -233,8 +247,10 @@ fn appends_trajs_index_without_raw_rollout_payload() {
                 "type": "transition_committed",
                 "seq": 2,
                 "call_id": "call-1",
+                "op": "open",
                 "from_node": "1",
                 "to_node": "1.1",
+                "call_start_ordinal": 0,
                 "boundary_end": 8,
             }),
         ]
