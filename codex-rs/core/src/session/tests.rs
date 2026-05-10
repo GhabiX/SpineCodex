@@ -112,6 +112,7 @@ use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadGoalStatus;
@@ -247,6 +248,18 @@ fn histogram_sum(resource_metrics: &ResourceMetrics, name: &str) -> u64 {
         },
         _ => panic!("unexpected metric data type"),
     }
+}
+
+fn write_rollout_items_for_test(path: &Path, items: &[RolloutItem]) -> anyhow::Result<()> {
+    let mut lines = Vec::with_capacity(items.len());
+    for item in items {
+        lines.push(serde_json::to_string(&RolloutLine {
+            timestamp: "2026-05-10T00:00:00.000Z".to_string(),
+            item: item.clone(),
+        })?);
+    }
+    std::fs::write(path, format!("{}\n", lines.join("\n")))?;
+    Ok(())
 }
 
 fn skill_message(text: &str) -> ResponseItem {
@@ -1304,6 +1317,39 @@ async fn spine_runtime_initializes_root_when_feature_is_on() -> anyhow::Result<(
 
     assert_eq!(spine.cursor(), &crate::spine::ids::NodeId::root());
     assert_eq!(spine.current_ordinal(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_resume_ordinal_counts_raw_rollout_items_not_filtered_history() -> anyhow::Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    write_rollout_items_for_test(
+        &rollout_path,
+        &[
+            RolloutItem::ResponseItem(user_message("raw one")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "summary".to_string(),
+                replacement_history: None,
+            }),
+            RolloutItem::ResponseItem(assistant_message("raw two")),
+            RolloutItem::ResponseItem(user_message("raw three")),
+        ],
+    )?;
+
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: vec![RolloutItem::ResponseItem(user_message(
+            "filtered prompt item",
+        ))],
+        rollout_path: Some(rollout_path),
+    });
+
+    assert_eq!(
+        crate::session::session::initial_spine_response_item_count(&initial_history).await?,
+        3
+    );
     Ok(())
 }
 

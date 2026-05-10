@@ -335,20 +335,33 @@ pub(crate) struct AppServerClientMetadata {
     pub(crate) client_version: Option<String>,
 }
 
-fn initial_response_item_count(initial_history: &InitialHistory) -> u64 {
+fn response_item_count(items: &[RolloutItem]) -> u64 {
+    u64::try_from(
+        items
+            .iter()
+            .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
+            .count(),
+    )
+    .unwrap_or(u64::MAX)
+}
+
+pub(crate) async fn initial_spine_response_item_count(
+    initial_history: &InitialHistory,
+) -> anyhow::Result<u64> {
     let count = match initial_history {
         InitialHistory::New | InitialHistory::Cleared => 0,
-        InitialHistory::Resumed(resumed) => resumed
-            .history
-            .iter()
-            .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
-            .count(),
-        InitialHistory::Forked(items) => items
-            .iter()
-            .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
-            .count(),
+        InitialHistory::Resumed(resumed) => {
+            if let Some(rollout_path) = resumed.rollout_path.as_ref() {
+                let (items, _, _) =
+                    crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
+                response_item_count(&items)
+            } else {
+                response_item_count(&resumed.history)
+            }
+        }
+        InitialHistory::Forked(items) => response_item_count(items),
     };
-    u64::try_from(count).unwrap_or(u64::MAX)
+    Ok(count)
 }
 
 impl Session {
@@ -418,7 +431,11 @@ impl Session {
             .unwrap_or(u64::MAX),
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
-        let initial_spine_ordinal = initial_response_item_count(&initial_history);
+        let initial_spine_ordinal = if config.features.enabled(Feature::SpineTaskTree) {
+            initial_spine_response_item_count(&initial_history).await?
+        } else {
+            0
+        };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
