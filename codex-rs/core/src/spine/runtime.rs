@@ -178,6 +178,8 @@ impl SpineRuntime {
                     .ok_or_else(|| SpineRuntimeError::MissingCloseScope {
                         node_id: committed.from_node.clone(),
                     })?;
+                self.store
+                    .validate_matching_open_for_scope(&scope_node_id, committed.boundary_end)?;
                 let cut_ordinal = self.raw_start_ordinal(&scope_node_id).ok_or_else(|| {
                     SpineRuntimeError::MissingRawStartOrdinal {
                         node_id: scope_node_id.clone(),

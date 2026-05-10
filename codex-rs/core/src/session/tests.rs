@@ -1426,6 +1426,24 @@ async fn spine_raw_mirror_tracks_metadata_without_compacted_history() -> anyhow:
     Ok(())
 }
 
+#[test]
+fn spine_compact_id_is_deterministic_for_same_boundary() {
+    let boundary = SpineCompactBoundary {
+        op: SpineOperation::Next,
+        node_id: crate::spine::ids::NodeId::from_segments(vec![1, 2]),
+        scope_node_id: None,
+        cut_ordinal: 4,
+        fold_end_ordinal: 9,
+        transition_summary: "leaf done".to_string(),
+        transition_worklog: "handoff".to_string(),
+    };
+
+    assert_eq!(
+        deterministic_spine_compact_id(&boundary),
+        deterministic_spine_compact_id(&boundary)
+    );
+}
+
 #[tokio::test]
 async fn try_replace_compacted_history_persists_checkpoint_before_replacing_history()
 -> anyhow::Result<()> {

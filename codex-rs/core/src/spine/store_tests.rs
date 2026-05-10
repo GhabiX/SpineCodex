@@ -299,6 +299,34 @@ fn appends_trajs_index_without_raw_rollout_payload() {
 }
 
 #[test]
+fn validates_matching_open_for_close_scope() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+
+    let missing = store
+        .validate_matching_open_for_scope(&id(&[1]), 4)
+        .expect_err("missing matching open should fail");
+    assert!(
+        matches!(missing, SpineStoreError::InvalidLedger(message) if message.contains("matching open"))
+    );
+
+    store
+        .append_transition_committed(
+            "call-1",
+            SpineOperation::Open,
+            &id(&[1]),
+            &id(&[1, 1]),
+            0,
+            2,
+        )
+        .expect("append open transition");
+
+    store
+        .validate_matching_open_for_scope(&id(&[1]), 4)
+        .expect("matching open validates scope");
+}
+
+#[test]
 fn appends_compact_index_and_raw_mirror_events() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");

@@ -2771,7 +2771,7 @@ impl Session {
             boundary.fold_end_ordinal,
             input,
         )?;
-        let compact_id = Uuid::new_v4().to_string();
+        let compact_id = deterministic_spine_compact_id(&boundary);
         store
             .append_compact_started(
                 &compact_id,
@@ -3742,6 +3742,23 @@ fn sha1_digest(value: &str) -> String {
     let mut hasher = sha1::Sha1::new();
     hasher.update(value.as_bytes());
     format!("sha1:{:x}", hasher.finalize())
+}
+
+fn deterministic_spine_compact_id(boundary: &SpineCompactBoundary) -> String {
+    sha1_digest(&format!(
+        "spine-compact-v1\nop={:?}\nnode={}\nscope={}\ncut={}\nfold_end={}\nsummary={}\nworklog={}",
+        boundary.op,
+        boundary.node_id,
+        boundary
+            .scope_node_id
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        boundary.cut_ordinal,
+        boundary.fold_end_ordinal,
+        boundary.transition_summary,
+        boundary.transition_worklog
+    ))
 }
 
 #[cfg(test)]

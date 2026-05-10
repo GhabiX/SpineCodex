@@ -333,6 +333,38 @@ impl SpineSidecarStore {
         Ok(())
     }
 
+    pub(crate) fn validate_matching_open_for_scope(
+        &self,
+        scope_node_id: &NodeId,
+        close_boundary_end: u64,
+    ) -> Result<(), SpineStoreError> {
+        for event in self.read_trajs_index_events()? {
+            let TrajsIndexEvent::TransitionCommitted {
+                op,
+                from_node,
+                to_node,
+                boundary_end,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if op != SpineOperation::Open || boundary_end > close_boundary_end {
+                continue;
+            }
+            let from_node = NodeId::parse(&from_node)?;
+            let to_node = NodeId::parse(&to_node)?;
+            if &from_node == scope_node_id && is_direct_child_of(&to_node, scope_node_id) {
+                return Ok(());
+            }
+        }
+
+        Err(SpineStoreError::InvalidLedger(format!(
+            "close compact scope {} has no matching open transition",
+            scope_node_id.bracketed()
+        )))
+    }
+
     pub(crate) fn append_raw_mirror_compact_checkpoint(
         &self,
         compact_id: impl Into<String>,
@@ -580,6 +612,48 @@ impl SpineSidecarStore {
             if event.seq() != expected_seq {
                 return Err(SpineStoreError::InvalidLedger(format!(
                     "tree.jsonl line {} has seq {}, expected {}",
+                    index + 1,
+                    event.seq(),
+                    expected_seq
+                )));
+            }
+            events.push(event);
+        }
+
+        Ok(events)
+    }
+
+    fn read_trajs_index_events(&self) -> Result<Vec<TrajsIndexEvent>, SpineStoreError> {
+        let path = self.trajs_index_path();
+        let file = File::open(&path).map_err(|source| SpineStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let reader = BufReader::new(file);
+        let mut events = Vec::new();
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line.map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if line.trim().is_empty() {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "trajs.index.jsonl line {} is empty",
+                    index + 1
+                )));
+            }
+            let event: TrajsIndexEvent =
+                serde_json::from_str(&line).map_err(|source| SpineStoreError::Json {
+                    path: path.clone(),
+                    source,
+                })?;
+            let expected_seq = u64::try_from(index + 1).map_err(|_| {
+                SpineStoreError::InvalidLedger("trajs.index.jsonl has too many events".to_string())
+            })?;
+            if event.seq() != expected_seq {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "trajs.index.jsonl line {} has seq {}, expected {}",
                     index + 1,
                     event.seq(),
                     expected_seq
@@ -844,6 +918,15 @@ enum TrajsIndexEvent {
     },
 }
 
+impl TrajsIndexEvent {
+    fn seq(&self) -> u64 {
+        match self {
+            TrajsIndexEvent::RawItemsRecorded { seq, .. }
+            | TrajsIndexEvent::TransitionCommitted { seq, .. } => *seq,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum CompactIndexEvent {
@@ -998,6 +1081,11 @@ fn direct_worklog_body(worklog: &str) -> &str {
         .split_once(GENERATED_WORKLOG_SECTION_MARKER)
         .map(|(direct, _)| direct)
         .unwrap_or(worklog)
+}
+
+fn is_direct_child_of(node_id: &NodeId, parent_id: &NodeId) -> bool {
+    node_id.segments().len() == parent_id.segments().len() + 1
+        && node_id.segments().starts_with(parent_id.segments())
 }
 
 #[cfg(test)]
