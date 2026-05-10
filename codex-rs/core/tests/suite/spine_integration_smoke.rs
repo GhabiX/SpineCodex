@@ -41,6 +41,18 @@ const OPEN_SUMMARY: &str = "open child scope";
 const OPEN_WORKLOG: &str = "Root handoff for child shell smoke.";
 const NEXT_SUMMARY: &str = "finish child scope";
 const NEXT_WORKLOG: &str = "Child handoff for sibling shell smoke.";
+const EXPECTED_SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
+You have a task tree tool named spine.
+Use the active task tree to split complex work into focused right-spine nodes.
+Keep simple tasks in one node.
+Call spine open when starting a focused subproblem.
+Call spine next when handing off from one sibling task to the next.
+Call spine close when finishing a child scope and returning to the parent sibling.
+Every spine call must include a concise summary and a durable worklog containing goal, findings, decisions, verification, and risks.
+Use update_plan only as the TODO list for the current active node; do not treat update_plan as the task tree driver.
+There is no read_spine tool; inspect task-tree files, worklogs, and historical rollout trajs with bash when needed.
+In Plan mode, do not call mutating spine operations.
+</spine_view>"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_transitions_commit_before_following_tools_in_same_response() -> anyhow::Result<()> {
@@ -108,6 +120,18 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
     submit_turn_and_assert_plan_update(&test).await?;
 
     let requests = responses.requests();
+    let base_instructions = model_base_instructions(&test).await;
+    let expected_instructions =
+        format!("{base_instructions}\n\n{EXPECTED_SPINE_VIEW_INSTRUCTIONS}");
+    assert_eq!(
+        requests
+            .first()
+            .expect("expected first model request")
+            .instructions_text()
+            .as_bytes(),
+        expected_instructions.as_bytes(),
+        "feature-on request should append exact spine steering instructions"
+    );
     assert_function_output_contains(&requests, CHILD_SHELL_CALL_ID, "child-spine");
     assert_function_output_contains(&requests, SIBLING_SHELL_CALL_ID, "sibling-spine");
     assert_function_output_contains(&requests, PLAN_CALL_ID, "Plan updated");
@@ -177,7 +201,16 @@ async fn spine_feature_off_exposes_no_task_tree_tools_or_sidecar() -> anyhow::Re
     let test = builder.build(&server).await?;
     test.submit_turn("feature off smoke").await?;
 
-    let tool_names = tool_names(&responses.single_request());
+    let request = responses.single_request();
+    let instructions = request.instructions_text();
+    let base_instructions = model_base_instructions(&test).await;
+    assert_eq!(
+        instructions.as_bytes(),
+        base_instructions.as_bytes(),
+        "feature-off request instructions should remain byte-identical"
+    );
+
+    let tool_names = tool_names(&request);
     for forbidden in ["spine", "read_spine", "spine_state", "spine_trajs"] {
         assert!(
             !tool_names.iter().any(|name| name == forbidden),
@@ -198,6 +231,17 @@ async fn spine_feature_off_exposes_no_task_tree_tools_or_sidecar() -> anyhow::Re
     );
 
     Ok(())
+}
+
+async fn model_base_instructions(test: &core_test_support::test_codex::TestCodex) -> String {
+    test.thread_manager
+        .get_models_manager()
+        .get_model_info(
+            test.session_configured.model.as_str(),
+            &test.config.to_models_manager_config(),
+        )
+        .await
+        .get_model_instructions(test.config.personality)
 }
 
 async fn submit_turn_and_assert_plan_update(

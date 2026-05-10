@@ -547,6 +547,10 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = crate::spine::instructions::append_spine_view_instructions(
+            base_instructions,
+            config.features.enabled(Feature::SpineTaskTree),
+        );
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -2730,8 +2734,13 @@ impl Session {
             && let Some(personality) = turn_context.personality
         {
             let model_info = turn_context.model_info.clone();
+            let base_instructions_without_spine_view =
+                crate::spine::instructions::strip_spine_view_instructions(&base_instructions);
             let has_baked_personality = model_info.supports_personality()
-                && base_instructions == model_info.get_model_instructions(Some(personality));
+                && base_instructions_without_spine_view
+                    == model_info
+                        .get_model_instructions(Some(personality))
+                        .as_str();
             if !has_baked_personality
                 && let Some(personality_message) =
                     crate::context_manager::updates::personality_message_for(
