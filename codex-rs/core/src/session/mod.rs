@@ -2583,6 +2583,9 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
         compacted_item: CompactedItem,
     ) {
+        if let Some(spine) = self.spine.as_ref() {
+            spine.lock().await.mark_non_spine_compacted_history();
+        }
         self.replace_history(items, reference_context_item.clone())
             .await;
 

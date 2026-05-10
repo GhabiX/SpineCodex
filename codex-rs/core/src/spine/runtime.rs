@@ -10,6 +10,7 @@ use super::store::SpineStoreError;
 use super::trajs::RawOrdinalRange;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
@@ -20,6 +21,8 @@ pub(crate) struct SpineRuntime {
     next_raw_ordinal: u64,
     staged_transition: Option<StagedTransition>,
     last_committed_transition: Option<CommittedTransition>,
+    pending_spine_call_starts: HashMap<String, u64>,
+    non_spine_compacted_history: bool,
 }
 
 impl SpineRuntime {
@@ -67,6 +70,8 @@ impl SpineRuntime {
             next_raw_ordinal,
             staged_transition: None,
             last_committed_transition: None,
+            pending_spine_call_starts: HashMap::new(),
+            non_spine_compacted_history: false,
         }
     }
 
@@ -92,6 +97,10 @@ impl SpineRuntime {
 
     pub(crate) fn take_last_committed_transition(&mut self) -> Option<CommittedTransition> {
         self.last_committed_transition.take()
+    }
+
+    pub(crate) fn mark_non_spine_compacted_history(&mut self) {
+        self.non_spine_compacted_history = true;
     }
 
     pub(crate) fn raw_start_ordinal(&self, node_id: &NodeId) -> Option<u64> {
@@ -138,8 +147,17 @@ impl SpineRuntime {
                 .unwrap_or(worklog_path.as_path())
                 .to_string_lossy()
                 .into_owned();
-            child_rows.push((format!("[{}] {summary}", child.node_id), worklog_path));
+            child_rows.push((
+                child.node_id.clone(),
+                format!("[{}] {summary}", child.node_id),
+                worklog_path,
+            ));
         }
+        child_rows.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
+        let child_rows = child_rows
+            .into_iter()
+            .map(|(_, summary, path)| (summary, path))
+            .collect::<Vec<_>>();
         Ok(render_context_compacted_outline(
             scope_node_id,
             scope_summary,
@@ -155,6 +173,7 @@ impl SpineRuntime {
         match committed.op {
             SpineOperation::Open => Ok(None),
             SpineOperation::Next => {
+                self.ensure_spine_compaction_allowed()?;
                 let cut_ordinal =
                     self.raw_start_ordinal(&committed.from_node)
                         .ok_or_else(|| SpineRuntimeError::MissingRawStartOrdinal {
@@ -171,6 +190,7 @@ impl SpineRuntime {
                 }))
             }
             SpineOperation::Close => {
+                self.ensure_spine_compaction_allowed()?;
                 let scope_node_id = self
                     .state
                     .node(&committed.from_node)
@@ -196,6 +216,13 @@ impl SpineRuntime {
                 }))
             }
         }
+    }
+
+    fn ensure_spine_compaction_allowed(&self) -> Result<(), SpineRuntimeError> {
+        if self.non_spine_compacted_history {
+            return Err(SpineRuntimeError::NonSpineCompactedHistory);
+        }
+        Ok(())
     }
 
     pub(crate) fn record_plan_update(
@@ -259,6 +286,18 @@ impl SpineRuntime {
                     start: item_start,
                 });
             }
+            if let ResponseItem::FunctionCall {
+                name,
+                namespace,
+                call_id,
+                ..
+            } = item
+                && namespace.is_none()
+                && name == "spine"
+            {
+                self.pending_spine_call_starts
+                    .insert(call_id.clone(), item_start);
+            }
             if let Some(staged) = self.staged_transition.as_mut()
                 && matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == &staged.call_id)
             {
@@ -271,6 +310,9 @@ impl SpineRuntime {
                     ranges.push(self.append_raw_range(turn_id.as_str(), range, item_end)?);
                 }
                 self.commit_staged_transition(&call_id, item_end)?;
+            }
+            if let ResponseItem::FunctionCallOutput { call_id, .. } = item {
+                self.pending_spine_call_starts.remove(call_id);
             }
         }
 
@@ -302,6 +344,8 @@ impl SpineRuntime {
         let mut validation_state = self.state.clone();
         let transition = op.apply(&mut validation_state, summary.clone(), worklog.clone())?;
 
+        let call_start_ordinal = self.pending_spine_call_starts.remove(&call_id);
+
         self.staged_transition = Some(StagedTransition {
             call_id,
             turn_id,
@@ -311,7 +355,7 @@ impl SpineRuntime {
             visible_spine: validation_state.visible_spine(),
             summary,
             worklog,
-            call_start_ordinal: None,
+            call_start_ordinal,
         });
         Ok(self
             .staged_transition
@@ -472,6 +516,8 @@ pub(crate) enum SpineRuntimeError {
     MissingCloseScope { node_id: NodeId },
     #[error("spine node {node_id} is missing summary for compact outline")]
     MissingSummary { node_id: NodeId },
+    #[error("spine compact cannot map raw ordinals after non-spine compacted history")]
+    NonSpineCompactedHistory,
     #[error("unknown spine node {0}")]
     UnknownNode(NodeId),
     #[error("spine plan revision overflow")]

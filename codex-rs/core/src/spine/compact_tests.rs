@@ -39,6 +39,35 @@ fn raw_ordinals_map_to_synthetic_spine_ir_boundaries_only() {
 }
 
 #[test]
+fn raw_ordinals_stop_at_non_spine_compact_items() {
+    let local_summary = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!("{}\nsummary", crate::compact::SUMMARY_PREFIX),
+        }],
+        phase: None,
+    };
+    let history = vec![
+        text_item("raw prefix"),
+        ResponseItem::Compaction {
+            encrypted_content: "opaque".to_string(),
+        },
+        text_item("synthetic tail"),
+    ];
+    let summary_history = vec![text_item("raw prefix"), local_summary, text_item("tail")];
+
+    assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 2), None);
+    assert_eq!(
+        effective_index_for_raw_ordinal(&summary_history, 1),
+        Some(1)
+    );
+    assert_eq!(effective_index_for_raw_ordinal(&summary_history, 2), None);
+}
+
+#[test]
 fn replacement_history_splices_prefix_ir_and_tail() {
     let old_history = vec![
         text_item("a"),

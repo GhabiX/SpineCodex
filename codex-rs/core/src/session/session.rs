@@ -364,6 +364,42 @@ pub(crate) async fn initial_spine_response_item_count(
     Ok(count)
 }
 
+pub(crate) async fn initial_spine_has_non_spine_compacted_history(
+    initial_history: &InitialHistory,
+) -> anyhow::Result<bool> {
+    let has_non_spine_compaction = match initial_history {
+        InitialHistory::New | InitialHistory::Cleared => false,
+        InitialHistory::Resumed(resumed) => {
+            if let Some(rollout_path) = resumed.rollout_path.as_ref() {
+                let (items, _, _) =
+                    crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
+                latest_compaction_is_non_spine(&items)
+            } else {
+                latest_compaction_is_non_spine(&resumed.history)
+            }
+        }
+        InitialHistory::Forked(items) => latest_compaction_is_non_spine(items),
+    };
+    Ok(has_non_spine_compaction)
+}
+
+fn latest_compaction_is_non_spine(items: &[RolloutItem]) -> bool {
+    items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::Compacted(compacted) => {
+                Some(!is_spine_compact_message(&compacted.message))
+            }
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+fn is_spine_compact_message(message: &str) -> bool {
+    message.starts_with("Spine compacted ")
+}
+
 impl Session {
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -436,6 +472,12 @@ impl Session {
         } else {
             0
         };
+        let initial_spine_has_non_spine_compaction =
+            if config.features.enabled(Feature::SpineTaskTree) {
+                initial_spine_has_non_spine_compacted_history(&initial_history).await?
+            } else {
+                false
+            };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -559,7 +601,13 @@ impl Session {
             let spine = if config.features.enabled(Feature::SpineTaskTree) {
                 rollout_path
                     .as_ref()
-                    .map(|path| SpineRuntime::load_or_init(path, initial_spine_ordinal))
+                    .map(|path| {
+                        let mut runtime = SpineRuntime::load_or_init(path, initial_spine_ordinal)?;
+                        if initial_spine_has_non_spine_compaction {
+                            runtime.mark_non_spine_compacted_history();
+                        }
+                        Ok::<_, crate::spine::runtime::SpineRuntimeError>(runtime)
+                    })
                     .transpose()
                     .map(|runtime| runtime.map(|runtime| Arc::new(Mutex::new(runtime))))?
             } else {

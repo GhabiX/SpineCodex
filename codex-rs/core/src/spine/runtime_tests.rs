@@ -362,6 +362,69 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
 }
 
 #[test]
+fn stage_after_recorded_call_preserves_function_call_start() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[assistant_message("before"), spine_call("call-1")],
+            0,
+            2,
+        )
+        .expect("record model output before tool dispatch");
+    runtime
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage transition after function call was recorded");
+    runtime
+        .after_response_items_recorded("turn-1", &[function_call_output("call-1")], 2, 3)
+        .expect("record tool output");
+
+    let committed = runtime
+        .take_last_committed_transition()
+        .expect("transition should be tracked");
+
+    assert_eq!(committed.call_start_ordinal, 1);
+    assert_eq!(committed.boundary_end, 3);
+    assert_eq!(
+        read_json_lines(runtime.store().trajs_index_path()),
+        vec![
+            json!({
+                "type": "raw_items_recorded",
+                "seq": 1,
+                "node_id": "1",
+                "turn_id": "turn-1",
+                "start": 0,
+                "end": 2,
+            }),
+            json!({
+                "type": "raw_items_recorded",
+                "seq": 2,
+                "node_id": "1",
+                "turn_id": "turn-1",
+                "start": 2,
+                "end": 3,
+            }),
+            json!({
+                "type": "transition_committed",
+                "seq": 3,
+                "call_id": "call-1",
+                "op": "open",
+                "from_node": "1",
+                "to_node": "1.1",
+                "call_start_ordinal": 1,
+                "boundary_end": 3,
+            }),
+        ]
+    );
+}
+
+#[test]
 fn next_compact_boundary_uses_finished_leaf_raw_start() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
@@ -415,6 +478,38 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
     assert_eq!(boundary.node_id, id(&[1, 1]));
     assert_eq!(boundary.cut_ordinal, 2);
     assert_eq!(boundary.fold_end_ordinal, 5);
+}
+
+#[test]
+fn next_compact_fails_after_non_spine_compacted_history() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "next-1",
+            "turn-1",
+            SpineOperation::Next,
+            "root done",
+            "Root handoff.",
+        )
+        .expect("stage next");
+    runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[spine_call("next-1"), function_call_output("next-1")],
+            0,
+            2,
+        )
+        .expect("commit next");
+    runtime.mark_non_spine_compacted_history();
+
+    let committed = runtime
+        .take_last_committed_transition()
+        .expect("next transition");
+    let error = runtime
+        .plan_compaction_after_transition(&committed)
+        .expect_err("non-spine compacted history should fail fast");
+
+    assert!(matches!(error, SpineRuntimeError::NonSpineCompactedHistory));
 }
 
 #[test]
@@ -539,6 +634,10 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
     assert!(outline.contains("[1] root scope (nodes/1/worklog.md)"));
     assert!(outline.contains("|-- [1.1] first child done (nodes/1/1/worklog.md)"));
     assert!(outline.contains("|-- [1.2] second child done (nodes/1/2/worklog.md)"));
+    assert!(
+        outline.find("|-- [1.1]").expect("first child row")
+            < outline.find("|-- [1.2]").expect("second child row")
+    );
     assert!(!outline.contains("First child handoff."));
     assert!(!outline.contains("Second child handoff."));
 }

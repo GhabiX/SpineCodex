@@ -328,6 +328,10 @@ pub(crate) fn effective_index_for_raw_ordinal(
             continue;
         }
 
+        if is_non_spine_compact_item(item) {
+            return (target_raw_ordinal == raw_cursor).then_some(index);
+        }
+
         if raw_cursor == target_raw_ordinal {
             return Some(index);
         }
@@ -365,6 +369,33 @@ fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
         fold_start,
         fold_end,
     })
+}
+
+fn is_non_spine_compact_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
+        ResponseItem::Message { role, content, .. } if role == "user" => {
+            content.iter().any(|content_item| {
+                matches!(
+                    content_item,
+                    ContentItem::InputText { text }
+                        if crate::compact::is_summary_message(text)
+                )
+            })
+        }
+        ResponseItem::Message { .. }
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Other => false,
+    }
 }
 
 fn parse_tag_value(header: &str, key: &str) -> Option<u64> {

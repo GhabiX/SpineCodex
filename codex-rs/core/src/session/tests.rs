@@ -1362,6 +1362,37 @@ async fn spine_resume_ordinal_counts_raw_rollout_items_not_filtered_history() ->
 }
 
 #[tokio::test]
+async fn spine_resume_detects_latest_non_spine_compaction() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    write_rollout_items_for_test(
+        &rollout_path,
+        &[
+            RolloutItem::Compacted(CompactedItem {
+                message: "Spine compacted 1 [0, 2)".to_string(),
+                replacement_history: Some(vec![user_message("spine ir")]),
+            }),
+            RolloutItem::Compacted(CompactedItem {
+                message: "native summary".to_string(),
+                replacement_history: Some(vec![user_message("summary")]),
+            }),
+        ],
+    )?;
+
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: Vec::new(),
+        rollout_path: Some(rollout_path),
+    });
+
+    assert!(
+        crate::session::session::initial_spine_has_non_spine_compacted_history(&initial_history)
+            .await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn spine_raw_mirror_is_not_written_without_runtime() -> anyhow::Result<()> {
     let (mut session, _turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;

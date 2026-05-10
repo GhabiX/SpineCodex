@@ -467,11 +467,15 @@ fn assert_plan_updated(tree: &[Value], node_id: &str, revision: u64, source_turn
 fn assert_transition_committed(index: &[Value], call_id: &str, from_node: &str, to_node: &str) {
     assert!(
         index.iter().any(|event| {
+            let call_start = event.get("call_start_ordinal").and_then(Value::as_u64);
+            let boundary_end = event.get("boundary_end").and_then(Value::as_u64);
             event.get("type").and_then(Value::as_str) == Some("transition_committed")
                 && event.get("call_id").and_then(Value::as_str) == Some(call_id)
                 && event.get("from_node").and_then(Value::as_str) == Some(from_node)
                 && event.get("to_node").and_then(Value::as_str) == Some(to_node)
-                && event.get("boundary_end").and_then(Value::as_u64).is_some()
+                && call_start
+                    .zip(boundary_end)
+                    .is_some_and(|(start, end)| start < end)
         }),
         "index should contain transition commit {call_id} {from_node} -> {to_node}: {index:?}"
     );
