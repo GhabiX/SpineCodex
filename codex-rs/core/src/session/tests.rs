@@ -1396,6 +1396,37 @@ async fn spine_raw_mirror_tracks_persisted_response_items() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn spine_raw_mirror_tracks_metadata_without_compacted_history() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let spine =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    let raw_mirror_path = spine.store().raw_rollout_path();
+    session.spine = Some(Arc::new(Mutex::new(spine)));
+
+    session
+        .persist_rollout_items(&[
+            RolloutItem::TurnContext(turn_context.to_turn_context_item()),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 1,
+            })),
+            RolloutItem::Compacted(CompactedItem {
+                message: "effective checkpoint".to_string(),
+                replacement_history: Some(vec![assistant_message("compacted")]),
+            }),
+        ])
+        .await;
+
+    let raw_mirror = read_json_lines_for_test(&raw_mirror_path)?;
+    let item_types = raw_mirror
+        .iter()
+        .map(|item| item["type"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(item_types, vec!["turn_context", "event_msg"]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn try_replace_compacted_history_persists_checkpoint_before_replacing_history()
 -> anyhow::Result<()> {
     let (mut session, _turn_context) = make_session_and_context().await;

@@ -3142,10 +3142,29 @@ impl Session {
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
-        if let Some(live_thread) = self.live_thread()
-            && let Err(e) = live_thread.append_items(items).await
-        {
+        let Some(live_thread) = self.live_thread() else {
+            return;
+        };
+        if let Err(e) = live_thread.append_items(items).await {
             error!("failed to record rollout items: {e:#}");
+            return;
+        }
+
+        if let Some(spine) = self.spine.as_ref() {
+            let raw_items = items
+                .iter()
+                .filter(|item| !matches!(item, RolloutItem::Compacted(_)))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !raw_items.is_empty()
+                && let Err(err) = spine
+                    .lock()
+                    .await
+                    .store()
+                    .append_raw_mirror_items(&raw_items)
+            {
+                error!("failed to mirror spine rollout items: {err}");
+            }
         }
     }
 
