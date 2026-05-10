@@ -378,6 +378,7 @@ impl ToolsConfig {
         let mut nested = self.clone();
         nested.code_mode_enabled = false;
         nested.code_mode_only_enabled = false;
+        nested.spine_task_tree = false;
         nested
     }
 }

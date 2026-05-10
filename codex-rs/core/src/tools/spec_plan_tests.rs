@@ -2242,6 +2242,40 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
 }
 
 #[test]
+fn code_mode_nested_tools_exclude_spine_task_tree() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.enable(Feature::SpineTaskTree);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
+    else {
+        panic!("expected freeform tool");
+    };
+
+    assert!(!description.contains("### `spine`"));
+    assert!(!description.contains("tools.spine"));
+}
+
+#[test]
 fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only() {
     let model_info = model_info();
     let mut features = Features::with_defaults();

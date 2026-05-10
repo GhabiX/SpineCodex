@@ -121,6 +121,32 @@ async fn plan_mode_rejects_before_staging() {
 }
 
 #[tokio::test]
+async fn code_mode_rejects_before_staging() {
+    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let mut invocation = invocation(Arc::clone(&session), turn, "call-spine", valid_args("open"));
+    invocation.source = ToolCallSource::CodeMode {
+        cell_id: "cell-1".to_string(),
+        runtime_tool_call_id: "runtime-call-1".to_string(),
+    };
+
+    let err = SpineHandler
+        .handle(invocation)
+        .await
+        .expect_err("code mode should reject spine");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "spine is not available as a Code Mode nested tool".to_string()
+        )
+    );
+    let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
+    assert!(runtime.staged_transition().is_none());
+}
+
+#[tokio::test]
 async fn missing_runtime_rejects() {
     let (session, turn) = make_session_and_context().await;
     let err = SpineHandler

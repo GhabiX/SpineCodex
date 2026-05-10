@@ -1,5 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::spine::store::SpineOperation;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -88,6 +89,7 @@ impl ToolHandler for SpineHandler {
             turn,
             call_id,
             payload,
+            source,
             ..
         } = invocation;
 
@@ -103,6 +105,11 @@ impl ToolHandler for SpineHandler {
         if turn.collaboration_mode.mode == ModeKind::Plan {
             return Err(FunctionCallError::RespondToModel(
                 "spine is not allowed in Plan mode".to_string(),
+            ));
+        }
+        if matches!(source, ToolCallSource::CodeMode { .. }) {
+            return Err(FunctionCallError::RespondToModel(
+                "spine is not available as a Code Mode nested tool".to_string(),
             ));
         }
 

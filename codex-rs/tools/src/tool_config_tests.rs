@@ -214,6 +214,9 @@ fn spine_task_tree_tracks_feature_flag() {
 
     assert!(!default_tools_config.spine_task_tree);
     assert!(enabled_tools_config.spine_task_tree);
+
+    let nested_tools_config = enabled_tools_config.for_code_mode_nested_tools();
+    assert!(!nested_tools_config.spine_task_tree);
 }
 
 #[test]
