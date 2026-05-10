@@ -1,5 +1,6 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
+use crate::spine::runtime::SpineRuntime;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -31,6 +32,7 @@ pub(crate) struct Session {
     pub(super) mailbox_rx: Mutex<MailboxReceiver>,
     pub(super) idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
     pub(crate) goal_runtime: GoalRuntimeState,
+    pub(crate) spine: Option<Arc<Mutex<SpineRuntime>>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) next_internal_sub_id: AtomicU64,
@@ -333,6 +335,22 @@ pub(crate) struct AppServerClientMetadata {
     pub(crate) client_version: Option<String>,
 }
 
+fn initial_response_item_count(initial_history: &InitialHistory) -> u64 {
+    let count = match initial_history {
+        InitialHistory::New | InitialHistory::Cleared => 0,
+        InitialHistory::Resumed(resumed) => resumed
+            .history
+            .iter()
+            .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
+            .count(),
+        InitialHistory::Forked(items) => items
+            .iter()
+            .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
+            .count(),
+    };
+    u64::try_from(count).unwrap_or(u64::MAX)
+}
+
 impl Session {
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -400,6 +418,7 @@ impl Session {
             .unwrap_or(u64::MAX),
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
+        let initial_spine_ordinal = initial_response_item_count(&initial_history);
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -517,6 +536,15 @@ impl Session {
         let session_result: anyhow::Result<Arc<Self>> = async {
             let rollout_path = if let Some(live_thread) = live_thread_init.as_ref() {
                 live_thread.local_rollout_path().await?
+            } else {
+                None
+            };
+            let spine = if config.features.enabled(Feature::SpineTaskTree) {
+                rollout_path
+                    .as_ref()
+                    .map(|path| SpineRuntime::load_or_init(path, initial_spine_ordinal))
+                    .transpose()
+                    .map(|runtime| runtime.map(|runtime| Arc::new(Mutex::new(runtime))))?
             } else {
                 None
             };
@@ -890,6 +918,7 @@ impl Session {
                 mailbox_rx: Mutex::new(mailbox_rx),
                 idle_pending_input: Mutex::new(Vec::new()),
                 goal_runtime: GoalRuntimeState::new(),
+                spine,
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 next_internal_sub_id: AtomicU64::new(0),

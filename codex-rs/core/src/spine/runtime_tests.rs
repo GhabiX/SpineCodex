@@ -1,0 +1,523 @@
+use super::*;
+use crate::spine::ids::NodeId;
+use crate::spine::store::SpineOperation;
+use crate::spine::store::SpineSidecarStore;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
+use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
+use std::path::Path;
+use tempfile::TempDir;
+
+fn id(segments: &[u32]) -> NodeId {
+    NodeId::from_segments(segments.to_vec())
+}
+
+fn temp_runtime() -> (TempDir, SpineRuntime) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let rollout_path = temp.path().join("rollout-2026-05-10T16-00-00-thread.jsonl");
+    let store = SpineSidecarStore::for_rollout(&rollout_path).expect("store path");
+    let runtime = SpineRuntime::create(store).expect("create runtime");
+    (temp, runtime)
+}
+
+fn read_json_lines(path: impl AsRef<Path>) -> Vec<Value> {
+    let contents = std::fs::read_to_string(path).expect("read jsonl");
+    contents
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("parse json line"))
+        .collect()
+}
+
+fn spine_call(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "spine".to_string(),
+        namespace: None,
+        arguments: r#"{"op":"open","summary":"root scope","worklog":"Root handoff."}"#.to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
+fn function_call_output(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("Spine updated.".to_string()),
+            success: Some(true),
+        },
+    }
+}
+
+fn assistant_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
+#[test]
+fn load_or_create_initializes_then_replays_existing_sidecar() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let rollout_path = temp.path().join("rollout-2026-05-10T16-00-00-thread.jsonl");
+    let store = SpineSidecarStore::for_rollout(&rollout_path).expect("store path");
+    let mut runtime =
+        SpineRuntime::load_or_create(store.clone(), 0).expect("create missing sidecar");
+    runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[assistant_message("one"), assistant_message("two")],
+            0,
+            2,
+        )
+        .expect("record raw items");
+
+    let loaded = SpineRuntime::load_or_create(store, 2).expect("load existing sidecar");
+
+    assert_eq!(loaded.cursor(), &id(&[1]));
+    assert_eq!(loaded.current_ordinal(), 2);
+    assert_eq!(
+        read_json_lines(loaded.store().tree_path()),
+        vec![json!({
+            "type": "node_created",
+            "seq": 1,
+            "node_id": "1",
+            "parent_id": null,
+            "raw_start_ordinal": 0,
+        })]
+    );
+}
+
+#[test]
+fn records_raw_item_ranges_for_current_cursor() {
+    let (_temp, mut runtime) = temp_runtime();
+
+    let first = runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[
+                assistant_message("one"),
+                assistant_message("two"),
+                assistant_message("three"),
+            ],
+            0,
+            3,
+        )
+        .expect("record raw items")
+        .pop()
+        .expect("non-empty range");
+
+    assert_eq!(
+        first,
+        RawOrdinalRange {
+            node_id: id(&[1]),
+            start: 0,
+            end: 3,
+        }
+    );
+    assert_eq!(runtime.current_ordinal(), 3);
+    assert_eq!(
+        read_json_lines(runtime.store().trajs_index_path()),
+        vec![json!({
+            "type": "raw_items_recorded",
+            "seq": 1,
+            "node_id": "1",
+            "turn_id": "turn-1",
+            "start": 0,
+            "end": 3,
+        })]
+    );
+}
+
+#[test]
+fn stage_does_not_advance_cursor_or_write_transition() {
+    let (_temp, mut runtime) = temp_runtime();
+
+    let staged = runtime
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage transition")
+        .clone();
+
+    assert_eq!(staged.from_node, id(&[1]));
+    assert_eq!(staged.to_node, id(&[1, 1]));
+    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert_eq!(runtime.state().visible_spine(), vec![id(&[1])]);
+    assert!(!runtime.store().worklog_path(&id(&[1])).exists());
+    assert_eq!(
+        read_json_lines(runtime.store().tree_path()),
+        vec![json!({
+            "type": "node_created",
+            "seq": 1,
+            "node_id": "1",
+            "parent_id": null,
+            "raw_start_ordinal": 0,
+        })]
+    );
+}
+
+#[test]
+fn commit_moves_cursor_after_function_call_output_boundary() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage transition");
+
+    let ranges = runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[spine_call("call-1"), function_call_output("call-1")],
+            0,
+            2,
+        )
+        .expect("record response items");
+
+    assert_eq!(
+        ranges,
+        vec![RawOrdinalRange {
+            node_id: id(&[1]),
+            start: 0,
+            end: 2,
+        }]
+    );
+    assert_eq!(
+        runtime.cursor(),
+        &id(&[1, 1]),
+        "cursor moves after the FunctionCallOutput is recorded"
+    );
+    assert!(runtime.staged_transition().is_none());
+    assert_eq!(
+        read_json_lines(runtime.store().tree_path()),
+        vec![
+            json!({
+                "type": "node_created",
+                "seq": 1,
+                "node_id": "1",
+                "parent_id": null,
+                "raw_start_ordinal": 0,
+            }),
+            json!({
+                "type": "transition_applied",
+                "seq": 2,
+                "op": "open",
+                "from_node": "1",
+                "to_node": "1.1",
+                "to_parent_id": "1",
+                "summary": "root scope",
+                "worklog_hash": "sha1:8770a7241631fffc71387378a9cb42810b7f148a",
+                "raw_start_ordinal": 2,
+            }),
+        ]
+    );
+    assert_eq!(
+        read_json_lines(runtime.store().trajs_index_path()),
+        vec![
+            json!({
+                "type": "raw_items_recorded",
+                "seq": 1,
+                "node_id": "1",
+                "turn_id": "turn-1",
+                "start": 0,
+                "end": 2,
+            }),
+            json!({
+                "type": "transition_committed",
+                "seq": 2,
+                "call_id": "call-1",
+                "from_node": "1",
+                "to_node": "1.1",
+                "boundary_end": 2,
+            }),
+        ]
+    );
+}
+
+#[test]
+fn raw_items_after_commit_are_owned_by_new_cursor() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .after_response_items_recorded("model-call", &[spine_call("call-1")], 0, 1)
+        .expect("record model call");
+    runtime
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage transition");
+    runtime
+        .after_response_items_recorded("spine-output", &[function_call_output("call-1")], 1, 2)
+        .expect("record output");
+    runtime
+        .commit_staged_transition("call-1", 2)
+        .expect_err("transition was already committed by the output hook");
+
+    let next = runtime
+        .after_response_items_recorded(
+            "after-spine",
+            &[
+                assistant_message("child one"),
+                assistant_message("child two"),
+            ],
+            2,
+            4,
+        )
+        .expect("record new node items")
+        .pop()
+        .expect("non-empty range");
+
+    assert_eq!(
+        next,
+        RawOrdinalRange {
+            node_id: id(&[1, 1]),
+            start: 2,
+            end: 4,
+        }
+    );
+    assert_eq!(runtime.current_ordinal(), 4);
+}
+
+#[test]
+fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage transition");
+
+    let ranges = runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[
+                spine_call("call-1"),
+                function_call_output("call-1"),
+                assistant_message("now working in child"),
+            ],
+            0,
+            3,
+        )
+        .expect("record response items");
+
+    assert_eq!(
+        ranges,
+        vec![
+            RawOrdinalRange {
+                node_id: id(&[1]),
+                start: 0,
+                end: 2,
+            },
+            RawOrdinalRange {
+                node_id: id(&[1, 1]),
+                start: 2,
+                end: 3,
+            },
+        ]
+    );
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
+    assert_eq!(runtime.current_ordinal(), 3);
+    assert_eq!(
+        read_json_lines(runtime.store().trajs_index_path()),
+        vec![
+            json!({
+                "type": "raw_items_recorded",
+                "seq": 1,
+                "node_id": "1",
+                "turn_id": "turn-1",
+                "start": 0,
+                "end": 2,
+            }),
+            json!({
+                "type": "transition_committed",
+                "seq": 2,
+                "call_id": "call-1",
+                "from_node": "1",
+                "to_node": "1.1",
+                "boundary_end": 2,
+            }),
+            json!({
+                "type": "raw_items_recorded",
+                "seq": 3,
+                "node_id": "1.1",
+                "turn_id": "turn-1",
+                "start": 2,
+                "end": 3,
+            }),
+        ]
+    );
+}
+
+#[test]
+fn rejects_second_staged_transition() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage first transition");
+
+    let error = runtime
+        .stage_transition(
+            "call-2",
+            "turn-1",
+            SpineOperation::Next,
+            "another",
+            "Another handoff.",
+        )
+        .expect_err("second staged transition should fail");
+
+    assert!(matches!(
+        error,
+        SpineRuntimeError::TransitionAlreadyStaged { call_id } if call_id == "call-1"
+    ));
+    assert_eq!(runtime.cursor(), &id(&[1]));
+}
+
+#[test]
+fn commit_requires_matching_call_id() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage transition");
+
+    let error = runtime
+        .commit_staged_transition("call-2", 0)
+        .expect_err("wrong call id should fail");
+
+    assert!(matches!(
+        error,
+        SpineRuntimeError::StagedCallIdMismatch { expected, actual }
+            if expected == "call-1" && actual == "call-2"
+    ));
+    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert!(runtime.staged_transition().is_some());
+}
+
+#[test]
+fn commit_failure_leaves_cursor_and_tree_unchanged() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "__spine_fail_transition_commit__",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage transition");
+
+    let error = runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[
+                spine_call("__spine_fail_transition_commit__"),
+                function_call_output("__spine_fail_transition_commit__"),
+            ],
+            0,
+            2,
+        )
+        .expect_err("injected commit failure should abort transition");
+
+    assert!(matches!(
+        error,
+        SpineRuntimeError::Store(crate::spine::store::SpineStoreError::InvalidLedger(message))
+            if message == "injected transition commit failure"
+    ));
+    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert_eq!(runtime.current_ordinal(), 2);
+    assert!(runtime.staged_transition().is_some());
+    assert!(!runtime.store().worklog_path(&id(&[1])).exists());
+    assert_eq!(
+        read_json_lines(runtime.store().tree_path()),
+        vec![json!({
+            "type": "node_created",
+            "seq": 1,
+            "node_id": "1",
+            "parent_id": null,
+            "raw_start_ordinal": 0,
+        })]
+    );
+    assert_eq!(
+        read_json_lines(runtime.store().trajs_index_path()),
+        vec![json!({
+            "type": "raw_items_recorded",
+            "seq": 1,
+            "node_id": "1",
+            "turn_id": "turn-1",
+            "start": 0,
+            "end": 2,
+        })]
+    );
+}
+
+#[test]
+fn stage_uses_state_validation_without_mutating_runtime() {
+    let (_temp, mut runtime) = temp_runtime();
+
+    let error = runtime
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Close,
+            "root done",
+            "Root cannot close.",
+        )
+        .expect_err("close on root should fail");
+
+    assert!(matches!(
+        error,
+        SpineRuntimeError::State(SpineStateError::CannotCloseRoot)
+    ));
+    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert!(runtime.staged_transition().is_none());
+}
+
+#[test]
+fn zero_raw_items_are_noop() {
+    let (_temp, mut runtime) = temp_runtime();
+
+    let ranges = runtime
+        .after_response_items_recorded("empty", &[], 0, 0)
+        .expect("zero item record should be a no-op");
+
+    assert_eq!(ranges, Vec::<RawOrdinalRange>::new());
+    assert_eq!(runtime.current_ordinal(), 0);
+    assert_eq!(
+        std::fs::read_to_string(runtime.store().trajs_index_path()).expect("read trajs index"),
+        ""
+    );
+}

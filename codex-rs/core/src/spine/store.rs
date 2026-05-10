@@ -220,9 +220,16 @@ impl SpineSidecarStore {
         boundary_end: u64,
     ) -> Result<(), SpineStoreError> {
         let path = self.trajs_index_path();
+        let call_id = call_id.into();
+        #[cfg(test)]
+        if call_id == "__spine_fail_transition_commit__" {
+            return Err(SpineStoreError::InvalidLedger(
+                "injected transition commit failure".to_string(),
+            ));
+        }
         let event = TrajsIndexEvent::TransitionCommitted {
             seq: self.next_jsonl_seq(&path)?,
-            call_id: call_id.into(),
+            call_id,
             from_node: from_node.to_string(),
             to_node: to_node.to_string(),
             boundary_end,
@@ -432,10 +439,23 @@ impl SpineSidecarStore {
             .write(true)
             .create_new(true)
             .open(&path)
+            .map(Some)
+            .or_else(|source| {
+                if source.kind() == std::io::ErrorKind::AlreadyExists {
+                    let existing = std::fs::read_to_string(&path)?;
+                    if existing == worklog {
+                        return Ok(None);
+                    }
+                }
+                Err(source)
+            })
             .map_err(|source| SpineStoreError::Io {
                 path: path.clone(),
                 source,
             })?;
+        let Some(file) = file.as_mut() else {
+            return Ok(());
+        };
         file.write_all(worklog.as_bytes())
             .map_err(|source| SpineStoreError::Io { path, source })
     }
@@ -478,7 +498,7 @@ pub(crate) enum SpineOperation {
 }
 
 impl SpineOperation {
-    fn apply(
+    pub(crate) fn apply(
         self,
         state: &mut SpineState,
         summary: impl Into<String>,

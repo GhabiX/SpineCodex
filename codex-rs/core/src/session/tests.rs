@@ -1283,6 +1283,30 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_runtime_is_inert_when_feature_is_off() -> anyhow::Result<()> {
+    let session = make_session_with_config(|_| {}).await?;
+
+    assert!(session.spine.is_none());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_runtime_initializes_root_when_feature_is_on() -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineTaskTree)
+            .expect("enable spine task tree");
+    })
+    .await?;
+    let spine = session.spine.as_ref().expect("spine runtime").lock().await;
+
+    assert_eq!(spine.cursor(), &crate::spine::ids::NodeId::root());
+    assert_eq!(spine.current_ordinal(), 0);
+    Ok(())
+}
+
 #[tokio::test]
 async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
     let (session, _turn_context) = make_session_and_context().await;
@@ -3950,6 +3974,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         goal_runtime: crate::goals::GoalRuntimeState::new(),
+        spine: None,
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         next_internal_sub_id: AtomicU64::new(0),
@@ -5665,6 +5690,7 @@ where
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         goal_runtime: crate::goals::GoalRuntimeState::new(),
+        spine: None,
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         next_internal_sub_id: AtomicU64::new(0),

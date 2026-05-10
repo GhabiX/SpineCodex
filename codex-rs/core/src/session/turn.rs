@@ -1764,7 +1764,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     state: &mut PlanModeStreamState,
     previously_active_item: Option<&TurnItem>,
     last_agent_message: &mut Option<String>,
-) -> bool {
+) -> CodexResult<bool> {
     if let ResponseItem::Message { role, .. } = item
         && role == "assistant"
     {
@@ -1783,13 +1783,13 @@ async fn handle_assistant_item_done_in_plan_mode(
             .await;
         }
 
-        record_completed_response_item(sess, turn_context, item).await;
+        record_completed_response_item(sess, turn_context, item).await?;
         if let Some(agent_message) = last_assistant_message_from_item(item, /*plan_mode*/ true) {
             *last_agent_message = Some(agent_message);
         }
-        return true;
+        return Ok(true);
     }
-    false
+    Ok(false)
 }
 
 async fn drain_in_flight(
@@ -1801,8 +1801,11 @@ async fn drain_in_flight(
         match res {
             Ok(response_input) => {
                 let response_item = response_input.into();
-                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
-                    .await;
+                sess.try_record_conversation_items(
+                    &turn_context,
+                    std::slice::from_ref(&response_item),
+                )
+                .await?;
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -1942,8 +1945,8 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
-                if let Some(state) = plan_mode_state.as_mut()
-                    && handle_assistant_item_done_in_plan_mode(
+                if let Some(state) = plan_mode_state.as_mut() {
+                    if handle_assistant_item_done_in_plan_mode(
                         &sess,
                         &turn_context,
                         &item,
@@ -1951,9 +1954,10 @@ async fn try_run_sampling_request(
                         previously_active_item.as_ref(),
                         &mut last_agent_message,
                     )
-                    .await
-                {
-                    continue;
+                    .await?
+                    {
+                        continue;
+                    }
                 }
 
                 let mut ctx = HandleOutputCtx {

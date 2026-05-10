@@ -2435,9 +2435,26 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
+        if let Err(err) = self
+            .try_record_conversation_items(turn_context, items)
+            .await
+        {
+            error!("failed to record conversation items: {err}");
+        }
+    }
+
+    pub(crate) async fn try_record_conversation_items(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) -> CodexResult<()> {
+        let spine_start_ordinal = self.spine_current_ordinal().await;
         self.record_into_history(items, turn_context).await;
-        self.persist_rollout_response_items(items).await;
+        self.try_persist_rollout_response_items(items).await?;
         self.send_raw_response_items(turn_context, items).await;
+        self.after_spine_response_items_recorded(turn_context, items, spine_start_ordinal)
+            .await?;
+        Ok(())
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -2546,13 +2563,61 @@ impl Session {
         self.services.model_client.advance_window_generation();
     }
 
-    async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
+    async fn try_persist_rollout_response_items(&self, items: &[ResponseItem]) -> CodexResult<()> {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
             .cloned()
             .map(RolloutItem::ResponseItem)
             .collect();
-        self.persist_rollout_items(&rollout_items).await;
+        if self.spine.is_none() {
+            self.persist_rollout_items(&rollout_items).await;
+            return Ok(());
+        }
+
+        let Some(live_thread) = self.live_thread() else {
+            return Err(CodexErr::Fatal(
+                "spine runtime requires rollout persistence".to_string(),
+            ));
+        };
+        live_thread
+            .append_items(&rollout_items)
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to record rollout items: {err:#}")))
+    }
+
+    async fn spine_current_ordinal(&self) -> Option<u64> {
+        let spine = self.spine.as_ref()?;
+        Some(spine.lock().await.current_ordinal())
+    }
+
+    async fn after_spine_response_items_recorded(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        start_ordinal: Option<u64>,
+    ) -> CodexResult<()> {
+        let Some(spine) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let Some(start_ordinal) = start_ordinal else {
+            return Ok(());
+        };
+        let item_count = u64::try_from(items.len()).map_err(|_| {
+            CodexErr::Fatal("too many response items for spine ordinal tracking".to_string())
+        })?;
+        let end_ordinal = start_ordinal
+            .checked_add(item_count)
+            .ok_or_else(|| CodexErr::Fatal("spine response item ordinal overflow".to_string()))?;
+        spine
+            .lock()
+            .await
+            .after_response_items_recorded(&turn_context.sub_id, items, start_ordinal, end_ordinal)
+            .map(|_| ())
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "Spine transition failed after response items were recorded. The turn was aborted before the next model request; spine cursor was not advanced. Cause: {err}"
+                ))
+            })
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

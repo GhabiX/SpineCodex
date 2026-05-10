@@ -127,9 +127,9 @@ pub(crate) async fn record_completed_response_item(
     sess: &Session,
     turn_context: &TurnContext,
     item: &ResponseItem,
-) {
-    sess.record_conversation_items(turn_context, std::slice::from_ref(item))
-        .await;
+) -> Result<()> {
+    sess.try_record_conversation_items(turn_context, std::slice::from_ref(item))
+        .await?;
     if completed_item_defers_mailbox_delivery_to_next_turn(
         item,
         turn_context.collaboration_mode.mode == ModeKind::Plan,
@@ -147,6 +147,7 @@ pub(crate) async fn record_completed_response_item(
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
     }
+    Ok(())
 }
 
 fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
@@ -244,7 +245,7 @@ pub(crate) async fn handle_output_item_done(
             );
 
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+                .await?;
 
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_future: InFlightFuture<'static> = Box::pin(
@@ -284,7 +285,7 @@ pub(crate) async fn handle_output_item_done(
                     .await;
             }
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+                .await?;
             let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
 
             output.last_agent_message = last_agent_message;
@@ -305,14 +306,14 @@ pub(crate) async fn handle_output_item_done(
                 },
             };
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+                .await?;
             if let Some(response_item) = response_input_to_response_item(&response) {
                 ctx.sess
-                    .record_conversation_items(
+                    .try_record_conversation_items(
                         &ctx.turn_context,
                         std::slice::from_ref(&response_item),
                     )
-                    .await;
+                    .await?;
             }
 
             output.needs_follow_up = true;
@@ -327,14 +328,14 @@ pub(crate) async fn handle_output_item_done(
                 },
             };
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+                .await?;
             if let Some(response_item) = response_input_to_response_item(&response) {
                 ctx.sess
-                    .record_conversation_items(
+                    .try_record_conversation_items(
                         &ctx.turn_context,
                         std::slice::from_ref(&response_item),
                     )
-                    .await;
+                    .await?;
             }
 
             output.needs_follow_up = true;
