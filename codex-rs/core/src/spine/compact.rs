@@ -24,6 +24,17 @@ pub(crate) struct SpineCompactInput {
     pub(crate) sidecar_root: PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpineCompactBoundary {
+    pub(crate) op: SpineOperation,
+    pub(crate) node_id: NodeId,
+    pub(crate) scope_node_id: Option<NodeId>,
+    pub(crate) cut_ordinal: u64,
+    pub(crate) fold_end_ordinal: u64,
+    pub(crate) transition_summary: String,
+    pub(crate) transition_worklog: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpineCompactPlan {
     pub(crate) input: SpineCompactInput,
@@ -43,10 +54,7 @@ pub(crate) struct SpineCompactOutput {
 
 #[async_trait]
 pub(crate) trait SpineCompactStrategy: Send + Sync {
-    async fn compact_suffix(
-        &self,
-        input: SpineCompactInput,
-    ) -> CodexResult<SpineCompactOutput>;
+    async fn compact_suffix(&self, input: SpineCompactInput) -> CodexResult<SpineCompactOutput>;
 }
 
 pub(crate) fn build_suffix_replacement_history(
@@ -55,8 +63,9 @@ pub(crate) fn build_suffix_replacement_history(
     fold_end_index: usize,
     ir_items: Vec<ResponseItem>,
 ) -> Vec<ResponseItem> {
-    let mut replacement_history =
-        Vec::with_capacity(cut_index + ir_items.len() + old_history.len().saturating_sub(fold_end_index));
+    let mut replacement_history = Vec::with_capacity(
+        cut_index + ir_items.len() + old_history.len().saturating_sub(fold_end_index),
+    );
     replacement_history.extend_from_slice(&old_history[..cut_index]);
     replacement_history.extend(ir_items);
     replacement_history.extend_from_slice(&old_history[fold_end_index..]);
@@ -91,7 +100,9 @@ pub(crate) fn plan_suffix_fold(
     }
 
     Ok(SpineCompactPlan {
-        worklog_path: input.sidecar_root.join(relative_worklog_path(&input.node_id)),
+        worklog_path: input
+            .sidecar_root
+            .join(relative_worklog_path(&input.node_id)),
         replacement_tail: history[fold_end_index..].to_vec(),
         input,
         cut_index,
@@ -137,7 +148,9 @@ pub(crate) fn render_context_compacted_outline(
     rendered.push_str("## Context Compacted\n\n");
     rendered.push_str(&format!(
         "[{}] {} ({})\n",
-        scope_node_id, scope_summary, scope_worklog_path.display()
+        scope_node_id,
+        scope_summary,
+        scope_worklog_path.display()
     ));
     for (summary, path) in child_rows {
         rendered.push_str(&format!("|-- {} ({})\n", summary, path));
@@ -179,12 +192,12 @@ struct SpineIrMetadata {
 
 fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
     let text = match item {
-        ResponseItem::Message { role, content, .. } if role == "user" => content
-            .iter()
-            .find_map(|content_item| match content_item {
+        ResponseItem::Message { role, content, .. } if role == "user" => {
+            content.iter().find_map(|content_item| match content_item {
                 ContentItem::InputText { text } => Some(text.as_str()),
                 _ => None,
-            })?,
+            })?
+        }
         _ => return None,
     };
 

@@ -1,3 +1,4 @@
+use super::compact::SpineCompactBoundary;
 use super::ids::NodeId;
 use super::plan_bridge::PlanSnapshot;
 use super::state::SpineState;
@@ -94,6 +95,54 @@ impl SpineRuntime {
 
     pub(crate) fn raw_start_ordinal(&self, node_id: &NodeId) -> Option<u64> {
         self.state.node(node_id)?.raw_start_ordinal
+    }
+
+    pub(crate) fn plan_compaction_after_transition(
+        &self,
+        committed: &CommittedTransition,
+    ) -> Result<Option<SpineCompactBoundary>, SpineRuntimeError> {
+        match committed.op {
+            SpineOperation::Open => Ok(None),
+            SpineOperation::Next => {
+                let cut_ordinal =
+                    self.raw_start_ordinal(&committed.from_node)
+                        .ok_or_else(|| SpineRuntimeError::MissingRawStartOrdinal {
+                            node_id: committed.from_node.clone(),
+                        })?;
+                Ok(Some(SpineCompactBoundary {
+                    op: committed.op,
+                    node_id: committed.from_node.clone(),
+                    scope_node_id: None,
+                    cut_ordinal,
+                    fold_end_ordinal: committed.boundary_end,
+                    transition_summary: committed.summary.clone(),
+                    transition_worklog: committed.worklog.clone(),
+                }))
+            }
+            SpineOperation::Close => {
+                let scope_node_id = self
+                    .state
+                    .node(&committed.from_node)
+                    .and_then(|node| node.parent_id.clone())
+                    .ok_or_else(|| SpineRuntimeError::MissingCloseScope {
+                        node_id: committed.from_node.clone(),
+                    })?;
+                let cut_ordinal = self.raw_start_ordinal(&scope_node_id).ok_or_else(|| {
+                    SpineRuntimeError::MissingRawStartOrdinal {
+                        node_id: scope_node_id.clone(),
+                    }
+                })?;
+                Ok(Some(SpineCompactBoundary {
+                    op: committed.op,
+                    node_id: scope_node_id.clone(),
+                    scope_node_id: Some(scope_node_id),
+                    cut_ordinal,
+                    fold_end_ordinal: committed.boundary_end,
+                    transition_summary: committed.summary.clone(),
+                    transition_worklog: committed.worklog.clone(),
+                }))
+            }
+        }
     }
 
     pub(crate) fn record_plan_update(
@@ -292,6 +341,8 @@ impl SpineRuntime {
             to_node: staged.to_node,
             call_start_ordinal: staged.call_start_ordinal.unwrap_or(boundary_end_ordinal),
             boundary_end: boundary_end_ordinal,
+            summary: staged.summary,
+            worklog: staged.worklog,
         };
         self.last_committed_transition = Some(committed.clone());
         Ok(committed)
@@ -337,6 +388,8 @@ pub(crate) struct CommittedTransition {
     pub(crate) to_node: NodeId,
     pub(crate) call_start_ordinal: u64,
     pub(crate) boundary_end: u64,
+    pub(crate) summary: String,
+    pub(crate) worklog: String,
 }
 
 #[derive(Debug, Error)]
@@ -360,6 +413,10 @@ pub(crate) enum SpineRuntimeError {
     },
     #[error("spine transition boundary mismatch: expected {expected}, got {actual}")]
     TransitionBoundaryMismatch { expected: u64, actual: u64 },
+    #[error("spine node {node_id} is missing raw_start_ordinal")]
+    MissingRawStartOrdinal { node_id: NodeId },
+    #[error("spine close transition from {node_id} has no parent scope")]
+    MissingCloseScope { node_id: NodeId },
     #[error("spine plan revision overflow")]
     PlanRevisionOverflow,
     #[error(

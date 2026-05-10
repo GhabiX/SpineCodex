@@ -40,7 +40,12 @@ fn raw_ordinals_map_through_synthetic_spine_ir_ranges() {
 
 #[test]
 fn replacement_history_splices_prefix_ir_and_tail() {
-    let old_history = vec![text_item("a"), text_item("b"), text_item("c"), text_item("d")];
+    let old_history = vec![
+        text_item("a"),
+        text_item("b"),
+        text_item("c"),
+        text_item("d"),
+    ];
     let ir_item = render_spine_ir_item(
         &id(&[1]),
         SpineOperation::Next,
@@ -50,12 +55,7 @@ fn replacement_history_splices_prefix_ir_and_tail() {
         1,
         3,
     );
-    let replacement = build_suffix_replacement_history(
-        &old_history,
-        1,
-        3,
-        vec![ir_item],
-    );
+    let replacement = build_suffix_replacement_history(&old_history, 1, 3, vec![ir_item]);
 
     assert_eq!(replacement.len(), 3);
     assert_eq!(replacement[0], old_history[0]);

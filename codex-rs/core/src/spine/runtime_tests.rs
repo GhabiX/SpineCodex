@@ -362,6 +362,119 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
 }
 
 #[test]
+fn next_compact_boundary_uses_finished_leaf_raw_start() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage open");
+    runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[spine_call("open-1"), function_call_output("open-1")],
+            0,
+            2,
+        )
+        .expect("commit open");
+    runtime.take_last_committed_transition();
+    runtime
+        .after_response_items_recorded("turn-2", &[assistant_message("leaf work")], 2, 3)
+        .expect("record leaf work");
+    runtime
+        .stage_transition(
+            "next-1",
+            "turn-2",
+            SpineOperation::Next,
+            "leaf done",
+            "Leaf handoff.",
+        )
+        .expect("stage next");
+    runtime
+        .after_response_items_recorded(
+            "turn-2",
+            &[spine_call("next-1"), function_call_output("next-1")],
+            3,
+            5,
+        )
+        .expect("commit next");
+
+    let committed = runtime
+        .take_last_committed_transition()
+        .expect("next transition");
+    let boundary = runtime
+        .plan_compaction_after_transition(&committed)
+        .expect("compact boundary")
+        .expect("next should compact");
+
+    assert_eq!(boundary.op, SpineOperation::Next);
+    assert_eq!(boundary.node_id, id(&[1, 1]));
+    assert_eq!(boundary.cut_ordinal, 2);
+    assert_eq!(boundary.fold_end_ordinal, 5);
+}
+
+#[test]
+fn close_compact_boundary_uses_parent_scope_raw_start() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            "Root handoff.",
+        )
+        .expect("stage open");
+    runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[spine_call("open-1"), function_call_output("open-1")],
+            0,
+            2,
+        )
+        .expect("commit open");
+    runtime.take_last_committed_transition();
+    runtime
+        .after_response_items_recorded("turn-2", &[assistant_message("child work")], 2, 3)
+        .expect("record child work");
+    runtime
+        .stage_transition(
+            "close-1",
+            "turn-2",
+            SpineOperation::Close,
+            "scope done",
+            "Scope handoff.",
+        )
+        .expect("stage close");
+    runtime
+        .after_response_items_recorded(
+            "turn-2",
+            &[spine_call("close-1"), function_call_output("close-1")],
+            3,
+            5,
+        )
+        .expect("commit close");
+
+    let committed = runtime
+        .take_last_committed_transition()
+        .expect("close transition");
+    let boundary = runtime
+        .plan_compaction_after_transition(&committed)
+        .expect("compact boundary")
+        .expect("close should compact");
+
+    assert_eq!(boundary.op, SpineOperation::Close);
+    assert_eq!(boundary.node_id, id(&[1]));
+    assert_eq!(boundary.scope_node_id, Some(id(&[1])));
+    assert_eq!(boundary.cut_ordinal, 0);
+    assert_eq!(boundary.fold_end_ordinal, 5);
+}
+
+#[test]
 fn raw_items_after_commit_are_owned_by_new_cursor() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
