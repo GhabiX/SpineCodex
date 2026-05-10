@@ -83,6 +83,7 @@ use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -1821,6 +1822,111 @@ async fn drain_in_flight(
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SpineToolOrderOutcome {
+    Allow { drain_after_dispatch: bool },
+    Reject { call_id: String, message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SpineToolKind {
+    Spine { call_id: String },
+    OtherTool,
+    NotTool,
+}
+
+#[derive(Debug)]
+struct SpineToolOrderGuard {
+    enabled: bool,
+    seen_non_spine_tool: bool,
+    seen_spine_transition: bool,
+}
+
+impl SpineToolOrderGuard {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            seen_non_spine_tool: false,
+            seen_spine_transition: false,
+        }
+    }
+
+    fn observe(&mut self, item: &ResponseItem) -> SpineToolOrderOutcome {
+        if !self.enabled {
+            return SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: false,
+            };
+        }
+
+        match Self::classify(item) {
+            SpineToolKind::Spine { call_id } => {
+                if self.seen_spine_transition {
+                    return SpineToolOrderOutcome::Reject {
+                        call_id,
+                        message: "only one spine transition is allowed per model response"
+                            .to_string(),
+                    };
+                }
+                if self.seen_non_spine_tool {
+                    return SpineToolOrderOutcome::Reject {
+                        call_id,
+                        message: "spine must be the first tool call in a model response"
+                            .to_string(),
+                    };
+                }
+                self.seen_spine_transition = true;
+                SpineToolOrderOutcome::Allow {
+                    drain_after_dispatch: true,
+                }
+            }
+            SpineToolKind::OtherTool => {
+                self.seen_non_spine_tool = true;
+                SpineToolOrderOutcome::Allow {
+                    drain_after_dispatch: false,
+                }
+            }
+            SpineToolKind::NotTool => SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: false,
+            },
+        }
+    }
+
+    fn classify(item: &ResponseItem) -> SpineToolKind {
+        match item {
+            ResponseItem::FunctionCall {
+                name,
+                namespace,
+                call_id,
+                ..
+            } if namespace.is_none() && name == "spine" => SpineToolKind::Spine {
+                call_id: call_id.clone(),
+            },
+            ResponseItem::FunctionCall { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. } => SpineToolKind::OtherTool,
+            _ => SpineToolKind::NotTool,
+        }
+    }
+}
+
+async fn record_spine_order_rejection(
+    sess: &Session,
+    turn_context: &TurnContext,
+    item: &ResponseItem,
+    call_id: String,
+    message: String,
+) -> CodexResult<()> {
+    record_completed_response_item(sess, turn_context, item).await?;
+    let mut output = FunctionCallOutputPayload::from_text(message);
+    output.success = Some(false);
+    let response_item = ResponseItem::FunctionCallOutput { call_id, output };
+    sess.try_record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+        .await
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -1880,6 +1986,8 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
+    let mut spine_tool_order_guard =
+        SpineToolOrderGuard::new(turn_context.tools_config.spine_task_tree);
     let receiving_span = trace_span!("receiving_stream");
     let mut completed_response_id: Option<String> = None;
     let outcome: CodexResult<SamplingRequestResult> = loop {
@@ -1986,6 +2094,25 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
+                let spine_order_outcome = spine_tool_order_guard.observe(&item);
+                let drain_after_dispatch = match spine_order_outcome {
+                    SpineToolOrderOutcome::Allow {
+                        drain_after_dispatch,
+                    } => drain_after_dispatch,
+                    SpineToolOrderOutcome::Reject { call_id, message } => {
+                        record_spine_order_rejection(
+                            sess.as_ref(),
+                            turn_context.as_ref(),
+                            &item,
+                            call_id,
+                            message,
+                        )
+                        .await?;
+                        needs_follow_up = true;
+                        continue;
+                    }
+                };
+
                 let output_result =
                     match handle_output_item_done(&mut ctx, item, previously_active_item)
                         .instrument(handle_responses)
@@ -1996,6 +2123,9 @@ async fn try_run_sampling_request(
                     };
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
+                    if drain_after_dispatch {
+                        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+                    }
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -2275,4 +2405,93 @@ pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     }
     None
+}
+
+#[cfg(test)]
+mod spine_tool_order_tests {
+    use super::*;
+
+    fn function_call(name: &str, call_id: &str) -> ResponseItem {
+        ResponseItem::FunctionCall {
+            id: None,
+            name: name.to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: call_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn feature_off_does_not_guard_spine_order() {
+        let mut guard = SpineToolOrderGuard::new(false);
+
+        assert_eq!(
+            guard.observe(&function_call("shell", "call-shell")),
+            SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: false,
+            }
+        );
+        assert_eq!(
+            guard.observe(&function_call("spine", "call-spine")),
+            SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: false,
+            }
+        );
+    }
+
+    #[test]
+    fn first_spine_requires_immediate_drain_barrier() {
+        let mut guard = SpineToolOrderGuard::new(true);
+
+        assert_eq!(
+            guard.observe(&function_call("spine", "call-spine")),
+            SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: true,
+            }
+        );
+        assert_eq!(
+            guard.observe(&function_call("shell", "call-shell")),
+            SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: false,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_second_spine_in_same_response() {
+        let mut guard = SpineToolOrderGuard::new(true);
+        assert_eq!(
+            guard.observe(&function_call("spine", "call-spine-1")),
+            SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: true,
+            }
+        );
+
+        assert_eq!(
+            guard.observe(&function_call("spine", "call-spine-2")),
+            SpineToolOrderOutcome::Reject {
+                call_id: "call-spine-2".to_string(),
+                message: "only one spine transition is allowed per model response".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_spine_after_non_spine_tool() {
+        let mut guard = SpineToolOrderGuard::new(true);
+        assert_eq!(
+            guard.observe(&function_call("shell", "call-shell")),
+            SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: false,
+            }
+        );
+
+        assert_eq!(
+            guard.observe(&function_call("spine", "call-spine")),
+            SpineToolOrderOutcome::Reject {
+                call_id: "call-spine".to_string(),
+                message: "spine must be the first tool call in a model response".to_string(),
+            }
+        );
+    }
 }
