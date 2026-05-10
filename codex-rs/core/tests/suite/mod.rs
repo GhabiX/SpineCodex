@@ -97,6 +97,8 @@ mod shell_snapshot;
 mod skill_approval;
 mod skills;
 mod spawn_agent_description;
+#[cfg(not(target_os = "windows"))]
+mod spine_integration_smoke;
 mod sqlite_state;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
