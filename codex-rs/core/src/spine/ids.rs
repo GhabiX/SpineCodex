@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct NodeId(Vec<u32>);
@@ -10,6 +11,10 @@ impl NodeId {
 
     pub(crate) fn from_segments(segments: Vec<u32>) -> Self {
         Self(segments)
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, NodeIdParseError> {
+        value.parse()
     }
 
     pub(crate) fn root_sibling(index: u32) -> Self {
@@ -28,6 +33,59 @@ impl NodeId {
 
     pub(crate) fn bracketed(&self) -> String {
         format!("[{self}]")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NodeIdParseError {
+    Empty,
+    EmptySegment,
+    InvalidSegment(String),
+    ZeroSegment,
+}
+
+impl fmt::Display for NodeIdParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NodeIdParseError::Empty => f.write_str("spine node id must not be empty"),
+            NodeIdParseError::EmptySegment => {
+                f.write_str("spine node id segments must not be empty")
+            }
+            NodeIdParseError::InvalidSegment(segment) => {
+                write!(f, "invalid spine node id segment {segment:?}")
+            }
+            NodeIdParseError::ZeroSegment => {
+                f.write_str("spine node id segments must be greater than zero")
+            }
+        }
+    }
+}
+
+impl std::error::Error for NodeIdParseError {}
+
+impl FromStr for NodeId {
+    type Err = NodeIdParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty() {
+            return Err(NodeIdParseError::Empty);
+        }
+
+        let mut segments = Vec::new();
+        for segment in value.split('.') {
+            if segment.is_empty() {
+                return Err(NodeIdParseError::EmptySegment);
+            }
+            let segment = segment
+                .parse::<u32>()
+                .map_err(|_| NodeIdParseError::InvalidSegment(segment.to_string()))?;
+            if segment == 0 {
+                return Err(NodeIdParseError::ZeroSegment);
+            }
+            segments.push(segment);
+        }
+
+        Ok(Self(segments))
     }
 }
 

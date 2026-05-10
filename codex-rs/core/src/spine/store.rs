@@ -1,0 +1,646 @@
+use super::ids::NodeId;
+use super::ids::NodeIdParseError;
+use super::state::NodeStatus;
+use super::state::SpineState;
+use super::state::SpineStateError;
+use super::state::Transition;
+use serde::Deserialize;
+use serde::Serialize;
+use sha1::Digest;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+use thiserror::Error;
+
+const TREE_FILE: &str = "tree.jsonl";
+const STATE_FILE: &str = "state.json";
+const NODES_DIR: &str = "nodes";
+const WORKLOG_FILE: &str = "worklog.md";
+const PLAN_FILE: &str = "plan.json";
+const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpineSidecarStore {
+    root: PathBuf,
+}
+
+impl SpineSidecarStore {
+    pub(crate) fn for_rollout(rollout_path: impl AsRef<Path>) -> Result<Self, SpineStoreError> {
+        Ok(Self {
+            root: Self::sidecar_dir_for_rollout(rollout_path.as_ref())?,
+        })
+    }
+
+    pub(crate) fn sidecar_dir_for_rollout(rollout_path: &Path) -> Result<PathBuf, SpineStoreError> {
+        if rollout_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("jsonl")
+        {
+            return Err(SpineStoreError::InvalidRolloutPath {
+                path: rollout_path.to_path_buf(),
+                reason: "rollout path must use the .jsonl extension",
+            });
+        }
+
+        let parent = rollout_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| SpineStoreError::InvalidRolloutPath {
+                path: rollout_path.to_path_buf(),
+                reason: "rollout path must include a parent directory",
+            })?;
+        let stem = rollout_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .ok_or_else(|| SpineStoreError::InvalidRolloutPath {
+                path: rollout_path.to_path_buf(),
+                reason: "rollout path must include a valid UTF-8 file stem",
+            })?;
+
+        Ok(parent.join(format!("spine-{stem}")))
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(crate) fn tree_path(&self) -> PathBuf {
+        self.root.join(TREE_FILE)
+    }
+
+    pub(crate) fn state_path(&self) -> PathBuf {
+        self.root.join(STATE_FILE)
+    }
+
+    pub(crate) fn trajs_index_path(&self) -> PathBuf {
+        self.root.join(TRAJS_INDEX_FILE)
+    }
+
+    pub(crate) fn node_dir(&self, node_id: &NodeId) -> PathBuf {
+        let mut path = self.root.join(NODES_DIR);
+        for segment in node_id.segments() {
+            path.push(segment.to_string());
+        }
+        path
+    }
+
+    pub(crate) fn worklog_path(&self, node_id: &NodeId) -> PathBuf {
+        self.node_dir(node_id).join(WORKLOG_FILE)
+    }
+
+    pub(crate) fn plan_path(&self, node_id: &NodeId) -> PathBuf {
+        self.node_dir(node_id).join(PLAN_FILE)
+    }
+
+    pub(crate) fn create(&self) -> Result<SpineState, SpineStoreError> {
+        let tree_path = self.tree_path();
+        if tree_path.exists() {
+            return Err(SpineStoreError::AlreadyInitialized {
+                path: self.root.clone(),
+            });
+        }
+
+        self.ensure_sidecar_dir()?;
+        self.ensure_node_dir(&NodeId::root())?;
+        self.create_trajs_index_file()?;
+
+        let event = TreeEvent::NodeCreated {
+            seq: 1,
+            node_id: NodeId::root().to_string(),
+            parent_id: None,
+            raw_start_ordinal: 0,
+        };
+        self.append_json_line(&tree_path, &event)?;
+
+        let state = SpineState::new();
+        self.write_state_cache(&state)?;
+        Ok(state)
+    }
+
+    pub(crate) fn load(&self) -> Result<SpineState, SpineStoreError> {
+        let state = self.replay_tree()?;
+        let state_path = self.state_path();
+        if state_path.exists() {
+            let cached = self.read_state_cache(&state_path)?;
+            let replayed = StateSnapshot::from_state(&state);
+            if cached != replayed {
+                return Err(SpineStoreError::StateCacheMismatch { path: state_path });
+            }
+        }
+        Ok(state)
+    }
+
+    pub(crate) fn record_transition(
+        &self,
+        state: &mut SpineState,
+        op: SpineOperation,
+        summary: impl Into<String>,
+        worklog: impl Into<String>,
+        raw_start_ordinal: u64,
+    ) -> Result<Transition, SpineStoreError> {
+        let summary = summary.into();
+        let worklog = worklog.into();
+        let mut next_state = state.clone();
+        let transition = op.apply(&mut next_state, summary.clone(), worklog.clone())?;
+        let to_parent_id = next_state
+            .node(&transition.to)
+            .ok_or_else(|| SpineStoreError::InvalidLedger("transition target missing".to_string()))?
+            .parent_id
+            .as_ref()
+            .map(ToString::to_string);
+
+        self.write_worklog_file(&transition.from, &worklog)?;
+        self.ensure_node_dir(&transition.to)?;
+
+        let event = TreeEvent::TransitionApplied {
+            seq: self.next_tree_seq()?,
+            op,
+            from_node: transition.from.to_string(),
+            to_node: transition.to.to_string(),
+            to_parent_id,
+            summary,
+            worklog_hash: worklog_hash(&worklog),
+            raw_start_ordinal,
+        };
+        self.append_json_line(&self.tree_path(), &event)?;
+
+        *state = next_state;
+        self.write_state_cache(state)?;
+        Ok(transition)
+    }
+
+    pub(crate) fn write_plan<T: Serialize>(
+        &self,
+        node_id: &NodeId,
+        plan: &T,
+    ) -> Result<PathBuf, SpineStoreError> {
+        self.ensure_node_dir(node_id)?;
+        let path = self.plan_path(node_id);
+        let contents =
+            serde_json::to_string_pretty(plan).map_err(|source| SpineStoreError::Json {
+                path: path.clone(),
+                source,
+            })? + "\n";
+        std::fs::write(&path, contents).map_err(|source| SpineStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(path)
+    }
+
+    pub(crate) fn append_raw_items_recorded(
+        &self,
+        node_id: &NodeId,
+        turn_id: impl Into<String>,
+        start: u64,
+        end: u64,
+    ) -> Result<(), SpineStoreError> {
+        let path = self.trajs_index_path();
+        let event = TrajsIndexEvent::RawItemsRecorded {
+            seq: self.next_jsonl_seq(&path)?,
+            node_id: node_id.to_string(),
+            turn_id: turn_id.into(),
+            start,
+            end,
+        };
+        self.append_json_line(&path, &event)
+    }
+
+    pub(crate) fn append_transition_committed(
+        &self,
+        call_id: impl Into<String>,
+        from_node: &NodeId,
+        to_node: &NodeId,
+        boundary_end: u64,
+    ) -> Result<(), SpineStoreError> {
+        let path = self.trajs_index_path();
+        let event = TrajsIndexEvent::TransitionCommitted {
+            seq: self.next_jsonl_seq(&path)?,
+            call_id: call_id.into(),
+            from_node: from_node.to_string(),
+            to_node: to_node.to_string(),
+            boundary_end,
+        };
+        self.append_json_line(&path, &event)
+    }
+
+    fn replay_tree(&self) -> Result<SpineState, SpineStoreError> {
+        let events = self.read_tree_events()?;
+        let mut state = None;
+
+        for event in events {
+            match event {
+                TreeEvent::NodeCreated {
+                    node_id,
+                    parent_id,
+                    raw_start_ordinal: _,
+                    ..
+                } => {
+                    if state.is_some() {
+                        return Err(SpineStoreError::InvalidLedger(
+                            "root node was created more than once".to_string(),
+                        ));
+                    }
+                    let node_id = NodeId::parse(&node_id)?;
+                    if node_id != NodeId::root() || parent_id.is_some() {
+                        return Err(SpineStoreError::InvalidLedger(
+                            "first node_created event must create the root node".to_string(),
+                        ));
+                    }
+                    state = Some(SpineState::new());
+                }
+                TreeEvent::TransitionApplied {
+                    op,
+                    from_node,
+                    to_node,
+                    to_parent_id,
+                    summary,
+                    worklog_hash: expected_worklog_hash,
+                    raw_start_ordinal: _,
+                    ..
+                } => {
+                    let state = state.as_mut().ok_or_else(|| {
+                        SpineStoreError::InvalidLedger(
+                            "transition appeared before root node creation".to_string(),
+                        )
+                    })?;
+                    let from_node = NodeId::parse(&from_node)?;
+                    let to_node = NodeId::parse(&to_node)?;
+                    let to_parent_id = to_parent_id.as_deref().map(NodeId::parse).transpose()?;
+                    let worklog = self.read_worklog_file(&from_node)?;
+                    let actual_worklog_hash = worklog_hash(&worklog);
+                    if expected_worklog_hash != actual_worklog_hash {
+                        return Err(SpineStoreError::WorklogHashMismatch { node_id: from_node });
+                    }
+                    let transition = op.apply(state, summary, worklog)?;
+                    if transition.from != from_node || transition.to != to_node {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "transition replay mismatch: expected {} -> {}, got {} -> {}",
+                            from_node.bracketed(),
+                            to_node.bracketed(),
+                            transition.from.bracketed(),
+                            transition.to.bracketed()
+                        )));
+                    }
+                    let actual_parent_id = state
+                        .node(&transition.to)
+                        .and_then(|node| node.parent_id.clone());
+                    if actual_parent_id != to_parent_id {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "transition target parent mismatch for {}",
+                            transition.to.bracketed()
+                        )));
+                    }
+                }
+            }
+        }
+
+        state.ok_or_else(|| {
+            SpineStoreError::InvalidLedger("tree.jsonl does not create a root node".to_string())
+        })
+    }
+
+    fn read_tree_events(&self) -> Result<Vec<TreeEvent>, SpineStoreError> {
+        let path = self.tree_path();
+        let file = File::open(&path).map_err(|source| SpineStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let reader = BufReader::new(file);
+        let mut events = Vec::new();
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line.map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if line.trim().is_empty() {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "tree.jsonl line {} is empty",
+                    index + 1
+                )));
+            }
+            let event: TreeEvent =
+                serde_json::from_str(&line).map_err(|source| SpineStoreError::Json {
+                    path: path.clone(),
+                    source,
+                })?;
+            let expected_seq = u64::try_from(index + 1).map_err(|_| {
+                SpineStoreError::InvalidLedger("tree.jsonl has too many events".to_string())
+            })?;
+            if event.seq() != expected_seq {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "tree.jsonl line {} has seq {}, expected {}",
+                    index + 1,
+                    event.seq(),
+                    expected_seq
+                )));
+            }
+            events.push(event);
+        }
+
+        Ok(events)
+    }
+
+    fn next_tree_seq(&self) -> Result<u64, SpineStoreError> {
+        let len = self.read_tree_events()?.len();
+        u64::try_from(len + 1)
+            .map_err(|_| SpineStoreError::InvalidLedger("tree.jsonl has too many events".into()))
+    }
+
+    fn next_jsonl_seq(&self, path: &Path) -> Result<u64, SpineStoreError> {
+        if !path.exists() {
+            return Ok(1);
+        }
+
+        let file = File::open(path).map_err(|source| SpineStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let reader = BufReader::new(file);
+        let mut count = 0_u64;
+        for line in reader.lines() {
+            line.map_err(|source| SpineStoreError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            count = count.checked_add(1).ok_or_else(|| {
+                SpineStoreError::InvalidLedger(format!("{} has too many events", path.display()))
+            })?;
+        }
+        Ok(count + 1)
+    }
+
+    fn append_json_line<T: Serialize>(
+        &self,
+        path: &Path,
+        value: &T,
+    ) -> Result<(), SpineStoreError> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|source| SpineStoreError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        serde_json::to_writer(&mut file, value).map_err(|source| SpineStoreError::Json {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        file.write_all(b"\n").map_err(|source| SpineStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+
+    fn ensure_sidecar_dir(&self) -> Result<(), SpineStoreError> {
+        std::fs::create_dir_all(&self.root).map_err(|source| SpineStoreError::Io {
+            path: self.root.clone(),
+            source,
+        })
+    }
+
+    fn ensure_node_dir(&self, node_id: &NodeId) -> Result<(), SpineStoreError> {
+        let path = self.node_dir(node_id);
+        std::fs::create_dir_all(&path).map_err(|source| SpineStoreError::Io { path, source })
+    }
+
+    fn create_trajs_index_file(&self) -> Result<(), SpineStoreError> {
+        let path = self.trajs_index_path();
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        Ok(())
+    }
+
+    fn write_worklog_file(&self, node_id: &NodeId, worklog: &str) -> Result<(), SpineStoreError> {
+        self.ensure_node_dir(node_id)?;
+        let path = self.worklog_path(node_id);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.write_all(worklog.as_bytes())
+            .map_err(|source| SpineStoreError::Io { path, source })
+    }
+
+    fn read_worklog_file(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
+        let path = self.worklog_path(node_id);
+        std::fs::read_to_string(&path).map_err(|source| SpineStoreError::Io { path, source })
+    }
+
+    fn write_state_cache(&self, state: &SpineState) -> Result<(), SpineStoreError> {
+        let path = self.state_path();
+        let contents =
+            serde_json::to_string_pretty(&StateSnapshot::from_state(state)).map_err(|source| {
+                SpineStoreError::Json {
+                    path: path.clone(),
+                    source,
+                }
+            })? + "\n";
+        std::fs::write(&path, contents).map_err(|source| SpineStoreError::Io { path, source })
+    }
+
+    fn read_state_cache(&self, path: &Path) -> Result<StateSnapshot, SpineStoreError> {
+        let contents = std::fs::read_to_string(path).map_err(|source| SpineStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        serde_json::from_str(&contents).map_err(|source| SpineStoreError::Json {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SpineOperation {
+    Open,
+    Next,
+    Close,
+}
+
+impl SpineOperation {
+    fn apply(
+        self,
+        state: &mut SpineState,
+        summary: impl Into<String>,
+        worklog: impl Into<String>,
+    ) -> Result<Transition, SpineStateError> {
+        match self {
+            SpineOperation::Open => state.open(summary, worklog),
+            SpineOperation::Next => state.next(summary, worklog),
+            SpineOperation::Close => state.close(summary, worklog),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TreeEvent {
+    NodeCreated {
+        seq: u64,
+        node_id: String,
+        parent_id: Option<String>,
+        raw_start_ordinal: u64,
+    },
+    TransitionApplied {
+        seq: u64,
+        op: SpineOperation,
+        from_node: String,
+        to_node: String,
+        to_parent_id: Option<String>,
+        summary: String,
+        worklog_hash: String,
+        raw_start_ordinal: u64,
+    },
+}
+
+impl TreeEvent {
+    fn seq(&self) -> u64 {
+        match self {
+            TreeEvent::NodeCreated { seq, .. } | TreeEvent::TransitionApplied { seq, .. } => *seq,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TrajsIndexEvent {
+    RawItemsRecorded {
+        seq: u64,
+        node_id: String,
+        turn_id: String,
+        start: u64,
+        end: u64,
+    },
+    TransitionCommitted {
+        seq: u64,
+        call_id: String,
+        from_node: String,
+        to_node: String,
+        boundary_end: u64,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+struct StateSnapshot {
+    cursor: String,
+    nodes: Vec<NodeSnapshot>,
+}
+
+impl StateSnapshot {
+    fn from_state(state: &SpineState) -> Self {
+        Self {
+            cursor: state.cursor().to_string(),
+            nodes: state
+                .nodes()
+                .values()
+                .map(|node| NodeSnapshot {
+                    node_id: node.node_id.to_string(),
+                    parent_id: node.parent_id.as_ref().map(ToString::to_string),
+                    status: status_label(&node.status).to_string(),
+                    summary: node.summary.clone(),
+                    worklog_hash: node.worklog.as_deref().map(worklog_hash),
+                    worklog_path: node
+                        .worklog
+                        .as_ref()
+                        .map(|_| relative_worklog_path(&node.node_id)),
+                    plan_path: Some(relative_plan_path(&node.node_id)),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+struct NodeSnapshot {
+    node_id: String,
+    parent_id: Option<String>,
+    status: String,
+    summary: Option<String>,
+    worklog_hash: Option<String>,
+    worklog_path: Option<String>,
+    plan_path: Option<String>,
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum SpineStoreError {
+    #[error("invalid spine rollout path {path}: {reason}")]
+    InvalidRolloutPath { path: PathBuf, reason: &'static str },
+    #[error("spine sidecar already initialized at {path}")]
+    AlreadyInitialized { path: PathBuf },
+    #[error("failed to access spine sidecar file {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to parse spine sidecar JSON {path}: {source}")]
+    Json {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("invalid spine ledger: {0}")]
+    InvalidLedger(String),
+    #[error("spine state cache mismatch at {path}")]
+    StateCacheMismatch { path: PathBuf },
+    #[error("spine worklog hash mismatch for {node_id}")]
+    WorklogHashMismatch { node_id: NodeId },
+    #[error(transparent)]
+    State(#[from] SpineStateError),
+    #[error(transparent)]
+    NodeId(#[from] NodeIdParseError),
+}
+
+fn status_label(status: &NodeStatus) -> &'static str {
+    match status {
+        NodeStatus::Live => "live",
+        NodeStatus::Opened => "opened",
+        NodeStatus::Finished => "finished",
+        NodeStatus::Closed => "closed",
+    }
+}
+
+fn relative_worklog_path(node_id: &NodeId) -> String {
+    relative_node_file_path(node_id, WORKLOG_FILE)
+}
+
+fn relative_plan_path(node_id: &NodeId) -> String {
+    relative_node_file_path(node_id, PLAN_FILE)
+}
+
+fn relative_node_file_path(node_id: &NodeId, file_name: &str) -> String {
+    let mut parts = vec![NODES_DIR.to_string()];
+    parts.extend(node_id.segments().iter().map(ToString::to_string));
+    parts.push(file_name.to_string());
+    parts.join("/")
+}
+
+fn worklog_hash(worklog: &str) -> String {
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(worklog.as_bytes());
+    format!("sha1:{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+#[path = "store_tests.rs"]
+mod tests;
