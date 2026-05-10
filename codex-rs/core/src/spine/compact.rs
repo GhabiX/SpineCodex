@@ -2,7 +2,6 @@ use super::ids::NodeId;
 use super::store::SpineOperation;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
-use crate::compact::SUMMARIZATION_PROMPT;
 use crate::session::session::Session;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
@@ -80,7 +79,8 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
         input: prompt_input,
         base_instructions: BaseInstructions {
             text: format!(
-                "{SUMMARIZATION_PROMPT}\n\nYou are compacting a SpineJIT suffix. Only summarize the target suffix provided in this request. Do not infer or rewrite any unseen prefix context."
+                "{}\n\nYou are compacting a SpineJIT suffix. Only summarize the target suffix provided in this request. Do not infer or rewrite any unseen prefix context.",
+                turn_context.compact_prompt()
             ),
         },
         personality: turn_context.personality,
@@ -114,7 +114,7 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
     )];
     Ok(SpineCompactOutput {
         compact_message: format!(
-            "Spine compacted {} [{} , {})",
+            "Spine compacted {} [{}, {})",
             input.node_id, input.cut_ordinal, input.fold_end_ordinal
         ),
         worklog_markdown,
