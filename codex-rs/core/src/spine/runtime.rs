@@ -210,13 +210,22 @@ impl SpineRuntime {
                         node_id: scope_node_id.clone(),
                     }
                 })?;
+                let scope_summary = self
+                    .state
+                    .node(&scope_node_id)
+                    .ok_or_else(|| SpineRuntimeError::UnknownNode(scope_node_id.clone()))?
+                    .summary
+                    .clone()
+                    .ok_or_else(|| SpineRuntimeError::MissingSummary {
+                        node_id: scope_node_id.clone(),
+                    })?;
                 Ok(Some(SpineCompactBoundary {
                     op: committed.op,
                     node_id: scope_node_id.clone(),
                     scope_node_id: Some(scope_node_id),
                     cut_ordinal,
                     fold_end_ordinal: committed.boundary_end,
-                    transition_summary: committed.summary.clone(),
+                    transition_summary: scope_summary,
                 }))
             }
         }

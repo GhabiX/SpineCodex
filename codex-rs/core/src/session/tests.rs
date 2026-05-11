@@ -1644,6 +1644,33 @@ async fn spine_raw_mirror_tracks_metadata_without_compacted_history() -> anyhow:
     Ok(())
 }
 
+#[tokio::test]
+async fn spine_raw_mirror_metadata_failure_poison_session() -> anyhow::Result<()> {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let spine =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    session.spine = Some(Arc::new(Mutex::new(spine)));
+
+    session
+        .persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::Warning(WarningEvent {
+            message: "__spine_fail_raw_mirror__".to_string(),
+        }))])
+        .await;
+
+    let error = session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect_err("raw mirror metadata failure should poison session");
+    assert!(matches!(
+        error,
+        CodexErr::Fatal(message)
+            if message.contains("failed to persist Spine rollout items")
+                && message.contains("injected raw mirror failure")
+    ));
+    Ok(())
+}
+
 #[test]
 fn spine_compact_id_is_deterministic_for_same_boundary() {
     let boundary = SpineCompactBoundary {

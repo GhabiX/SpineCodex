@@ -559,6 +559,7 @@ fn close_compact_boundary_uses_parent_scope_raw_start() {
     assert_eq!(boundary.scope_node_id, Some(id(&[1])));
     assert_eq!(boundary.cut_ordinal, 0);
     assert_eq!(boundary.fold_end_ordinal, 5);
+    assert_eq!(boundary.transition_summary, "root scope");
 }
 
 #[test]

@@ -3190,13 +3190,26 @@ impl Session {
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
-        let Some(live_thread) = self.live_thread() else {
-            return;
-        };
-        if let Err(e) = live_thread.append_items(items).await {
-            error!("failed to record rollout items: {e:#}");
-            return;
+        if let Err(err) = self.try_persist_rollout_items(items).await {
+            error!("failed to persist rollout items: {err}");
+            if self.spine.is_some() {
+                let _ = self
+                    .poison_spine_compact(format!(
+                        "failed to persist Spine rollout items: {err}"
+                    ))
+                    .await;
+            }
         }
+    }
+
+    async fn try_persist_rollout_items(&self, items: &[RolloutItem]) -> CodexResult<()> {
+        let Some(live_thread) = self.live_thread() else {
+            return Ok(());
+        };
+        live_thread
+            .append_items(items)
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to record rollout items: {err:#}")))?;
 
         if let Some(spine) = self.spine.as_ref() {
             let raw_items = items
@@ -3211,9 +3224,12 @@ impl Session {
                     .store()
                     .append_raw_mirror_items(&raw_items)
             {
-                error!("failed to mirror spine rollout items: {err}");
+                return Err(CodexErr::Fatal(format!(
+                    "failed to mirror spine rollout items: {err}"
+                )));
             }
         }
+        Ok(())
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {

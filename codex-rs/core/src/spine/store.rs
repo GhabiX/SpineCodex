@@ -1157,21 +1157,23 @@ fn record_compact_terminal(
 
 #[cfg(test)]
 fn is_raw_mirror_failure_test_item(item: &RolloutItem) -> bool {
-    matches!(
-        item,
+    match item {
         RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Message {
             content,
             ..
-        })
-            if content.iter().any(|content_item| {
-                matches!(
-                    content_item,
-                    codex_protocol::models::ContentItem::InputText { text }
-                        | codex_protocol::models::ContentItem::OutputText { text }
-                        if text == "__spine_fail_raw_mirror__"
-                )
-            })
-    )
+        }) => content.iter().any(|content_item| {
+            matches!(
+                content_item,
+                codex_protocol::models::ContentItem::InputText { text }
+                    | codex_protocol::models::ContentItem::OutputText { text }
+                    if text == "__spine_fail_raw_mirror__"
+            )
+        }),
+        RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::Warning(warning)) => {
+            warning.message == "__spine_fail_raw_mirror__"
+        }
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
