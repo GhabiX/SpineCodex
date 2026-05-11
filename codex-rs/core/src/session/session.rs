@@ -1,5 +1,6 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
+use crate::spine::compact::SpineCompactBoundary;
 use crate::spine::runtime::SpineRuntime;
 use crate::spine::runtime::SpineRuntimeError;
 use crate::spine::store::SpineSidecarStore;
@@ -36,6 +37,7 @@ pub(crate) struct Session {
     pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) spine: Option<Arc<Mutex<SpineRuntime>>>,
     pub(crate) spine_compact_poison: Mutex<Option<String>>,
+    pub(crate) pending_spine_compact_boundaries: Mutex<Vec<SpineCompactBoundary>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) next_internal_sub_id: AtomicU64,
@@ -1048,6 +1050,7 @@ impl Session {
                 goal_runtime: GoalRuntimeState::new(),
                 spine,
                 spine_compact_poison: Mutex::new(None),
+                pending_spine_compact_boundaries: Mutex::new(Vec::new()),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 next_internal_sub_id: AtomicU64::new(0),

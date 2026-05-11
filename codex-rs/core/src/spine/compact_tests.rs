@@ -1,5 +1,7 @@
 use super::*;
 use crate::spine::ids::NodeId;
+use crate::spine::state::SpineState;
+use crate::spine::view::render_tree;
 use pretty_assertions::assert_eq;
 use serde_json;
 use std::path::Path;
@@ -177,12 +179,17 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
 
 #[test]
 fn codex_builtin_prompt_uses_fork_full_history_shape() {
+    let mut state = SpineState::new();
+    state.open("parent").expect("open parent");
+    state.next("leaf done").expect("finish leaf");
+    let spine_tree = render_tree(&state, state.cursor());
     let input = SpineCompactInput {
         op: SpineOperation::Next,
-        node_id: id(&[1]),
+        node_id: id(&[1, 1]),
         scope_node_id: None,
         cut_ordinal: 1,
         fold_end_ordinal: 3,
+        spine_tree,
         prefix_items: vec![text_item("prefix must stay local")],
         suffix_items: vec![text_item("suffix goes to compactor")],
         transition_summary: "leaf done".to_string(),
@@ -198,9 +205,10 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(rendered.contains("suffix goes to compactor"));
     assert!(rendered.contains("prefix must stay local"));
     assert!(!rendered.contains("quoted_suffix_response_items_json"));
-    assert!(rendered.contains("Target response ordinal range: [1, 3)"));
-    assert!(rendered.contains("Target suffix item count: 1"));
-    assert!(rendered.contains("Target suffix item signature: message"));
+    assert!(!rendered.contains("Target suffix item count"));
+    assert!(rendered.contains("<spine_tree>"));
+    assert!(rendered.contains("|-- [1.1] finished leaf done"));
+    assert!(rendered.contains("|-- [1.2] live current"));
     assert!(rendered.contains("<spine_compact_worklog>"));
     assert!(rendered.contains("</spine_compact_worklog>"));
     assert_eq!(prompt[0], input.prefix_items[0]);
@@ -212,7 +220,10 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
         panic!("expected compact instruction text");
     };
     assert!(text.starts_with(crate::compact::SUMMARIZATION_PROMPT));
-    assert!(text.contains("exactly the immediately preceding 1 ResponseItem(s)"));
+    assert!(text.contains("Use the Spine Tree representation below as the node tag"));
+    assert!(text.contains("match the target node by its bracketed id"));
+    assert!(text.contains("target node `1.1` in this Spine Tree"));
+    assert!(text.contains("For `next`, compact the completed target leaf"));
 }
 
 #[test]

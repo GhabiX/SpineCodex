@@ -1745,6 +1745,50 @@ async fn spine_compact_poison_blocks_future_sampling() {
 }
 
 #[tokio::test]
+async fn spine_transition_compaction_is_deferred_until_turn_end() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let mut runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    runtime
+        .stage_transition("open-1", "turn-1", SpineOperation::Open, "root scope")
+        .expect("stage open");
+    runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[spine_function_call("open-1"), function_call_output("open-1")],
+            0,
+            2,
+        )
+        .expect("commit open");
+    runtime.take_last_committed_transition();
+    runtime
+        .stage_transition("next-1", "turn-2", SpineOperation::Next, "leaf done")
+        .expect("stage next");
+    session.spine = Some(Arc::new(Mutex::new(runtime)));
+
+    let items = [
+        user_message("current turn direct instruction"),
+        spine_function_call("next-1"),
+        function_call_output("next-1"),
+    ];
+    session
+        .try_record_conversation_items(&turn_context, &items)
+        .await?;
+    let before_compact = session.clone_history().await.raw_items().to_vec();
+
+    session
+        .compact_pending_spine_transition(&turn_context)
+        .await?;
+
+    assert_eq!(session.clone_history().await.raw_items(), before_compact);
+    let pending = session.pending_spine_compact_boundaries.lock().await;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].node_id, crate::spine::ids::NodeId::from_segments(vec![1, 1]));
+    Ok(())
+}
+
+#[tokio::test]
 async fn spine_record_conversation_items_poison_on_persist_failure() -> anyhow::Result<()> {
     let (mut session, turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;
@@ -4552,6 +4596,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         goal_runtime: crate::goals::GoalRuntimeState::new(),
         spine: None,
         spine_compact_poison: Mutex::new(None),
+        pending_spine_compact_boundaries: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         next_internal_sub_id: AtomicU64::new(0),
@@ -6269,6 +6314,7 @@ where
         goal_runtime: crate::goals::GoalRuntimeState::new(),
         spine: None,
         spine_compact_poison: Mutex::new(None),
+        pending_spine_compact_boundaries: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         next_internal_sub_id: AtomicU64::new(0),

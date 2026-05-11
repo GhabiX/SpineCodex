@@ -8,6 +8,7 @@ use super::store::SpineOperation;
 use super::store::SpineSidecarStore;
 use super::store::SpineStoreError;
 use super::trajs::RawOrdinalRange;
+use super::view::render_tree;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
@@ -170,6 +171,14 @@ impl SpineRuntime {
             &scope_worklog_path,
             &child_rows,
         ))
+    }
+
+    pub(crate) fn render_tree_for_prompt(&self) -> Result<String, SpineRuntimeError> {
+        let cursor = self.cursor();
+        if self.state.node(cursor).is_none() {
+            return Err(SpineRuntimeError::UnknownNode(cursor.clone()));
+        }
+        Ok(render_tree(&self.state, cursor))
     }
 
     pub(crate) fn plan_compaction_after_transition(

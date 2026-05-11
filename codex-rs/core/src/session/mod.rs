@@ -2738,9 +2738,32 @@ impl Session {
         self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
             .await;
         if let Some(boundary) = boundary {
-            Box::pin(self.compact_spine_suffix_after_transition(turn_context, boundary)).await?;
+            self.pending_spine_compact_boundaries
+                .lock()
+                .await
+                .push(boundary);
         }
         Ok(())
+    }
+
+    pub(crate) async fn install_pending_spine_compactions(
+        &self,
+        turn_context: &TurnContext,
+    ) -> CodexResult<()> {
+        loop {
+            let boundary = {
+                let mut pending = self.pending_spine_compact_boundaries.lock().await;
+                if pending.is_empty() {
+                    None
+                } else {
+                    Some(pending.remove(0))
+                }
+            };
+            let Some(boundary) = boundary else {
+                return Ok(());
+            };
+            Box::pin(self.compact_spine_suffix_after_transition(turn_context, boundary)).await?;
+        }
     }
 
     pub(crate) async fn ensure_spine_compact_not_poisoned(&self) -> CodexResult<()> {
@@ -2793,12 +2816,18 @@ impl Session {
             .map(|file_name| format!("../{}", file_name.to_string_lossy()))
             .unwrap_or_else(|| rollout_path.to_string_lossy().into_owned());
         let history = self.clone_history().await.raw_items().to_vec();
+        let spine_tree = spine
+            .lock()
+            .await
+            .render_tree_for_prompt()
+            .map_err(|err| CodexErr::Fatal(format!("failed to render spine tree: {err}")))?;
         let input = SpineCompactInput {
             op: boundary.op,
             node_id: boundary.node_id.clone(),
             scope_node_id: boundary.scope_node_id.clone(),
             cut_ordinal: boundary.cut_ordinal,
             fold_end_ordinal: boundary.fold_end_ordinal,
+            spine_tree,
             prefix_items: Vec::new(),
             suffix_items: Vec::new(),
             transition_summary: boundary.transition_summary.clone(),

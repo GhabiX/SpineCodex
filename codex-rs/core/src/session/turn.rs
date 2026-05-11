@@ -665,6 +665,15 @@ pub(crate) async fn run_turn(
         }
     }
 
+    if last_agent_message.is_some()
+        && let Err(err) = sess.install_pending_spine_compactions(turn_context.as_ref()).await
+    {
+        info!("Turn error: {err:#}");
+        let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
+        sess.send_event(&turn_context, event).await;
+        return None;
+    }
+
     last_agent_message
 }
 

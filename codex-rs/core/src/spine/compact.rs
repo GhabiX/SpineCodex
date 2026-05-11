@@ -1,5 +1,7 @@
 use super::ids::NodeId;
 use super::store::SpineOperation;
+use super::view::op_label;
+use super::view::relative_worklog_path;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::session::session::Session;
@@ -24,6 +26,7 @@ pub(crate) struct SpineCompactInput {
     pub(crate) scope_node_id: Option<NodeId>,
     pub(crate) cut_ordinal: u64,
     pub(crate) fold_end_ordinal: u64,
+    pub(crate) spine_tree: String,
     pub(crate) prefix_items: Vec<ResponseItem>,
     pub(crate) suffix_items: Vec<ResponseItem>,
     pub(crate) transition_summary: String,
@@ -111,8 +114,6 @@ fn build_codex_builtin_prompt_input(
     input: &SpineCompactInput,
     compact_prompt: &str,
 ) -> Vec<ResponseItem> {
-    let suffix_item_count = input.suffix_items.len();
-    let suffix_signature = response_item_signature(&input.suffix_items);
     let mut prompt_input =
         Vec::with_capacity(input.prefix_items.len() + input.suffix_items.len() + 1);
     prompt_input.extend(input.prefix_items.clone());
@@ -122,17 +123,12 @@ fn build_codex_builtin_prompt_input(
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "{compact_prompt}\n\nSpineJIT suffix compaction request.\n\nYou are compacting a SpineJIT suffix so the runtime can replace raw transcript tokens with compact worklog IR while preserving enough context for the next turn to continue correctly.\n\nTarget node: {}\nTarget operation: {}\nTarget response ordinal range: [{}, {})\nSpine Tree summary label: {}\nTarget suffix item count: {}\nTarget suffix item signature: {}\n\nThe target suffix is exactly the immediately preceding {} ResponseItem(s) in this prompt, corresponding to response ordinals [{}, {}). The earlier prompt prefix is preserved verbatim in the runtime context and must not be summarized or rewritten.\n\nPreserve information with high locality:\n- Preserve temporal locality from the suffix: latest decisions, current goal, next actions, unresolved risks, verification status, and failed attempts.\n- Preserve spatial locality from the suffix: relevant files, functions, tests, commands, errors, node relationships, worklog/traj paths, and neighboring scope context needed to resume.\n\nDrop low-value transcript detail, repeated chatter, and tool-output noise. Keep exact identifiers, paths, commands, errors, and test results when they affect future work. Do not mention prefix-only content unless it is repeated or changed inside the target suffix.\n\nReturn exactly one XML-like block and no text outside it:\n{}\n<dense Markdown compact for the target suffix only>\n{}",
+                "{compact_prompt}\n\nSpineJIT suffix compaction request.\n\nYou are compacting one completed Spine Tree node or closed subtree so the runtime can replace that raw transcript suffix with compact worklog IR while preserving enough context for the next turn to continue correctly.\n\nTarget node: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\nUse the Spine Tree representation below as the node tag for selecting the target suffix. It is rendered by the same runtime code that emits `spine` tool outputs in the conversation history, so match the target node by its bracketed id, summary/status line, and worklog path in this tree instead of inventing another tag.\n\n<spine_tree>\n{}\n</spine_tree>\n\nThe prompt before this instruction is the preserved prefix followed by the target suffix. Compact only the immediately preceding suffix represented by target node `{}` in this Spine Tree:\n- For `next`, compact the completed target leaf from the point it became current through the latest `spine next` output.\n- For `close`, compact the closed target scope/subtree from the point the scope became current through the latest `spine close` output.\n\nThe earlier prefix remains verbatim in runtime context and must not be summarized or rewritten.\n\nPreserve information with high locality:\n- Preserve temporal locality from the target suffix: latest decisions, current goal, next actions, unresolved risks, verification status, and failed attempts.\n- Preserve spatial locality from the target suffix: relevant files, functions, tests, commands, errors, node relationships, worklog/traj paths, and neighboring scope context needed to resume.\n\nDrop low-value transcript detail, repeated chatter, and tool-output noise. Keep exact identifiers, paths, commands, errors, and test results when they affect future work. Do not mention prefix-only content unless it is repeated or changed inside the target suffix.\n\nReturn exactly one XML-like block and no text outside it:\n{}\n<dense Markdown compact for the target suffix only>\n{}",
                 input.node_id,
                 op_label(input.op),
-                input.cut_ordinal,
-                input.fold_end_ordinal,
                 input.transition_summary,
-                suffix_item_count,
-                suffix_signature,
-                suffix_item_count,
-                input.cut_ordinal,
-                input.fold_end_ordinal,
+                input.spine_tree,
+                input.node_id,
                 COMPACT_WORKLOG_OPEN_TAG,
                 COMPACT_WORKLOG_CLOSE_TAG
             ),
@@ -140,33 +136,6 @@ fn build_codex_builtin_prompt_input(
         phase: None,
     });
     prompt_input
-}
-
-fn response_item_signature(items: &[ResponseItem]) -> String {
-    items
-        .iter()
-        .map(response_item_label)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn response_item_label(item: &ResponseItem) -> &'static str {
-    match item {
-        ResponseItem::Message { .. } => "message",
-        ResponseItem::Reasoning { .. } => "reasoning",
-        ResponseItem::LocalShellCall { .. } => "local_shell_call",
-        ResponseItem::FunctionCall { .. } => "function_call",
-        ResponseItem::ToolSearchCall { .. } => "tool_search_call",
-        ResponseItem::FunctionCallOutput { .. } => "function_call_output",
-        ResponseItem::CustomToolCall { .. } => "custom_tool_call",
-        ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output",
-        ResponseItem::ToolSearchOutput { .. } => "tool_search_output",
-        ResponseItem::WebSearchCall { .. } => "web_search_call",
-        ResponseItem::ImageGenerationCall { .. } => "image_generation_call",
-        ResponseItem::Compaction { .. } => "compaction",
-        ResponseItem::ContextCompaction { .. } => "context_compaction",
-        ResponseItem::Other => "other",
-    }
 }
 
 async fn collect_compaction_response(
@@ -489,23 +458,6 @@ fn parse_tag_string<'a>(header: &'a str, key: &str) -> Option<&'a str> {
     let needle = format!("{key}=\"");
     let value = header.split_once(&needle)?.1;
     Some(value.split_once('"')?.0)
-}
-
-fn op_label(op: SpineOperation) -> &'static str {
-    match op {
-        SpineOperation::Open => "open",
-        SpineOperation::Next => "next",
-        SpineOperation::Close => "close",
-    }
-}
-
-fn relative_worklog_path(node_id: &NodeId) -> PathBuf {
-    let mut path = PathBuf::from("nodes");
-    for segment in node_id.segments() {
-        path.push(segment.to_string());
-    }
-    path.push("worklog.md");
-    path
 }
 
 #[cfg(test)]
