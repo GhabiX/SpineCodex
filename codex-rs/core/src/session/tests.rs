@@ -202,6 +202,26 @@ fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
+fn spine_function_call(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "spine".to_string(),
+        namespace: None,
+        arguments: r#"{"op":"open","summary":"root scope"}"#.to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
+fn function_call_output(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("Spine updated.".to_string()),
+            success: Some(true),
+        },
+    }
+}
+
 fn test_session_telemetry_without_metadata() -> SessionTelemetry {
     let exporter = InMemoryMetricExporter::default();
     let metrics = MetricsClient::new(
@@ -1325,6 +1345,104 @@ async fn spine_runtime_initializes_root_when_feature_is_on() -> anyhow::Result<(
 
     assert_eq!(spine.cursor(), &crate::spine::ids::NodeId::root());
     assert_eq!(spine.current_ordinal(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_resume_emits_initial_tree_update_after_session_configured() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let codex_home = temp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home)?;
+    let rollout_path = codex_home.join("rollouts/rollout.jsonl");
+    std::fs::create_dir_all(rollout_path.parent().expect("rollout parent"))?;
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(spine_function_call("spine-open")),
+        RolloutItem::ResponseItem(function_call_output("spine-open")),
+    ];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
+
+    let mut runtime = crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0)?;
+    runtime.stage_transition(
+        "spine-open",
+        "turn-1",
+        crate::spine::store::SpineOperation::Open,
+        "root scope",
+    )?;
+    runtime.after_response_items_recorded(
+        "turn-1",
+        &[spine_function_call("spine-open"), function_call_output("spine-open")],
+        0,
+        2,
+    )?;
+
+    let mut config = build_test_config(&codex_home).await;
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    let config = Arc::new(config);
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let models_manager = models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        auth_manager.clone(),
+        config.model_provider.clone(),
+    );
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.original_config_do_not_use = Arc::clone(&config);
+    session_configuration.codex_home = config.codex_home.clone();
+    session_configuration.cwd = config.cwd.clone();
+    session_configuration.environments = vec![TurnEnvironmentSelection {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd: config.cwd.clone(),
+    }];
+    let (tx_event, rx_event) = async_channel::unbounded();
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
+    let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
+    let thread_id = ThreadId::new();
+
+    let _session = Session::new(
+        session_configuration,
+        Arc::clone(&config),
+        "11111111-1111-4111-8111-111111111111".to_string(),
+        auth_manager,
+        models_manager,
+        Arc::new(ExecPolicyManager::default()),
+        tx_event,
+        agent_status_tx,
+        InitialHistory::Resumed(ResumedHistory {
+            conversation_id: thread_id,
+            history: rollout_items,
+            rollout_path: Some(rollout_path),
+        }),
+        SessionSource::Exec,
+        skills_manager,
+        plugins_manager,
+        mcp_manager,
+        Arc::new(SkillsWatcher::noop()),
+        AgentControl::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        Arc::new(codex_thread_store::LocalThreadStore::new(
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
+            /*state_db*/ None,
+        )),
+        codex_rollout_trace::ThreadTraceContext::disabled(),
+    )
+    .await?;
+
+    let first = rx_event.recv().await.expect("session configured event");
+    assert!(matches!(first.msg, EventMsg::SessionConfigured(_)));
+    let second = rx_event.recv().await.expect("spine tree update event");
+    let EventMsg::SpineTreeUpdate(snapshot) = second.msg else {
+        panic!("expected spine tree update after session configured");
+    };
+    assert_eq!(snapshot.active_node_id, "1.1");
+    assert_eq!(snapshot.nodes.len(), 2);
     Ok(())
 }
 

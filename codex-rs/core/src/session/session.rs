@@ -1059,7 +1059,7 @@ impl Session {
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.
             let initial_messages = initial_history.get_event_msgs();
-            let events = std::iter::once(Event {
+            let mut events = vec![Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                     session_id,
@@ -1084,8 +1084,25 @@ impl Session {
                     }),
                     rollout_path,
                 }),
-            })
-            .chain(post_session_configured_events.into_iter());
+            }];
+            if initial_spine_has_spine_history
+                && matches!(initial_history, InitialHistory::Resumed(_))
+                && let Some(spine) = sess.spine.as_ref()
+            {
+                let snapshot =
+                    spine
+                        .lock()
+                        .await
+                        .build_tree_snapshot()
+                        .map_err(|err| {
+                            anyhow::anyhow!("failed to build initial spine tree snapshot: {err}")
+                        })?;
+                events.push(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::SpineTreeUpdate(snapshot),
+                });
+            }
+            events.extend(post_session_configured_events.into_iter());
             for event in events {
                 sess.send_event_raw(event).await;
             }
