@@ -87,8 +87,7 @@ fn create_writes_root_ledger_and_state_cache() {
                 "raw_start_ordinal": 0,
                 "status": "live",
                 "summary": null,
-                "worklog_hash": null,
-                "worklog_path": null,
+                "worklog_path": "nodes/1/worklog.md",
                 "plan_path": "nodes/1/plan.json",
             }]
         })
@@ -100,18 +99,12 @@ fn create_writes_root_ledger_and_state_cache() {
 }
 
 #[test]
-fn records_transition_worklog_and_replays_from_tree() {
+fn records_transition_summary_and_replays_from_tree() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
 
     let transition = store
-        .record_transition(
-            &mut state,
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-            8,
-        )
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
         .expect("record transition");
 
     assert_eq!(
@@ -121,10 +114,7 @@ fn records_transition_worklog_and_replays_from_tree() {
             to: id(&[1, 1]),
         }
     );
-    assert_eq!(
-        std::fs::read_to_string(store.worklog_path(&id(&[1]))).expect("read worklog"),
-        "Root handoff."
-    );
+    assert!(!store.worklog_path(&id(&[1])).exists());
     assert!(store.root().join("nodes").join("1").join("1").is_dir());
     assert!(!store.root().join("nodes").join("1.1").exists());
     assert_eq!(
@@ -145,7 +135,6 @@ fn records_transition_worklog_and_replays_from_tree() {
                 "to_node": "1.1",
                 "to_parent_id": "1",
                 "summary": "root scope",
-                "worklog_hash": worklog_hash("Root handoff."),
                 "raw_start_ordinal": 8,
             }),
         ]
@@ -154,12 +143,6 @@ fn records_transition_worklog_and_replays_from_tree() {
     let loaded = store.load().expect("load sidecar");
 
     assert_eq!(loaded, state);
-    assert_eq!(
-        loaded
-            .node(&id(&[1]))
-            .and_then(|node| node.worklog.as_deref()),
-        Some("Root handoff.")
-    );
     assert_eq!(
         loaded
             .node(&id(&[1, 1]))
@@ -173,13 +156,7 @@ fn generated_worklog_sections_do_not_break_transition_replay_hash() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(
-            &mut state,
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-            8,
-        )
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
         .expect("record transition");
 
     store
@@ -187,19 +164,12 @@ fn generated_worklog_sections_do_not_break_transition_replay_hash() {
         .expect("append generated section");
 
     let worklog = std::fs::read_to_string(store.worklog_path(&id(&[1]))).expect("read worklog");
-    assert!(worklog.contains("Root handoff."));
     assert!(worklog.contains("spine:auto-compact-generated"));
     assert!(worklog.contains("generated summary"));
 
     let loaded = store.load().expect("load sidecar");
 
     assert_eq!(loaded, state);
-    assert_eq!(
-        loaded
-            .node(&id(&[1]))
-            .and_then(|node| node.worklog.as_deref()),
-        Some("Root handoff.")
-    );
 }
 
 #[test]
@@ -207,13 +177,7 @@ fn state_cache_mismatch_fails_fast() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(
-            &mut state,
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-            8,
-        )
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
         .expect("record transition");
     let mut cache = read_json(store.state_path());
     cache["cursor"] = json!("9");

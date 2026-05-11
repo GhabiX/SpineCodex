@@ -62,7 +62,7 @@ fn spine_call(call_id: &str) -> ResponseItem {
         id: None,
         name: "spine".to_string(),
         namespace: None,
-        arguments: r#"{"op":"open","summary":"root scope","worklog":"Root handoff."}"#.to_string(),
+        arguments: r#"{"op":"open","summary":"root scope"}"#.to_string(),
         call_id: call_id.to_string(),
     }
 }
@@ -244,13 +244,7 @@ fn stage_does_not_advance_cursor_or_write_transition() {
     let (_temp, mut runtime) = temp_runtime();
 
     let staged = runtime
-        .stage_transition(
-            "call-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage transition")
         .clone();
 
@@ -275,13 +269,7 @@ fn stage_does_not_advance_cursor_or_write_transition() {
 fn commit_moves_cursor_after_function_call_output_boundary() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "call-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage transition");
 
     let ranges = runtime
@@ -331,7 +319,6 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
                 "to_node": "1.1",
                 "to_parent_id": "1",
                 "summary": "root scope",
-                "worklog_hash": "sha1:8770a7241631fffc71387378a9cb42810b7f148a",
                 "raw_start_ordinal": 2,
             }),
         ]
@@ -373,13 +360,7 @@ fn stage_after_recorded_call_preserves_function_call_start() {
         )
         .expect("record model output before tool dispatch");
     runtime
-        .stage_transition(
-            "call-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage transition after function call was recorded");
     runtime
         .after_response_items_recorded("turn-1", &[function_call_output("call-1")], 2, 3)
@@ -428,13 +409,7 @@ fn stage_after_recorded_call_preserves_function_call_start() {
 fn next_compact_boundary_uses_finished_leaf_raw_start() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "open-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("open-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage open");
     runtime
         .after_response_items_recorded(
@@ -449,13 +424,7 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
         .after_response_items_recorded("turn-2", &[assistant_message("leaf work")], 2, 3)
         .expect("record leaf work");
     runtime
-        .stage_transition(
-            "next-1",
-            "turn-2",
-            SpineOperation::Next,
-            "leaf done",
-            "Leaf handoff.",
-        )
+        .stage_transition("next-1", "turn-2", SpineOperation::Next, "leaf done")
         .expect("stage next");
     runtime
         .after_response_items_recorded(
@@ -484,13 +453,7 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
 fn next_compact_fails_after_non_spine_compacted_history() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "next-1",
-            "turn-1",
-            SpineOperation::Next,
-            "root done",
-            "Root handoff.",
-        )
+        .stage_transition("next-1", "turn-1", SpineOperation::Next, "root done")
         .expect("stage next");
     runtime
         .after_response_items_recorded(
@@ -516,13 +479,7 @@ fn next_compact_fails_after_non_spine_compacted_history() {
 fn close_compact_boundary_uses_parent_scope_raw_start() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "open-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("open-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage open");
     runtime
         .after_response_items_recorded(
@@ -537,13 +494,7 @@ fn close_compact_boundary_uses_parent_scope_raw_start() {
         .after_response_items_recorded("turn-2", &[assistant_message("child work")], 2, 3)
         .expect("record child work");
     runtime
-        .stage_transition(
-            "close-1",
-            "turn-2",
-            SpineOperation::Close,
-            "scope done",
-            "Scope handoff.",
-        )
+        .stage_transition("close-1", "turn-2", SpineOperation::Close, "scope done")
         .expect("stage close");
     runtime
         .after_response_items_recorded(
@@ -573,13 +524,7 @@ fn close_compact_boundary_uses_parent_scope_raw_start() {
 fn close_context_outline_lists_scope_and_direct_children_only() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "open-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("open-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage open");
     runtime
         .after_response_items_recorded(
@@ -591,13 +536,7 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
         .expect("commit open");
     runtime.take_last_committed_transition();
     runtime
-        .stage_transition(
-            "next-1",
-            "turn-2",
-            SpineOperation::Next,
-            "first child done",
-            "First child handoff.",
-        )
+        .stage_transition("next-1", "turn-2", SpineOperation::Next, "first child done")
         .expect("stage next");
     runtime
         .after_response_items_recorded(
@@ -614,7 +553,6 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
             "turn-3",
             SpineOperation::Close,
             "second child done",
-            "Second child handoff.",
         )
         .expect("stage close");
     runtime
@@ -638,8 +576,6 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
         outline.find("|-- [1.1]").expect("first child row")
             < outline.find("|-- [1.2]").expect("second child row")
     );
-    assert!(!outline.contains("First child handoff."));
-    assert!(!outline.contains("Second child handoff."));
 }
 
 #[test]
@@ -649,13 +585,7 @@ fn raw_items_after_commit_are_owned_by_new_cursor() {
         .after_response_items_recorded("model-call", &[spine_call("call-1")], 0, 1)
         .expect("record model call");
     runtime
-        .stage_transition(
-            "call-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage transition");
     runtime
         .after_response_items_recorded("spine-output", &[function_call_output("call-1")], 1, 2)
@@ -693,13 +623,7 @@ fn raw_items_after_commit_are_owned_by_new_cursor() {
 fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "call-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage transition");
 
     let ranges = runtime
@@ -770,23 +694,11 @@ fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
 fn rejects_second_staged_transition() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "call-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage first transition");
 
     let error = runtime
-        .stage_transition(
-            "call-2",
-            "turn-1",
-            SpineOperation::Next,
-            "another",
-            "Another handoff.",
-        )
+        .stage_transition("call-2", "turn-1", SpineOperation::Next, "another")
         .expect_err("second staged transition should fail");
 
     assert!(matches!(
@@ -800,13 +712,7 @@ fn rejects_second_staged_transition() {
 fn commit_requires_matching_call_id() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "call-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            "Root handoff.",
-        )
+        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
         .expect("stage transition");
 
     let error = runtime
@@ -826,13 +732,7 @@ fn commit_requires_matching_call_id() {
 fn commit_requires_recorded_function_call_start() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "call-1",
-            "turn-1",
-            SpineOperation::Next,
-            "root done",
-            "Root handoff.",
-        )
+        .stage_transition("call-1", "turn-1", SpineOperation::Next, "root done")
         .expect("stage transition without recorded call");
 
     let error = runtime
@@ -856,7 +756,6 @@ fn commit_failure_leaves_cursor_and_tree_unchanged() {
             "turn-1",
             SpineOperation::Open,
             "root scope",
-            "Root handoff.",
         )
         .expect("stage transition");
 
@@ -909,13 +808,7 @@ fn stage_uses_state_validation_without_mutating_runtime() {
     let (_temp, mut runtime) = temp_runtime();
 
     let error = runtime
-        .stage_transition(
-            "call-1",
-            "turn-1",
-            SpineOperation::Close,
-            "root done",
-            "Root cannot close.",
-        )
+        .stage_transition("call-1", "turn-1", SpineOperation::Close, "root done")
         .expect_err("close on root should fail");
 
     assert!(matches!(

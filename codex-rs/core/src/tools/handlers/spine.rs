@@ -23,7 +23,6 @@ pub struct SpineHandler;
 struct SpineArgs {
     op: SpineOperation,
     summary: String,
-    worklog: String,
 }
 
 #[derive(Debug)]
@@ -121,13 +120,7 @@ impl ToolHandler for SpineHandler {
         let (cursor, visible_spine) = {
             let mut runtime = spine.lock().await;
             let staged = runtime
-                .stage_transition(
-                    call_id,
-                    turn.sub_id.clone(),
-                    args.op,
-                    args.summary,
-                    args.worklog,
-                )
+                .stage_transition(call_id, turn.sub_id.clone(), args.op, args.summary)
                 .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
             (
                 staged.to_node.bracketed(),

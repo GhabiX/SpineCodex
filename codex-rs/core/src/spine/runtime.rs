@@ -186,7 +186,6 @@ impl SpineRuntime {
                     cut_ordinal,
                     fold_end_ordinal: committed.boundary_end,
                     transition_summary: committed.summary.clone(),
-                    transition_worklog: committed.worklog.clone(),
                 }))
             }
             SpineOperation::Close => {
@@ -212,7 +211,6 @@ impl SpineRuntime {
                     cut_ordinal,
                     fold_end_ordinal: committed.boundary_end,
                     transition_summary: committed.summary.clone(),
-                    transition_worklog: committed.worklog.clone(),
                 }))
             }
         }
@@ -329,7 +327,6 @@ impl SpineRuntime {
         turn_id: impl Into<String>,
         op: SpineOperation,
         summary: impl Into<String>,
-        worklog: impl Into<String>,
     ) -> Result<&StagedTransition, SpineRuntimeError> {
         if let Some(staged) = self.staged_transition.as_ref() {
             return Err(SpineRuntimeError::TransitionAlreadyStaged {
@@ -340,9 +337,8 @@ impl SpineRuntime {
         let call_id = call_id.into();
         let turn_id = turn_id.into();
         let summary = summary.into();
-        let worklog = worklog.into();
         let mut validation_state = self.state.clone();
-        let transition = op.apply(&mut validation_state, summary.clone(), worklog.clone())?;
+        let transition = op.apply(&mut validation_state, summary.clone())?;
 
         let call_start_ordinal = self.pending_spine_call_starts.remove(&call_id);
 
@@ -354,7 +350,6 @@ impl SpineRuntime {
             to_node: transition.to,
             visible_spine: validation_state.visible_spine(),
             summary,
-            worklog,
             call_start_ordinal,
         });
         Ok(self
@@ -399,11 +394,9 @@ impl SpineRuntime {
         }
 
         let mut validation_state = self.state.clone();
-        let validation_transition = staged.op.apply(
-            &mut validation_state,
-            staged.summary.clone(),
-            staged.worklog.clone(),
-        )?;
+        let validation_transition = staged
+            .op
+            .apply(&mut validation_state, staged.summary.clone())?;
         if validation_transition.from != staged.from_node
             || validation_transition.to != staged.to_node
         {
@@ -429,7 +422,6 @@ impl SpineRuntime {
             &mut next_state,
             staged.op,
             staged.summary.clone(),
-            staged.worklog.clone(),
             boundary_end_ordinal,
         )?;
         if transition.from != staged.from_node || transition.to != staged.to_node {
@@ -451,7 +443,6 @@ impl SpineRuntime {
             call_start_ordinal,
             boundary_end: boundary_end_ordinal,
             summary: staged.summary,
-            worklog: staged.worklog,
         };
         self.last_committed_transition = Some(committed.clone());
         Ok(committed)
@@ -485,7 +476,6 @@ pub(crate) struct StagedTransition {
     pub(crate) to_node: NodeId,
     pub(crate) visible_spine: Vec<NodeId>,
     pub(crate) summary: String,
-    pub(crate) worklog: String,
     pub(crate) call_start_ordinal: Option<u64>,
 }
 
@@ -498,7 +488,6 @@ pub(crate) struct CommittedTransition {
     pub(crate) call_start_ordinal: u64,
     pub(crate) boundary_end: u64,
     pub(crate) summary: String,
-    pub(crate) worklog: String,
 }
 
 #[derive(Debug, Error)]

@@ -1535,7 +1535,6 @@ fn spine_compact_id_is_deterministic_for_same_boundary() {
         cut_ordinal: 4,
         fold_end_ordinal: 9,
         transition_summary: "leaf done".to_string(),
-        transition_worklog: "handoff".to_string(),
     };
 
     assert_eq!(

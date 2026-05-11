@@ -9,7 +9,6 @@ use super::state::Transition;
 use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
 use serde::Serialize;
-use sha1::Digest;
 use std::collections::HashMap;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -161,13 +160,11 @@ impl SpineSidecarStore {
         state: &mut SpineState,
         op: SpineOperation,
         summary: impl Into<String>,
-        worklog: impl Into<String>,
         raw_start_ordinal: u64,
     ) -> Result<Transition, SpineStoreError> {
         let summary = summary.into();
-        let worklog = worklog.into();
         let mut next_state = state.clone();
-        let transition = op.apply(&mut next_state, summary.clone(), worklog.clone())?;
+        let transition = op.apply(&mut next_state, summary.clone())?;
         next_state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
         let to_parent_id = next_state
             .node(&transition.to)
@@ -176,7 +173,6 @@ impl SpineSidecarStore {
             .as_ref()
             .map(ToString::to_string);
 
-        self.write_worklog_file(&transition.from, &worklog)?;
         self.ensure_node_dir(&transition.to)?;
 
         let event = TreeEvent::TransitionApplied {
@@ -186,7 +182,6 @@ impl SpineSidecarStore {
             to_node: transition.to.to_string(),
             to_parent_id,
             summary,
-            worklog_hash: worklog_hash(&worklog),
             raw_start_ordinal,
         };
         self.append_json_line(&self.tree_path(), &event)?;
@@ -472,6 +467,7 @@ impl SpineSidecarStore {
         self.ensure_node_dir(node_id)?;
         let path = self.worklog_path(node_id);
         let mut file = OpenOptions::new()
+            .create(true)
             .append(true)
             .open(&path)
             .map_err(|source| SpineStoreError::Io {
@@ -492,7 +488,13 @@ impl SpineSidecarStore {
         node_id: &NodeId,
         section: &str,
     ) -> Result<String, SpineStoreError> {
-        let mut worklog = self.read_worklog_file(node_id)?;
+        let mut worklog = match self.read_worklog_file(node_id) {
+            Ok(worklog) => worklog,
+            Err(SpineStoreError::Io { source, .. }) if source.kind() == ErrorKind::NotFound => {
+                String::new()
+            }
+            Err(err) => return Err(err),
+        };
         worklog.push_str(GENERATED_WORKLOG_SECTION_MARKER);
         worklog.push_str(section);
         Ok(worklog)
@@ -535,7 +537,6 @@ impl SpineSidecarStore {
                     to_node,
                     to_parent_id,
                     summary,
-                    worklog_hash: expected_worklog_hash,
                     raw_start_ordinal,
                     ..
                 } => {
@@ -547,12 +548,7 @@ impl SpineSidecarStore {
                     let from_node = NodeId::parse(&from_node)?;
                     let to_node = NodeId::parse(&to_node)?;
                     let to_parent_id = to_parent_id.as_deref().map(NodeId::parse).transpose()?;
-                    let worklog = self.read_worklog_file(&from_node)?;
-                    let actual_worklog_hash = worklog_hash(direct_worklog_body(&worklog));
-                    if expected_worklog_hash != actual_worklog_hash {
-                        return Err(SpineStoreError::WorklogHashMismatch { node_id: from_node });
-                    }
-                    let transition = op.apply(state, summary, direct_worklog_body(&worklog))?;
+                    let transition = op.apply(state, summary)?;
                     if transition.from != from_node || transition.to != to_node {
                         return Err(SpineStoreError::InvalidLedger(format!(
                             "transition replay mismatch: expected {} -> {}, got {} -> {}",
@@ -994,12 +990,11 @@ impl SpineOperation {
         self,
         state: &mut SpineState,
         summary: impl Into<String>,
-        worklog: impl Into<String>,
     ) -> Result<Transition, SpineStateError> {
         match self {
-            SpineOperation::Open => state.open(summary, worklog),
-            SpineOperation::Next => state.next(summary, worklog),
-            SpineOperation::Close => state.close(summary, worklog),
+            SpineOperation::Open => state.open(summary),
+            SpineOperation::Next => state.next(summary),
+            SpineOperation::Close => state.close(summary),
         }
     }
 }
@@ -1020,7 +1015,6 @@ enum TreeEvent {
         to_node: String,
         to_parent_id: Option<String>,
         summary: String,
-        worklog_hash: String,
         raw_start_ordinal: u64,
     },
     TaskPlanUpdated {
@@ -1209,11 +1203,7 @@ impl StateSnapshot {
                     raw_start_ordinal: node.raw_start_ordinal,
                     status: status_label(&node.status).to_string(),
                     summary: node.summary.clone(),
-                    worklog_hash: node.worklog.as_deref().map(worklog_hash),
-                    worklog_path: node
-                        .worklog
-                        .as_ref()
-                        .map(|_| relative_worklog_path(&node.node_id)),
+                    worklog_path: Some(relative_worklog_path(&node.node_id)),
                     plan_path: Some(relative_plan_path(&node.node_id)),
                 })
                 .collect(),
@@ -1228,7 +1218,6 @@ struct NodeSnapshot {
     raw_start_ordinal: Option<u64>,
     status: String,
     summary: Option<String>,
-    worklog_hash: Option<String>,
     worklog_path: Option<String>,
     plan_path: Option<String>,
 }
@@ -1285,19 +1274,6 @@ fn relative_node_file_path(node_id: &NodeId, file_name: &str) -> String {
     parts.extend(node_id.segments().iter().map(ToString::to_string));
     parts.push(file_name.to_string());
     parts.join("/")
-}
-
-fn worklog_hash(worklog: &str) -> String {
-    let mut hasher = sha1::Sha1::new();
-    hasher.update(worklog.as_bytes());
-    format!("sha1:{:x}", hasher.finalize())
-}
-
-fn direct_worklog_body(worklog: &str) -> &str {
-    worklog
-        .split_once(GENERATED_WORKLOG_SECTION_MARKER)
-        .map(|(direct, _)| direct)
-        .unwrap_or(worklog)
 }
 
 fn is_direct_child_of(node_id: &NodeId, parent_id: &NodeId) -> bool {

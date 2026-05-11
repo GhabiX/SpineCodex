@@ -15,12 +15,8 @@ pub(crate) fn create_spine_tool() -> ToolSpec {
         ),
         (
             "summary".to_string(),
-            JsonSchema::string(Some("Short roadmap line for the transition".to_string())),
-        ),
-        (
-            "worklog".to_string(),
             JsonSchema::string(Some(
-                "Semantic handoff for the current task node".to_string(),
+                "Short Spine Tree display label for the transition".to_string(),
             )),
         ),
     ]);
@@ -33,11 +29,7 @@ pub(crate) fn create_spine_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(
             properties,
-            Some(vec![
-                "op".to_string(),
-                "summary".to_string(),
-                "worklog".to_string(),
-            ]),
+            Some(vec!["op".to_string(), "summary".to_string()]),
             Some(false.into()),
         ),
         output_schema: None,

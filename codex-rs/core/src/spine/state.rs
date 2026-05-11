@@ -17,7 +17,6 @@ pub(crate) struct NodeRecord {
     pub(crate) raw_start_ordinal: Option<u64>,
     pub(crate) status: NodeStatus,
     pub(crate) summary: Option<String>,
-    pub(crate) worklog: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,7 +34,6 @@ impl SpineState {
             raw_start_ordinal: Some(0),
             status: NodeStatus::Live,
             summary: None,
-            worklog: None,
         };
         Self {
             cursor: root.clone(),
@@ -88,12 +86,11 @@ impl SpineState {
     pub(crate) fn open(
         &mut self,
         summary: impl Into<String>,
-        worklog: impl Into<String>,
     ) -> Result<Transition, SpineStateError> {
         let from = self.cursor.clone();
         let child = from.child(self.next_child_index(Some(&from))?);
 
-        self.write_direct_worklog(&from, summary, worklog)?;
+        self.write_summary(&from, summary)?;
         self.set_status(&from, NodeStatus::Opened)?;
         self.insert_node(child.clone(), Some(from.clone()))?;
         self.cursor = child.clone();
@@ -104,13 +101,12 @@ impl SpineState {
     pub(crate) fn next(
         &mut self,
         summary: impl Into<String>,
-        worklog: impl Into<String>,
     ) -> Result<Transition, SpineStateError> {
         let from = self.cursor.clone();
         let parent = self.parent_id(&from)?;
         let next_sibling = self.next_sibling_id(parent.as_ref())?;
 
-        self.write_direct_worklog(&from, summary, worklog)?;
+        self.write_summary(&from, summary)?;
         self.set_status(&from, NodeStatus::Finished)?;
         self.insert_node(next_sibling.clone(), parent)?;
         self.cursor = next_sibling.clone();
@@ -124,7 +120,6 @@ impl SpineState {
     pub(crate) fn close(
         &mut self,
         summary: impl Into<String>,
-        worklog: impl Into<String>,
     ) -> Result<Transition, SpineStateError> {
         let from = self.cursor.clone();
         let parent = self
@@ -133,7 +128,7 @@ impl SpineState {
         let grandparent = self.parent_id(&parent)?;
         let parent_sibling = self.next_sibling_id(grandparent.as_ref())?;
 
-        self.write_direct_worklog(&from, summary, worklog)?;
+        self.write_summary(&from, summary)?;
         self.set_status(&from, NodeStatus::Finished)?;
         self.set_status(&parent, NodeStatus::Closed)?;
         self.insert_node(parent_sibling.clone(), grandparent)?;
@@ -182,37 +177,28 @@ impl SpineState {
             raw_start_ordinal: None,
             status: NodeStatus::Live,
             summary: None,
-            worklog: None,
         };
         self.nodes.insert(node_id, node);
         Ok(())
     }
 
-    fn write_direct_worklog(
+    fn write_summary(
         &mut self,
         node_id: &NodeId,
         summary: impl Into<String>,
-        worklog: impl Into<String>,
     ) -> Result<(), SpineStateError> {
         let summary = summary.into();
         if summary.trim().is_empty() {
             return Err(SpineStateError::EmptySummary);
         }
-        let worklog = worklog.into();
-        if worklog.trim().is_empty() {
-            return Err(SpineStateError::EmptyWorklog);
-        }
         let node = self
             .nodes
             .get_mut(node_id)
             .ok_or_else(|| SpineStateError::UnknownNode(node_id.clone()))?;
-        if node.summary.is_some() || node.worklog.is_some() {
-            return Err(SpineStateError::DirectWorklogAlreadyWritten(
-                node_id.clone(),
-            ));
+        if node.summary.is_some() {
+            return Err(SpineStateError::SummaryAlreadyWritten(node_id.clone()));
         }
         node.summary = Some(summary);
-        node.worklog = Some(worklog);
         Ok(())
     }
 
@@ -235,10 +221,9 @@ pub(crate) struct Transition {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpineStateError {
     CannotCloseRoot,
-    DirectWorklogAlreadyWritten(NodeId),
     DuplicateNode(NodeId),
     EmptySummary,
-    EmptyWorklog,
+    SummaryAlreadyWritten(NodeId),
     TooManyChildren,
     UnknownNode(NodeId),
 }
@@ -247,18 +232,13 @@ impl fmt::Display for SpineStateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SpineStateError::CannotCloseRoot => f.write_str("cannot close the root spine node"),
-            SpineStateError::DirectWorklogAlreadyWritten(node_id) => {
-                write!(
-                    f,
-                    "direct worklog already written for {}",
-                    node_id.bracketed()
-                )
+            SpineStateError::SummaryAlreadyWritten(node_id) => {
+                write!(f, "summary already written for {}", node_id.bracketed())
             }
             SpineStateError::DuplicateNode(node_id) => {
                 write!(f, "duplicate spine node {}", node_id.bracketed())
             }
             SpineStateError::EmptySummary => f.write_str("spine summary must not be empty"),
-            SpineStateError::EmptyWorklog => f.write_str("spine worklog must not be empty"),
             SpineStateError::TooManyChildren => f.write_str("too many spine child nodes"),
             SpineStateError::UnknownNode(node_id) => {
                 write!(f, "unknown spine node {}", node_id.bracketed())

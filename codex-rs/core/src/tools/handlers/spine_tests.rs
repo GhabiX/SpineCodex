@@ -52,7 +52,6 @@ fn valid_args(op: &str) -> serde_json::Value {
     json!({
         "op": op,
         "summary": "root scope",
-        "worklog": "Root handoff.",
     })
 }
 
@@ -199,7 +198,6 @@ async fn empty_summary_rejects_without_staging() {
             json!({
                 "op": "open",
                 "summary": "",
-                "worklog": "Root handoff.",
             }),
         ))
         .await
@@ -208,32 +206,6 @@ async fn empty_summary_rejects_without_staging() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel("spine summary must not be empty".to_string())
-    );
-    let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
-    assert!(runtime.staged_transition().is_none());
-}
-
-#[tokio::test]
-async fn empty_worklog_rejects_without_staging() {
-    let (_temp, session, turn) = session_and_turn_with_spine().await;
-    let session = Arc::new(session);
-    let err = SpineHandler
-        .handle(invocation(
-            Arc::clone(&session),
-            Arc::new(turn),
-            "call-spine",
-            json!({
-                "op": "open",
-                "summary": "root scope",
-                "worklog": "  ",
-            }),
-        ))
-        .await
-        .expect_err("empty worklog should reject");
-
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel("spine worklog must not be empty".to_string())
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     assert!(runtime.staged_transition().is_none());

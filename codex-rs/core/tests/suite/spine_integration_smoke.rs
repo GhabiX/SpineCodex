@@ -40,11 +40,8 @@ const CLOSE_CALL_ID: &str = "spine-close-call";
 const ROOT_SHELL_CALL_ID: &str = "root-shell-call";
 
 const OPEN_SUMMARY: &str = "open child scope";
-const OPEN_WORKLOG: &str = "Root handoff for child shell smoke.";
 const NEXT_SUMMARY: &str = "finish child scope";
-const NEXT_WORKLOG: &str = "Child handoff for sibling shell smoke.";
 const CLOSE_SUMMARY: &str = "finish root scope";
-const CLOSE_WORKLOG: &str = "Sibling handoff for root shell smoke.";
 const EXPECTED_SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
 You have a task tree tool named spine.
 Use the active task tree to split complex work into focused right-spine nodes.
@@ -52,9 +49,9 @@ Keep simple tasks in one node.
 Call spine open when starting a focused subproblem.
 Call spine next when handing off from one sibling task to the next.
 Call spine close when finishing a child scope and returning to the parent sibling.
-Every spine call must include a concise summary and a durable worklog containing goal, findings, decisions, verification, and risks.
+Use each spine summary as a short Spine Tree display label; keep detailed findings, decisions, verification, and risks in worklogs or compacted context, not in the summary.
 Use update_plan only as the TODO list for the current active node; do not treat update_plan as the task tree driver.
-There is no read_spine tool; inspect task-tree files, worklogs, and historical rollout trajs with bash when needed.
+To inspect prior task-tree state, use shell commands to read sidecar tree files, node worklogs, compact indexes, and rollout trajs when needed.
 In Plan mode, do not call mutating spine operations.
 </spine_view>"#;
 
@@ -69,11 +66,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
         vec![
             sse(vec![
                 ev_response_created("resp-open"),
-                ev_function_call(
-                    OPEN_CALL_ID,
-                    "spine",
-                    &spine_args("open", OPEN_SUMMARY, OPEN_WORKLOG),
-                ),
+                ev_function_call(OPEN_CALL_ID, "spine", &spine_args("open", OPEN_SUMMARY)),
                 ev_function_call(
                     CHILD_SHELL_CALL_ID,
                     "shell_command",
@@ -88,11 +81,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
             ]),
             sse(vec![
                 ev_response_created("resp-next"),
-                ev_function_call(
-                    NEXT_CALL_ID,
-                    "spine",
-                    &spine_args("next", NEXT_SUMMARY, NEXT_WORKLOG),
-                ),
+                ev_function_call(NEXT_CALL_ID, "spine", &spine_args("next", NEXT_SUMMARY)),
                 ev_function_call(
                     SIBLING_SHELL_CALL_ID,
                     "shell_command",
@@ -107,11 +96,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
             ]),
             sse(vec![
                 ev_response_created("resp-close"),
-                ev_function_call(
-                    CLOSE_CALL_ID,
-                    "spine",
-                    &spine_args("close", CLOSE_SUMMARY, CLOSE_WORKLOG),
-                ),
+                ev_function_call(CLOSE_CALL_ID, "spine", &spine_args("close", CLOSE_SUMMARY)),
                 ev_function_call(
                     ROOT_SHELL_CALL_ID,
                     "shell_command",
@@ -193,7 +178,6 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert_raw_range_for_node_after_transition(&index, CLOSE_CALL_ID, "2");
 
     let root_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/worklog.md"))?;
-    assert!(root_worklog.starts_with(OPEN_WORKLOG));
     assert!(root_worklog.contains("spine:auto-compact-generated"));
     assert!(root_worklog.contains("Compacted root findings."));
     assert!(root_worklog.contains("## Context Compacted"));
@@ -201,7 +185,6 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert!(root_worklog.contains("|-- [1.1] finish child scope (nodes/1/1/worklog.md)"));
     assert!(root_worklog.contains("|-- [1.2] finish root scope (nodes/1/2/worklog.md)"));
     let child_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/worklog.md"))?;
-    assert!(child_worklog.starts_with(NEXT_WORKLOG));
     assert!(child_worklog.contains("spine:auto-compact-generated"));
     assert!(child_worklog.contains("Compacted child findings."));
     assert_compact_installed(&compact_index, "1.1", "next");
@@ -370,11 +353,10 @@ fn shell_args(command: &str) -> String {
     .to_string()
 }
 
-fn spine_args(op: &str, summary: &str, worklog: &str) -> String {
+fn spine_args(op: &str, summary: &str) -> String {
     json!({
         "op": op,
         "summary": summary,
-        "worklog": worklog,
     })
     .to_string()
 }
@@ -469,13 +451,6 @@ fn assert_transition(tree: &[Value], op: &str, from_node: &str, to_node: &str, s
         .unwrap_or_else(|| panic!("missing {op} transition {from_node} -> {to_node}: {tree:?}"));
 
     assert_eq!(event.get("summary").and_then(Value::as_str), Some(summary));
-    assert!(
-        event
-            .get("worklog_hash")
-            .and_then(Value::as_str)
-            .is_some_and(|hash| hash.starts_with("sha1:")),
-        "transition should contain a worklog hash: {event:?}"
-    );
 }
 
 fn assert_plan_updated(tree: &[Value], node_id: &str, revision: u64, source_turn_id: &str) {

@@ -5,9 +5,9 @@ Keep simple tasks in one node.
 Call spine open when starting a focused subproblem.
 Call spine next when handing off from one sibling task to the next.
 Call spine close when finishing a child scope and returning to the parent sibling.
-Every spine call must include a concise summary and a durable worklog containing goal, findings, decisions, verification, and risks.
+Use each spine summary as a short Spine Tree display label; keep detailed findings, decisions, verification, and risks in worklogs or compacted context, not in the summary.
 Use update_plan only as the TODO list for the current active node; do not treat update_plan as the task tree driver.
-There is no read_spine tool; inspect task-tree files, worklogs, and historical rollout trajs with bash when needed.
+To inspect prior task-tree state, use shell commands to read sidecar tree files, node worklogs, compact indexes, and rollout trajs when needed.
 In Plan mode, do not call mutating spine operations.
 </spine_view>"#;
 
