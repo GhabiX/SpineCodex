@@ -8,3 +8,4 @@ pub(crate) mod runtime;
 pub(crate) mod state;
 pub(crate) mod store;
 pub(crate) mod trajs;
+pub(crate) mod view;
