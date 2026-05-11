@@ -100,6 +100,14 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
                 ev_completed("resp-next"),
             ]),
             sse(vec![
+                ev_response_created("resp-spine-compact"),
+                ev_assistant_message(
+                    "msg-spine-compact",
+                    "<spine_compact_worklog>\nCompacted child findings.\n</spine_compact_worklog>",
+                ),
+                ev_completed("resp-spine-compact"),
+            ]),
+            sse(vec![
                 ev_response_created("resp-close"),
                 ev_spine_transition_call(CLOSE_CALL_ID, "close", CLOSE_SUMMARY),
                 ev_function_call(
@@ -110,25 +118,17 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
                 ev_completed("resp-close"),
             ]),
             sse(vec![
-                ev_response_created("resp-done"),
-                ev_assistant_message("msg-done", "done"),
-                ev_completed("resp-done"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-spine-compact"),
-                ev_assistant_message(
-                    "msg-spine-compact",
-                    "<spine_compact_worklog>\nCompacted child findings.\n</spine_compact_worklog>",
-                ),
-                ev_completed("resp-spine-compact"),
-            ]),
-            sse(vec![
                 ev_response_created("resp-spine-close-compact"),
                 ev_assistant_message(
                     "msg-spine-close-compact",
                     "<spine_compact_worklog>\nCompacted root findings.\n</spine_compact_worklog>",
                 ),
                 ev_completed("resp-spine-close-compact"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-done"),
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
             ]),
         ],
     )
