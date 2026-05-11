@@ -207,8 +207,8 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(!rendered.contains("quoted_suffix_response_items_json"));
     assert!(!rendered.contains("Target suffix item count"));
     assert!(rendered.contains("<spine_tree>"));
-    assert!(rendered.contains("|-- [1.1] finished leaf done"));
-    assert!(rendered.contains("|-- [1.2] live current"));
+    assert!(rendered.contains("1: finished leaf done [worklog already in context]"));
+    assert!(rendered.contains("2: Current"));
     assert!(rendered.contains("<spine_compact_worklog>"));
     assert!(rendered.contains("</spine_compact_worklog>"));
     assert_eq!(prompt[0], input.prefix_items[0]);

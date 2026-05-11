@@ -77,10 +77,7 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
         .await
         .expect("spine open should stage");
 
-    assert_eq!(
-        output.log_preview(),
-        "Spine updated: open\n\ncurrent: [1.1] live\n\n[1] opened root scope (nodes/1/worklog.md)\n|-- [1.1] live current (nodes/1/1/worklog.md)"
-    );
+    assert_eq!(output.log_preview(), "Current:  1\n\n1: Current");
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     assert_eq!(runtime.cursor().bracketed(), "[1]");
     let staged = runtime
@@ -137,7 +134,7 @@ async fn valid_next_returns_compact_tree_view() {
 
     assert_eq!(
         output.log_preview(),
-        "Spine updated: next\n\ncurrent: [1.2] live\n\n[1] opened root scope (nodes/1/worklog.md)\n|-- [1.1] finished Completed reproduction and patch verification (nodes/1/1/worklog.md)\n|-- [1.2] live current (nodes/1/2/worklog.md)"
+        "Current:  2\n\n1: finished Completed reproduction and patch verification [worklog already in context]\n2: Current"
     );
 }
 
@@ -310,10 +307,7 @@ async fn tree_prints_current_tree_without_staging() {
         .await
         .expect("spine tree should render");
 
-    assert_eq!(
-        output.log_preview(),
-        "Spine tree\n\ncurrent: [1] live\n\n[1] live current (nodes/1/worklog.md)"
-    );
+    assert_eq!(output.log_preview(), "Current:  root\n\n(empty)");
     assert_eq!(
         output.code_mode_result(&ToolPayload::Function {
             arguments: "{}".to_string()
@@ -321,7 +315,7 @@ async fn tree_prints_current_tree_without_staging() {
         json!({
             "op": null,
             "cursor": "[1]",
-            "tree": "[1] live current (nodes/1/worklog.md)",
+            "tree": "(empty)",
         })
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
