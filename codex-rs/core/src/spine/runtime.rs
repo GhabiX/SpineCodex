@@ -385,12 +385,11 @@ impl SpineRuntime {
                 actual: boundary_end_ordinal,
             });
         }
-        let call_start_ordinal =
-            staged
-                .call_start_ordinal
-                .ok_or_else(|| SpineRuntimeError::MissingCallStartOrdinal {
-                    call_id: staged.call_id.clone(),
-                })?;
+        let call_start_ordinal = staged.call_start_ordinal.ok_or_else(|| {
+            SpineRuntimeError::MissingCallStartOrdinal {
+                call_id: staged.call_id.clone(),
+            }
+        })?;
         if call_start_ordinal >= boundary_end_ordinal {
             return Err(SpineRuntimeError::InvalidCallBoundary {
                 call_id: staged.call_id.clone(),

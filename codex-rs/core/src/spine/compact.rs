@@ -361,15 +361,8 @@ struct SpineIrMetadata {
 fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
     let text = match item {
         ResponseItem::Message {
-            id,
-            role,
-            content,
-            ..
-        } if id
-            .as_deref()
-            .is_some_and(|id| id.starts_with("spine-ir:"))
-            && role == "user" =>
-        {
+            id, role, content, ..
+        } if id.as_deref().is_some_and(|id| id.starts_with("spine-ir:")) && role == "user" => {
             content.iter().find_map(|content_item| match content_item {
                 ContentItem::InputText { text } => Some(text.as_str()),
                 _ => None,
