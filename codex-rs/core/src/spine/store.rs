@@ -10,6 +10,7 @@ use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
 use serde::Serialize;
 use sha1::Digest;
+use std::collections::HashMap;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::BufRead;
@@ -143,6 +144,7 @@ impl SpineSidecarStore {
 
     pub(crate) fn load(&self) -> Result<SpineState, SpineStoreError> {
         let state = self.replay_tree()?;
+        self.validate_compact_index()?;
         let state_path = self.state_path();
         if state_path.exists() {
             let cached = self.read_state_cache(&state_path)?;
@@ -678,6 +680,131 @@ impl SpineSidecarStore {
         Ok(events)
     }
 
+    fn read_compact_index_events(&self) -> Result<Vec<CompactIndexEvent>, SpineStoreError> {
+        let path = self.compact_index_path();
+        let file = File::open(&path).map_err(|source| SpineStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let reader = BufReader::new(file);
+        let mut events = Vec::new();
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line.map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if line.trim().is_empty() {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "compact.index.jsonl line {} is empty",
+                    index + 1
+                )));
+            }
+            let event: CompactIndexEvent =
+                serde_json::from_str(&line).map_err(|source| SpineStoreError::Json {
+                    path: path.clone(),
+                    source,
+                })?;
+            let expected_seq = u64::try_from(index + 1).map_err(|_| {
+                SpineStoreError::InvalidLedger(
+                    "compact.index.jsonl has too many events".to_string(),
+                )
+            })?;
+            if event.seq() != expected_seq {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "compact.index.jsonl line {} has seq {}, expected {}",
+                    index + 1,
+                    event.seq(),
+                    expected_seq
+                )));
+            }
+            events.push(event);
+        }
+
+        Ok(events)
+    }
+
+    fn validate_compact_index(&self) -> Result<(), SpineStoreError> {
+        let mut attempts: HashMap<String, CompactAttemptState> = HashMap::new();
+
+        for event in self.read_compact_index_events()? {
+            match event {
+                CompactIndexEvent::CompactStarted {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    ..
+                } => {
+                    if attempts
+                        .insert(
+                            compact_id.clone(),
+                            CompactAttemptState {
+                                node_id,
+                                op,
+                                cut_ordinal,
+                                fold_end_ordinal,
+                                terminal: None,
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "compact.index.jsonl has duplicate compact_started for {compact_id}"
+                        )));
+                    }
+                }
+                CompactIndexEvent::CompactInstalled {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    ..
+                } => {
+                    record_compact_terminal(
+                        &mut attempts,
+                        compact_id,
+                        node_id,
+                        op,
+                        cut_ordinal,
+                        fold_end_ordinal,
+                        "compact_installed",
+                    )?;
+                }
+                CompactIndexEvent::CompactFailed {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    ..
+                } => {
+                    record_compact_terminal(
+                        &mut attempts,
+                        compact_id,
+                        node_id,
+                        op,
+                        cut_ordinal,
+                        fold_end_ordinal,
+                        "compact_failed",
+                    )?;
+                }
+            }
+        }
+
+        for (compact_id, attempt) in attempts {
+            if attempt.terminal.is_none() {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "compact.index.jsonl has dangling compact_started for {compact_id}; explicit spine compact repair is required"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     fn next_tree_seq(&self) -> Result<u64, SpineStoreError> {
         let len = self.read_tree_events()?.len();
         u64::try_from(len + 1)
@@ -940,6 +1067,15 @@ impl TrajsIndexEvent {
     }
 }
 
+#[derive(Debug)]
+struct CompactAttemptState {
+    node_id: String,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    terminal: Option<&'static str>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum CompactIndexEvent {
@@ -975,6 +1111,48 @@ enum CompactIndexEvent {
         strategy: String,
         error: String,
     },
+}
+
+impl CompactIndexEvent {
+    fn seq(&self) -> u64 {
+        match self {
+            CompactIndexEvent::CompactStarted { seq, .. }
+            | CompactIndexEvent::CompactInstalled { seq, .. }
+            | CompactIndexEvent::CompactFailed { seq, .. } => *seq,
+        }
+    }
+}
+
+fn record_compact_terminal(
+    attempts: &mut HashMap<String, CompactAttemptState>,
+    compact_id: String,
+    node_id: String,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    terminal: &'static str,
+) -> Result<(), SpineStoreError> {
+    let Some(attempt) = attempts.get_mut(&compact_id) else {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl has {terminal} without matching compact_started for {compact_id}"
+        )));
+    };
+    if attempt.terminal.is_some() {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl has duplicate terminal event for {compact_id}"
+        )));
+    }
+    if attempt.node_id != node_id
+        || attempt.op != op
+        || attempt.cut_ordinal != cut_ordinal
+        || attempt.fold_end_ordinal != fold_end_ordinal
+    {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl {terminal} does not match compact_started for {compact_id}"
+        )));
+    }
+    attempt.terminal = Some(terminal);
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]

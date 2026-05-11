@@ -412,3 +412,229 @@ fn appends_compact_index_and_raw_mirror_events() {
         })
     );
 }
+
+#[test]
+fn compact_index_started_without_terminal_fails_load() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append compact started");
+
+    let error = store.load().expect_err("dangling compact should fail");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("dangling compact_started for compact-1")
+    ));
+}
+
+#[test]
+fn compact_index_started_then_installed_loads() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append compact started");
+    store
+        .append_compact_installed(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "nodes/1/worklog.md",
+            "sha1:abc",
+        )
+        .expect("append compact installed");
+
+    store.load().expect("resolved compact should load");
+}
+
+#[test]
+fn compact_index_started_then_failed_loads() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append compact started");
+    store
+        .append_compact_failed(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+            "strategy failed",
+        )
+        .expect("append compact failed");
+
+    store.load().expect("failed compact should be terminal");
+}
+
+#[test]
+fn compact_index_terminal_without_started_fails_load() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_installed(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "nodes/1/worklog.md",
+            "sha1:abc",
+        )
+        .expect("append compact installed");
+
+    let error = store
+        .load()
+        .expect_err("terminal without started should fail");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("compact_installed without matching compact_started")
+    ));
+}
+
+#[test]
+fn compact_index_terminal_mismatch_fails_load() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append compact started");
+    store
+        .append_compact_installed(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Close,
+            4,
+            9,
+            7,
+            "nodes/1/worklog.md",
+            "sha1:abc",
+        )
+        .expect("append mismatched compact installed");
+
+    let error = store.load().expect_err("mismatched terminal should fail");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("compact_installed does not match compact_started")
+    ));
+}
+
+#[test]
+fn compact_index_duplicate_terminal_fails_load() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append compact started");
+    store
+        .append_compact_installed(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "nodes/1/worklog.md",
+            "sha1:abc",
+        )
+        .expect("append compact installed");
+    store
+        .append_compact_failed(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+            "late failure",
+        )
+        .expect("append duplicate terminal");
+
+    let error = store.load().expect_err("duplicate terminal should fail");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("duplicate terminal event for compact-1")
+    ));
+}
+
+#[test]
+fn compact_index_seq_gap_fails_load() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    std::fs::write(
+        store.compact_index_path(),
+        serde_json::to_string(&json!({
+            "type": "compact_started",
+            "seq": 2,
+            "compact_id": "compact-1",
+            "node_id": "1",
+            "op": "next",
+            "cut_ordinal": 4,
+            "fold_end_ordinal": 9,
+            "strategy": "codex_builtin_text",
+            "raw_trajs": "raw/rollout.raw.jsonl",
+            "rollout": "../rollout.jsonl",
+        }))
+        .expect("serialize compact event")
+            + "\n",
+    )
+    .expect("write compact index");
+
+    let error = store.load().expect_err("seq gap should fail");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("compact.index.jsonl line 1 has seq 2, expected 1")
+    ));
+}
