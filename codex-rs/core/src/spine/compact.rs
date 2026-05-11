@@ -1,6 +1,7 @@
 use super::ids::NodeId;
 use super::store::SpineOperation;
 use super::view::op_label;
+use super::view::relative_node_trajs_path;
 use super::view::relative_worklog_path;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
@@ -219,10 +220,12 @@ fn render_auto_compact_worklog(input: &SpineCompactInput, compacted_suffix: &str
         .raw_mirror_path
         .strip_prefix(&input.sidecar_root)
         .unwrap_or(input.raw_mirror_path.as_path());
+    let node_trajs_path = relative_node_trajs_path(&input.node_id);
     format!(
-        "\n\n## Auto Compact\n\nStrategy: {CODEX_BUILTIN_TEXT_STRATEGY}\nFold: response ordinals [{}, {})\nRaw trajs: {}\nRollout: {}\nIndex: trajs.index.jsonl\n\n{}\n\n## Node Summary\n\n{}\n",
+        "\n\n## Auto Compact\n\nStrategy: {CODEX_BUILTIN_TEXT_STRATEGY}\nFold: response ordinals [{}, {})\nNode trajs: {}\nRaw mirror: {}\nRollout: {}\nIndex: trajs.index.jsonl\n\n{}\n\n## Node Summary\n\n{}\n",
         input.cut_ordinal,
         input.fold_end_ordinal,
+        node_trajs_path.display(),
         raw_mirror_path.display(),
         input.rollout_path.display(),
         compacted_suffix,

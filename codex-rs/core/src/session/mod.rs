@@ -1565,7 +1565,8 @@ impl Session {
         args: UpdatePlanArgs,
     ) -> CodexResult<()> {
         let Some(spine) = self.spine.as_ref() else {
-            self.send_event(turn_context, EventMsg::PlanUpdate(args)).await;
+            self.send_event(turn_context, EventMsg::PlanUpdate(args))
+                .await;
             return Ok(());
         };
 
@@ -1580,7 +1581,8 @@ impl Session {
         };
         self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
             .await;
-        self.send_event(turn_context, EventMsg::PlanUpdate(args)).await;
+        self.send_event(turn_context, EventMsg::PlanUpdate(args))
+            .await;
         Ok(())
     }
 
@@ -2946,6 +2948,20 @@ impl Session {
                 ))
                 .await);
         }
+        let node_trajs_items = plan
+            .input
+            .suffix_items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect::<Vec<_>>();
+        if let Err(err) = store.append_node_trajs_items(&boundary.node_id, &node_trajs_items) {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to archive installed spine compact node trajs after rollout checkpoint: {err}"
+                ))
+                .await);
+        }
         if let Err(err) = store.append_raw_mirror_compact_checkpoint(
             &compact_id,
             &message_hash,
@@ -3223,9 +3239,7 @@ impl Session {
             error!("failed to persist rollout items: {err}");
             if self.spine.is_some() {
                 let _ = self
-                    .poison_spine_compact(format!(
-                        "failed to persist Spine rollout items: {err}"
-                    ))
+                    .poison_spine_compact(format!("failed to persist Spine rollout items: {err}"))
                     .await;
             }
         }

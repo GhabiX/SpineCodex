@@ -106,3 +106,12 @@ pub(crate) fn relative_worklog_path(node_id: &NodeId) -> PathBuf {
     path.push("worklog.md");
     path
 }
+
+pub(crate) fn relative_node_trajs_path(node_id: &NodeId) -> PathBuf {
+    let mut path = PathBuf::from("nodes");
+    for segment in node_id.segments() {
+        path.push(segment.to_string());
+    }
+    path.push("trajs.jsonl");
+    path
+}

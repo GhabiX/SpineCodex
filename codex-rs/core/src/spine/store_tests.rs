@@ -29,6 +29,17 @@ fn read_json(path: impl AsRef<Path>) -> Value {
     serde_json::from_str(&contents).expect("parse json")
 }
 
+fn assistant_rollout_item(text: &str) -> RolloutItem {
+    RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![codex_protocol::models::ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    })
+}
+
 #[test]
 fn derives_sidecar_path_from_rollout_path() {
     let rollout_path = Path::new("/tmp/sessions/2026/05/10/rollout-2026-thread.jsonl");
@@ -170,6 +181,42 @@ fn generated_worklog_sections_do_not_break_transition_replay_hash() {
     let loaded = store.load().expect("load sidecar");
 
     assert_eq!(loaded, state);
+}
+
+#[test]
+fn appends_node_trajs_next_to_worklog() {
+    let (_temp, store) = temp_store();
+    let mut state = store.create().expect("create sidecar");
+    store
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
+        .expect("record transition");
+
+    store
+        .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\ngenerated summary\n")
+        .expect("append generated worklog");
+    store
+        .append_node_trajs_items(&id(&[1, 1]), &[assistant_rollout_item("folded suffix")])
+        .expect("append node trajs");
+
+    let worklog_path = store.worklog_path(&id(&[1, 1]));
+    let trajs_path = store.node_trajs_path(&id(&[1, 1]));
+    assert_eq!(worklog_path.parent(), trajs_path.parent());
+    assert_eq!(trajs_path, store.root().join("nodes/1/1/trajs.jsonl"));
+    assert!(worklog_path.exists());
+    assert_eq!(
+        read_json_lines(trajs_path),
+        vec![json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "folded suffix",
+                }],
+            },
+        })]
+    );
 }
 
 #[test]

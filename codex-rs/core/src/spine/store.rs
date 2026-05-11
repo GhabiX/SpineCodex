@@ -24,6 +24,7 @@ const TREE_FILE: &str = "tree.jsonl";
 const STATE_FILE: &str = "state.json";
 const NODES_DIR: &str = "nodes";
 const WORKLOG_FILE: &str = "worklog.md";
+const NODE_TRAJS_FILE: &str = "trajs.jsonl";
 const PLAN_FILE: &str = "plan.json";
 const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
@@ -108,6 +109,10 @@ impl SpineSidecarStore {
 
     pub(crate) fn worklog_path(&self, node_id: &NodeId) -> PathBuf {
         self.node_dir(node_id).join(WORKLOG_FILE)
+    }
+
+    pub(crate) fn node_trajs_path(&self, node_id: &NodeId) -> PathBuf {
+        self.node_dir(node_id).join(NODE_TRAJS_FILE)
     }
 
     pub(crate) fn plan_path(&self, node_id: &NodeId) -> PathBuf {
@@ -332,6 +337,19 @@ impl SpineSidecarStore {
         }
         for item in items {
             self.append_json_line(&self.raw_rollout_path(), item)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn append_node_trajs_items(
+        &self,
+        node_id: &NodeId,
+        items: &[RolloutItem],
+    ) -> Result<(), SpineStoreError> {
+        self.ensure_node_dir(node_id)?;
+        let path = self.node_trajs_path(node_id);
+        for item in items {
+            self.append_json_line(&path, item)?;
         }
         Ok(())
     }

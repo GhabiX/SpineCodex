@@ -224,6 +224,10 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(text.contains("match the target node by its bracketed id"));
     assert!(text.contains("target node `1.1` in this Spine Tree"));
     assert!(text.contains("For `next`, compact the completed target leaf"));
+
+    let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
+    assert!(output.contains("Node trajs: nodes/1/1/trajs.jsonl"));
+    assert!(output.contains("Raw mirror: /tmp/raw.jsonl"));
 }
 
 #[test]
