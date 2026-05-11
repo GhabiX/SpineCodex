@@ -1,6 +1,7 @@
 use super::*;
 use crate::spine::ids::NodeId;
 use pretty_assertions::assert_eq;
+use serde_json;
 use std::path::Path;
 
 fn id(segments: &[u32]) -> NodeId {
@@ -55,6 +56,37 @@ fn raw_ordinals_ignore_untagged_spine_ir_text() {
     assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
     assert_eq!(effective_index_for_raw_ordinal(&history, 2), Some(2));
     assert_eq!(effective_index_for_raw_ordinal(&history, 3), Some(3));
+}
+
+#[test]
+fn raw_ordinals_map_serialized_spine_ir_marker() {
+    let ir_item = render_spine_ir_item(
+        &id(&[1, 2]),
+        SpineOperation::Next,
+        "leaf summary",
+        Path::new("nodes/1/2/worklog.md"),
+        "leaf body",
+        1,
+        4,
+    );
+    let serialized = serde_json::to_string(&ir_item).expect("serialize spine ir item");
+    assert!(
+        !serialized.contains("\"id\":\"spine-ir:"),
+        "ResponseItem message ids are intentionally skipped by rollout serialization"
+    );
+    assert!(
+        serialized.contains("<spine_ir id=\\\"spine-ir:1.2:1-4:next\\\""),
+        "the text marker must survive rollout serialization"
+    );
+    let deserialized: ResponseItem =
+        serde_json::from_str(&serialized).expect("deserialize spine ir item");
+    let history = vec![text_item("prefix"), deserialized, text_item("tail")];
+
+    assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 2), None);
+    assert_eq!(effective_index_for_raw_ordinal(&history, 3), None);
+    assert_eq!(effective_index_for_raw_ordinal(&history, 4), Some(2));
 }
 
 #[test]
@@ -131,6 +163,7 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
     };
 
     assert!(text.contains("node=\"1.2\""));
+    assert!(text.contains("id=\"spine-ir:1.2:8-17:close\""));
     assert!(text.contains("op=\"close\""));
     assert!(text.contains("fold_start=\"8\""));
     assert!(text.contains("fold_end=\"17\""));

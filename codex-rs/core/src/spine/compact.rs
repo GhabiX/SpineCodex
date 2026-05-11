@@ -265,12 +265,14 @@ pub(crate) fn render_spine_ir_item(
     fold_start: u64,
     fold_end: u64,
 ) -> ResponseItem {
+    let synthetic_id = spine_ir_synthetic_id(node_id, op, fold_start, fold_end);
     ResponseItem::Message {
-        id: Some(spine_ir_synthetic_id(node_id, op, fold_start, fold_end)),
+        id: Some(synthetic_id.clone()),
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "<spine_ir node=\"{}\" op=\"{}\" runtime_generated=\"true\" fold_start=\"{}\" fold_end=\"{}\">\nSummary: {}\nWorklog path: {}\n\n<worklog>\n{}\n</worklog>\n</spine_ir>",
+                "<spine_ir id=\"{}\" node=\"{}\" op=\"{}\" runtime_generated=\"true\" fold_start=\"{}\" fold_end=\"{}\">\nSummary: {}\nWorklog path: {}\n\n<worklog>\n{}\n</worklog>\n</spine_ir>",
+                synthetic_id,
                 node_id,
                 op_label(op),
                 fold_start,
@@ -359,20 +361,30 @@ struct SpineIrMetadata {
 }
 
 fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
-    let text = match item {
+    let (item_id, text) = match item {
         ResponseItem::Message {
             id, role, content, ..
-        } if id.as_deref().is_some_and(|id| id.starts_with("spine-ir:")) && role == "user" => {
+        } if role == "user" => (
+            id.as_deref(),
             content.iter().find_map(|content_item| match content_item {
                 ContentItem::InputText { text } => Some(text.as_str()),
                 _ => None,
-            })?
-        }
+            })?,
+        ),
         _ => return None,
     };
 
     let header = text.strip_prefix("<spine_ir ")?;
     let header = header.split_once('>')?.0;
+    let text_id = parse_tag_string(header, "id")?;
+    if !text_id.starts_with("spine-ir:") {
+        return None;
+    }
+    if let Some(item_id) = item_id
+        && item_id != text_id
+    {
+        return None;
+    }
     let fold_start = parse_tag_value(header, "fold_start")?;
     let fold_end = parse_tag_value(header, "fold_end")?;
     Some(SpineIrMetadata {
@@ -409,10 +421,13 @@ fn is_non_spine_compact_item(item: &ResponseItem) -> bool {
 }
 
 fn parse_tag_value(header: &str, key: &str) -> Option<u64> {
+    parse_tag_string(header, key)?.parse().ok()
+}
+
+fn parse_tag_string<'a>(header: &'a str, key: &str) -> Option<&'a str> {
     let needle = format!("{key}=\"");
     let value = header.split_once(&needle)?.1;
-    let value = value.split_once('"')?.0;
-    value.parse().ok()
+    Some(value.split_once('"')?.0)
 }
 
 fn op_label(op: SpineOperation) -> &'static str {
