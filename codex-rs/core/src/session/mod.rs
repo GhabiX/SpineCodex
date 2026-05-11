@@ -2472,6 +2472,13 @@ impl Session {
             .await
         {
             error!("failed to record conversation items: {err}");
+            if self.spine.is_some() {
+                let _ = self
+                    .poison_spine_compact(format!(
+                        "failed to record Spine conversation items: {err}"
+                    ))
+                    .await;
+            }
         }
     }
 

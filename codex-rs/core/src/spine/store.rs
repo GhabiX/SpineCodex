@@ -329,6 +329,12 @@ impl SpineSidecarStore {
         &self,
         items: &[RolloutItem],
     ) -> Result<(), SpineStoreError> {
+        #[cfg(test)]
+        if items.iter().any(is_raw_mirror_failure_test_item) {
+            return Err(SpineStoreError::InvalidLedger(
+                "injected raw mirror failure".to_string(),
+            ));
+        }
         for item in items {
             self.append_json_line(&self.raw_rollout_path(), item)?;
         }
@@ -1153,6 +1159,25 @@ fn record_compact_terminal(
     }
     attempt.terminal = Some(terminal);
     Ok(())
+}
+
+#[cfg(test)]
+fn is_raw_mirror_failure_test_item(item: &RolloutItem) -> bool {
+    matches!(
+        item,
+        RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Message {
+            content,
+            ..
+        })
+            if content.iter().any(|content_item| {
+                matches!(
+                    content_item,
+                    codex_protocol::models::ContentItem::InputText { text }
+                        | codex_protocol::models::ContentItem::OutputText { text }
+                        if text == "__spine_fail_raw_mirror__"
+                )
+            })
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]

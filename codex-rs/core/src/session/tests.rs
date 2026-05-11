@@ -1601,6 +1601,31 @@ async fn spine_compact_poison_blocks_future_sampling() {
 }
 
 #[tokio::test]
+async fn spine_record_conversation_items_poison_on_persist_failure() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let spine =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    session.spine = Some(Arc::new(Mutex::new(spine)));
+
+    session
+        .record_conversation_items(&turn_context, &[user_message("__spine_fail_raw_mirror__")])
+        .await;
+
+    let error = session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect_err("spine persistence failure should poison session");
+    assert!(matches!(
+        error,
+        CodexErr::Fatal(message)
+            if message.contains("failed to record Spine conversation items")
+                && message.contains("injected raw mirror failure")
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
     let (session, _turn_context) = make_session_and_context().await;
     {
