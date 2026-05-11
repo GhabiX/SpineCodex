@@ -1,6 +1,8 @@
 use super::compact::SpineCompactBoundary;
 use super::compact::render_context_compacted_outline;
 use super::ids::NodeId;
+use super::is_legacy_spine_transition_tool;
+use super::is_spine_transition_tool;
 use super::plan_bridge::PlanSnapshot;
 use super::state::SpineState;
 use super::state::SpineStateError;
@@ -272,9 +274,7 @@ impl SpineRuntime {
         Ok(snapshot)
     }
 
-    pub(crate) fn build_tree_snapshot(
-        &self,
-    ) -> Result<SpineTreeUpdateEvent, SpineRuntimeError> {
+    pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineRuntimeError> {
         let snapshot_seq = self.store.next_tree_event_seq()?.saturating_sub(1);
         let mut nodes = Vec::with_capacity(self.state.nodes().len());
         for (node_id, node) in self.state.nodes() {
@@ -346,8 +346,8 @@ impl SpineRuntime {
                 call_id,
                 ..
             } = item
-                && namespace.is_none()
-                && name == "spine"
+                && (is_spine_transition_tool(name, namespace.as_deref())
+                    || is_legacy_spine_transition_tool(name, namespace.as_deref()))
             {
                 self.pending_spine_call_starts
                     .insert(call_id.clone(), item_start);

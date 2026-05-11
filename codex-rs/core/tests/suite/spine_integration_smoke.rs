@@ -19,6 +19,7 @@ use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -45,12 +46,16 @@ const NESTED_OPEN_SUMMARY: &str = "open focused child scope";
 const NEXT_SUMMARY: &str = "finish child scope";
 const CLOSE_SUMMARY: &str = "finish sibling scope";
 const EXPECTED_SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
-Use spine as the task tree for this work. At the start, make a compact task plan; use a single node if the task is simple.
-Use update_plan only as the checklist inside the current active node. Use spine only when changing task-tree scope:
-- spine open: enter a child scope for a focused subproblem that should have its own context.
-- spine next: finish the current leaf and move to its next sibling.
-- spine close: finish the current leaf and close its non-root parent scope, then continue at the parent's next sibling. Root cannot be closed.
-Each spine summary should be a short tree label for the node being opened, finished, or closed.
+Use spine as a tree of local reasoning scopes for long-running work, not as a per-message or per-turn log. A node is the active working context: keep one coherent goal, evidence set, decisions, and plan inside it.
+Default to staying in the current live node while it remains focused. Use update_plan as the checklist inside the current active scope for local steps, verification items, and short-lived task tracking.
+Move spine only when a scope boundary improves focus, cost, or future recall:
+- spine.open: enter a child scope for a focused subproblem that should inherit the parent goal but keep its own local context.
+- spine.next: finish the current leaf and move to its next sibling when the current phase has a clear handoff, or when accumulated local context has become noisy enough that the next phase should start clean.
+- spine.close: finish the current leaf and close its non-root parent scope, then continue at the parent's next sibling. Root cannot be closed.
+Use spine.tree to inspect the current node and Spine Tree without moving the cursor.
+Do not move spine only because a new user message arrived, because you answered a short question, or because you updated progress within the same scope.
+Each spine summary should describe the scope handoff: what was learned, decided, verified, or intentionally isolated.
+Prefer the smallest tree that keeps the active reasoning context clean; avoid both one-node context bloat and one-turn-per-node fragmentation.
 When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar files only when you need historical details.
 In Plan mode, do not call mutating spine operations.
 </spine_view>"#;
@@ -66,16 +71,12 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
         vec![
             sse(vec![
                 ev_response_created("resp-open"),
-                ev_function_call(OPEN_CALL_ID, "spine", &spine_args("open", OPEN_SUMMARY)),
+                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY),
                 ev_completed("resp-open"),
             ]),
             sse(vec![
                 ev_response_created("resp-nested-open"),
-                ev_function_call(
-                    NESTED_OPEN_CALL_ID,
-                    "spine",
-                    &spine_args("open", NESTED_OPEN_SUMMARY),
-                ),
+                ev_spine_transition_call(NESTED_OPEN_CALL_ID, "open", NESTED_OPEN_SUMMARY),
                 ev_function_call(
                     CHILD_SHELL_CALL_ID,
                     "shell_command",
@@ -90,7 +91,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
             ]),
             sse(vec![
                 ev_response_created("resp-next"),
-                ev_function_call(NEXT_CALL_ID, "spine", &spine_args("next", NEXT_SUMMARY)),
+                ev_spine_transition_call(NEXT_CALL_ID, "next", NEXT_SUMMARY),
                 ev_function_call(
                     SIBLING_SHELL_CALL_ID,
                     "shell_command",
@@ -99,13 +100,8 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
                 ev_completed("resp-next"),
             ]),
             sse(vec![
-                ev_response_created("resp-spine-compact"),
-                ev_assistant_message("msg-spine-compact", "Compacted child findings."),
-                ev_completed("resp-spine-compact"),
-            ]),
-            sse(vec![
                 ev_response_created("resp-close"),
-                ev_function_call(CLOSE_CALL_ID, "spine", &spine_args("close", CLOSE_SUMMARY)),
+                ev_spine_transition_call(CLOSE_CALL_ID, "close", CLOSE_SUMMARY),
                 ev_function_call(
                     ROOT_SHELL_CALL_ID,
                     "shell_command",
@@ -114,14 +110,25 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
                 ev_completed("resp-close"),
             ]),
             sse(vec![
-                ev_response_created("resp-spine-close-compact"),
-                ev_assistant_message("msg-spine-close-compact", "Compacted root findings."),
-                ev_completed("resp-spine-close-compact"),
-            ]),
-            sse(vec![
                 ev_response_created("resp-done"),
                 ev_assistant_message("msg-done", "done"),
                 ev_completed("resp-done"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-spine-compact"),
+                ev_assistant_message(
+                    "msg-spine-compact",
+                    "<spine_compact_worklog>\nCompacted child findings.\n</spine_compact_worklog>",
+                ),
+                ev_completed("resp-spine-compact"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-spine-close-compact"),
+                ev_assistant_message(
+                    "msg-spine-close-compact",
+                    "<spine_compact_worklog>\nCompacted root findings.\n</spine_compact_worklog>",
+                ),
+                ev_completed("resp-spine-close-compact"),
             ]),
         ],
     )
@@ -382,9 +389,12 @@ fn shell_args(command: &str) -> String {
     .to_string()
 }
 
-fn spine_args(op: &str, summary: &str) -> String {
+fn ev_spine_transition_call(call_id: &str, name: &str, summary: &str) -> Value {
+    ev_function_call_with_namespace(call_id, "spine", name, &spine_args(summary))
+}
+
+fn spine_args(summary: &str) -> String {
     json!({
-        "op": op,
         "summary": summary,
     })
     .to_string()
@@ -449,7 +459,21 @@ fn assert_function_output_contains(requests: &[ResponsesRequest], call_id: &str,
     let output = requests
         .iter()
         .find_map(|request| request.function_call_output_text(call_id))
-        .unwrap_or_else(|| panic!("function_call_output missing for {call_id}"));
+        .unwrap_or_else(|| {
+            let available = requests
+                .iter()
+                .flat_map(|request| request.input())
+                .filter(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                })
+                .filter_map(|item| {
+                    item.get("call_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>();
+            panic!("function_call_output missing for {call_id}; available outputs: {available:?}")
+        });
     assert!(
         output.contains(expected),
         "expected output for {call_id} to contain {expected:?}, got {output:?}"

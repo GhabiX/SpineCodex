@@ -412,7 +412,7 @@ fn has_spine_history_items(items: &[RolloutItem]) -> bool {
         RolloutItem::Compacted(compacted) => is_spine_compact_message(&compacted.message),
         RolloutItem::ResponseItem(ResponseItem::FunctionCall {
             name, namespace, ..
-        }) => namespace.is_none() && name == "spine",
+        }) => crate::spine::is_spine_history_tool(name, namespace.as_deref()),
         _ => false,
     })
 }

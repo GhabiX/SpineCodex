@@ -67,6 +67,16 @@ fn spine_call(call_id: &str) -> ResponseItem {
     }
 }
 
+fn namespaced_spine_call(name: &str, call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: name.to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
 fn function_call_output(call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCallOutput {
         call_id: call_id.to_string(),
@@ -427,6 +437,35 @@ fn stage_after_recorded_call_preserves_function_call_start() {
             }),
         ]
     );
+}
+
+#[test]
+fn namespaced_transition_call_preserves_function_call_start() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[
+                assistant_message("before"),
+                namespaced_spine_call("open", "call-1"),
+            ],
+            0,
+            2,
+        )
+        .expect("record namespaced model output before tool dispatch");
+    runtime
+        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
+        .expect("stage transition after function call was recorded");
+    runtime
+        .after_response_items_recorded("turn-1", &[function_call_output("call-1")], 2, 3)
+        .expect("record tool output");
+
+    let committed = runtime
+        .take_last_committed_transition()
+        .expect("transition should be tracked");
+
+    assert_eq!(committed.call_start_ordinal, 1);
+    assert_eq!(committed.boundary_end, 3);
 }
 
 #[test]

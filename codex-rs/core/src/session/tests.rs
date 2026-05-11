@@ -1370,7 +1370,10 @@ async fn spine_resume_emits_initial_tree_update_after_session_configured() -> an
     )?;
     runtime.after_response_items_recorded(
         "turn-1",
-        &[spine_function_call("spine-open"), function_call_output("spine-open")],
+        &[
+            spine_function_call("spine-open"),
+            function_call_output("spine-open"),
+        ],
         0,
         2,
     )?;
@@ -1529,6 +1532,32 @@ async fn spine_resume_detects_existing_spine_history_from_rollout() -> anyhow::R
                 replacement_history: Some(vec![user_message("spine ir")]),
             }),
         ],
+    )?;
+
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: Vec::new(),
+        rollout_path: Some(rollout_path),
+    });
+
+    assert!(crate::session::session::initial_spine_has_spine_history(&initial_history).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_resume_detects_existing_namespaced_spine_history_from_rollout() -> anyhow::Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    write_rollout_items_for_test(
+        &rollout_path,
+        &[RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "tree".to_string(),
+            namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+            arguments: "{}".to_string(),
+            call_id: "call-spine-tree".to_string(),
+        })],
     )?;
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
@@ -1756,7 +1785,10 @@ async fn spine_transition_compaction_is_deferred_until_turn_end() -> anyhow::Res
     runtime
         .after_response_items_recorded(
             "turn-1",
-            &[spine_function_call("open-1"), function_call_output("open-1")],
+            &[
+                spine_function_call("open-1"),
+                function_call_output("open-1"),
+            ],
             0,
             2,
         )
@@ -1784,7 +1816,10 @@ async fn spine_transition_compaction_is_deferred_until_turn_end() -> anyhow::Res
     assert_eq!(session.clone_history().await.raw_items(), before_compact);
     let pending = session.pending_spine_compact_boundaries.lock().await;
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].node_id, crate::spine::ids::NodeId::from_segments(vec![1, 1]));
+    assert_eq!(
+        pending[0].node_id,
+        crate::spine::ids::NodeId::from_segments(vec![1, 1])
+    );
     Ok(())
 }
 

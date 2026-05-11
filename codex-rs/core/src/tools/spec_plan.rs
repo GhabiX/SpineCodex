@@ -41,6 +41,7 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::tools::handlers::shell_spec::ShellToolOptions;
+use crate::tools::handlers::spine_spec::create_spine_namespace_tool;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
@@ -197,7 +198,15 @@ pub fn build_tool_registry_builder(
 
     builder.register_handler(Arc::new(PlanHandler));
     if config.spine_task_tree {
-        builder.register_handler(Arc::new(SpineHandler));
+        if config.namespace_tools {
+            builder.push_spec(
+                create_spine_namespace_tool(),
+                /*supports_parallel_tool_calls*/ false,
+            );
+        }
+        for handler in SpineHandler::all() {
+            builder.register_handler(Arc::new(handler));
+        }
     }
     if config.goal_tools {
         builder.register_handler(Arc::new(GetGoalHandler));

@@ -22,6 +22,19 @@ pub(crate) fn render_tool_output(
     )
 }
 
+pub(crate) fn render_tree_tool_output(state: &SpineState, cursor: &NodeId) -> String {
+    let cursor_status = state
+        .node(cursor)
+        .map(|node| format_status(&node.status))
+        .unwrap_or("unknown");
+    format!(
+        "Spine tree\n\ncurrent: {} {}\n\n{}",
+        cursor.bracketed(),
+        cursor_status,
+        render_tree(state, cursor)
+    )
+}
+
 pub(crate) fn render_tree(state: &SpineState, cursor: &NodeId) -> String {
     state
         .nodes()

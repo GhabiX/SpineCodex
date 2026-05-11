@@ -666,7 +666,9 @@ pub(crate) async fn run_turn(
     }
 
     if last_agent_message.is_some()
-        && let Err(err) = sess.install_pending_spine_compactions(turn_context.as_ref()).await
+        && let Err(err) = sess
+            .install_pending_spine_compactions(turn_context.as_ref())
+            .await
     {
         info!("Turn error: {err:#}");
         let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
@@ -1910,9 +1912,13 @@ impl SpineToolOrderGuard {
                 namespace,
                 call_id,
                 ..
-            } if namespace.is_none() && name == "spine" => SpineToolKind::Spine {
-                call_id: call_id.clone(),
-            },
+            } if crate::spine::is_spine_transition_tool(name, namespace.as_deref())
+                || crate::spine::is_legacy_spine_transition_tool(name, namespace.as_deref()) =>
+            {
+                SpineToolKind::Spine {
+                    call_id: call_id.clone(),
+                }
+            }
             ResponseItem::FunctionCall { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::CustomToolCall { .. }
@@ -2426,10 +2432,22 @@ mod spine_tool_order_tests {
     use super::*;
 
     fn function_call(name: &str, call_id: &str) -> ResponseItem {
+        function_call_with_namespace(name, None, call_id)
+    }
+
+    fn spine_function_call(name: &str, call_id: &str) -> ResponseItem {
+        function_call_with_namespace(name, Some(crate::spine::SPINE_NAMESPACE), call_id)
+    }
+
+    fn function_call_with_namespace(
+        name: &str,
+        namespace: Option<&str>,
+        call_id: &str,
+    ) -> ResponseItem {
         ResponseItem::FunctionCall {
             id: None,
             name: name.to_string(),
-            namespace: None,
+            namespace: namespace.map(str::to_string),
             arguments: "{}".to_string(),
             call_id: call_id.to_string(),
         }
@@ -2446,7 +2464,7 @@ mod spine_tool_order_tests {
             }
         );
         assert_eq!(
-            guard.observe(&function_call("spine", "call-spine")),
+            guard.observe(&spine_function_call("open", "call-spine")),
             SpineToolOrderOutcome::Allow {
                 drain_after_dispatch: false,
             }
@@ -2458,7 +2476,7 @@ mod spine_tool_order_tests {
         let mut guard = SpineToolOrderGuard::new(true);
 
         assert_eq!(
-            guard.observe(&function_call("spine", "call-spine")),
+            guard.observe(&spine_function_call("open", "call-spine")),
             SpineToolOrderOutcome::Allow {
                 drain_after_dispatch: true,
             }
@@ -2475,14 +2493,14 @@ mod spine_tool_order_tests {
     fn rejects_second_spine_in_same_response() {
         let mut guard = SpineToolOrderGuard::new(true);
         assert_eq!(
-            guard.observe(&function_call("spine", "call-spine-1")),
+            guard.observe(&spine_function_call("open", "call-spine-1")),
             SpineToolOrderOutcome::Allow {
                 drain_after_dispatch: true,
             }
         );
 
         assert_eq!(
-            guard.observe(&function_call("spine", "call-spine-2")),
+            guard.observe(&spine_function_call("next", "call-spine-2")),
             SpineToolOrderOutcome::Reject {
                 call_id: "call-spine-2".to_string(),
                 message: "only one spine transition is allowed per model response".to_string(),
@@ -2501,7 +2519,38 @@ mod spine_tool_order_tests {
         );
 
         assert_eq!(
+            guard.observe(&spine_function_call("open", "call-spine")),
+            SpineToolOrderOutcome::Reject {
+                call_id: "call-spine".to_string(),
+                message: "spine must be the first tool call in a model response".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn legacy_spine_transition_is_still_guarded_for_resume_compatibility() {
+        let mut guard = SpineToolOrderGuard::new(true);
+
+        assert_eq!(
             guard.observe(&function_call("spine", "call-spine")),
+            SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: true,
+            }
+        );
+    }
+
+    #[test]
+    fn tree_tool_is_read_only_for_transition_ordering() {
+        let mut guard = SpineToolOrderGuard::new(true);
+
+        assert_eq!(
+            guard.observe(&spine_function_call("tree", "call-tree")),
+            SpineToolOrderOutcome::Allow {
+                drain_after_dispatch: false,
+            }
+        );
+        assert_eq!(
+            guard.observe(&spine_function_call("open", "call-spine")),
             SpineToolOrderOutcome::Reject {
                 call_id: "call-spine".to_string(),
                 message: "spine must be the first tool call in a model response".to_string(),

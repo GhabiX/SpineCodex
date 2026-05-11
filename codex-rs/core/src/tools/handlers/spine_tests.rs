@@ -1,4 +1,5 @@
 use super::SpineHandler;
+use super::SpineTool;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
@@ -32,6 +33,7 @@ fn invocation(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     call_id: &str,
+    tool: SpineTool,
     arguments: serde_json::Value,
 ) -> ToolInvocation {
     ToolInvocation {
@@ -40,7 +42,7 @@ fn invocation(
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: call_id.to_string(),
-        tool_name: codex_tools::ToolName::plain("spine"),
+        tool_name: codex_tools::ToolName::namespaced(crate::spine::SPINE_NAMESPACE, tool.name()),
         source: ToolCallSource::Direct,
         payload: ToolPayload::Function {
             arguments: arguments.to_string(),
@@ -48,11 +50,14 @@ fn invocation(
     }
 }
 
-fn valid_args(op: &str) -> serde_json::Value {
+fn transition_args() -> serde_json::Value {
     json!({
-        "op": op,
         "summary": "root scope",
     })
+}
+
+fn handler(tool: SpineTool) -> SpineHandler {
+    SpineHandler { tool }
 }
 
 #[tokio::test]
@@ -61,12 +66,13 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    let output = SpineHandler
+    let output = handler(SpineTool::Open)
         .handle(invocation(
             Arc::clone(&session),
             Arc::clone(&turn),
             "call-spine",
-            valid_args("open"),
+            SpineTool::Open,
+            transition_args(),
         ))
         .await
         .expect("spine open should stage");
@@ -116,13 +122,13 @@ async fn valid_next_returns_compact_tree_view() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    let output = SpineHandler
+    let output = handler(SpineTool::Next)
         .handle(invocation(
             Arc::clone(&session),
             Arc::clone(&turn),
             "call-next",
+            SpineTool::Next,
             json!({
-                "op": "next",
                 "summary": "Completed reproduction and patch verification",
             }),
         ))
@@ -142,12 +148,13 @@ async fn plan_mode_rejects_before_staging() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    let err = SpineHandler
+    let err = handler(SpineTool::Open)
         .handle(invocation(
             Arc::clone(&session),
             turn,
             "call-spine",
-            valid_args("open"),
+            SpineTool::Open,
+            transition_args(),
         ))
         .await
         .expect_err("plan mode should reject spine");
@@ -165,13 +172,19 @@ async fn code_mode_rejects_before_staging() {
     let (_temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let mut invocation = invocation(Arc::clone(&session), turn, "call-spine", valid_args("open"));
+    let mut invocation = invocation(
+        Arc::clone(&session),
+        turn,
+        "call-spine",
+        SpineTool::Open,
+        transition_args(),
+    );
     invocation.source = ToolCallSource::CodeMode {
         cell_id: "cell-1".to_string(),
         runtime_tool_call_id: "runtime-call-1".to_string(),
     };
 
-    let err = SpineHandler
+    let err = handler(SpineTool::Open)
         .handle(invocation)
         .await
         .expect_err("code mode should reject spine");
@@ -189,12 +202,13 @@ async fn code_mode_rejects_before_staging() {
 #[tokio::test]
 async fn missing_runtime_rejects() {
     let (session, turn) = make_session_and_context().await;
-    let err = SpineHandler
+    let err = handler(SpineTool::Open)
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
             "call-spine",
-            valid_args("open"),
+            SpineTool::Open,
+            transition_args(),
         ))
         .await
         .expect_err("missing runtime should reject");
@@ -206,18 +220,22 @@ async fn missing_runtime_rejects() {
 }
 
 #[tokio::test]
-async fn invalid_operation_rejects_without_staging() {
+async fn unexpected_transition_arg_rejects_without_staging() {
     let (_temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
-    let err = SpineHandler
+    let err = handler(SpineTool::Open)
         .handle(invocation(
             Arc::clone(&session),
             Arc::new(turn),
             "call-spine",
-            valid_args("jump"),
+            SpineTool::Open,
+            json!({
+                "summary": "root scope",
+                "op": "jump",
+            }),
         ))
         .await
-        .expect_err("invalid op should reject");
+        .expect_err("unexpected arg should reject");
 
     let FunctionCallError::RespondToModel(message) = err else {
         panic!("expected model-visible parse error");
@@ -231,13 +249,13 @@ async fn invalid_operation_rejects_without_staging() {
 async fn empty_summary_rejects_without_staging() {
     let (_temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
-    let err = SpineHandler
+    let err = handler(SpineTool::Open)
         .handle(invocation(
             Arc::clone(&session),
             Arc::new(turn),
             "call-spine",
+            SpineTool::Open,
             json!({
-                "op": "open",
                 "summary": "",
             }),
         ))
@@ -256,12 +274,13 @@ async fn empty_summary_rejects_without_staging() {
 async fn close_on_root_rejects_without_staging() {
     let (_temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
-    let err = SpineHandler
+    let err = handler(SpineTool::Close)
         .handle(invocation(
             Arc::clone(&session),
             Arc::new(turn),
             "call-spine",
-            valid_args("close"),
+            SpineTool::Close,
+            transition_args(),
         ))
         .await
         .expect_err("root close should reject");
@@ -272,4 +291,56 @@ async fn close_on_root_rejects_without_staging() {
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     assert!(runtime.staged_transition().is_none());
+}
+
+#[tokio::test]
+async fn tree_prints_current_tree_without_staging() {
+    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let output = handler(SpineTool::Tree)
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "call-tree",
+            SpineTool::Tree,
+            json!({}),
+        ))
+        .await
+        .expect("spine tree should render");
+
+    assert_eq!(
+        output.log_preview(),
+        "Spine tree\n\ncurrent: [1] live\n\n[1] live current (nodes/1/worklog.md)"
+    );
+    assert_eq!(
+        output.code_mode_result(&ToolPayload::Function {
+            arguments: "{}".to_string()
+        }),
+        json!({
+            "op": null,
+            "cursor": "[1]",
+            "tree": "[1] live current (nodes/1/worklog.md)",
+        })
+    );
+    let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
+    assert!(runtime.staged_transition().is_none());
+}
+
+#[tokio::test]
+async fn tree_is_allowed_in_plan_mode() {
+    let (_temp, session, mut turn) = session_and_turn_with_spine().await;
+    turn.collaboration_mode.mode = ModeKind::Plan;
+
+    handler(SpineTool::Tree)
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "call-tree",
+            SpineTool::Tree,
+            json!({}),
+        ))
+        .await
+        .expect("read-only tree should be allowed in Plan mode");
 }

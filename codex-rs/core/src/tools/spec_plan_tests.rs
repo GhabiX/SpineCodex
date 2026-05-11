@@ -22,7 +22,7 @@ use crate::tools::handlers::shell_spec::create_exec_command_tool;
 use crate::tools::handlers::shell_spec::create_request_permissions_tool;
 use crate::tools::handlers::shell_spec::create_write_stdin_tool;
 use crate::tools::handlers::shell_spec::request_permissions_tool_description;
-use crate::tools::handlers::spine_spec::create_spine_tool;
+use crate::tools::handlers::spine_spec::create_spine_namespace_tool;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolRegistry;
@@ -209,8 +209,18 @@ fn spine_tool_is_feature_gated() {
         /*deferred_mcp_tools*/ None,
         &[],
     );
-    assert_lacks_tool_name(&default_tools, "spine");
-    assert!(!default_registry.has_handler(&ToolName::plain("spine")));
+    assert_lacks_tool_name(&default_tools, crate::spine::SPINE_NAMESPACE);
+    for name in [
+        crate::spine::SPINE_TOOL_TREE,
+        crate::spine::SPINE_TOOL_OPEN,
+        crate::spine::SPINE_TOOL_NEXT,
+        crate::spine::SPINE_TOOL_CLOSE,
+    ] {
+        assert!(
+            !default_registry
+                .has_handler(&ToolName::namespaced(crate::spine::SPINE_NAMESPACE, name))
+        );
+    }
 
     features.enable(Feature::SpineTaskTree);
     let enabled_config = ToolsConfig::new(&ToolsConfigParams {
@@ -229,11 +239,25 @@ fn spine_tool_is_feature_gated() {
         /*deferred_mcp_tools*/ None,
         &[],
     );
-    assert_contains_tool_names(&enabled_tools, &["spine"]);
-    assert!(enabled_registry.has_handler(&ToolName::plain("spine")));
+    assert_contains_tool_names(&enabled_tools, &[crate::spine::SPINE_NAMESPACE]);
+    for name in [
+        crate::spine::SPINE_TOOL_TREE,
+        crate::spine::SPINE_TOOL_OPEN,
+        crate::spine::SPINE_TOOL_NEXT,
+        crate::spine::SPINE_TOOL_CLOSE,
+    ] {
+        assert!(
+            enabled_registry
+                .has_handler(&ToolName::namespaced(crate::spine::SPINE_NAMESPACE, name))
+        );
+    }
 
-    let spine_tool = find_tool(&enabled_tools, "spine");
-    assert_eq!(spine_tool.spec, create_spine_tool());
+    let spine_tool = find_tool(&enabled_tools, crate::spine::SPINE_NAMESPACE);
+    assert_eq!(spine_tool.spec, create_spine_namespace_tool());
+    assert_eq!(
+        namespace_function_names(&enabled_tools, crate::spine::SPINE_NAMESPACE),
+        vec!["tree", "open", "next", "close"]
+    );
     assert_lacks_tool_name(&enabled_tools, "read_spine");
     assert_lacks_tool_name(&enabled_tools, "spine_state");
     assert_lacks_tool_name(&enabled_tools, "spine_trajs");
