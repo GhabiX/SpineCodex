@@ -324,8 +324,25 @@ async fn submit_turn_and_assert_plan_update(
     })
     .await;
 
+    let mut saw_spine_tree_update = false;
     let mut saw_plan_update = false;
     wait_for_event(&test.codex, |event| match event {
+        EventMsg::SpineTreeUpdate(update) => {
+            let Some(plan) = update
+                .nodes
+                .iter()
+                .find(|node| node.node_id == "1.1")
+                .and_then(|node| node.plan.as_ref())
+            else {
+                return false;
+            };
+            saw_spine_tree_update = true;
+            assert_eq!(plan.revision, 1);
+            assert_eq!(plan.items.len(), 2);
+            assert_eq!(plan.items[0].stable_task_id, "step-1");
+            assert_eq!(plan.items[0].step, "Exercise child node");
+            false
+        }
         EventMsg::PlanUpdate(update) => {
             saw_plan_update = true;
             assert_eq!(update.explanation.as_deref(), Some("plan still works"));
@@ -340,6 +357,7 @@ async fn submit_turn_and_assert_plan_update(
         _ => false,
     })
     .await;
+    assert!(saw_spine_tree_update, "expected SpineTreeUpdate event");
     assert!(saw_plan_update, "expected normal PlanUpdate event");
 
     Ok(turn_id)

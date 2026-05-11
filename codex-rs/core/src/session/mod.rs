@@ -98,6 +98,7 @@ use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -1530,8 +1531,6 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
-        self.maybe_record_spine_plan_update(turn_context, &legacy_source)
-            .await;
         self.services
             .rollout_thread_trace
             .record_codex_turn_event(&turn_context.sub_id, &legacy_source);
@@ -1560,21 +1559,29 @@ impl Session {
         }
     }
 
-    async fn maybe_record_spine_plan_update(&self, turn_context: &TurnContext, msg: &EventMsg) {
-        let EventMsg::PlanUpdate(args) = msg else {
-            return;
-        };
+    pub(crate) async fn record_plan_update_and_emit_progress(
+        &self,
+        turn_context: &TurnContext,
+        args: UpdatePlanArgs,
+    ) -> CodexResult<()> {
         let Some(spine) = self.spine.as_ref() else {
-            return;
+            self.send_event(turn_context, EventMsg::PlanUpdate(args)).await;
+            return Ok(());
         };
 
-        let mut spine = spine.lock().await;
-        if let Err(err) = spine.record_plan_update(&turn_context.sub_id, args.clone()) {
-            error!(
-                "failed to record spine plan snapshot for turn {}: {err}",
-                turn_context.sub_id
-            );
-        }
+        let snapshot = {
+            let mut spine = spine.lock().await;
+            spine
+                .record_plan_update(&turn_context.sub_id, args.clone())
+                .and_then(|_| spine.build_tree_snapshot())
+                .map_err(|err| {
+                    CodexErr::Fatal(format!("failed to record spine plan update: {err}"))
+                })?
+        };
+        self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
+            .await;
+        self.send_event(turn_context, EventMsg::PlanUpdate(args)).await;
+        Ok(())
     }
 
     /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
@@ -2709,19 +2716,27 @@ impl Session {
         let Some(spine) = self.spine.as_ref() else {
             return Ok(());
         };
-        let boundary = {
+        let (boundary, snapshot) = {
             let mut runtime = spine.lock().await;
             let Some(committed) = runtime.take_last_committed_transition() else {
                 return Ok(());
             };
-            runtime
+            let boundary = runtime
                 .plan_compaction_after_transition(&committed)
                 .map_err(|err| {
                     CodexErr::Fatal(format!(
                         "Spine compact planning failed after transition commit: {err}"
                     ))
-                })?
+                })?;
+            let snapshot = runtime.build_tree_snapshot().map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to build spine tree snapshot after transition commit: {err}"
+                ))
+            })?;
+            (boundary, snapshot)
         };
+        self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
+            .await;
         if let Some(boundary) = boundary {
             Box::pin(self.compact_spine_suffix_after_transition(turn_context, boundary)).await?;
         }

@@ -214,6 +214,39 @@ impl App {
                     );
                 }
             }
+            AppEvent::UpsertSpineTreeCell { turn_id, snapshot } => {
+                let cell: Arc<dyn HistoryCell> =
+                    Arc::new(history_cell::new_spine_tree_update(turn_id, snapshot));
+                let replaced = if let Some(last) = self.transcript_cells.last_mut()
+                    && last.as_any().is::<history_cell::SpineTreeUpdateCell>()
+                {
+                    *last = cell.clone();
+                    true
+                } else {
+                    false
+                };
+                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                    if replaced {
+                        t.replace_cells(self.transcript_cells.clone());
+                    } else {
+                        t.insert_cell(cell.clone());
+                    }
+                    tui.frame_requester().schedule_frame();
+                }
+                if replaced {
+                    if self.terminal_resize_reflow_enabled() {
+                        self.transcript_reflow.schedule_immediate();
+                        tui.frame_requester().schedule_frame();
+                    }
+                } else {
+                    self.transcript_cells.push(cell.clone());
+                    self.insert_history_cell_lines(
+                        tui,
+                        cell.as_ref(),
+                        tui.terminal.last_known_screen_size.width,
+                    );
+                }
+            }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }

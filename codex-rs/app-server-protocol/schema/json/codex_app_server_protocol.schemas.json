@@ -4103,6 +4103,26 @@
           "properties": {
             "method": {
               "enum": [
+                "spine/tree/updated"
+              ],
+              "title": "Spine/tree/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SpineTreeUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Spine/tree/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/started"
               ],
               "title": "Item/startedNotificationMethod",
@@ -14821,6 +14841,139 @@
           "desc"
         ],
         "type": "string"
+      },
+      "SpineTreeNode": {
+        "properties": {
+          "nodeId": {
+            "type": "string"
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpineTreePlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/definitions/v2/SpineTreeNodeStatus"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "nodeId",
+          "status"
+        ],
+        "type": "object"
+      },
+      "SpineTreeNodeStatus": {
+        "enum": [
+          "live",
+          "opened",
+          "finished",
+          "closed"
+        ],
+        "type": "string"
+      },
+      "SpineTreePlan": {
+        "properties": {
+          "explanation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/definitions/v2/SpineTreePlanItem"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "SpineTreePlanItem": {
+        "properties": {
+          "stableTaskId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/SpineTreePlanItemStatus"
+          },
+          "step": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stableTaskId",
+          "status",
+          "step"
+        ],
+        "type": "object"
+      },
+      "SpineTreePlanItemStatus": {
+        "enum": [
+          "pending",
+          "inProgress",
+          "completed"
+        ],
+        "type": "string"
+      },
+      "SpineTreeUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "activeNodeId": {
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/definitions/v2/SpineTreeNode"
+            },
+            "type": "array"
+          },
+          "snapshotSeq": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "activeNodeId",
+          "nodes",
+          "snapshotSeq",
+          "threadId",
+          "turnId"
+        ],
+        "title": "SpineTreeUpdatedNotification",
+        "type": "object"
       },
       "SubAgentSource": {
         "oneOf": [

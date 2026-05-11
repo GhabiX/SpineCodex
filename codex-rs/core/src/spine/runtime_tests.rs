@@ -167,6 +167,30 @@ fn record_plan_update_reuses_task_ids_after_insert_and_reorder() {
 }
 
 #[test]
+fn build_tree_snapshot_includes_node_local_plans() {
+    let (_temp, mut runtime) = temp_runtime();
+
+    runtime
+        .record_plan_update("turn-1", plan_args("Inspect root", StepStatus::InProgress))
+        .expect("record root plan");
+    let snapshot = runtime.build_tree_snapshot().expect("build snapshot");
+
+    assert_eq!(snapshot.snapshot_seq, 2);
+    assert_eq!(snapshot.active_node_id, "1");
+    assert_eq!(snapshot.nodes.len(), 1);
+    let root = &snapshot.nodes[0];
+    assert_eq!(root.node_id, "1");
+    assert_eq!(root.parent_id, None);
+    assert_eq!(root.summary, None);
+    assert_eq!(root.status, SpineTreeNodeStatus::Live);
+    let plan = root.plan.as_ref().expect("root plan");
+    assert_eq!(plan.revision, 1);
+    assert_eq!(plan.items[0].stable_task_id, "step-1");
+    assert_eq!(plan.items[0].step, "Inspect root");
+    assert_eq!(plan.items[0].status, SpineTreePlanItemStatus::InProgress);
+}
+
+#[test]
 fn load_or_create_initializes_then_replays_existing_sidecar() {
     let temp = tempfile::tempdir().expect("tempdir");
     let rollout_path = temp.path().join("rollout-2026-05-10T16-00-00-thread.jsonl");

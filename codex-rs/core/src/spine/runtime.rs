@@ -10,6 +10,12 @@ use super::store::SpineStoreError;
 use super::trajs::RawOrdinalRange;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
+use codex_protocol::spine_tree::SpineTreeNodeStatus;
+use codex_protocol::spine_tree::SpineTreePlanItemSnapshot;
+use codex_protocol::spine_tree::SpineTreePlanItemStatus;
+use codex_protocol::spine_tree::SpineTreePlanSnapshot;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
@@ -246,6 +252,38 @@ impl SpineRuntime {
         );
         self.store.write_plan_snapshot(self.cursor(), &snapshot)?;
         Ok(snapshot)
+    }
+
+    pub(crate) fn build_tree_snapshot(
+        &self,
+    ) -> Result<SpineTreeUpdateEvent, SpineRuntimeError> {
+        let snapshot_seq = self.store.next_tree_event_seq()?.saturating_sub(1);
+        let mut nodes = Vec::with_capacity(self.state.nodes().len());
+        for (node_id, node) in self.state.nodes() {
+            let plan = self
+                .store
+                .read_plan_snapshot(node_id)?
+                .map(spine_tree_plan_snapshot)
+                .transpose()?;
+            nodes.push(SpineTreeNodeSnapshot {
+                node_id: node.node_id.to_string(),
+                parent_id: node.parent_id.as_ref().map(ToString::to_string),
+                summary: node.summary.clone(),
+                status: match node.status {
+                    super::state::NodeStatus::Live => SpineTreeNodeStatus::Live,
+                    super::state::NodeStatus::Opened => SpineTreeNodeStatus::Opened,
+                    super::state::NodeStatus::Finished => SpineTreeNodeStatus::Finished,
+                    super::state::NodeStatus::Closed => SpineTreeNodeStatus::Closed,
+                },
+                plan,
+            });
+        }
+
+        Ok(SpineTreeUpdateEvent {
+            snapshot_seq,
+            active_node_id: self.cursor().to_string(),
+            nodes,
+        })
     }
 
     pub(crate) fn after_response_items_recorded(
@@ -533,6 +571,8 @@ pub(crate) enum SpineRuntimeError {
     UnknownNode(NodeId),
     #[error("spine plan revision overflow")]
     PlanRevisionOverflow,
+    #[error("unknown spine plan item status {0}")]
+    UnknownPlanItemStatus(String),
     #[error(
         "staged spine transition mismatch: expected {expected_from} -> {expected_to}, got {actual_from} -> {actual_to}"
     )]
@@ -559,6 +599,34 @@ fn staged_function_call_output_id(
         }
         _ => None,
     }
+}
+
+fn spine_tree_plan_snapshot(
+    snapshot: PlanSnapshot,
+) -> Result<SpineTreePlanSnapshot, SpineRuntimeError> {
+    Ok(SpineTreePlanSnapshot {
+        revision: snapshot.revision,
+        explanation: snapshot.explanation,
+        items: snapshot
+            .items
+            .into_iter()
+            .map(|item| {
+                let status = match item.status.as_str() {
+                    "pending" => SpineTreePlanItemStatus::Pending,
+                    "in_progress" => SpineTreePlanItemStatus::InProgress,
+                    "completed" => SpineTreePlanItemStatus::Completed,
+                    _ => {
+                        return Err(SpineRuntimeError::UnknownPlanItemStatus(item.status));
+                    }
+                };
+                Ok(SpineTreePlanItemSnapshot {
+                    stable_task_id: item.stable_task_id,
+                    step: item.step,
+                    status,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    })
 }
 
 #[cfg(test)]

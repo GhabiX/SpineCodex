@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "SpineTreeNode": {
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineTreePlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/SpineTreeNodeStatus"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "nodeId",
+        "status"
+      ],
+      "type": "object"
+    },
+    "SpineTreeNodeStatus": {
+      "enum": [
+        "live",
+        "opened",
+        "finished",
+        "closed"
+      ],
+      "type": "string"
+    },
+    "SpineTreePlan": {
+      "properties": {
+        "explanation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "items": {
+            "$ref": "#/definitions/SpineTreePlanItem"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "SpineTreePlanItem": {
+      "properties": {
+        "stableTaskId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/SpineTreePlanItemStatus"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "stableTaskId",
+        "status",
+        "step"
+      ],
+      "type": "object"
+    },
+    "SpineTreePlanItemStatus": {
+      "enum": [
+        "pending",
+        "inProgress",
+        "completed"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "activeNodeId": {
+      "type": "string"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/definitions/SpineTreeNode"
+      },
+      "type": "array"
+    },
+    "snapshotSeq": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "activeNodeId",
+    "nodes",
+    "snapshotSeq",
+    "threadId",
+    "turnId"
+  ],
+  "title": "SpineTreeUpdatedNotification",
+  "type": "object"
+}

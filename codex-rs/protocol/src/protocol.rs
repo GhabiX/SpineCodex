@@ -47,6 +47,7 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::spine_tree::SpineTreeUpdateEvent;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
@@ -1405,6 +1406,8 @@ pub enum EventMsg {
     SkillsUpdateAvailable,
 
     PlanUpdate(UpdatePlanArgs),
+
+    SpineTreeUpdate(SpineTreeUpdateEvent),
 
     TurnAborted(TurnAbortedEvent),
 

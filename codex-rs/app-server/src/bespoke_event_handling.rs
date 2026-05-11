@@ -50,6 +50,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SkillsChangedNotification;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -90,6 +91,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -1219,6 +1221,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
+        EventMsg::SpineTreeUpdate(spine_tree_event) => {
+            handle_spine_tree_update(
+                conversation_id,
+                &event_turn_id,
+                spine_tree_event,
+                &outgoing,
+            )
+            .await;
+        }
         EventMsg::ShutdownComplete => {
             thread_watch_manager
                 .note_thread_shutdown(&conversation_id.to_string())
@@ -1242,6 +1253,24 @@ async fn handle_turn_diff(
     };
     outgoing
         .send_server_notification(ServerNotification::TurnDiffUpdated(notification))
+        .await;
+}
+
+async fn handle_spine_tree_update(
+    conversation_id: ThreadId,
+    event_turn_id: &str,
+    spine_tree_event: SpineTreeUpdateEvent,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+) {
+    let notification = SpineTreeUpdatedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id: event_turn_id.to_string(),
+        snapshot_seq: spine_tree_event.snapshot_seq,
+        active_node_id: spine_tree_event.active_node_id,
+        nodes: spine_tree_event.nodes.into_iter().map(Into::into).collect(),
+    };
+    outgoing
+        .send_server_notification(ServerNotification::SpineTreeUpdated(notification))
         .await;
 }
 

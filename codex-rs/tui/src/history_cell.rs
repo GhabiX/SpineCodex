@@ -53,6 +53,10 @@ use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
 use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_app_server_protocol::SpineTreeNode;
+use codex_app_server_protocol::SpineTreePlanItem;
+use codex_app_server_protocol::SpineTreePlanItemStatus;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ToolRequestUserInputAnswer;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
 use codex_app_server_protocol::WebSearchAction;
@@ -2957,6 +2961,13 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
+pub(crate) fn new_spine_tree_update(
+    turn_id: String,
+    snapshot: SpineTreeUpdatedNotification,
+) -> SpineTreeUpdateCell {
+    SpineTreeUpdateCell { turn_id, snapshot }
+}
+
 /// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
 ///
 /// The plan body is stored as raw markdown so terminal resize reflow can render it again at the
@@ -3128,6 +3139,175 @@ impl HistoryCell for PlanUpdateCell {
         }
         lines
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct SpineTreeUpdateCell {
+    turn_id: String,
+    snapshot: SpineTreeUpdatedNotification,
+}
+
+impl HistoryCell for SpineTreeUpdateCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = vec![vec!["• ".dim(), "Spine Tree".bold()].into()];
+        let nodes = spine_tree_display_nodes(&self.snapshot);
+        if nodes.is_empty() {
+            lines.push(vec!["  └ ".dim(), "(empty)".dim().italic()].into());
+            return lines;
+        }
+
+        for node in nodes {
+            lines.extend(render_spine_tree_node(
+                &node,
+                &self.snapshot.active_node_id,
+                width,
+            ));
+        }
+        lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from(format!(
+            "Spine Tree turn={} snapshot_seq={}",
+            self.turn_id, self.snapshot.snapshot_seq
+        ))];
+        for node in spine_tree_display_nodes(&self.snapshot) {
+            let prefix = "  ".repeat(node.depth);
+            let marker = if node.node.node_id == self.snapshot.active_node_id {
+                "* "
+            } else {
+                ""
+            };
+            let summary = node
+                .node
+                .summary
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .unwrap_or("(no summary)");
+            lines.push(Line::from(format!(
+                "{prefix}{marker}{} {summary}",
+                node.node.node_id
+            )));
+            if let Some(plan) = &node.node.plan {
+                for item in &plan.items {
+                    lines.push(Line::from(format!(
+                        "{prefix}  {:?}: {}",
+                        item.status, item.step
+                    )));
+                }
+            }
+        }
+        lines
+    }
+}
+
+struct SpineTreeDisplayNode<'a> {
+    node: &'a SpineTreeNode,
+    depth: usize,
+    is_last: bool,
+}
+
+fn spine_tree_display_nodes(
+    snapshot: &SpineTreeUpdatedNotification,
+) -> Vec<SpineTreeDisplayNode<'_>> {
+    let mut out = Vec::new();
+    append_spine_tree_children(snapshot, None, 0, &mut out);
+    out
+}
+
+fn append_spine_tree_children<'a>(
+    snapshot: &'a SpineTreeUpdatedNotification,
+    parent_id: Option<&str>,
+    depth: usize,
+    out: &mut Vec<SpineTreeDisplayNode<'a>>,
+) {
+    let children = snapshot
+        .nodes
+        .iter()
+        .filter(|node| node.parent_id.as_deref() == parent_id)
+        .collect::<Vec<_>>();
+    let child_count = children.len();
+    for (index, node) in children.into_iter().enumerate() {
+        out.push(SpineTreeDisplayNode {
+            node,
+            depth,
+            is_last: index + 1 == child_count,
+        });
+        append_spine_tree_children(snapshot, Some(node.node_id.as_str()), depth + 1, out);
+    }
+}
+
+fn render_spine_tree_node(
+    display_node: &SpineTreeDisplayNode<'_>,
+    active_node_id: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let branch = if display_node.depth == 0 {
+        "└ "
+    } else if display_node.is_last {
+        "└ "
+    } else {
+        "├ "
+    };
+    let prefix = format!("  {}{}", "  ".repeat(display_node.depth), branch);
+    let node = display_node.node;
+    let active = node.node_id == active_node_id;
+    let summary = node
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or("(no summary)");
+    let mut spans = vec![
+        Span::from(prefix.clone()).dim(),
+        Span::from(node.node_id.clone()).cyan().bold(),
+        Span::from(" "),
+        Span::from(summary.to_string()),
+    ];
+    if active {
+        spans.push(Span::from(" current").cyan().bold());
+    }
+    let line = Line::from(spans);
+    let wrapped = adaptive_wrap_line(
+        &line,
+        RtOptions::new(width.saturating_sub(2).max(1) as usize)
+            .subsequent_indent(format!("{}  ", "  ".repeat(display_node.depth + 1)).into()),
+    );
+    push_owned_lines(&wrapped, &mut out);
+
+    if let Some(plan) = &node.plan {
+        for item in &plan.items {
+            out.extend(render_spine_tree_plan_item(
+                item,
+                display_node.depth + 1,
+                width,
+            ));
+        }
+    }
+    out
+}
+
+fn render_spine_tree_plan_item(
+    item: &SpineTreePlanItem,
+    depth: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let (box_str, step_style) = match item.status {
+        SpineTreePlanItemStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
+        SpineTreePlanItemStatus::InProgress => ("□ ", Style::default().cyan().bold()),
+        SpineTreePlanItemStatus::Pending => ("□ ", Style::default().dim()),
+    };
+    let indent = format!("  {}  ", "  ".repeat(depth));
+    let opts = RtOptions::new(width.saturating_sub(2).max(1) as usize)
+        .initial_indent(format!("{indent}{box_str}").into())
+        .subsequent_indent(format!("{indent}  ").into());
+    let line = Line::from(item.step.clone().set_style(step_style));
+    let wrapped = adaptive_wrap_line(&line, opts);
+    let mut out = Vec::new();
+    push_owned_lines(&wrapped, &mut out);
+    out
 }
 
 /// Create a new `PendingPatch` cell that lists the file‑level summary of
