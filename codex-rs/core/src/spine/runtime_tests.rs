@@ -517,7 +517,7 @@ fn next_compact_fails_after_non_spine_compacted_history() {
 }
 
 #[test]
-fn close_compact_boundary_uses_parent_scope_raw_start() {
+fn close_that_would_close_root_scope_is_rejected() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
         .stage_transition("open-1", "turn-1", SpineOperation::Open, "root scope")
@@ -534,32 +534,17 @@ fn close_compact_boundary_uses_parent_scope_raw_start() {
     runtime
         .after_response_items_recorded("turn-2", &[assistant_message("child work")], 2, 3)
         .expect("record child work");
-    runtime
+
+    let error = runtime
         .stage_transition("close-1", "turn-2", SpineOperation::Close, "scope done")
-        .expect("stage close");
-    runtime
-        .after_response_items_recorded(
-            "turn-2",
-            &[spine_call("close-1"), function_call_output("close-1")],
-            3,
-            5,
-        )
-        .expect("commit close");
+        .expect_err("close should reject root scope");
 
-    let committed = runtime
-        .take_last_committed_transition()
-        .expect("close transition");
-    let boundary = runtime
-        .plan_compaction_after_transition(&committed)
-        .expect("compact boundary")
-        .expect("close should compact");
-
-    assert_eq!(boundary.op, SpineOperation::Close);
-    assert_eq!(boundary.node_id, id(&[1]));
-    assert_eq!(boundary.scope_node_id, Some(id(&[1])));
-    assert_eq!(boundary.cut_ordinal, 0);
-    assert_eq!(boundary.fold_end_ordinal, 5);
-    assert_eq!(boundary.transition_summary, "root scope");
+    assert!(matches!(
+        error,
+        SpineRuntimeError::State(SpineStateError::CannotCloseRoot)
+    ));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
+    assert!(runtime.staged_transition().is_none());
 }
 
 #[test]
@@ -578,45 +563,57 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
         .expect("commit open");
     runtime.take_last_committed_transition();
     runtime
-        .stage_transition("next-1", "turn-2", SpineOperation::Next, "first child done")
-        .expect("stage next");
+        .stage_transition("open-2", "turn-2", SpineOperation::Open, "child scope")
+        .expect("stage nested open");
     runtime
         .after_response_items_recorded(
             "turn-2",
-            &[spine_call("next-1"), function_call_output("next-1")],
+            &[spine_call("open-2"), function_call_output("open-2")],
             2,
             4,
+        )
+        .expect("commit nested open");
+    runtime.take_last_committed_transition();
+    runtime
+        .stage_transition("next-1", "turn-3", SpineOperation::Next, "first child done")
+        .expect("stage next");
+    runtime
+        .after_response_items_recorded(
+            "turn-3",
+            &[spine_call("next-1"), function_call_output("next-1")],
+            4,
+            6,
         )
         .expect("commit next");
     runtime.take_last_committed_transition();
     runtime
         .stage_transition(
             "close-1",
-            "turn-3",
+            "turn-4",
             SpineOperation::Close,
             "second child done",
         )
         .expect("stage close");
     runtime
         .after_response_items_recorded(
-            "turn-3",
+            "turn-4",
             &[spine_call("close-1"), function_call_output("close-1")],
-            4,
             6,
+            8,
         )
         .expect("commit close");
 
     let outline = runtime
-        .render_context_compacted_outline(&id(&[1]))
+        .render_context_compacted_outline(&id(&[1, 1]))
         .expect("render outline");
 
     assert!(outline.contains("## Context Compacted"));
-    assert!(outline.contains("[1] root scope (nodes/1/worklog.md)"));
-    assert!(outline.contains("|-- [1.1] first child done (nodes/1/1/worklog.md)"));
-    assert!(outline.contains("|-- [1.2] second child done (nodes/1/2/worklog.md)"));
+    assert!(outline.contains("[1.1] child scope (nodes/1/1/worklog.md)"));
+    assert!(outline.contains("|-- [1.1.1] first child done (nodes/1/1/1/worklog.md)"));
+    assert!(outline.contains("|-- [1.1.2] second child done (nodes/1/1/2/worklog.md)"));
     assert!(
-        outline.find("|-- [1.1]").expect("first child row")
-            < outline.find("|-- [1.2]").expect("second child row")
+        outline.find("|-- [1.1.1]").expect("first child row")
+            < outline.find("|-- [1.1.2]").expect("second child row")
     );
 }
 

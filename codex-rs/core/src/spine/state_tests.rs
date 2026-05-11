@@ -139,35 +139,17 @@ fn repeated_next_allocates_consecutive_siblings() {
 }
 
 #[test]
-fn close_finishes_leaf_closes_parent_and_enters_parent_sibling() {
+fn close_that_would_close_root_scope_fails_without_mutating_state() {
     let mut state = SpineState::new();
     state.open("root scope").expect("open should succeed");
+    let before = state.clone();
 
-    let transition = state
+    let error = state
         .close("child scope done")
-        .expect("close should succeed");
+        .expect_err("close should reject root scope");
 
-    assert_eq!(
-        transition,
-        Transition {
-            from: id(&[1, 1]),
-            to: id(&[2]),
-        }
-    );
-    assert_eq!(state.cursor(), &id(&[2]));
-    assert_eq!(
-        summaries(&state),
-        vec![
-            (id(&[1]), Some("root scope".to_string()), NodeStatus::Closed,),
-            (
-                id(&[1, 1]),
-                Some("child scope done".to_string()),
-                NodeStatus::Finished,
-            ),
-            (id(&[2]), None, NodeStatus::Live),
-        ]
-    );
-    assert_eq!(state.visible_spine(), vec![id(&[1]), id(&[2])]);
+    assert_eq!(error, SpineStateError::CannotCloseRoot);
+    assert_eq!(state, before);
 }
 
 #[test]

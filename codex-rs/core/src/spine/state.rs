@@ -125,13 +125,15 @@ impl SpineState {
         let parent = self
             .parent_id(&from)?
             .ok_or(SpineStateError::CannotCloseRoot)?;
-        let grandparent = self.parent_id(&parent)?;
-        let parent_sibling = self.next_sibling_id(grandparent.as_ref())?;
+        let grandparent = self
+            .parent_id(&parent)?
+            .ok_or(SpineStateError::CannotCloseRoot)?;
+        let parent_sibling = self.next_sibling_id(Some(&grandparent))?;
 
         self.write_summary(&from, summary)?;
         self.set_status(&from, NodeStatus::Finished)?;
         self.set_status(&parent, NodeStatus::Closed)?;
-        self.insert_node(parent_sibling.clone(), grandparent)?;
+        self.insert_node(parent_sibling.clone(), Some(grandparent))?;
         self.cursor = parent_sibling.clone();
 
         Ok(Transition {
