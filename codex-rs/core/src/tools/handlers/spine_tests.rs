@@ -73,7 +73,7 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
 
     assert_eq!(
         output.log_preview(),
-        "Spine updated.\nSpine cursor: [1.1]\nVisible spine: [1, 1.1]\nNext: continue work in [1.1]."
+        "Spine updated: open\n\ncurrent: [1.1] live\n\n[1] opened root scope (nodes/1/worklog.md)\n|-- [1.1] live current (nodes/1/1/worklog.md)"
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     assert_eq!(runtime.cursor().bracketed(), "[1]");
@@ -91,6 +91,47 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
             .map(|node| node.bracketed())
             .collect::<Vec<_>>(),
         vec!["[1]".to_string(), "[1.1]".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn valid_next_returns_compact_tree_view() {
+    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    {
+        let spine = session.spine.as_ref().expect("spine runtime");
+        let mut runtime = spine.lock().await;
+        let mut state = runtime.state().clone();
+        runtime
+            .store()
+            .record_transition(
+                &mut state,
+                crate::spine::store::SpineOperation::Open,
+                "root scope",
+                0,
+            )
+            .expect("record open");
+        let store = runtime.store().clone();
+        *runtime = SpineRuntime::from_parts(store, state, 0);
+    }
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let output = SpineHandler
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "call-next",
+            json!({
+                "op": "next",
+                "summary": "Completed reproduction and patch verification",
+            }),
+        ))
+        .await
+        .expect("spine next should stage");
+
+    assert_eq!(
+        output.log_preview(),
+        "Spine updated: next\n\ncurrent: [1.2] live\n\n[1] opened root scope (nodes/1/worklog.md)\n|-- [1.1] finished Completed reproduction and patch verification (nodes/1/1/worklog.md)\n|-- [1.2] live current (nodes/1/2/worklog.md)"
     );
 }
 
