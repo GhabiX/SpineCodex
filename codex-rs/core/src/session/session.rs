@@ -1,6 +1,8 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
 use crate::spine::runtime::SpineRuntime;
+use crate::spine::runtime::SpineRuntimeError;
+use crate::spine::store::SpineSidecarStore;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -384,6 +386,35 @@ pub(crate) async fn initial_spine_has_non_spine_compacted_history(
     Ok(has_non_spine_compaction)
 }
 
+pub(crate) async fn initial_spine_has_spine_history(
+    initial_history: &InitialHistory,
+) -> anyhow::Result<bool> {
+    let has_spine_history = match initial_history {
+        InitialHistory::New | InitialHistory::Cleared => false,
+        InitialHistory::Resumed(resumed) => {
+            if let Some(rollout_path) = resumed.rollout_path.as_ref() {
+                let (items, _, _) =
+                    crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
+                has_spine_history_items(&items)
+            } else {
+                has_spine_history_items(&resumed.history)
+            }
+        }
+        InitialHistory::Forked(items) => has_spine_history_items(items),
+    };
+    Ok(has_spine_history)
+}
+
+fn has_spine_history_items(items: &[RolloutItem]) -> bool {
+    items.iter().any(|item| match item {
+        RolloutItem::Compacted(compacted) => is_spine_compact_message(&compacted.message),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            name, namespace, ..
+        }) => namespace.is_none() && name == "spine",
+        _ => false,
+    })
+}
+
 fn latest_compaction_is_non_spine(items: &[RolloutItem]) -> bool {
     items
         .iter()
@@ -399,6 +430,31 @@ fn latest_compaction_is_non_spine(items: &[RolloutItem]) -> bool {
 
 fn is_spine_compact_message(message: &str) -> bool {
     message.starts_with("Spine compacted ")
+}
+
+pub(crate) fn load_initial_spine_runtime(
+    rollout_path: &Path,
+    next_raw_ordinal: u64,
+    has_spine_history: bool,
+    has_non_spine_compaction: bool,
+) -> Result<SpineRuntime, SpineRuntimeError> {
+    let mut runtime = if has_spine_history {
+        let store = SpineSidecarStore::for_rollout(rollout_path)?;
+        if !store.tree_path().exists() {
+            return Err(crate::spine::store::SpineStoreError::InvalidLedger(format!(
+                "spine sidecar is missing for existing Spine rollout history at {}",
+                store.root().display()
+            ))
+            .into());
+        }
+        SpineRuntime::load(store, next_raw_ordinal)?
+    } else {
+        SpineRuntime::load_or_init(rollout_path, next_raw_ordinal)?
+    };
+    if has_non_spine_compaction {
+        runtime.mark_non_spine_compacted_history();
+    }
+    Ok(runtime)
 }
 
 impl Session {
@@ -479,6 +535,11 @@ impl Session {
             } else {
                 false
             };
+        let initial_spine_has_spine_history = if config.features.enabled(Feature::SpineTaskTree) {
+            initial_spine_has_spine_history(&initial_history).await?
+        } else {
+            false
+        };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -603,11 +664,12 @@ impl Session {
                 rollout_path
                     .as_ref()
                     .map(|path| {
-                        let mut runtime = SpineRuntime::load_or_init(path, initial_spine_ordinal)?;
-                        if initial_spine_has_non_spine_compaction {
-                            runtime.mark_non_spine_compacted_history();
-                        }
-                        Ok::<_, crate::spine::runtime::SpineRuntimeError>(runtime)
+                        load_initial_spine_runtime(
+                            path,
+                            initial_spine_ordinal,
+                            initial_spine_has_spine_history,
+                            initial_spine_has_non_spine_compaction,
+                        )
                     })
                     .transpose()
                     .map(|runtime| runtime.map(|runtime| Arc::new(Mutex::new(runtime))))?

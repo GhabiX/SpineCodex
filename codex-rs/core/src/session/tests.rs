@@ -1393,6 +1393,75 @@ async fn spine_resume_detects_latest_non_spine_compaction() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn spine_resume_detects_existing_spine_history_from_rollout() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    write_rollout_items_for_test(
+        &rollout_path,
+        &[
+            RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: "spine".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call-spine".to_string(),
+            }),
+            RolloutItem::Compacted(CompactedItem {
+                message: "Spine compacted 1 [0, 1)".to_string(),
+                replacement_history: Some(vec![user_message("spine ir")]),
+            }),
+        ],
+    )?;
+
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: Vec::new(),
+        rollout_path: Some(rollout_path),
+    });
+
+    assert!(crate::session::session::initial_spine_has_spine_history(&initial_history).await?);
+    Ok(())
+}
+
+#[test]
+fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let runtime =
+        crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false)?;
+
+    assert_eq!(runtime.cursor(), &crate::spine::ids::NodeId::root());
+    assert!(
+        crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?
+            .tree_path()
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn initial_spine_runtime_rejects_missing_sidecar_for_existing_spine_history() -> anyhow::Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+
+    let error = crate::session::session::load_initial_spine_runtime(&rollout_path, 3, true, false)
+        .expect_err("existing Spine rollout history requires sidecar");
+
+    assert!(
+        error
+            .to_string()
+            .contains("spine sidecar is missing for existing Spine rollout history")
+    );
+    assert!(
+        !crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?
+            .tree_path()
+            .exists()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn spine_raw_mirror_is_not_written_without_runtime() -> anyhow::Result<()> {
     let (mut session, _turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;
