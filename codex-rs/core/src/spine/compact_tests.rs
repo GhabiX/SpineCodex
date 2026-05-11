@@ -176,7 +176,7 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
 }
 
 #[test]
-fn codex_builtin_prompt_contains_suffix_but_not_prefix_items() {
+fn codex_builtin_prompt_uses_fork_full_history_shape() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1]),
@@ -191,11 +191,48 @@ fn codex_builtin_prompt_contains_suffix_but_not_prefix_items() {
         sidecar_root: Path::new("/tmp/spine").to_path_buf(),
     };
 
-    let prompt = build_codex_builtin_prompt_input(&input).expect("build prompt");
+    let prompt = build_codex_builtin_prompt_input(&input, crate::compact::SUMMARIZATION_PROMPT);
     let rendered = format!("{prompt:?}");
 
+    assert_eq!(prompt.len(), 3);
     assert!(rendered.contains("suffix goes to compactor"));
-    assert!(!rendered.contains("prefix must stay local"));
-    assert_eq!(prompt.len(), 1);
-    assert!(rendered.contains("quoted_suffix_response_items_json"));
+    assert!(rendered.contains("prefix must stay local"));
+    assert!(!rendered.contains("quoted_suffix_response_items_json"));
+    assert!(rendered.contains("Target response ordinal range: [1, 3)"));
+    assert!(rendered.contains("Target suffix item count: 1"));
+    assert!(rendered.contains("Target suffix item signature: message"));
+    assert!(rendered.contains("<spine_compact_worklog>"));
+    assert!(rendered.contains("</spine_compact_worklog>"));
+    assert_eq!(prompt[0], input.prefix_items[0]);
+    assert_eq!(prompt[1], input.suffix_items[0]);
+    let ResponseItem::Message { content, .. } = &prompt[2] else {
+        panic!("expected final compact instruction message");
+    };
+    let ContentItem::InputText { text } = &content[0] else {
+        panic!("expected compact instruction text");
+    };
+    assert!(text.starts_with(crate::compact::SUMMARIZATION_PROMPT));
+    assert!(text.contains("exactly the immediately preceding 1 ResponseItem(s)"));
+}
+
+#[test]
+fn spine_compact_worklog_extraction_requires_exact_outer_block() {
+    assert_eq!(
+        extract_spine_compact_worklog(
+            "<spine_compact_worklog>\n## Done\n\nfacts\n</spine_compact_worklog>"
+        )
+        .expect("extract compact worklog"),
+        "## Done\n\nfacts"
+    );
+    assert!(
+        extract_spine_compact_worklog("prefix\n<spine_compact_worklog>x</spine_compact_worklog>")
+            .is_err()
+    );
+    assert!(
+        extract_spine_compact_worklog("<spine_compact_worklog>x</spine_compact_worklog>\nsuffix")
+            .is_err()
+    );
+    assert!(
+        extract_spine_compact_worklog("<spine_compact_worklog> </spine_compact_worklog>").is_err()
+    );
 }
