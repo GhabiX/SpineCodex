@@ -2590,6 +2590,38 @@ async fn thread_rollback_fails_without_persisted_thread_history() {
 }
 
 #[tokio::test]
+async fn thread_rollback_fails_when_spine_runtime_is_active() -> anyhow::Result<()> {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+    let spine =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    Arc::get_mut(&mut sess)
+        .expect("session should not have additional references")
+        .spine = Some(Arc::new(Mutex::new(spine)));
+
+    let initial_context = sess.build_initial_context(tc.as_ref()).await;
+    sess.record_into_history(&initial_context, tc.as_ref())
+        .await;
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
+
+    let error_event = wait_for_thread_rollback_failed(&rx).await;
+    assert_eq!(
+        error_event.message,
+        "spine task tree does not yet support thread rollback"
+    );
+    assert_eq!(
+        error_event.codex_error_info,
+        Some(CodexErrorInfo::ThreadRollbackFailed)
+    );
+    assert_eq!(sess.clone_history().await.raw_items(), initial_context);
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context_from_replay() {
     let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
     attach_thread_persistence(
