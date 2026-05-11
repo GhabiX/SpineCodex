@@ -137,6 +137,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -1808,7 +1809,8 @@ async fn spine_compact_poison_blocks_future_sampling() {
 }
 
 #[tokio::test]
-async fn spine_transition_compaction_is_deferred_until_turn_end() -> anyhow::Result<()> {
+async fn spine_transition_compaction_boundary_waits_for_sampling_completion() -> anyhow::Result<()>
+{
     let (mut session, turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;
     let mut runtime =
@@ -1853,6 +1855,86 @@ async fn spine_transition_compaction_is_deferred_until_turn_end() -> anyhow::Res
     assert_eq!(
         pending[0].node_id,
         crate::spine::ids::NodeId::from_segments(vec![1, 1])
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineTaskTree)
+            .expect("enable spine task tree");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-open"),
+                ev_function_call_with_namespace(
+                    "call-open",
+                    "spine",
+                    "open",
+                    r#"{"summary":"focused leaf"}"#,
+                ),
+                ev_completed("resp-open"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-next"),
+                ev_assistant_message("msg-raw-suffix", "RAW_SUFFIX_DETAIL should be folded"),
+                ev_function_call_with_namespace(
+                    "call-next",
+                    "spine",
+                    "next",
+                    r#"{"summary":"leaf done"}"#,
+                ),
+                ev_completed("resp-next"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-compact"),
+                ev_assistant_message(
+                    "msg-compact",
+                    "<spine_compact_worklog>\ncompact leaf fact\n</spine_compact_worklog>",
+                ),
+                ev_completed("resp-compact"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-final"),
+                ev_assistant_message("msg-final", "Done after compact."),
+                ev_completed("resp-final"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "start spine work".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
+    let compact_request = &requests[2];
+    assert!(compact_request.body_contains_text("SpineJIT suffix compaction request"));
+    assert!(compact_request.tool_by_name("spine", "next").is_some());
+
+    let followup_request = &requests[3];
+    assert!(followup_request.body_contains_text("<spine_ir"));
+    assert!(followup_request.body_contains_text("compact leaf fact"));
+    assert!(
+        !followup_request.body_contains_text("RAW_SUFFIX_DETAIL should be folded"),
+        "the main follow-up request should see replacement history, not the raw folded suffix"
     );
     Ok(())
 }

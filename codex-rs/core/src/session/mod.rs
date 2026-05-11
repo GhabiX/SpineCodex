@@ -2771,28 +2771,6 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn install_pending_spine_compactions(
-        &self,
-        turn_context: &TurnContext,
-    ) -> CodexResult<()> {
-        let prompt_envelope = Prompt {
-            base_instructions: self.get_base_instructions().await,
-            personality: turn_context.personality,
-            output_schema: turn_context.final_output_json_schema.clone(),
-            output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
-                &turn_context.session_source,
-            ),
-            ..Default::default()
-        };
-        let mut client_session = self.services.model_client.new_session();
-        self.install_pending_spine_compactions_with_prompt(
-            turn_context,
-            &mut client_session,
-            &prompt_envelope,
-        )
-        .await
-    }
-
     pub(crate) async fn install_pending_spine_compactions_with_prompt(
         &self,
         turn_context: &TurnContext,
