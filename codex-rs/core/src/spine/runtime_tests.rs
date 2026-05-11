@@ -474,6 +474,23 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
 }
 
 #[test]
+fn transition_stage_fails_after_non_spine_compacted_history() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime.mark_non_spine_compacted_history();
+
+    for op in [
+        SpineOperation::Open,
+        SpineOperation::Next,
+        SpineOperation::Close,
+    ] {
+        let error = runtime
+            .stage_transition("spine-1", "turn-1", op, "summary")
+            .expect_err("non-spine compacted history should fail fast");
+        assert!(matches!(error, SpineRuntimeError::NonSpineCompactedHistory));
+    }
+}
+
+#[test]
 fn next_compact_fails_after_non_spine_compacted_history() {
     let (_temp, mut runtime) = temp_runtime();
     runtime

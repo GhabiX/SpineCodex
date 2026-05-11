@@ -179,7 +179,7 @@ impl SpineRuntime {
         match committed.op {
             SpineOperation::Open => Ok(None),
             SpineOperation::Next => {
-                self.ensure_spine_compaction_allowed()?;
+                self.ensure_spine_mutation_allowed()?;
                 let cut_ordinal =
                     self.raw_start_ordinal(&committed.from_node)
                         .ok_or_else(|| SpineRuntimeError::MissingRawStartOrdinal {
@@ -195,7 +195,7 @@ impl SpineRuntime {
                 }))
             }
             SpineOperation::Close => {
-                self.ensure_spine_compaction_allowed()?;
+                self.ensure_spine_mutation_allowed()?;
                 let scope_node_id = self
                     .state
                     .node(&committed.from_node)
@@ -222,7 +222,7 @@ impl SpineRuntime {
         }
     }
 
-    fn ensure_spine_compaction_allowed(&self) -> Result<(), SpineRuntimeError> {
+    fn ensure_spine_mutation_allowed(&self) -> Result<(), SpineRuntimeError> {
         if self.non_spine_compacted_history {
             return Err(SpineRuntimeError::NonSpineCompactedHistory);
         }
@@ -366,6 +366,7 @@ impl SpineRuntime {
         op: SpineOperation,
         summary: impl Into<String>,
     ) -> Result<&StagedTransition, SpineRuntimeError> {
+        self.ensure_spine_mutation_allowed()?;
         if let Some(staged) = self.staged_transition.as_ref() {
             return Err(SpineRuntimeError::TransitionAlreadyStaged {
                 call_id: staged.call_id.clone(),
