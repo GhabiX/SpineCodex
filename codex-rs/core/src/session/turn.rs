@@ -311,6 +311,15 @@ pub(crate) async fn run_turn(
     } else {
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
         let response_item: ResponseItem = initial_input_for_turn.clone().into();
+        if let Err(err) = sess
+            .emit_initial_spine_tree_if_needed(turn_context.as_ref())
+            .await
+        {
+            info!("Turn error: {err:#}");
+            let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
+            sess.send_event(&turn_context, event).await;
+            return None;
+        }
         let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
             &sess,
             &turn_context,

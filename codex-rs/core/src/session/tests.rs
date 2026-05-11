@@ -1348,6 +1348,40 @@ async fn spine_runtime_initializes_root_when_feature_is_on() -> anyhow::Result<(
     Ok(())
 }
 
+#[tokio::test]
+async fn initial_spine_tree_is_emitted_once_before_first_user_prompt() -> anyhow::Result<()> {
+    let (mut session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let session_mut = Arc::get_mut(&mut session).expect("fresh test session has no other refs");
+    let rollout_path = attach_thread_persistence(session_mut).await;
+    let spine = crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0)?;
+    session_mut.spine = Some(Arc::new(Mutex::new(spine)));
+
+    session
+        .emit_initial_spine_tree_if_needed(turn_context.as_ref())
+        .await?;
+    let input = vec![UserInput::Text {
+        text: "start".to_string(),
+        text_elements: Vec::new(),
+    }];
+    let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+    session
+        .record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+        .await;
+
+    let first = rx.recv().await.expect("spine tree event");
+    assert!(matches!(first.msg, EventMsg::SpineTreeUpdate(_)));
+
+    while rx.try_recv().is_ok() {}
+    session
+        .emit_initial_spine_tree_if_needed(turn_context.as_ref())
+        .await?;
+    assert!(
+        rx.try_recv().is_err(),
+        "initial spine tree should not be emitted twice"
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_resume_emits_initial_tree_update_after_session_configured() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;

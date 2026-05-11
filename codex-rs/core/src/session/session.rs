@@ -1104,6 +1104,10 @@ impl Session {
                     id: INITIAL_SUBMIT_ID.to_owned(),
                     msg: EventMsg::SpineTreeUpdate(snapshot),
                 });
+                sess.state
+                    .lock()
+                    .await
+                    .mark_initial_spine_tree_emitted();
             }
             events.extend(post_session_configured_events.into_iter());
             for event in events {

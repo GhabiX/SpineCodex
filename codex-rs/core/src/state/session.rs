@@ -34,6 +34,7 @@ pub(crate) struct SessionState {
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     granted_permissions: Option<AdditionalPermissionProfile>,
     next_turn_is_first: bool,
+    initial_spine_tree_pending: bool,
 }
 
 impl SessionState {
@@ -53,6 +54,7 @@ impl SessionState {
             pending_session_start_source: None,
             granted_permissions: None,
             next_turn_is_first: true,
+            initial_spine_tree_pending: true,
         }
     }
 
@@ -83,6 +85,14 @@ impl SessionState {
         let is_first_turn = self.next_turn_is_first;
         self.next_turn_is_first = false;
         is_first_turn
+    }
+
+    pub(crate) fn initial_spine_tree_pending(&self) -> bool {
+        self.initial_spine_tree_pending
+    }
+
+    pub(crate) fn mark_initial_spine_tree_emitted(&mut self) {
+        self.initial_spine_tree_pending = false;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

@@ -1586,6 +1586,27 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn emit_initial_spine_tree_if_needed(
+        &self,
+        turn_context: &TurnContext,
+    ) -> CodexResult<()> {
+        let Some(spine) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        if !self.state.lock().await.initial_spine_tree_pending() {
+            return Ok(());
+        }
+        let snapshot = spine.lock().await.build_tree_snapshot().map_err(|err| {
+            CodexErr::Fatal(format!(
+                "failed to build initial spine tree snapshot: {err}"
+            ))
+        })?;
+        self.state.lock().await.mark_initial_spine_tree_emitted();
+        self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
+            .await;
+        Ok(())
+    }
+
     /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
     async fn maybe_notify_parent_of_terminal_turn(
         &self,
