@@ -36,11 +36,15 @@ const CHILD_SHELL_CALL_ID: &str = "child-shell-call";
 const PLAN_CALL_ID: &str = "plan-call";
 const NEXT_CALL_ID: &str = "spine-next-call";
 const SIBLING_SHELL_CALL_ID: &str = "sibling-shell-call";
+const CLOSE_CALL_ID: &str = "spine-close-call";
+const ROOT_SHELL_CALL_ID: &str = "root-shell-call";
 
 const OPEN_SUMMARY: &str = "open child scope";
 const OPEN_WORKLOG: &str = "Root handoff for child shell smoke.";
 const NEXT_SUMMARY: &str = "finish child scope";
 const NEXT_WORKLOG: &str = "Child handoff for sibling shell smoke.";
+const CLOSE_SUMMARY: &str = "finish root scope";
+const CLOSE_WORKLOG: &str = "Sibling handoff for root shell smoke.";
 const EXPECTED_SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
 You have a task tree tool named spine.
 Use the active task tree to split complex work into focused right-spine nodes.
@@ -55,7 +59,8 @@ In Plan mode, do not call mutating spine operations.
 </spine_view>"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_transitions_commit_before_following_tools_in_same_response() -> anyhow::Result<()> {
+async fn spine_transitions_commit_and_compact_before_following_tools_in_same_response()
+-> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -101,6 +106,25 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
                 ev_completed("resp-spine-compact"),
             ]),
             sse(vec![
+                ev_response_created("resp-close"),
+                ev_function_call(
+                    CLOSE_CALL_ID,
+                    "spine",
+                    &spine_args("close", CLOSE_SUMMARY, CLOSE_WORKLOG),
+                ),
+                ev_function_call(
+                    ROOT_SHELL_CALL_ID,
+                    "shell_command",
+                    &shell_args("printf 'root-spine\\n'"),
+                ),
+                ev_completed("resp-close"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-spine-close-compact"),
+                ev_assistant_message("msg-spine-close-compact", "Compacted root findings."),
+                ev_completed("resp-spine-close-compact"),
+            ]),
+            sse(vec![
                 ev_response_created("resp-done"),
                 ev_assistant_message("msg-done", "done"),
                 ev_completed("resp-done"),
@@ -139,6 +163,7 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
     );
     assert_function_output_contains(&requests, CHILD_SHELL_CALL_ID, "child-spine");
     assert_function_output_contains(&requests, SIBLING_SHELL_CALL_ID, "sibling-spine");
+    assert_function_output_contains(&requests, ROOT_SHELL_CALL_ID, "root-spine");
     assert_function_output_contains(&requests, PLAN_CALL_ID, "Plan updated");
 
     let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
@@ -159,20 +184,28 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
     assert_transition(&tree, "open", "1", "1.1", OPEN_SUMMARY);
     assert_plan_updated(&tree, "1.1", 1, &plan_turn_id);
     assert_transition(&tree, "next", "1.1", "1.2", NEXT_SUMMARY);
+    assert_transition(&tree, "close", "1.2", "2", CLOSE_SUMMARY);
     assert_transition_committed(&index, OPEN_CALL_ID, "1", "1.1");
     assert_transition_committed(&index, NEXT_CALL_ID, "1.1", "1.2");
+    assert_transition_committed(&index, CLOSE_CALL_ID, "1.2", "2");
     assert_raw_range_for_node_after_transition(&index, OPEN_CALL_ID, "1.1");
     assert_raw_range_for_node_after_transition(&index, NEXT_CALL_ID, "1.2");
+    assert_raw_range_for_node_after_transition(&index, CLOSE_CALL_ID, "2");
 
-    assert_eq!(
-        std::fs::read_to_string(sidecar_dir.join("nodes/1/worklog.md"))?,
-        OPEN_WORKLOG
-    );
+    let root_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/worklog.md"))?;
+    assert!(root_worklog.starts_with(OPEN_WORKLOG));
+    assert!(root_worklog.contains("spine:auto-compact-generated"));
+    assert!(root_worklog.contains("Compacted root findings."));
+    assert!(root_worklog.contains("## Context Compacted"));
+    assert!(root_worklog.contains("[1] open child scope (nodes/1/worklog.md)"));
+    assert!(root_worklog.contains("|-- [1.1] finish child scope (nodes/1/1/worklog.md)"));
+    assert!(root_worklog.contains("|-- [1.2] finish root scope (nodes/1/2/worklog.md)"));
     let child_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/worklog.md"))?;
     assert!(child_worklog.starts_with(NEXT_WORKLOG));
     assert!(child_worklog.contains("spine:auto-compact-generated"));
     assert!(child_worklog.contains("Compacted child findings."));
     assert_compact_installed(&compact_index, "1.1", "next");
+    assert_compact_installed(&compact_index, "1", "close");
     let plan_snapshot = read_json(sidecar_dir.join("nodes/1/1/plan.json"))?;
     assert_eq!(plan_snapshot["node_id"], "1.1");
     assert_eq!(plan_snapshot["revision"], 1);
@@ -200,7 +233,12 @@ async fn spine_transitions_commit_before_following_tools_in_same_response() -> a
         rollout_text.contains(SIBLING_SHELL_CALL_ID) && rollout_text.contains("sibling-spine"),
         "rollout should remain the raw traj source for sibling shell output"
     );
-    assert_rollout_has_spine_compaction_checkpoint(&rollout_text)?;
+    assert!(
+        rollout_text.contains(ROOT_SHELL_CALL_ID) && rollout_text.contains("root-spine"),
+        "rollout should remain the raw traj source for root shell output"
+    );
+    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 2)?;
+    assert_raw_mirror_has_raw_items_and_compact_metadata(&sidecar_dir)?;
 
     Ok(())
 }
@@ -532,7 +570,10 @@ fn assert_compact_installed(index: &[Value], node_id: &str, op: &str) {
     );
 }
 
-fn assert_rollout_has_spine_compaction_checkpoint(rollout_text: &str) -> anyhow::Result<()> {
+fn assert_rollout_has_spine_compaction_checkpoint(
+    rollout_text: &str,
+    expected_count: usize,
+) -> anyhow::Result<()> {
     let mut compacted = 0;
     for line in rollout_text.lines().filter(|line| !line.trim().is_empty()) {
         let entry: RolloutLine = serde_json::from_str(line).context("parse rollout line")?;
@@ -559,8 +600,39 @@ fn assert_rollout_has_spine_compaction_checkpoint(rollout_text: &str) -> anyhow:
         }
     }
     assert_eq!(
-        compacted, 1,
-        "expected exactly one spine compact checkpoint"
+        compacted, expected_count,
+        "unexpected spine compact checkpoint count"
+    );
+    Ok(())
+}
+
+fn assert_raw_mirror_has_raw_items_and_compact_metadata(sidecar_dir: &Path) -> anyhow::Result<()> {
+    let raw_mirror_path = sidecar_dir.join("raw/rollout.raw.jsonl");
+    let raw_mirror_text = std::fs::read_to_string(&raw_mirror_path)
+        .with_context(|| format!("read {}", raw_mirror_path.display()))?;
+    let raw_mirror = parse_json_lines(&raw_mirror_text)?;
+    let response_items = raw_mirror
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("response_item"))
+        .count();
+    let compact_metadata = raw_mirror
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("raw_mirror_event"))
+        .count();
+
+    assert!(
+        response_items > 0,
+        "raw mirror should contain raw response items: {raw_mirror_text}"
+    );
+    assert_eq!(
+        compact_metadata, 2,
+        "raw mirror should record compact checkpoints only as metadata: {raw_mirror_text}"
+    );
+    assert!(
+        raw_mirror
+            .iter()
+            .all(|item| item.get("type").and_then(Value::as_str) != Some("compacted")),
+        "raw mirror must not store compact replacement history items: {raw_mirror_text}"
     );
     Ok(())
 }

@@ -1511,6 +1511,27 @@ async fn try_replace_compacted_history_persists_checkpoint_before_replacing_hist
 }
 
 #[tokio::test]
+async fn spine_compact_poison_blocks_future_sampling() {
+    let (session, _turn_context) = make_session_and_context().await;
+
+    session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect("fresh session should not be poisoned");
+    *session.spine_compact_poison.lock().await =
+        Some("spine compact sidecar install failed".to_string());
+
+    let error = session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect_err("poison should block future sampling");
+    assert!(matches!(
+        error,
+        CodexErr::Fatal(message) if message == "spine compact sidecar install failed"
+    ));
+}
+
+#[tokio::test]
 async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
     let (session, _turn_context) = make_session_and_context().await;
     {
@@ -1823,6 +1844,88 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         .await;
 
     assert_eq!(reconstructed.history, replacement_history);
+}
+
+#[tokio::test]
+async fn reconstruct_history_replays_suffix_after_spine_compact_checkpoint() {
+    let (session, turn_context) = make_session_and_context().await;
+    let spine_ir = user_message("<spine_ir node=\"1.1\">compacted child</spine_ir>");
+    let later = assistant_message("later sibling work");
+    let replacement_history = vec![spine_ir.clone()];
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("raw child work")),
+        RolloutItem::ResponseItem(assistant_message("raw child result")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted 1.1 [0, 2)".to_string(),
+            replacement_history: Some(replacement_history.clone()),
+        }),
+        RolloutItem::ResponseItem(later.clone()),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.history, vec![spine_ir, later]);
+    assert_eq!(
+        crate::session::session::initial_spine_response_item_count(&InitialHistory::Resumed(
+            ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: None,
+            },
+        ))
+        .await
+        .expect("count raw response items"),
+        3
+    );
+}
+
+#[tokio::test]
+async fn reconstruct_history_does_not_revive_rolled_back_spine_compact_checkpoint() {
+    let (session, turn_context) = make_session_and_context().await;
+    let turn_id = "spine-turn".to_string();
+    let replacement_history = vec![user_message("spine compact ir")];
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: turn_id.clone(),
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "turn user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
+        RolloutItem::ResponseItem(user_message("raw work")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted 1 [0, 1)".to_string(),
+            replacement_history: Some(replacement_history),
+        }),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id,
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert!(
+        reconstructed.history.is_empty(),
+        "rollback should drop the user turn that contained the spine compact checkpoint"
+    );
 }
 
 #[tokio::test]
