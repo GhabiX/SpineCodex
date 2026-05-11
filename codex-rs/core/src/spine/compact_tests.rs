@@ -2,8 +2,13 @@ use super::*;
 use crate::spine::ids::NodeId;
 use crate::spine::state::SpineState;
 use crate::spine::view::render_tree;
+use codex_protocol::models::BaseInstructions;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 fn id(segments: &[u32]) -> NodeId {
@@ -228,6 +233,67 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
     assert!(output.contains("Node trajs: nodes/1/1/trajs.jsonl"));
     assert!(output.contains("Raw mirror: /tmp/raw.jsonl"));
+}
+
+#[test]
+fn codex_builtin_prompt_reuses_main_request_envelope() {
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[1, 1]),
+        scope_node_id: None,
+        cut_ordinal: 1,
+        fold_end_ordinal: 3,
+        spine_tree: "1: finished leaf done [worklog already in context]".to_string(),
+        prefix_items: vec![text_item("prefix")],
+        suffix_items: vec![text_item("suffix")],
+        transition_summary: "leaf done".to_string(),
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+    let tool = ToolSpec::Function(ResponsesApiTool {
+        name: "probe".to_string(),
+        description: "Probe tool".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::new(),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        ),
+        output_schema: None,
+    });
+    let prompt_envelope = crate::Prompt {
+        input: vec![text_item("main request input is replaced")],
+        tools: vec![tool.clone()],
+        parallel_tool_calls: true,
+        base_instructions: BaseInstructions {
+            text: "main instructions".to_string(),
+        },
+        personality: None,
+        output_schema: Some(serde_json::json!({"type": "object"})),
+        output_schema_strict: false,
+    };
+
+    let compact_prompt = build_codex_builtin_prompt(
+        &input,
+        crate::compact::SUMMARIZATION_PROMPT,
+        &prompt_envelope,
+    );
+
+    assert_eq!(compact_prompt.tools, vec![tool]);
+    assert!(compact_prompt.parallel_tool_calls);
+    assert_eq!(
+        compact_prompt.base_instructions.text,
+        prompt_envelope.base_instructions.text
+    );
+    assert_eq!(compact_prompt.output_schema, prompt_envelope.output_schema);
+    assert_eq!(
+        compact_prompt.output_schema_strict,
+        prompt_envelope.output_schema_strict
+    );
+    assert_eq!(compact_prompt.input[0], input.prefix_items[0]);
+    assert_eq!(compact_prompt.input[1], input.suffix_items[0]);
 }
 
 #[test]

@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::Prompt;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
@@ -15,6 +16,7 @@ use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::build_available_skills;
+use crate::client::ModelClientSession;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
@@ -2773,6 +2775,30 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> CodexResult<()> {
+        let prompt_envelope = Prompt {
+            base_instructions: self.get_base_instructions().await,
+            personality: turn_context.personality,
+            output_schema: turn_context.final_output_json_schema.clone(),
+            output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
+                &turn_context.session_source,
+            ),
+            ..Default::default()
+        };
+        let mut client_session = self.services.model_client.new_session();
+        self.install_pending_spine_compactions_with_prompt(
+            turn_context,
+            &mut client_session,
+            &prompt_envelope,
+        )
+        .await
+    }
+
+    pub(crate) async fn install_pending_spine_compactions_with_prompt(
+        &self,
+        turn_context: &TurnContext,
+        client_session: &mut ModelClientSession,
+        prompt_envelope: &Prompt,
+    ) -> CodexResult<()> {
         loop {
             let boundary = {
                 let mut pending = self.pending_spine_compact_boundaries.lock().await;
@@ -2785,7 +2811,13 @@ impl Session {
             let Some(boundary) = boundary else {
                 return Ok(());
             };
-            Box::pin(self.compact_spine_suffix_after_transition(turn_context, boundary)).await?;
+            Box::pin(self.compact_spine_suffix_after_transition(
+                turn_context,
+                client_session,
+                prompt_envelope,
+                boundary,
+            ))
+            .await?;
         }
     }
 
@@ -2805,6 +2837,8 @@ impl Session {
     async fn compact_spine_suffix_after_transition(
         &self,
         turn_context: &TurnContext,
+        client_session: &mut ModelClientSession,
+        prompt_envelope: &Prompt,
         boundary: SpineCompactBoundary,
     ) -> CodexResult<()> {
         let spine = self
@@ -2882,6 +2916,8 @@ impl Session {
         let compact_output = match Box::pin(compact_suffix_with_codex_builtin_text(
             self,
             turn_context,
+            client_session,
+            prompt_envelope,
             plan.input.clone(),
         ))
         .await

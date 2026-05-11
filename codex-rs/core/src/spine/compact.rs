@@ -4,6 +4,7 @@ use super::view::op_label;
 use super::view::relative_node_trajs_path;
 use super::view::relative_worklog_path;
 use crate::Prompt;
+use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
 use crate::session::session::Session;
 use crate::session::turn::get_last_assistant_message_from_turn;
@@ -74,20 +75,15 @@ const COMPACT_WORKLOG_CLOSE_TAG: &str = "</spine_compact_worklog>";
 pub(crate) async fn compact_suffix_with_codex_builtin_text(
     sess: &Session,
     turn_context: &TurnContext,
+    client_session: &mut ModelClientSession,
+    prompt_envelope: &Prompt,
     input: SpineCompactInput,
 ) -> CodexResult<SpineCompactOutput> {
-    let prompt_input = build_codex_builtin_prompt_input(&input, turn_context.compact_prompt());
-    let prompt = Prompt {
-        input: prompt_input,
-        base_instructions: sess.get_base_instructions().await,
-        personality: turn_context.personality,
-        ..Default::default()
-    };
-    let mut client_session = sess.services.model_client.new_session();
+    let prompt = build_codex_builtin_prompt(&input, turn_context.compact_prompt(), prompt_envelope);
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let compacted_suffix = loop {
-        match collect_compaction_response(sess, turn_context, &mut client_session, &prompt).await {
+        match collect_compaction_response(sess, turn_context, client_session, &prompt).await {
             Ok(text) => break text,
             Err(err) if err.is_retryable() && retries < max_retries => {
                 retries += 1;
@@ -109,6 +105,22 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
         worklog_markdown,
         strategy_name: CODEX_BUILTIN_TEXT_STRATEGY,
     })
+}
+
+fn build_codex_builtin_prompt(
+    input: &SpineCompactInput,
+    compact_prompt: &str,
+    prompt_envelope: &Prompt,
+) -> Prompt {
+    Prompt {
+        input: build_codex_builtin_prompt_input(input, compact_prompt),
+        tools: prompt_envelope.tools.clone(),
+        parallel_tool_calls: prompt_envelope.parallel_tool_calls,
+        base_instructions: prompt_envelope.base_instructions.clone(),
+        personality: prompt_envelope.personality,
+        output_schema: prompt_envelope.output_schema.clone(),
+        output_schema_strict: prompt_envelope.output_schema_strict,
+    }
 }
 
 fn build_codex_builtin_prompt_input(

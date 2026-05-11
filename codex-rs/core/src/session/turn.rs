@@ -2413,6 +2413,15 @@ async fn try_run_sampling_request(
         return Err(CodexErr::TurnAborted);
     }
 
+    if outcome.is_ok() {
+        sess.install_pending_spine_compactions_with_prompt(
+            turn_context.as_ref(),
+            client_session,
+            prompt,
+        )
+        .await?;
+    }
+
     if should_emit_turn_diff {
         let unified_diff = {
             let tracker = turn_diff_tracker.lock().await;
