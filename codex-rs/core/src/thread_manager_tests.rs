@@ -52,6 +52,16 @@ fn assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn spine_call_msg(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        call_id: call_id.to_string(),
+        name: "spine".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+    }
+}
+
 fn contextual_user_interrupted_marker() -> ResponseItem {
     interrupted_turn_history_marker(InterruptedTurnHistoryMarker::ContextualUser)
         .expect("contextual-user interrupted marker should be enabled")
@@ -864,6 +874,52 @@ async fn new_uses_active_provider_for_model_refresh() {
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
     assert_eq!(models_mock.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn forked_spine_history_is_rejected_when_spine_feature_is_enabled() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+    );
+
+    let result = manager
+        .resume_thread_with_history(
+            config,
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(spine_call_msg("spine-1"))]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await;
+    let err = match result {
+        Ok(_) => panic!("spine fork history should be rejected"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        CodexErr::InvalidRequest(message)
+            if message == "spine task tree does not yet support forked thread history"
+    ));
 }
 
 #[test]
