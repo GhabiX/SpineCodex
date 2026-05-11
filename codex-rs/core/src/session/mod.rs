@@ -2721,6 +2721,19 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn ensure_spine_compact_not_poisoned(&self) -> CodexResult<()> {
+        if let Some(message) = self.spine_compact_poison.lock().await.clone() {
+            return Err(CodexErr::Fatal(message));
+        }
+        Ok(())
+    }
+
+    async fn poison_spine_compact(&self, message: impl Into<String>) -> CodexErr {
+        let message = message.into();
+        *self.spine_compact_poison.lock().await = Some(message.clone());
+        CodexErr::Fatal(message)
+    }
+
     async fn compact_spine_suffix_after_transition(
         &self,
         turn_context: &TurnContext,
@@ -2820,14 +2833,11 @@ impl Session {
             worklog_markdown.push_str("\n\n");
             worklog_markdown.push_str(&outline);
         }
-        store
-            .append_worklog_section(&boundary.node_id, &worklog_markdown)
+        let worklog_body = store
+            .worklog_with_appended_section(&boundary.node_id, &worklog_markdown)
             .map_err(|err| {
-                CodexErr::Fatal(format!("failed to append spine compact worklog: {err}"))
+                CodexErr::Fatal(format!("failed to stage spine compact worklog: {err}"))
             })?;
-        let worklog_body = store.read_worklog(&boundary.node_id).map_err(|err| {
-            CodexErr::Fatal(format!("failed to read spine compact worklog: {err}"))
-        })?;
         let worklog_rel_path = plan
             .worklog_path
             .strip_prefix(store.root())
@@ -2874,31 +2884,40 @@ impl Session {
                 })?;
             return Err(err);
         }
-        store
-            .append_raw_mirror_compact_checkpoint(
-                &compact_id,
-                &message_hash,
-                replacement_history.len(),
-            )
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "failed to record spine raw mirror checkpoint: {err}"
+        if let Err(err) = store.append_worklog_section(&boundary.node_id, &worklog_markdown) {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to append installed spine compact worklog after rollout checkpoint: {err}"
                 ))
-            })?;
-        store
-            .append_compact_installed(
-                compact_id,
-                &boundary.node_id,
-                boundary.op,
-                boundary.cut_ordinal,
-                boundary.fold_end_ordinal,
-                replacement_history.len(),
-                worklog_rel_path.to_string_lossy().into_owned(),
-                message_hash,
-            )
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to record installed spine compact: {err}"))
-            })?;
+                .await);
+        }
+        if let Err(err) = store.append_raw_mirror_compact_checkpoint(
+            &compact_id,
+            &message_hash,
+            replacement_history.len(),
+        ) {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to record spine raw mirror checkpoint after rollout checkpoint: {err}"
+                ))
+                .await);
+        }
+        if let Err(err) = store.append_compact_installed(
+            compact_id,
+            &boundary.node_id,
+            boundary.op,
+            boundary.cut_ordinal,
+            boundary.fold_end_ordinal,
+            replacement_history.len(),
+            worklog_rel_path.to_string_lossy().into_owned(),
+            message_hash,
+        ) {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to record installed spine compact after rollout checkpoint: {err}"
+                ))
+                .await);
+        }
         Ok(())
     }
 

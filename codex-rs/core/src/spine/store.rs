@@ -477,6 +477,17 @@ impl SpineSidecarStore {
             .map_err(|source| SpineStoreError::Io { path, source })
     }
 
+    pub(crate) fn worklog_with_appended_section(
+        &self,
+        node_id: &NodeId,
+        section: &str,
+    ) -> Result<String, SpineStoreError> {
+        let mut worklog = self.read_worklog_file(node_id)?;
+        worklog.push_str(GENERATED_WORKLOG_SECTION_MARKER);
+        worklog.push_str(section);
+        Ok(worklog)
+    }
+
     pub(crate) fn read_worklog(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
         self.read_worklog_file(node_id)
     }

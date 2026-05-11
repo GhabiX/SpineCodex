@@ -823,6 +823,31 @@ fn commit_requires_matching_call_id() {
 }
 
 #[test]
+fn commit_requires_recorded_function_call_start() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Next,
+            "root done",
+            "Root handoff.",
+        )
+        .expect("stage transition without recorded call");
+
+    let error = runtime
+        .commit_staged_transition("call-1", 0)
+        .expect_err("missing call start should fail fast");
+
+    assert!(matches!(
+        error,
+        SpineRuntimeError::MissingCallStartOrdinal { call_id } if call_id == "call-1"
+    ));
+    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert!(runtime.staged_transition().is_some());
+}
+
+#[test]
 fn commit_failure_leaves_cursor_and_tree_unchanged() {
     let (_temp, mut runtime) = temp_runtime();
     runtime

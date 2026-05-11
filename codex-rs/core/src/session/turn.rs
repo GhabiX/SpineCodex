@@ -1013,6 +1013,7 @@ async fn run_sampling_request(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    sess.ensure_spine_compact_not_poisoned().await?;
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1044,6 +1045,7 @@ async fn run_sampling_request(
     let mut retries = 0;
     let mut initial_input = Some(input);
     loop {
+        sess.ensure_spine_compact_not_poisoned().await?;
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {

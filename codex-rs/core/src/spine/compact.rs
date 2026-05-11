@@ -273,7 +273,7 @@ pub(crate) fn render_spine_ir_item(
     fold_end: u64,
 ) -> ResponseItem {
     ResponseItem::Message {
-        id: None,
+        id: Some(spine_ir_synthetic_id(node_id, op, fold_start, fold_end)),
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
@@ -289,6 +289,21 @@ pub(crate) fn render_spine_ir_item(
         }],
         phase: None,
     }
+}
+
+fn spine_ir_synthetic_id(
+    node_id: &NodeId,
+    op: SpineOperation,
+    fold_start: u64,
+    fold_end: u64,
+) -> String {
+    format!(
+        "spine-ir:{}:{}-{}:{}",
+        node_id,
+        fold_start,
+        fold_end,
+        op_label(op)
+    )
 }
 
 pub(crate) fn render_context_compacted_outline(
@@ -352,7 +367,16 @@ struct SpineIrMetadata {
 
 fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
     let text = match item {
-        ResponseItem::Message { role, content, .. } if role == "user" => {
+        ResponseItem::Message {
+            id,
+            role,
+            content,
+            ..
+        } if id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("spine-ir:"))
+            && role == "user" =>
+        {
             content.iter().find_map(|content_item| match content_item {
                 ContentItem::InputText { text } => Some(text.as_str()),
                 _ => None,

@@ -33,6 +33,7 @@ pub(crate) struct Session {
     pub(super) idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
     pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) spine: Option<Arc<Mutex<SpineRuntime>>>,
+    pub(crate) spine_compact_poison: Mutex<Option<String>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) next_internal_sub_id: AtomicU64,
@@ -984,6 +985,7 @@ impl Session {
                 idle_pending_input: Mutex::new(Vec::new()),
                 goal_runtime: GoalRuntimeState::new(),
                 spine,
+                spine_compact_poison: Mutex::new(None),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 next_internal_sub_id: AtomicU64::new(0),

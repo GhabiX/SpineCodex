@@ -385,6 +385,19 @@ impl SpineRuntime {
                 actual: boundary_end_ordinal,
             });
         }
+        let call_start_ordinal =
+            staged
+                .call_start_ordinal
+                .ok_or_else(|| SpineRuntimeError::MissingCallStartOrdinal {
+                    call_id: staged.call_id.clone(),
+                })?;
+        if call_start_ordinal >= boundary_end_ordinal {
+            return Err(SpineRuntimeError::InvalidCallBoundary {
+                call_id: staged.call_id.clone(),
+                call_start_ordinal,
+                boundary_end: boundary_end_ordinal,
+            });
+        }
 
         let mut validation_state = self.state.clone();
         let validation_transition = staged.op.apply(
@@ -408,7 +421,7 @@ impl SpineRuntime {
             staged.op,
             &staged.from_node,
             &staged.to_node,
-            staged.call_start_ordinal.unwrap_or(boundary_end_ordinal),
+            call_start_ordinal,
             boundary_end_ordinal,
         )?;
 
@@ -436,7 +449,7 @@ impl SpineRuntime {
             call_id: call_id.to_string(),
             from_node: staged.from_node,
             to_node: staged.to_node,
-            call_start_ordinal: staged.call_start_ordinal.unwrap_or(boundary_end_ordinal),
+            call_start_ordinal,
             boundary_end: boundary_end_ordinal,
             summary: staged.summary,
             worklog: staged.worklog,
@@ -510,6 +523,16 @@ pub(crate) enum SpineRuntimeError {
     },
     #[error("spine transition boundary mismatch: expected {expected}, got {actual}")]
     TransitionBoundaryMismatch { expected: u64, actual: u64 },
+    #[error("spine transition {call_id} is missing FunctionCall start ordinal")]
+    MissingCallStartOrdinal { call_id: String },
+    #[error(
+        "spine transition {call_id} has invalid call boundary: start {call_start_ordinal}, end {boundary_end}"
+    )]
+    InvalidCallBoundary {
+        call_id: String,
+        call_start_ordinal: u64,
+        boundary_end: u64,
+    },
     #[error("spine node {node_id} is missing raw_start_ordinal")]
     MissingRawStartOrdinal { node_id: NodeId },
     #[error("spine close transition from {node_id} has no parent scope")]
