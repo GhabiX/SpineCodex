@@ -351,6 +351,7 @@ fn appends_compact_index_and_raw_mirror_events() {
             4,
             9,
             "codex_builtin_text",
+            "../rollout.jsonl",
         )
         .expect("append compact started");
     store
@@ -382,6 +383,7 @@ fn appends_compact_index_and_raw_mirror_events() {
                 "fold_end_ordinal": 9,
                 "strategy": "codex_builtin_text",
                 "raw_trajs": "raw/rollout.raw.jsonl",
+                "rollout": "../rollout.jsonl",
             }),
             json!({
                 "type": "compact_installed",

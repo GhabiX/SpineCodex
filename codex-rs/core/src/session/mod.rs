@@ -2766,6 +2766,10 @@ impl Session {
             .ok_or_else(|| {
                 CodexErr::Fatal("spine compact requires a local rollout path".to_string())
             })?;
+        let compact_index_rollout_path = rollout_path
+            .file_name()
+            .map(|file_name| format!("../{}", file_name.to_string_lossy()))
+            .unwrap_or_else(|| rollout_path.to_string_lossy().into_owned());
         let history = self.clone_history().await.raw_items().to_vec();
         let input = SpineCompactInput {
             op: boundary.op,
@@ -2796,6 +2800,7 @@ impl Session {
                 boundary.cut_ordinal,
                 boundary.fold_end_ordinal,
                 CODEX_BUILTIN_TEXT_STRATEGY,
+                compact_index_rollout_path,
             )
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to record spine compact start: {err}"))

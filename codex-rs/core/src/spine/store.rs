@@ -387,6 +387,7 @@ impl SpineSidecarStore {
         cut_ordinal: u64,
         fold_end_ordinal: u64,
         strategy: impl Into<String>,
+        rollout: impl Into<String>,
     ) -> Result<(), SpineStoreError> {
         let path = self.compact_index_path();
         let event = CompactIndexEvent::CompactStarted {
@@ -398,6 +399,7 @@ impl SpineSidecarStore {
             fold_end_ordinal,
             strategy: strategy.into(),
             raw_trajs: format!("{RAW_DIR}/{RAW_ROLLOUT_FILE}"),
+            rollout: rollout.into(),
         };
         self.append_json_line(&path, &event)
     }
@@ -950,6 +952,7 @@ enum CompactIndexEvent {
         fold_end_ordinal: u64,
         strategy: String,
         raw_trajs: String,
+        rollout: String,
     },
     CompactInstalled {
         seq: u64,

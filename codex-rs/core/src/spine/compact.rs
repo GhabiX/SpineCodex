@@ -57,7 +57,6 @@ pub(crate) struct SpineCompactPlan {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpineCompactOutput {
     pub(crate) worklog_markdown: String,
-    pub(crate) rendered_ir_items: Vec<ResponseItem>,
     pub(crate) compact_message: String,
     pub(crate) strategy_name: &'static str,
 }
@@ -103,22 +102,12 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
     };
 
     let worklog_markdown = render_auto_compact_worklog(&input, &compacted_suffix);
-    let rendered_ir_items = vec![render_spine_ir_item(
-        &input.node_id,
-        input.op,
-        &input.transition_summary,
-        &relative_worklog_path(&input.node_id),
-        &worklog_markdown,
-        input.cut_ordinal,
-        input.fold_end_ordinal,
-    )];
     Ok(SpineCompactOutput {
         compact_message: format!(
             "Spine compacted {} [{}, {})",
             input.node_id, input.cut_ordinal, input.fold_end_ordinal
         ),
         worklog_markdown,
-        rendered_ir_items,
         strategy_name: CODEX_BUILTIN_TEXT_STRATEGY,
     })
 }
@@ -196,11 +185,15 @@ async fn collect_compaction_response(
 }
 
 fn render_auto_compact_worklog(input: &SpineCompactInput, compacted_suffix: &str) -> String {
+    let raw_mirror_path = input
+        .raw_mirror_path
+        .strip_prefix(&input.sidecar_root)
+        .unwrap_or(input.raw_mirror_path.as_path());
     format!(
         "\n\n## Auto Compact\n\nStrategy: {CODEX_BUILTIN_TEXT_STRATEGY}\nFold: response ordinals [{}, {})\nRaw trajs: {}\nRollout: {}\nIndex: trajs.index.jsonl\n\n{}\n\n## Node Summary\n\n{}\n",
         input.cut_ordinal,
         input.fold_end_ordinal,
-        input.raw_mirror_path.display(),
+        raw_mirror_path.display(),
         input.rollout_path.display(),
         compacted_suffix,
         input.transition_summary
