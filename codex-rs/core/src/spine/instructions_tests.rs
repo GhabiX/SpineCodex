@@ -44,6 +44,7 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("runtime-generated worklog IR"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.next"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.close"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("the runtime does not carry old checklist items forward"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("A node is a working scope, not a checklist item"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("The node summary is only a short tree label"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("investigate/localize"));

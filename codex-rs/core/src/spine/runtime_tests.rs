@@ -201,6 +201,93 @@ fn build_tree_snapshot_includes_node_local_plans() {
 }
 
 #[test]
+fn build_tree_snapshot_includes_only_current_node_plan() {
+    let (_temp, mut runtime) = temp_runtime();
+
+    runtime
+        .record_plan_update("turn-root", plan_args("Inspect root", StepStatus::InProgress))
+        .expect("record root plan");
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-open",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    runtime
+        .after_response_items_recorded(
+            "turn-open",
+            &[spine_call("open-1"), function_call_output("open-1")],
+            0,
+            2,
+        )
+        .expect("commit open");
+    runtime.take_last_committed_transition();
+
+    runtime
+        .record_plan_update(
+            "turn-child",
+            plan_args("Inspect child", StepStatus::InProgress),
+        )
+        .expect("record child plan");
+    runtime
+        .stage_transition(
+            "next-1",
+            "turn-next",
+            SpineOperation::Next,
+            "child done",
+            /*compact_instruction*/ None,
+        )
+        .expect("stage next");
+    runtime
+        .after_response_items_recorded(
+            "turn-next",
+            &[spine_call("next-1"), function_call_output("next-1")],
+            2,
+            4,
+        )
+        .expect("commit next");
+    runtime.take_last_committed_transition();
+
+    runtime
+        .record_plan_update(
+            "turn-sibling",
+            plan_args("Inspect sibling", StepStatus::InProgress),
+        )
+        .expect("record sibling plan");
+    let snapshot = runtime.build_tree_snapshot().expect("build snapshot");
+
+    assert_eq!(snapshot.active_node_id, "1.2");
+    let root = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1")
+        .expect("root node");
+    let child = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1")
+        .expect("child node");
+    let sibling = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.2")
+        .expect("sibling node");
+
+    assert_eq!(root.status, SpineTreeNodeStatus::Opened);
+    assert_eq!(root.plan, None);
+    assert_eq!(child.status, SpineTreeNodeStatus::Finished);
+    assert_eq!(child.plan, None);
+    assert_eq!(sibling.status, SpineTreeNodeStatus::Live);
+    let plan = sibling.plan.as_ref().expect("current sibling plan");
+    assert_eq!(plan.revision, 1);
+    assert_eq!(plan.items[0].step, "Inspect sibling");
+    assert_eq!(plan.items[0].status, SpineTreePlanItemStatus::InProgress);
+}
+
+#[test]
 fn load_or_create_initializes_then_replays_existing_sidecar() {
     let temp = tempfile::tempdir().expect("tempdir");
     let rollout_path = temp.path().join("rollout-2026-05-10T16-00-00-thread.jsonl");

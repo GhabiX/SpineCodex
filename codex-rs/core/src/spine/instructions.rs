@@ -13,6 +13,7 @@ Do not move spine only because a new user message arrived, because you answered 
 Do not create one node per shell command, checklist item, short reply, or conversation turn.
 After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `nodes/1/1/worklog.md`; later context shows the Spine Tree plus `1.1` worklog, not `1.1` raw trace.
 After spine.close from `1.1.2` to `1.2`, the runtime folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes that were already folded are carried through the Spine Tree/worklog IR, while raw child traces stay expandable out of band.
+After spine.next or spine.close, if unfinished work remains, immediately call update_plan in the new current node to rebuild the checklist from the handoff summary and current evidence; the runtime does not carry old checklist items forward.
 Prefer scopes large enough to produce useful generated worklogs and small enough to stop carrying irrelevant raw history. Keep working in the current node when the next work still depends on the current raw details.
 When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar trajs/worklog files only when you need historical details.
 In Plan mode, do not call mutating spine operations.

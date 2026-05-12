@@ -280,11 +280,14 @@ impl SpineRuntime {
         let snapshot_seq = self.store.next_tree_event_seq()?.saturating_sub(1);
         let mut nodes = Vec::with_capacity(self.state.nodes().len());
         for (node_id, node) in self.state.nodes() {
-            let plan = self
-                .store
-                .read_plan_snapshot(node_id)?
-                .map(spine_tree_plan_snapshot)
-                .transpose()?;
+            let plan = if node_id == self.cursor() {
+                self.store
+                    .read_plan_snapshot(node_id)?
+                    .map(spine_tree_plan_snapshot)
+                    .transpose()?
+            } else {
+                None
+            };
             nodes.push(SpineTreeNodeSnapshot {
                 node_id: node.node_id.to_string(),
                 parent_id: node.parent_id.as_ref().map(ToString::to_string),
