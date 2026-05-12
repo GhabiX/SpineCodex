@@ -1612,7 +1612,7 @@ fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()>
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
     let runtime =
-        crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false)?;
+        crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
 
     assert_eq!(runtime.cursor(), &crate::spine::ids::NodeId::root());
     assert!(
@@ -1629,8 +1629,9 @@ fn initial_spine_runtime_rejects_missing_sidecar_for_existing_spine_history() ->
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
 
-    let error = crate::session::session::load_initial_spine_runtime(&rollout_path, 3, true, false)
-        .expect_err("existing Spine rollout history requires sidecar");
+    let error =
+        crate::session::session::load_initial_spine_runtime(&rollout_path, 3, true, false, None)
+            .expect_err("existing Spine rollout history requires sidecar");
 
     assert!(
         error
@@ -2459,6 +2460,93 @@ async fn reconstruct_history_does_not_revive_rolled_back_spine_compact_checkpoin
         reconstructed.history.is_empty(),
         "rollback should drop the user turn that contained the spine compact checkpoint"
     );
+}
+
+#[tokio::test]
+async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let next_call = ResponseItem::FunctionCall {
+        id: None,
+        name: "spine".to_string(),
+        namespace: None,
+        arguments: r#"{"op":"next","summary":"rolled back next"}"#.to_string(),
+        call_id: "next-1".to_string(),
+    };
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("turn 1 user")),
+        RolloutItem::ResponseItem(spine_function_call("open-1")),
+        RolloutItem::ResponseItem(function_call_output("open-1")),
+        RolloutItem::ResponseItem(user_message("turn 2 user")),
+        RolloutItem::ResponseItem(next_call.clone()),
+        RolloutItem::ResponseItem(function_call_output("next-1")),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    ];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
+
+    let mut runtime = crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0)?;
+    runtime.stage_transition(
+        "open-1",
+        "turn-1",
+        crate::spine::store::SpineOperation::Open,
+        "root scope",
+        /*compact_instruction*/ None,
+    )?;
+    runtime.after_response_items_recorded(
+        "turn-1",
+        &[
+            user_message("turn 1 user"),
+            spine_function_call("open-1"),
+            function_call_output("open-1"),
+        ],
+        0,
+        3,
+    )?;
+    runtime.stage_transition(
+        "next-1",
+        "turn-2",
+        crate::spine::store::SpineOperation::Next,
+        "rolled back next",
+        /*compact_instruction*/ None,
+    )?;
+    runtime.after_response_items_recorded(
+        "turn-2",
+        &[
+            user_message("turn 2 user"),
+            next_call,
+            function_call_output("next-1"),
+        ],
+        3,
+        6,
+    )?;
+    assert_eq!(runtime.cursor().to_string(), "1.2");
+
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: Vec::new(),
+        rollout_path: Some(rollout_path.clone()),
+    });
+    let projection = crate::session::session::initial_spine_projection(&initial_history)
+        .await?
+        .expect("rollback spine history should project");
+    assert_eq!(projection.response_item_count, 3);
+    assert_eq!(projection.state.cursor().to_string(), "1.1");
+
+    let projected_runtime = crate::session::session::load_initial_spine_runtime(
+        &rollout_path,
+        projection.response_item_count,
+        /*has_spine_history*/ true,
+        /*has_non_spine_compaction*/ false,
+        Some(&projection),
+    )?;
+    assert_eq!(projected_runtime.cursor().to_string(), "1.1");
+    assert!(
+        std::fs::read_to_string(projected_runtime.store().tree_path())?
+            .contains("\"projection_reset\"")
+    );
+    Ok(())
 }
 
 #[tokio::test]

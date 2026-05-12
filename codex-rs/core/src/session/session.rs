@@ -1,6 +1,7 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
 use crate::spine::compact::SpineCompactBoundary;
+use crate::spine::projection::SpineProjection;
 use crate::spine::projection::project_spine_state_from_rollout;
 use crate::spine::runtime::SpineRuntime;
 use crate::spine::runtime::SpineRuntimeError;
@@ -418,6 +419,35 @@ fn has_spine_history_items(items: &[RolloutItem]) -> bool {
     })
 }
 
+fn has_thread_rollback(items: &[RolloutItem]) -> bool {
+    items
+        .iter()
+        .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))))
+}
+
+pub(crate) async fn initial_spine_projection(
+    initial_history: &InitialHistory,
+) -> anyhow::Result<Option<SpineProjection>> {
+    let projection = match initial_history {
+        InitialHistory::New | InitialHistory::Cleared => None,
+        InitialHistory::Resumed(resumed) => {
+            if let Some(rollout_path) = resumed.rollout_path.as_ref() {
+                let (items, _, _) =
+                    crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
+                (has_thread_rollback(&items) && has_spine_history_items(&items))
+                    .then(|| project_spine_state_from_rollout(&items))
+                    .transpose()?
+            } else {
+                (has_thread_rollback(&resumed.history) && has_spine_history_items(&resumed.history))
+                    .then(|| project_spine_state_from_rollout(&resumed.history))
+                    .transpose()?
+            }
+        }
+        InitialHistory::Forked(_) => None,
+    };
+    Ok(projection)
+}
+
 fn latest_compaction_is_non_spine(items: &[RolloutItem]) -> bool {
     items
         .iter()
@@ -440,6 +470,7 @@ pub(crate) fn load_initial_spine_runtime(
     next_raw_ordinal: u64,
     has_spine_history: bool,
     has_non_spine_compaction: bool,
+    projection: Option<&SpineProjection>,
 ) -> Result<SpineRuntime, SpineRuntimeError> {
     let mut runtime = if has_spine_history {
         let store = SpineSidecarStore::for_rollout(rollout_path)?;
@@ -454,6 +485,16 @@ pub(crate) fn load_initial_spine_runtime(
     } else {
         SpineRuntime::load_or_init(rollout_path, next_raw_ordinal)?
     };
+    if let Some(projection) = projection
+        && runtime.state() != &projection.state
+    {
+        runtime.record_projection_reset(
+            projection.state.clone(),
+            projection.response_item_count,
+            "resume_projection",
+            None,
+        )?;
+    }
     if has_non_spine_compaction {
         runtime.mark_non_spine_compacted_history();
     }
@@ -583,8 +624,16 @@ impl Session {
             .unwrap_or(u64::MAX),
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
+        let initial_spine_projection = if config.features.enabled(Feature::SpineTaskTree) {
+            initial_spine_projection(&initial_history).await?
+        } else {
+            None
+        };
         let initial_spine_ordinal = if config.features.enabled(Feature::SpineTaskTree) {
-            initial_spine_response_item_count(&initial_history).await?
+            initial_spine_projection
+                .as_ref()
+                .map(|projection| projection.response_item_count)
+                .unwrap_or(initial_spine_response_item_count(&initial_history).await?)
         } else {
             0
         };
@@ -735,6 +784,7 @@ impl Session {
                             initial_spine_ordinal,
                             initial_spine_has_spine_history,
                             initial_spine_has_non_spine_compaction,
+                            initial_spine_projection.as_ref(),
                         )
                     })
                     .transpose()
