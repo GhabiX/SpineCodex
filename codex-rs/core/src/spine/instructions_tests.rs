@@ -42,6 +42,10 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("<spine_view>"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("</spine_view>"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("runtime-generated worklog IR"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("substantial raw history"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("future work is likely to reuse"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("only a short review/final response remains"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("reused enough future turns"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.next"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.close"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("optional instruction argument"));
