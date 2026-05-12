@@ -31,7 +31,13 @@ pub(crate) struct SpineRuntime {
     staged_transition: Option<StagedTransition>,
     last_committed_transition: Option<CommittedTransition>,
     pending_spine_call_starts: HashMap<String, u64>,
-    non_spine_compacted_history: bool,
+    mode: SpineRuntimeMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SpineRuntimeMode {
+    Mutable,
+    ArchivedReadOnly { reason: String },
 }
 
 impl SpineRuntime {
@@ -80,7 +86,7 @@ impl SpineRuntime {
             staged_transition: None,
             last_committed_transition: None,
             pending_spine_call_starts: HashMap::new(),
-            non_spine_compacted_history: false,
+            mode: SpineRuntimeMode::Mutable,
         }
     }
 
@@ -108,8 +114,22 @@ impl SpineRuntime {
         self.last_committed_transition.take()
     }
 
+    pub(crate) fn mode(&self) -> &SpineRuntimeMode {
+        &self.mode
+    }
+
+    pub(crate) fn is_mutable(&self) -> bool {
+        matches!(self.mode, SpineRuntimeMode::Mutable)
+    }
+
+    pub(crate) fn mark_archived_read_only(&mut self, reason: impl Into<String>) {
+        self.mode = SpineRuntimeMode::ArchivedReadOnly {
+            reason: reason.into(),
+        };
+    }
+
     pub(crate) fn mark_non_spine_compacted_history(&mut self) {
-        self.non_spine_compacted_history = true;
+        self.mark_archived_read_only("latest surviving compact checkpoint is not spine-readable");
     }
 
     pub(crate) fn raw_start_ordinal(&self, node_id: &NodeId) -> Option<u64> {
@@ -245,8 +265,10 @@ impl SpineRuntime {
     }
 
     fn ensure_spine_mutation_allowed(&self) -> Result<(), SpineRuntimeError> {
-        if self.non_spine_compacted_history {
-            return Err(SpineRuntimeError::NonSpineCompactedHistory);
+        if let SpineRuntimeMode::ArchivedReadOnly { reason } = &self.mode {
+            return Err(SpineRuntimeError::ArchivedReadOnly {
+                reason: reason.clone(),
+            });
         }
         Ok(())
     }
@@ -594,8 +616,8 @@ pub(crate) enum SpineRuntimeError {
     MissingCloseScope { node_id: NodeId },
     #[error("spine node {node_id} is missing summary for compact outline")]
     MissingSummary { node_id: NodeId },
-    #[error("spine compact cannot map raw ordinals after non-spine compacted history")]
-    NonSpineCompactedHistory,
+    #[error("spine task tree is archived read-only: {reason}")]
+    ArchivedReadOnly { reason: String },
     #[error("unknown spine node {0}")]
     UnknownNode(NodeId),
     #[error("spine plan revision overflow")]

@@ -205,7 +205,10 @@ fn build_tree_snapshot_includes_only_current_node_plan() {
     let (_temp, mut runtime) = temp_runtime();
 
     runtime
-        .record_plan_update("turn-root", plan_args("Inspect root", StepStatus::InProgress))
+        .record_plan_update(
+            "turn-root",
+            plan_args("Inspect root", StepStatus::InProgress),
+        )
         .expect("record root plan");
     runtime
         .stage_transition(
@@ -654,7 +657,7 @@ fn transition_stage_fails_after_non_spine_compacted_history() {
                 "spine-1", "turn-1", op, "summary", /*compact_instruction*/ None,
             )
             .expect_err("non-spine compacted history should fail fast");
-        assert!(matches!(error, SpineRuntimeError::NonSpineCompactedHistory));
+        assert!(matches!(error, SpineRuntimeError::ArchivedReadOnly { .. }));
     }
 }
 
@@ -687,7 +690,7 @@ fn next_compact_fails_after_non_spine_compacted_history() {
         .plan_compaction_after_transition(&committed)
         .expect_err("non-spine compacted history should fail fast");
 
-    assert!(matches!(error, SpineRuntimeError::NonSpineCompactedHistory));
+    assert!(matches!(error, SpineRuntimeError::ArchivedReadOnly { .. }));
 }
 
 #[test]
