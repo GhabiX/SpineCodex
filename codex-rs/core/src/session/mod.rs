@@ -2934,13 +2934,17 @@ impl Session {
             boundary.fold_end_ordinal,
             input,
         )?;
-        let compact_id = deterministic_spine_compact_id(&boundary);
+        let effective_boundary = SpineCompactBoundary {
+            cut_ordinal: plan.input.cut_ordinal,
+            ..boundary.clone()
+        };
+        let compact_id = deterministic_spine_compact_id(&effective_boundary);
         store
             .append_compact_started(
                 &compact_id,
                 &boundary.node_id,
                 boundary.op,
-                boundary.cut_ordinal,
+                effective_boundary.cut_ordinal,
                 boundary.fold_end_ordinal,
                 CODEX_BUILTIN_TEXT_STRATEGY,
                 compact_index_rollout_path,
@@ -2972,7 +2976,7 @@ impl Session {
             store.root(),
             &worklog_rel_path,
             &worklog_body,
-            boundary.cut_ordinal,
+            effective_boundary.cut_ordinal,
             boundary.fold_end_ordinal,
         )];
         let replacement_history = build_suffix_replacement_history(
@@ -2983,7 +2987,7 @@ impl Session {
         );
         let compact_message = format!(
             "Spine compacted root epoch {} [{}, {})",
-            boundary.node_id, boundary.cut_ordinal, boundary.fold_end_ordinal
+            boundary.node_id, effective_boundary.cut_ordinal, boundary.fold_end_ordinal
         );
         let compacted_item = CompactedItem {
             message: compact_message.clone(),
@@ -2999,7 +3003,7 @@ impl Session {
                     &compact_id,
                     &boundary.node_id,
                     boundary.op,
-                    boundary.cut_ordinal,
+                    effective_boundary.cut_ordinal,
                     boundary.fold_end_ordinal,
                     CODEX_BUILTIN_TEXT_STRATEGY,
                     err.to_string(),
@@ -3065,7 +3069,7 @@ impl Session {
             compact_id,
             &boundary.node_id,
             boundary.op,
-            boundary.cut_ordinal,
+            effective_boundary.cut_ordinal,
             boundary.fold_end_ordinal,
             replacement_history.len(),
             worklog_rel_path.to_string_lossy().into_owned(),
@@ -3147,13 +3151,17 @@ impl Session {
             boundary.fold_end_ordinal,
             input,
         )?;
-        let compact_id = deterministic_spine_compact_id(&boundary);
+        let effective_boundary = SpineCompactBoundary {
+            cut_ordinal: plan.input.cut_ordinal,
+            ..boundary.clone()
+        };
+        let compact_id = deterministic_spine_compact_id(&effective_boundary);
         store
             .append_compact_started(
                 &compact_id,
                 &boundary.node_id,
                 boundary.op,
-                boundary.cut_ordinal,
+                effective_boundary.cut_ordinal,
                 boundary.fold_end_ordinal,
                 CODEX_BUILTIN_TEXT_STRATEGY,
                 compact_index_rollout_path,
@@ -3178,7 +3186,7 @@ impl Session {
                         &compact_id,
                         &boundary.node_id,
                         boundary.op,
-                        boundary.cut_ordinal,
+                        effective_boundary.cut_ordinal,
                         boundary.fold_end_ordinal,
                         CODEX_BUILTIN_TEXT_STRATEGY,
                         err.to_string(),
@@ -3213,7 +3221,7 @@ impl Session {
             store.root(),
             &worklog_rel_path,
             &worklog_body,
-            boundary.cut_ordinal,
+            effective_boundary.cut_ordinal,
             boundary.fold_end_ordinal,
         )];
         let replacement_history = build_suffix_replacement_history(
@@ -3236,7 +3244,7 @@ impl Session {
                     &compact_id,
                     &boundary.node_id,
                     boundary.op,
-                    boundary.cut_ordinal,
+                    effective_boundary.cut_ordinal,
                     boundary.fold_end_ordinal,
                     CODEX_BUILTIN_TEXT_STRATEGY,
                     err.to_string(),
@@ -3284,7 +3292,7 @@ impl Session {
             compact_id,
             &boundary.node_id,
             boundary.op,
-            boundary.cut_ordinal,
+            effective_boundary.cut_ordinal,
             boundary.fold_end_ordinal,
             replacement_history.len(),
             worklog_rel_path.to_string_lossy().into_owned(),

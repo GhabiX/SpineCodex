@@ -3,6 +3,8 @@ use crate::spine::ids::NodeId;
 use crate::spine::state::SpineState;
 use crate::spine::view::render_tree;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
@@ -23,6 +25,27 @@ fn text_item(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+    }
+}
+
+fn user_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
+fn function_call_output(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("Spine updated.".to_string()),
+            success: Some(true),
+        },
     }
 }
 
@@ -151,6 +174,65 @@ fn replacement_history_splices_prefix_ir_and_tail() {
     assert_eq!(replacement[0], old_history[0]);
     assert_eq!(replacement[2], old_history[3]);
     assert!(matches!(replacement[1], ResponseItem::Message { .. }));
+}
+
+#[test]
+fn suffix_fold_preserves_prefix_tool_closure_before_ir() {
+    let history = vec![
+        user_item("previous turn asked to open"),
+        function_call_output("call-open"),
+        text_item("previous turn final answer"),
+        user_item("current turn asks next"),
+        text_item("assistant reasoning for next"),
+        function_call_output("call-next"),
+        text_item("tail after folded suffix"),
+    ];
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[1, 1]),
+        scope_node_id: None,
+        cut_ordinal: 2,
+        fold_end_ordinal: 6,
+        spine_tree: "1: finished leaf [worklog already in context]\n2: Current".to_string(),
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: "leaf done".to_string(),
+        compact_instruction: None,
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let plan = plan_suffix_fold(&history, 2, 6, input).expect("plan suffix fold");
+    assert_eq!(plan.cut_index, 3);
+    assert_eq!(plan.input.cut_ordinal, 3);
+    assert_eq!(
+        plan.input.prefix_items[2],
+        text_item("previous turn final answer")
+    );
+    assert_eq!(
+        plan.input.suffix_items[0],
+        user_item("current turn asks next")
+    );
+
+    let replacement = build_suffix_replacement_history(
+        &history,
+        plan.cut_index,
+        plan.fold_end_index,
+        vec![render_spine_ir_item(
+            &id(&[1, 1]),
+            SpineOperation::Next,
+            "leaf done",
+            Path::new("/tmp/spine"),
+            Path::new("nodes/1/1/worklog.md"),
+            "Pending continuation: respond exactly DONE",
+            plan.input.cut_ordinal,
+            plan.input.fold_end_ordinal,
+        )],
+    );
+    assert_eq!(replacement[2], text_item("previous turn final answer"));
+    assert!(matches!(replacement[3], ResponseItem::Message { .. }));
+    assert_eq!(replacement[4], text_item("tail after folded suffix"));
 }
 
 #[test]

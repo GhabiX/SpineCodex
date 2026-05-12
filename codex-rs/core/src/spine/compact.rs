@@ -312,7 +312,14 @@ pub(crate) fn plan_suffix_fold(
             "spine compact fold range is empty after mapping".to_string(),
         ));
     }
+    let cut_index = adjusted_cut_index_after_prefix_closure(history, cut_index, fold_end_index);
+    let cut_ordinal = raw_ordinal_for_effective_index(history, cut_index).ok_or_else(|| {
+        CodexErr::Fatal(format!(
+            "spine compact adjusted cut index {cut_index} does not map to a raw ordinal"
+        ))
+    })?;
     let mut input = input;
+    input.cut_ordinal = cut_ordinal;
     input.prefix_items = history[..cut_index].to_vec();
     input.suffix_items = history[cut_index..fold_end_index].to_vec();
 
@@ -325,6 +332,56 @@ pub(crate) fn plan_suffix_fold(
         cut_index,
         fold_end_index,
     })
+}
+
+fn adjusted_cut_index_after_prefix_closure(
+    history: &[ResponseItem],
+    cut_index: usize,
+    fold_end_index: usize,
+) -> usize {
+    if cut_index == 0
+        || cut_index >= fold_end_index
+        || !matches!(
+            history.get(cut_index - 1),
+            Some(ResponseItem::FunctionCallOutput { .. })
+        )
+    {
+        return cut_index;
+    }
+
+    let mut first_user_index = None;
+    for index in cut_index..fold_end_index {
+        if matches!(
+            history.get(index),
+            Some(ResponseItem::Message { role, .. }) if role == "user"
+        ) {
+            first_user_index = Some(index);
+            break;
+        }
+    }
+
+    match first_user_index {
+        Some(index) if index > cut_index => index,
+        _ => cut_index,
+    }
+}
+
+fn raw_ordinal_for_effective_index(history: &[ResponseItem], target_index: usize) -> Option<u64> {
+    let mut raw_cursor = 0_u64;
+    for (index, item) in history.iter().enumerate() {
+        if index == target_index {
+            return Some(raw_cursor);
+        }
+        if let Some(meta) = parse_spine_ir_metadata(item) {
+            raw_cursor = meta.fold_end;
+            continue;
+        }
+        if is_non_spine_compact_item(item) {
+            return None;
+        }
+        raw_cursor = raw_cursor.checked_add(1)?;
+    }
+    (target_index == history.len()).then_some(raw_cursor)
 }
 
 pub(crate) fn render_spine_ir_item(

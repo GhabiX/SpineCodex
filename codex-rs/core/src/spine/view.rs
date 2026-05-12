@@ -1,4 +1,5 @@
 use super::ids::NodeId;
+use super::runtime::SpineRuntimeHint;
 use super::state::NodeStatus;
 use super::state::SpineState;
 use super::store::SpineOperation;
@@ -20,7 +21,17 @@ pub(crate) fn render_tool_output_with_base(
     cursor: &NodeId,
     base: &Path,
 ) -> String {
-    render_spine_tree_view_with_base(state, cursor, Some(base))
+    render_spine_tree_view_with_base_and_hint(state, cursor, Some(base), None)
+}
+
+pub(crate) fn render_tool_output_with_base_and_hint(
+    _op: SpineOperation,
+    state: &SpineState,
+    cursor: &NodeId,
+    base: &Path,
+    hint: Option<&SpineRuntimeHint>,
+) -> String {
+    render_spine_tree_view_with_base_and_hint(state, cursor, Some(base), hint)
 }
 
 pub(crate) fn render_tree_tool_output(state: &SpineState, cursor: &NodeId) -> String {
@@ -32,27 +43,50 @@ pub(crate) fn render_tree_tool_output_with_base(
     cursor: &NodeId,
     base: &Path,
 ) -> String {
-    render_spine_tree_view_with_base(state, cursor, Some(base))
+    render_spine_tree_view_with_base_and_hint(state, cursor, Some(base), None)
+}
+
+pub(crate) fn render_tree_tool_output_with_base_and_hint(
+    state: &SpineState,
+    cursor: &NodeId,
+    base: &Path,
+    hint: Option<&SpineRuntimeHint>,
+) -> String {
+    render_spine_tree_view_with_base_and_hint(state, cursor, Some(base), hint)
 }
 
 fn render_spine_tree_view(state: &SpineState, cursor: &NodeId) -> String {
-    render_spine_tree_view_with_base(state, cursor, None)
+    render_spine_tree_view_with_base_and_hint(state, cursor, None, None)
 }
 
-fn render_spine_tree_view_with_base(
+fn render_spine_tree_view_with_base_and_hint(
     state: &SpineState,
     cursor: &NodeId,
     base: Option<&Path>,
+    hint: Option<&SpineRuntimeHint>,
 ) -> String {
     let base_line = base
         .map(|base| format!("\nBase: {}", base.display()))
         .unwrap_or_default();
+    let hint_text = hint.map(render_size_hint).unwrap_or_default();
     format!(
-        "Current:  {}{}\n\n{}",
+        "Current:  {}{}\n\n{}{}",
         display_node_id(cursor),
         base_line,
-        render_tree(state, cursor)
+        render_tree(state, cursor),
+        hint_text,
     )
+}
+
+pub(crate) fn render_size_hint(hint: &SpineRuntimeHint) -> String {
+    format!(
+        "\n\nSpine hint: current node raw trace is about {}k tokens. If this scope is complete, finish it cleanly and use spine.next or spine.close before starting work that can rely on the worklog.",
+        rounded_k_tokens(hint.estimated_tokens)
+    )
+}
+
+fn rounded_k_tokens(tokens: u64) -> u64 {
+    tokens.saturating_add(500) / 1_000
 }
 
 pub(crate) fn render_tree(state: &SpineState, cursor: &NodeId) -> String {

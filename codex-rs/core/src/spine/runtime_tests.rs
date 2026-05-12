@@ -98,6 +98,10 @@ fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
+fn response_item(text: &str) -> ResponseItem {
+    assistant_message(text)
+}
+
 #[test]
 fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
     let (_temp, mut runtime) = temp_runtime();
@@ -139,6 +143,64 @@ fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
     assert_eq!(second.event_seq, 3);
     assert_eq!(second.items[0].stable_task_id, "step-1");
     assert_eq!(runtime.state(), &initial_state);
+}
+
+#[test]
+fn size_hint_thresholds_start_at_60k_then_step_by_30k() {
+    assert_eq!(size_hint_threshold(59_999), None);
+    assert_eq!(size_hint_threshold(60_000), Some(60_000));
+    assert_eq!(size_hint_threshold(89_999), Some(60_000));
+    assert_eq!(size_hint_threshold(90_000), Some(90_000));
+    assert_eq!(size_hint_threshold(119_999), Some(90_000));
+    assert_eq!(size_hint_threshold(120_000), Some(120_000));
+}
+
+#[test]
+fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
+    let (_temp, mut runtime) = temp_runtime();
+    let payload = "x".repeat(240_000);
+    runtime
+        .store()
+        .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
+            response_item(&payload),
+        )])
+        .expect("append raw mirror");
+    runtime
+        .after_response_items_recorded("turn-1", &[response_item(&payload)], 0, 1)
+        .expect("record raw item");
+
+    let first = runtime
+        .maybe_emit_size_hint("tree_output")
+        .expect("emit first hint")
+        .expect("hint should appear");
+    assert_eq!(first.node_id, id(&[1]));
+    assert!(first.estimated_tokens >= 60_000);
+    assert_eq!(first.threshold_tokens, 60_000);
+
+    assert_eq!(
+        runtime
+            .maybe_emit_size_hint("tree_output")
+            .expect("second call should not fail"),
+        None
+    );
+
+    let larger_payload = "y".repeat(120_000);
+    runtime
+        .store()
+        .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
+            response_item(&larger_payload),
+        )])
+        .expect("append larger raw mirror");
+    runtime
+        .after_response_items_recorded("turn-2", &[response_item(&larger_payload)], 1, 2)
+        .expect("record larger raw item");
+
+    let second = runtime
+        .maybe_emit_size_hint("tree_output")
+        .expect("emit second threshold")
+        .expect("second threshold should appear");
+    assert_eq!(second.node_id, id(&[1]));
+    assert_eq!(second.threshold_tokens, 90_000);
 }
 
 #[test]

@@ -9,6 +9,7 @@ use super::state::Transition;
 use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -370,6 +371,133 @@ impl SpineSidecarStore {
         self.append_json_line(&path, &event)
     }
 
+    pub(crate) fn estimate_raw_response_tokens(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> Result<u64, SpineStoreError> {
+        if start > end {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "raw response token estimate range [{start}, {end}) is invalid"
+            )));
+        }
+
+        let path = self.raw_rollout_path();
+        let file = File::open(&path).map_err(|source| SpineStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let reader = BufReader::new(file);
+        let mut response_ordinal = 0_u64;
+        let mut chars = 0_u64;
+        let mut selected = false;
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line.map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if line.trim().is_empty() {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "raw rollout line {} is empty",
+                    index + 1
+                )));
+            }
+            let row: Value =
+                serde_json::from_str(&line).map_err(|source| SpineStoreError::Json {
+                    path: path.clone(),
+                    source,
+                })?;
+            if row.get("type").and_then(Value::as_str) != Some("response_item") {
+                continue;
+            }
+            if response_ordinal >= start && response_ordinal < end {
+                let payload = row.get("payload").ok_or_else(|| {
+                    SpineStoreError::InvalidLedger(format!(
+                        "raw rollout response_item line {} is missing payload",
+                        index + 1
+                    ))
+                })?;
+                let serialized =
+                    serde_json::to_string(payload).map_err(|source| SpineStoreError::Json {
+                        path: path.clone(),
+                        source,
+                    })?;
+                let serialized_len = u64::try_from(serialized.len()).map_err(|_| {
+                    SpineStoreError::InvalidLedger(
+                        "raw rollout response item is too large to estimate".to_string(),
+                    )
+                })?;
+                if selected {
+                    chars = chars.checked_add(1).ok_or_else(|| {
+                        SpineStoreError::InvalidLedger(
+                            "raw response token estimate overflow".to_string(),
+                        )
+                    })?;
+                }
+                chars = chars.checked_add(serialized_len).ok_or_else(|| {
+                    SpineStoreError::InvalidLedger(
+                        "raw response token estimate overflow".to_string(),
+                    )
+                })?;
+                selected = true;
+            }
+            response_ordinal = response_ordinal.checked_add(1).ok_or_else(|| {
+                SpineStoreError::InvalidLedger("raw response ordinal overflow".to_string())
+            })?;
+            if response_ordinal >= end {
+                break;
+            }
+        }
+
+        if response_ordinal < end {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "raw rollout has {response_ordinal} response items, cannot estimate range ending at {end}"
+            )));
+        }
+
+        Ok(chars.div_ceil(4))
+    }
+
+    pub(crate) fn has_size_hint_emitted(
+        &self,
+        node_id: &NodeId,
+        threshold_tokens: u64,
+    ) -> Result<bool, SpineStoreError> {
+        let node_id = node_id.to_string();
+        for event in self.read_tree_events()? {
+            let TreeEvent::SpineHintEmitted {
+                node_id: event_node_id,
+                threshold_tokens: event_threshold_tokens,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if event_node_id == node_id && event_threshold_tokens == threshold_tokens {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub(crate) fn append_size_hint_emitted(
+        &self,
+        node_id: &NodeId,
+        threshold_tokens: u64,
+        estimated_tokens: u64,
+        source: impl Into<String>,
+    ) -> Result<(), SpineStoreError> {
+        let event = TreeEvent::SpineHintEmitted {
+            seq: self.next_tree_seq()?,
+            node_id: node_id.to_string(),
+            threshold_tokens,
+            estimated_tokens,
+            source: source.into(),
+        };
+        self.append_json_line(&self.tree_path(), &event)
+    }
+
     pub(crate) fn append_transition_committed(
         &self,
         call_id: impl Into<String>,
@@ -724,6 +852,20 @@ impl SpineSidecarStore {
                     state: snapshot, ..
                 } => {
                     state = Some(spine_state_from_snapshot(snapshot)?);
+                }
+                TreeEvent::SpineHintEmitted { node_id, .. } => {
+                    let state = state.as_ref().ok_or_else(|| {
+                        SpineStoreError::InvalidLedger(
+                            "spine_hint_emitted appeared before root node creation".to_string(),
+                        )
+                    })?;
+                    let node_id = NodeId::parse(&node_id)?;
+                    if state.node(&node_id).is_none() {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "spine_hint_emitted references unknown node {}",
+                            node_id.bracketed()
+                        )));
+                    }
                 }
             }
         }
@@ -1199,6 +1341,13 @@ enum TreeEvent {
         source_turn_id: Option<String>,
         state: StateSnapshot,
     },
+    SpineHintEmitted {
+        seq: u64,
+        node_id: String,
+        threshold_tokens: u64,
+        estimated_tokens: u64,
+        source: String,
+    },
 }
 
 impl TreeEvent {
@@ -1208,7 +1357,8 @@ impl TreeEvent {
             | TreeEvent::TransitionApplied { seq, .. }
             | TreeEvent::TaskPlanUpdated { seq, .. }
             | TreeEvent::RootEpochArchived { seq, .. }
-            | TreeEvent::ProjectionReset { seq, .. } => *seq,
+            | TreeEvent::ProjectionReset { seq, .. }
+            | TreeEvent::SpineHintEmitted { seq, .. } => *seq,
         }
     }
 }

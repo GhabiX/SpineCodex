@@ -49,7 +49,7 @@ const NEXT_SUMMARY: &str = "finish child scope";
 const CLOSE_SUMMARY: &str = "finish sibling scope";
 const EXPECTED_SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
 Use Spine as your task plan and context manager. Completed scopes are folded into runtime-generated worklog IR, and later turns carry the visible Spine Tree, completed worklogs, and the current live suffix instead of every old raw message.
-Use Spine proactively and reasonably to keep active work focused while reducing avoidable context cost.
+Use Spine effectively and efficiently.
 At the start, form a compact Spine plan: one node for simple tasks, or a small tree of focused scopes for longer work. Revise the tree when new evidence changes the task structure.
 Default to staying in the current live node while it remains focused. Use update_plan as the checklist inside the current active scope for local steps, verification items, and short-lived task tracking.
 Move Spine when a completed scope has accumulated substantial raw history and future work is likely to reuse its generated worklog IR:
@@ -65,7 +65,9 @@ After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `
 After spine.close from `1.1.2` to `1.2`, the runtime folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes that were already folded are carried through the Spine Tree/worklog IR, while raw child traces stay expandable out of band.
 Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../worklog.md` against that Base, not against the workspace cwd.
 After spine.next or spine.close, if unfinished work remains, immediately call update_plan in the new current node to rebuild the checklist from the handoff summary and current evidence; the runtime does not carry old checklist items forward.
-Keep working in the current node when the raw transcript is still small, the same details are still active, or only a short review/final response remains. Cost is reduced only when the folded worklog IR will be reused enough future turns to pay for compacting it.
+Keep working in the current node while its raw details are still useful. When a coherent work scope is complete, fold it so later turns use its worklog instead of its raw trace.
+Avoid tiny splits for individual commands, small observations, or conversation turns.
+The runtime may hint when the current node grows large: around 60k raw tokens, then every additional 30k. Treat the hint as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the worklog.
 When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar trajs/worklog files only when you need historical details.
 In Plan mode, do not call mutating spine operations.
 </spine_view>"#;

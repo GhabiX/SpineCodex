@@ -23,6 +23,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
+const SPINE_HINT_FIRST_THRESHOLD_TOKENS: u64 = 60_000;
+const SPINE_HINT_STEP_TOKENS: u64 = 30_000;
+
 #[derive(Debug)]
 pub(crate) struct SpineRuntime {
     store: SpineSidecarStore,
@@ -202,6 +205,48 @@ impl SpineRuntime {
             return Err(SpineRuntimeError::UnknownNode(cursor.clone()));
         }
         Ok(render_tree(&self.state, cursor))
+    }
+
+    pub(crate) fn maybe_emit_size_hint(
+        &mut self,
+        source: impl Into<String>,
+    ) -> Result<Option<SpineRuntimeHint>, SpineRuntimeError> {
+        self.size_hint_for_cursor(source)
+    }
+
+    fn size_hint_for_cursor(
+        &mut self,
+        source: impl Into<String>,
+    ) -> Result<Option<SpineRuntimeHint>, SpineRuntimeError> {
+        let node_id = self.cursor().clone();
+        let start = self.raw_start_ordinal(&node_id).ok_or_else(|| {
+            SpineRuntimeError::MissingRawStartOrdinal {
+                node_id: node_id.clone(),
+            }
+        })?;
+        let estimated_tokens = self
+            .store
+            .estimate_raw_response_tokens(start, self.next_raw_ordinal)?;
+        let Some(threshold_tokens) = size_hint_threshold(estimated_tokens) else {
+            return Ok(None);
+        };
+        if self
+            .store
+            .has_size_hint_emitted(&node_id, threshold_tokens)?
+        {
+            return Ok(None);
+        }
+        self.store.append_size_hint_emitted(
+            &node_id,
+            threshold_tokens,
+            estimated_tokens,
+            source,
+        )?;
+        Ok(Some(SpineRuntimeHint {
+            node_id,
+            estimated_tokens,
+            threshold_tokens,
+        }))
     }
 
     pub(crate) fn plan_compaction_after_transition(
@@ -645,6 +690,13 @@ pub(crate) struct CommittedTransition {
     pub(crate) compact_instruction: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpineRuntimeHint {
+    pub(crate) node_id: NodeId,
+    pub(crate) estimated_tokens: u64,
+    pub(crate) threshold_tokens: u64,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum SpineRuntimeError {
     #[error("spine transition already staged for call_id {call_id}")]
@@ -718,6 +770,15 @@ fn staged_function_call_output_id(
         }
         _ => None,
     }
+}
+
+pub(crate) fn size_hint_threshold(estimated_tokens: u64) -> Option<u64> {
+    if estimated_tokens < SPINE_HINT_FIRST_THRESHOLD_TOKENS {
+        return None;
+    }
+    let offset = estimated_tokens - SPINE_HINT_FIRST_THRESHOLD_TOKENS;
+    let steps = offset / SPINE_HINT_STEP_TOKENS;
+    Some(SPINE_HINT_FIRST_THRESHOLD_TOKENS + steps * SPINE_HINT_STEP_TOKENS)
 }
 
 fn spine_tree_plan_snapshot(

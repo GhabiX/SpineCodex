@@ -40,6 +40,14 @@ fn assistant_rollout_item(text: &str) -> RolloutItem {
     })
 }
 
+fn event_rollout_item() -> RolloutItem {
+    RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::Warning(
+        codex_protocol::protocol::WarningEvent {
+            message: "not a response item".to_string(),
+        },
+    ))
+}
+
 #[test]
 fn derives_sidecar_path_from_rollout_path() {
     let rollout_path = Path::new("/tmp/sessions/2026/05/10/rollout-2026-thread.jsonl");
@@ -366,6 +374,68 @@ fn appends_trajs_index_without_raw_rollout_payload() {
         events
             .iter()
             .all(|event| event.get("raw_payload").is_none())
+    );
+}
+
+#[test]
+fn estimates_raw_response_tokens_from_raw_mirror_response_items_only() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_raw_mirror_items(&[
+            assistant_rollout_item("alpha"),
+            event_rollout_item(),
+            assistant_rollout_item("beta beta"),
+            assistant_rollout_item("gamma"),
+        ])
+        .expect("append raw mirror items");
+
+    let all = store
+        .estimate_raw_response_tokens(0, 3)
+        .expect("estimate all response items");
+    let suffix = store
+        .estimate_raw_response_tokens(1, 3)
+        .expect("estimate suffix response items");
+
+    assert!(all > suffix);
+    assert!(suffix > 0);
+}
+
+#[test]
+fn records_size_hint_emission_without_changing_replayed_state() {
+    let (_temp, store) = temp_store();
+    let state = store.create().expect("create sidecar");
+
+    assert!(
+        !store
+            .has_size_hint_emitted(&id(&[1]), 60_000)
+            .expect("query missing hint")
+    );
+    store
+        .append_size_hint_emitted(&id(&[1]), 60_000, 63_200, "tree_output")
+        .expect("append hint event");
+
+    assert!(
+        store
+            .has_size_hint_emitted(&id(&[1]), 60_000)
+            .expect("query emitted hint")
+    );
+    assert!(
+        !store
+            .has_size_hint_emitted(&id(&[1]), 90_000)
+            .expect("query other threshold")
+    );
+    assert_eq!(store.load().expect("load sidecar"), state);
+    assert_eq!(
+        read_json_lines(store.tree_path())[1],
+        json!({
+            "type": "spine_hint_emitted",
+            "seq": 2,
+            "node_id": "1",
+            "threshold_tokens": 60000,
+            "estimated_tokens": 63200,
+            "source": "tree_output",
+        })
     );
 }
 

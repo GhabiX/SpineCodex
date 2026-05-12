@@ -42,10 +42,14 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("<spine_view>"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("</spine_view>"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("runtime-generated worklog IR"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("Use Spine effectively and efficiently"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("substantial raw history"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("future work is likely to reuse"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("only a short review/final response remains"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("reused enough future turns"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("raw details are still useful"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("coherent work scope is complete"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 60k raw tokens"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 30k"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the hint as a cue"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.next"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.close"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("optional instruction argument"));
@@ -56,4 +60,5 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("A node is a working scope, not a checklist item"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("The node summary is only a short tree label"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("investigate/localize"));
+    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("warn"));
 }
