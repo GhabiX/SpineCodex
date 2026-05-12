@@ -196,6 +196,48 @@ impl SpineSidecarStore {
         Ok(transition)
     }
 
+    pub(crate) fn record_root_epoch_archive(
+        &self,
+        state: &mut SpineState,
+        summary: impl Into<String>,
+        raw_start_ordinal: u64,
+        compact_id: impl Into<String>,
+        source_turn_id: impl Into<String>,
+    ) -> Result<Transition, SpineStoreError> {
+        let summary = summary.into();
+        let compact_id = compact_id.into();
+        let source_turn_id = source_turn_id.into();
+        let mut next_state = state.clone();
+        let transition = next_state.archive_current_root_epoch(summary.clone())?;
+        next_state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
+        let to_parent_id = next_state
+            .node(&transition.to)
+            .ok_or_else(|| {
+                SpineStoreError::InvalidLedger("root epoch archive target missing".to_string())
+            })?
+            .parent_id
+            .as_ref()
+            .map(ToString::to_string);
+
+        self.ensure_node_dir(&transition.to)?;
+
+        let event = TreeEvent::RootEpochArchived {
+            seq: self.next_tree_seq()?,
+            archived_root_id: transition.from.to_string(),
+            next_root_id: transition.to.to_string(),
+            next_parent_id: to_parent_id,
+            summary,
+            raw_start_ordinal,
+            compact_id,
+            source_turn_id,
+        };
+        self.append_json_line(&self.tree_path(), &event)?;
+
+        *state = next_state;
+        self.write_state_cache(state)?;
+        Ok(transition)
+    }
+
     pub(crate) fn write_plan<T: Serialize>(
         &self,
         node_id: &NodeId,
@@ -607,6 +649,44 @@ impl SpineSidecarStore {
                             node_id.bracketed()
                         )));
                     }
+                }
+                TreeEvent::RootEpochArchived {
+                    archived_root_id,
+                    next_root_id,
+                    next_parent_id,
+                    summary,
+                    raw_start_ordinal,
+                    ..
+                } => {
+                    let state = state.as_mut().ok_or_else(|| {
+                        SpineStoreError::InvalidLedger(
+                            "root_epoch_archived appeared before root node creation".to_string(),
+                        )
+                    })?;
+                    let archived_root_id = NodeId::parse(&archived_root_id)?;
+                    let next_root_id = NodeId::parse(&next_root_id)?;
+                    let next_parent_id =
+                        next_parent_id.as_deref().map(NodeId::parse).transpose()?;
+                    let transition = state.archive_current_root_epoch(summary)?;
+                    if transition.from != archived_root_id || transition.to != next_root_id {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "root epoch archive replay mismatch: expected {} -> {}, got {} -> {}",
+                            archived_root_id.bracketed(),
+                            next_root_id.bracketed(),
+                            transition.from.bracketed(),
+                            transition.to.bracketed()
+                        )));
+                    }
+                    let actual_parent_id = state
+                        .node(&transition.to)
+                        .and_then(|node| node.parent_id.clone());
+                    if actual_parent_id != next_parent_id {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "root epoch archive target parent mismatch for {}",
+                            transition.to.bracketed()
+                        )));
+                    }
+                    state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
                 }
             }
         }
@@ -1043,6 +1123,16 @@ enum TreeEvent {
         items: Vec<PlanSnapshotItem>,
         source_turn_id: String,
     },
+    RootEpochArchived {
+        seq: u64,
+        archived_root_id: String,
+        next_root_id: String,
+        next_parent_id: Option<String>,
+        summary: String,
+        raw_start_ordinal: u64,
+        compact_id: String,
+        source_turn_id: String,
+    },
 }
 
 impl TreeEvent {
@@ -1050,7 +1140,8 @@ impl TreeEvent {
         match self {
             TreeEvent::NodeCreated { seq, .. }
             | TreeEvent::TransitionApplied { seq, .. }
-            | TreeEvent::TaskPlanUpdated { seq, .. } => *seq,
+            | TreeEvent::TaskPlanUpdated { seq, .. }
+            | TreeEvent::RootEpochArchived { seq, .. } => *seq,
         }
     }
 }

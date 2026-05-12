@@ -142,6 +142,43 @@ impl SpineState {
         })
     }
 
+    pub(crate) fn archive_current_root_epoch(
+        &mut self,
+        summary: impl Into<String>,
+    ) -> Result<Transition, SpineStateError> {
+        let archived = self.current_root_epoch()?;
+        let parent = self.parent_id(&archived)?;
+        let next_epoch = self.next_sibling_id(parent.as_ref())?;
+
+        self.write_summary_if_absent(&archived, summary)?;
+        self.set_status(&archived, NodeStatus::Closed)?;
+        self.insert_node(next_epoch.clone(), parent)?;
+        self.cursor = next_epoch.clone();
+
+        Ok(Transition {
+            from: archived,
+            to: next_epoch,
+        })
+    }
+
+    pub(crate) fn current_root_epoch(&self) -> Result<NodeId, SpineStateError> {
+        if self.cursor == NodeId::root() {
+            return Ok(self.cursor.clone());
+        }
+
+        let segments = self.cursor.segments();
+        let root_epoch = if segments.first() == Some(&1) && segments.len() > 1 {
+            NodeId::from_segments(vec![1, segments[1]])
+        } else {
+            NodeId::from_segments(vec![segments[0]])
+        };
+        if self.nodes.contains_key(&root_epoch) {
+            Ok(root_epoch)
+        } else {
+            Err(SpineStateError::UnknownNode(root_epoch))
+        }
+    }
+
     fn parent_id(&self, node_id: &NodeId) -> Result<Option<NodeId>, SpineStateError> {
         self.nodes
             .get(node_id)
@@ -202,6 +239,23 @@ impl SpineState {
         }
         node.summary = Some(summary);
         Ok(())
+    }
+
+    fn write_summary_if_absent(
+        &mut self,
+        node_id: &NodeId,
+        summary: impl Into<String>,
+    ) -> Result<(), SpineStateError> {
+        if self
+            .nodes
+            .get(node_id)
+            .ok_or_else(|| SpineStateError::UnknownNode(node_id.clone()))?
+            .summary
+            .is_some()
+        {
+            return Ok(());
+        }
+        self.write_summary(node_id, summary)
     }
 
     fn set_status(&mut self, node_id: &NodeId, status: NodeStatus) -> Result<(), SpineStateError> {

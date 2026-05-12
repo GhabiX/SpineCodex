@@ -196,6 +196,68 @@ fn close_on_root_fails_without_mutating_state() {
 }
 
 #[test]
+fn archive_current_root_epoch_closes_active_epoch_and_enters_next_root() {
+    let mut state = SpineState::new();
+    state.open("root scope").expect("open should succeed");
+    state
+        .open("child scope")
+        .expect("nested open should succeed");
+
+    let transition = state
+        .archive_current_root_epoch("context compacted")
+        .expect("archive root epoch");
+
+    assert_eq!(
+        transition,
+        Transition {
+            from: id(&[1, 1]),
+            to: id(&[1, 2]),
+        }
+    );
+    assert_eq!(state.cursor(), &id(&[1, 2]));
+    assert_eq!(
+        state.node(&id(&[1, 1])).map(|node| node.status.clone()),
+        Some(NodeStatus::Closed)
+    );
+    assert_eq!(
+        state
+            .node(&id(&[1, 1]))
+            .and_then(|node| node.summary.clone()),
+        Some("child scope".to_string())
+    );
+    assert_eq!(
+        state.node(&id(&[1, 1, 1])).map(|node| node.status.clone()),
+        Some(NodeStatus::Live)
+    );
+}
+
+#[test]
+fn archive_current_root_epoch_handles_root_cursor() {
+    let mut state = SpineState::new();
+
+    let transition = state
+        .archive_current_root_epoch("context compacted")
+        .expect("archive root cursor");
+
+    assert_eq!(
+        transition,
+        Transition {
+            from: id(&[1]),
+            to: id(&[2]),
+        }
+    );
+    assert_eq!(state.cursor(), &id(&[2]));
+    assert_eq!(
+        state.node(&id(&[1])).map(|node| node.status.clone()),
+        Some(NodeStatus::Closed)
+    );
+    assert_eq!(
+        state.node(&id(&[1])).and_then(|node| node.summary.clone()),
+        Some("context compacted".to_string())
+    );
+}
+
+#[test]
 fn empty_summary_fails_without_mutating_state() {
     let mut state = SpineState::new();
     let before = state.clone();

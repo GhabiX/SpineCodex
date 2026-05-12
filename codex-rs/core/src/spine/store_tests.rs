@@ -163,6 +163,66 @@ fn records_transition_summary_and_replays_from_tree() {
 }
 
 #[test]
+fn records_root_epoch_archive_and_replays_from_tree() {
+    let (_temp, store) = temp_store();
+    let mut state = store.create().expect("create sidecar");
+    store
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
+        .expect("record root open");
+    store
+        .record_transition(&mut state, SpineOperation::Open, "child scope", 13)
+        .expect("record nested open");
+
+    let transition = store
+        .record_root_epoch_archive(
+            &mut state,
+            "context compacted",
+            21,
+            "compact-1",
+            "turn-compact",
+        )
+        .expect("record root archive");
+
+    assert_eq!(
+        transition,
+        Transition {
+            from: id(&[1, 1]),
+            to: id(&[1, 2]),
+        }
+    );
+    assert!(store.root().join("nodes").join("1").join("2").is_dir());
+    assert_eq!(
+        read_json_lines(store.tree_path())[3],
+        json!({
+            "type": "root_epoch_archived",
+            "seq": 4,
+            "archived_root_id": "1.1",
+            "next_root_id": "1.2",
+            "next_parent_id": "1",
+            "summary": "context compacted",
+            "raw_start_ordinal": 21,
+            "compact_id": "compact-1",
+            "source_turn_id": "turn-compact",
+        })
+    );
+
+    let loaded = store.load().expect("load archived sidecar");
+
+    assert_eq!(loaded, state);
+    assert_eq!(loaded.cursor(), &id(&[1, 2]));
+    assert_eq!(
+        loaded.node(&id(&[1, 1])).map(|node| node.status.clone()),
+        Some(NodeStatus::Closed)
+    );
+    assert_eq!(
+        loaded
+            .node(&id(&[1, 2]))
+            .and_then(|node| node.raw_start_ordinal),
+        Some(21)
+    );
+}
+
+#[test]
 fn generated_worklog_sections_do_not_break_transition_replay_hash() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
