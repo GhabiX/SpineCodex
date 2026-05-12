@@ -226,8 +226,10 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     };
     assert!(text.starts_with(crate::compact::SUMMARIZATION_PROMPT));
     assert!(text.contains("Use the Spine Tree representation below as the node tag"));
-    assert!(text.contains("match the target node by its bracketed id"));
-    assert!(text.contains("target node `1.1` in this Spine Tree"));
+    assert!(text.contains("Target tree node: 1"));
+    assert!(text.contains("Internal node id: 1.1"));
+    assert!(text.contains("match the target node by its rendered tree id"));
+    assert!(text.contains("target tree node `1` in this Spine Tree"));
     assert!(text.contains("For `next`, compact the completed target leaf"));
     assert!(text.contains("pending immediate obligation"));
     assert!(text.contains("do not describe it as completed unless the suffix itself contains"));

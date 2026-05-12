@@ -105,7 +105,7 @@ fn should_show_worklog_ref(status: &NodeStatus) -> bool {
     matches!(status, NodeStatus::Finished | NodeStatus::Closed)
 }
 
-fn display_node_id(node_id: &NodeId) -> String {
+pub(crate) fn display_node_id(node_id: &NodeId) -> String {
     let segments = node_id.segments();
     let display_segments = if segments == [1] {
         return "root".to_string();
