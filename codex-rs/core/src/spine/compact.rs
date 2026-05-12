@@ -119,8 +119,10 @@ fn build_codex_builtin_prompt(
         parallel_tool_calls: prompt_envelope.parallel_tool_calls,
         base_instructions: prompt_envelope.base_instructions.clone(),
         personality: prompt_envelope.personality,
-        output_schema: prompt_envelope.output_schema.clone(),
-        output_schema_strict: prompt_envelope.output_schema_strict,
+        // The internal compact response is parsed from the XML-like block below.
+        // Carrying a user turn final-output schema would make that response invalid.
+        output_schema: None,
+        output_schema_strict: true,
     }
 }
 

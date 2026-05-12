@@ -240,7 +240,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
 }
 
 #[test]
-fn codex_builtin_prompt_reuses_main_request_envelope() {
+fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 1]),
@@ -291,10 +291,10 @@ fn codex_builtin_prompt_reuses_main_request_envelope() {
         compact_prompt.base_instructions.text,
         prompt_envelope.base_instructions.text
     );
-    assert_eq!(compact_prompt.output_schema, prompt_envelope.output_schema);
-    assert_eq!(
+    assert_eq!(compact_prompt.output_schema, None);
+    assert!(
         compact_prompt.output_schema_strict,
-        prompt_envelope.output_schema_strict
+        "compact response is parsed from a strict XML-like block, not the user final output schema"
     );
     assert_eq!(compact_prompt.input[0], input.prefix_items[0]);
     assert_eq!(compact_prompt.input[1], input.suffix_items[0]);
