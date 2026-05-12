@@ -190,6 +190,7 @@ impl SpineRuntime {
         Ok(render_context_compacted_outline(
             scope_node_id,
             scope_summary,
+            self.store.root(),
             &scope_worklog_path,
             &child_rows,
         ))

@@ -1998,7 +1998,7 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
                 ev_response_created("resp-compact"),
                 ev_assistant_message(
                     "msg-compact",
-                    "<spine_compact_worklog>\ncompact leaf fact\n</spine_compact_worklog>",
+                    "<spine_compact_worklog>\ncompact leaf fact\n\nPending continuation: respond exactly FINAL_AFTER_SPINE_COMPACT.\n</spine_compact_worklog>",
                 ),
                 ev_completed("resp-compact"),
             ]),
@@ -2033,6 +2033,9 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     let followup_request = &requests[3];
     assert!(followup_request.body_contains_text("<spine_ir"));
     assert!(followup_request.body_contains_text("compact leaf fact"));
+    assert!(followup_request.body_contains_text("Pending continuation"));
+    assert!(followup_request.body_contains_text("FINAL_AFTER_SPINE_COMPACT"));
+    assert!(followup_request.body_contains_text("Continue the active user turn"));
     assert!(
         !followup_request.body_contains_text("RAW_SUFFIX_DETAIL should be folded"),
         "the main follow-up request should see replacement history, not the raw folded suffix"

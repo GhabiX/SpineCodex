@@ -34,6 +34,10 @@ async fn session_and_turn_with_spine() -> (TempDir, Session, TurnContext) {
     (temp, session, turn)
 }
 
+fn spine_base(temp: &TempDir) -> String {
+    temp.path().join("spine-rollout-test").display().to_string()
+}
+
 fn invocation(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -111,7 +115,7 @@ fn transition_schema_exposes_instruction_only_for_next_and_close() {
 
 #[tokio::test]
 async fn valid_open_stages_transition_without_advancing_cursor() {
-    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    let (temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -126,7 +130,10 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
         .await
         .expect("spine open should stage");
 
-    assert_eq!(output.log_preview(), "Current:  1\n\n1: Current");
+    assert_eq!(
+        output.log_preview(),
+        format!("Current:  1\nBase: {}\n\n1: Current", spine_base(&temp))
+    );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     assert_eq!(runtime.cursor().bracketed(), "[1]");
     let staged = runtime
@@ -148,7 +155,7 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
 
 #[tokio::test]
 async fn valid_next_returns_compact_tree_view() {
-    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    let (temp, session, turn) = session_and_turn_with_spine().await;
     {
         let spine = session.spine.as_ref().expect("spine runtime");
         let mut runtime = spine.lock().await;
@@ -183,7 +190,10 @@ async fn valid_next_returns_compact_tree_view() {
 
     assert_eq!(
         output.log_preview(),
-        "Current:  2\n\n1: finished Completed reproduction and patch verification [worklog already in context]\n2: Current"
+        format!(
+            "Current:  2\nBase: {}\n\n1: finished Completed reproduction and patch verification [worklog already in context]\n2: Current",
+            spine_base(&temp)
+        )
     );
 }
 
@@ -443,7 +453,7 @@ async fn close_on_root_rejects_without_staging() {
 
 #[tokio::test]
 async fn tree_prints_current_tree_without_staging() {
-    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    let (temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -458,7 +468,10 @@ async fn tree_prints_current_tree_without_staging() {
         .await
         .expect("spine tree should render");
 
-    assert_eq!(output.log_preview(), "Current:  root\n\n(empty)");
+    assert_eq!(
+        output.log_preview(),
+        format!("Current:  root\nBase: {}\n\n(empty)", spine_base(&temp))
+    );
     assert_eq!(
         output.code_mode_result(&ToolPayload::Function {
             arguments: "{}".to_string()

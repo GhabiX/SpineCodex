@@ -151,7 +151,7 @@ fn build_codex_builtin_prompt_input(
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "{compact_prompt}\n\nSpineJIT suffix compaction request.\n\nYou are compacting one completed Spine Tree node or closed subtree so the runtime can replace that raw transcript suffix with compact worklog IR while preserving enough context for the next turn to continue correctly.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\nUse the Spine Tree representation below as the node tag for selecting the target suffix. It is rendered by the same runtime code that emits `spine` tool outputs in the conversation history, so match the target node by its rendered tree id, summary/status line, and worklog path in this tree instead of inventing another tag.\n\n<spine_tree>\n{}\n</spine_tree>\n\nThe prompt before this instruction is the preserved prefix followed by the target suffix. Compact only the immediately preceding suffix represented by target tree node `{}` in this Spine Tree:\n- For `next`, compact the completed target leaf from the point it became current through the latest `spine next` output.\n- For `close`, compact the closed target scope/subtree from the point the scope became current through the latest `spine close` output.\n\nThe earlier prefix remains verbatim in runtime context and must not be summarized or rewritten.\n\nPreserve information with high locality:\n- Preserve temporal locality from the target suffix: latest decisions, current goal, next actions, unresolved risks, verification status, and failed attempts.\n- Preserve any user instruction in the target suffix that still applies after the latest spine tool output as a pending immediate obligation; do not describe it as completed unless the suffix itself contains the later assistant/tool output that completed it.\n- Preserve spatial locality from the target suffix: relevant files, functions, tests, commands, errors, node relationships, worklog/traj paths, and neighboring scope context needed to resume.{}\n\nDrop low-value transcript detail, repeated chatter, and tool-output noise. Keep exact identifiers, paths, commands, errors, and test results when they affect future work. Do not mention prefix-only content unless it is repeated or changed inside the target suffix.\n\nReturn exactly one XML-like block and no text outside it:\n{}\n<dense Markdown compact for the target suffix only>\n{}",
+                "{compact_prompt}\n\nSpineJIT suffix compaction request.\n\nYou are compacting one completed Spine Tree node or closed subtree so the runtime can replace that raw transcript suffix with compact worklog IR while preserving enough context for the next turn to continue correctly.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\nUse the Spine Tree representation below as the node tag for selecting the target suffix. It is rendered by the same runtime code that emits `spine` tool outputs in the conversation history, so match the target node by its rendered tree id, summary/status line, and worklog path in this tree instead of inventing another tag.\n\n<spine_tree>\n{}\n</spine_tree>\n\nThe prompt before this instruction is the preserved prefix followed by the target suffix. Compact only the immediately preceding suffix represented by target tree node `{}` in this Spine Tree:\n- For `next`, compact the completed target leaf from the point it became current through the latest `spine next` output.\n- For `close`, compact the closed target scope/subtree from the point the scope became current through the latest `spine close` output.\n\nThe earlier prefix remains verbatim in runtime context and must not be summarized or rewritten.\n\nPreserve information with high locality:\n- Preserve temporal locality from the target suffix: latest decisions, current goal, next actions, unresolved risks, verification status, and failed attempts.\n- Preserve any user instruction in the target suffix that still applies after the latest spine tool output as a pending immediate obligation; do not describe it as completed unless the suffix itself contains the later assistant/tool output that completed it.\n- If the target suffix contains the active user prompt that caused the latest spine tool call, include a `Pending continuation` bullet that copies the exact post-tool obligation still owed by the assistant, including exact final response text, required next tool/command, or verification instruction. If no such obligation remains, write `Pending continuation: none`.\n- Preserve spatial locality from the target suffix: relevant files, functions, tests, commands, errors, node relationships, worklog/traj paths, and neighboring scope context needed to resume.{}\n\nDrop low-value transcript detail, repeated chatter, and tool-output noise. Keep exact identifiers, paths, commands, errors, and test results when they affect future work. Do not mention prefix-only content unless it is repeated or changed inside the target suffix.\n\nReturn exactly one XML-like block and no text outside it:\n{}\n<dense Markdown compact for the target suffix only>\n{}",
                 target_tree_node_id,
                 input.node_id,
                 op_label(input.op),
@@ -259,7 +259,8 @@ pub(crate) fn render_auto_compact_worklog(
         .map(|instruction| format!("Compact instruction:\n{instruction}\n"))
         .unwrap_or_default();
     format!(
-        "\n\n## Auto Compact\n\nStrategy: {CODEX_BUILTIN_TEXT_STRATEGY}\n{compact_instruction}Fold: response ordinals [{}, {})\nNode trajs: {}\nRaw mirror: {}\nRollout: {}\nIndex: trajs.index.jsonl\n\n{}\n\n## Node Summary\n\n{}\n",
+        "\n\n## Auto Compact\n\nStrategy: {CODEX_BUILTIN_TEXT_STRATEGY}\n{compact_instruction}Base: {}\nFold: response ordinals [{}, {})\nNode trajs: {}\nRaw mirror: {}\nRollout: {}\nIndex: trajs.index.jsonl\n\n{}\n\n## Node Summary\n\n{}\n",
+        input.sidecar_root.display(),
         input.cut_ordinal,
         input.fold_end_ordinal,
         node_trajs_path.display(),
@@ -330,6 +331,7 @@ pub(crate) fn render_spine_ir_item(
     node_id: &NodeId,
     op: SpineOperation,
     summary: &str,
+    base_path: &Path,
     worklog_path: &Path,
     worklog_body: &str,
     fold_start: u64,
@@ -341,13 +343,14 @@ pub(crate) fn render_spine_ir_item(
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "<spine_ir id=\"{}\" node=\"{}\" op=\"{}\" runtime_generated=\"true\" fold_start=\"{}\" fold_end=\"{}\">\nSummary: {}\nWorklog path: {}\n\n<worklog>\n{}\n</worklog>\n</spine_ir>",
+                "<spine_ir id=\"{}\" node=\"{}\" op=\"{}\" runtime_generated=\"true\" fold_start=\"{}\" fold_end=\"{}\">\nSummary: {}\nBase: {}\nWorklog path: {}\nContinuation: This runtime-generated IR replaces the folded suffix. Continue the active user turn from any pending continuation recorded in the worklog, and do not repeat older tool calls from the preserved prefix.\n\n<worklog>\n{}\n</worklog>\n</spine_ir>",
                 synthetic_id,
                 node_id,
                 op_label(op),
                 fold_start,
                 fold_end,
                 summary,
+                base_path.display(),
                 worklog_path.display(),
                 worklog_body
             ),
@@ -374,11 +377,13 @@ fn spine_ir_synthetic_id(
 pub(crate) fn render_context_compacted_outline(
     scope_node_id: &NodeId,
     scope_summary: &str,
+    base_path: &Path,
     scope_worklog_path: &Path,
     child_rows: &[(String, String)],
 ) -> String {
     let mut rendered = String::new();
     rendered.push_str("## Context Compacted\n\n");
+    rendered.push_str(&format!("Base: {}\n", base_path.display()));
     rendered.push_str(&format!(
         "[{}] {} ({})\n",
         scope_node_id,

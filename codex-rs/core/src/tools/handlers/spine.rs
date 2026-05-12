@@ -5,9 +5,9 @@ use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::spine::store::SpineOperation;
-use crate::spine::view::render_tool_output;
+use crate::spine::view::render_tool_output_with_base;
 use crate::spine::view::render_tree;
-use crate::spine::view::render_tree_tool_output;
+use crate::spine::view::render_tree_tool_output_with_base;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -182,10 +182,11 @@ impl ToolHandler for SpineHandler {
             let (cursor, tree, text) = {
                 let runtime = spine.lock().await;
                 let cursor = runtime.cursor().clone();
+                let base = runtime.store().root().to_path_buf();
                 (
                     cursor.bracketed(),
                     render_tree(runtime.state(), &cursor),
-                    render_tree_tool_output(runtime.state(), &cursor),
+                    render_tree_tool_output_with_base(runtime.state(), &cursor, &base),
                 )
             };
             return Ok(SpineToolOutput {
@@ -221,6 +222,7 @@ impl ToolHandler for SpineHandler {
         let (op, cursor, tree, text) = {
             let mut runtime = spine.lock().await;
             let mut preview_state = runtime.state().clone();
+            let base = runtime.store().root().to_path_buf();
             op.apply(&mut preview_state, args.summary.clone())
                 .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
             let staged = runtime
@@ -242,7 +244,7 @@ impl ToolHandler for SpineHandler {
                 staged.op,
                 staged.to_node.bracketed(),
                 render_tree(&preview_state, &staged.to_node),
-                render_tool_output(staged.op, &preview_state, &staged.to_node),
+                render_tool_output_with_base(staged.op, &preview_state, &staged.to_node, &base),
             )
         };
 

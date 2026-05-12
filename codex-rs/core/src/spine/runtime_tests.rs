@@ -829,8 +829,10 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
     let outline = runtime
         .render_context_compacted_outline(&id(&[1, 1]))
         .expect("render outline");
+    let base = runtime.store().root().display().to_string();
 
     assert!(outline.contains("## Context Compacted"));
+    assert!(outline.contains(&format!("Base: {base}")));
     assert!(outline.contains("[1.1] child scope (nodes/1/1/worklog.md)"));
     assert!(outline.contains("|-- [1.1.1] first child done (nodes/1/1/1/worklog.md)"));
     assert!(outline.contains("|-- [1.1.2] second child done (nodes/1/1/2/worklog.md)"));

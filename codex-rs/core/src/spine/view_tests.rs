@@ -1,4 +1,5 @@
 use super::*;
+use std::path::Path;
 
 #[test]
 fn tree_view_omits_root_and_marks_visible_worklogs() {
@@ -9,6 +10,18 @@ fn tree_view_omits_root_and_marks_visible_worklogs() {
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
         "Current:  2\n\n1: finished first child done [worklog already in context]\n2: Current"
+    );
+}
+
+#[test]
+fn tree_tool_view_can_include_base_path() {
+    let mut state = SpineState::new();
+    state.open("parent scope").expect("open parent");
+    state.next("first child done").expect("finish child");
+
+    assert_eq!(
+        render_tree_tool_output_with_base(&state, state.cursor(), Path::new("/tmp/spine")),
+        "Current:  2\nBase: /tmp/spine\n\n1: finished first child done [worklog already in context]\n2: Current"
     );
 }
 

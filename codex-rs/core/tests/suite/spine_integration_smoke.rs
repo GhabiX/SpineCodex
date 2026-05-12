@@ -63,6 +63,7 @@ Do not move spine only because a new user message arrived, because you answered 
 Do not create one node per shell command, checklist item, short reply, or conversation turn.
 After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `nodes/1/1/worklog.md`; later context shows the Spine Tree plus `1.1` worklog, not `1.1` raw trace.
 After spine.close from `1.1.2` to `1.2`, the runtime folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes that were already folded are carried through the Spine Tree/worklog IR, while raw child traces stay expandable out of band.
+Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../worklog.md` against that Base, not against the workspace cwd.
 After spine.next or spine.close, if unfinished work remains, immediately call update_plan in the new current node to rebuild the checklist from the handoff summary and current evidence; the runtime does not carry old checklist items forward.
 Keep working in the current node when the raw transcript is still small, the same details are still active, or only a short review/final response remains. Cost is reduced only when the folded worklog IR will be reused enough future turns to pay for compacting it.
 When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar trajs/worklog files only when you need historical details.
@@ -205,7 +206,9 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert_raw_range_for_node_after_transition(&index, CLOSE_CALL_ID, "1.2");
 
     let scope_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/worklog.md"))?;
+    let base_line = format!("Base: {}", sidecar_dir.display());
     assert!(scope_worklog.contains("spine:auto-compact-generated"));
+    assert!(scope_worklog.contains(&base_line));
     assert!(scope_worklog.contains("Compacted root findings."));
     assert!(scope_worklog.contains("## Context Compacted"));
     assert!(scope_worklog.contains("[1.1] open focused child scope (nodes/1/1/worklog.md)"));
@@ -213,6 +216,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert!(scope_worklog.contains("|-- [1.1.2] finish sibling scope (nodes/1/1/2/worklog.md)"));
     let leaf_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/worklog.md"))?;
     assert!(leaf_worklog.contains("spine:auto-compact-generated"));
+    assert!(leaf_worklog.contains(&base_line));
     assert!(leaf_worklog.contains("Compacted child findings."));
     assert_compact_installed(&compact_index, "1.1.1", "next");
     assert_compact_installed(&compact_index, "1.1", "close");

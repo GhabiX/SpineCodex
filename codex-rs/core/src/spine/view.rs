@@ -3,6 +3,7 @@ use super::state::NodeStatus;
 use super::state::SpineState;
 use super::store::SpineOperation;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 
 pub(crate) fn render_tool_output(
@@ -13,14 +14,43 @@ pub(crate) fn render_tool_output(
     render_spine_tree_view(state, cursor)
 }
 
+pub(crate) fn render_tool_output_with_base(
+    _op: SpineOperation,
+    state: &SpineState,
+    cursor: &NodeId,
+    base: &Path,
+) -> String {
+    render_spine_tree_view_with_base(state, cursor, Some(base))
+}
+
 pub(crate) fn render_tree_tool_output(state: &SpineState, cursor: &NodeId) -> String {
     render_spine_tree_view(state, cursor)
 }
 
+pub(crate) fn render_tree_tool_output_with_base(
+    state: &SpineState,
+    cursor: &NodeId,
+    base: &Path,
+) -> String {
+    render_spine_tree_view_with_base(state, cursor, Some(base))
+}
+
 fn render_spine_tree_view(state: &SpineState, cursor: &NodeId) -> String {
+    render_spine_tree_view_with_base(state, cursor, None)
+}
+
+fn render_spine_tree_view_with_base(
+    state: &SpineState,
+    cursor: &NodeId,
+    base: Option<&Path>,
+) -> String {
+    let base_line = base
+        .map(|base| format!("\nBase: {}", base.display()))
+        .unwrap_or_default();
     format!(
-        "Current:  {}\n\n{}",
+        "Current:  {}{}\n\n{}",
         display_node_id(cursor),
+        base_line,
         render_tree(state, cursor)
     )
 }

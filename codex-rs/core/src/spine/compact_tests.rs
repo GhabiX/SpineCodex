@@ -32,6 +32,7 @@ fn raw_ordinals_map_to_synthetic_spine_ir_boundaries_only() {
         &id(&[1, 2]),
         SpineOperation::Next,
         "leaf summary",
+        Path::new("/tmp/spine"),
         Path::new("nodes/1/2/worklog.md"),
         "leaf body",
         1,
@@ -71,6 +72,7 @@ fn raw_ordinals_map_serialized_spine_ir_marker() {
         &id(&[1, 2]),
         SpineOperation::Next,
         "leaf summary",
+        Path::new("/tmp/spine"),
         Path::new("nodes/1/2/worklog.md"),
         "leaf body",
         1,
@@ -137,6 +139,7 @@ fn replacement_history_splices_prefix_ir_and_tail() {
         &id(&[1]),
         SpineOperation::Next,
         "leaf summary",
+        Path::new("/tmp/spine"),
         Path::new("nodes/1/worklog.md"),
         "leaf body",
         1,
@@ -156,6 +159,7 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
         &id(&[1, 2]),
         SpineOperation::Close,
         "scope summary",
+        Path::new("/tmp/spine"),
         Path::new("nodes/1/2/worklog.md"),
         "scope body",
         8,
@@ -174,7 +178,10 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
     assert!(text.contains("op=\"close\""));
     assert!(text.contains("fold_start=\"8\""));
     assert!(text.contains("fold_end=\"17\""));
+    assert!(text.contains("Base: /tmp/spine"));
     assert!(text.contains("Worklog path: nodes/1/2/worklog.md"));
+    assert!(text.contains("Continue the active user turn"));
+    assert!(text.contains("do not repeat older tool calls"));
     assert!(text.contains("scope body"));
     let ResponseItem::Message { id, .. } = item else {
         panic!("unexpected item type");
@@ -233,10 +240,13 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(text.contains("target tree node `1` in this Spine Tree"));
     assert!(text.contains("For `next`, compact the completed target leaf"));
     assert!(text.contains("pending immediate obligation"));
+    assert!(text.contains("include a `Pending continuation` bullet"));
+    assert!(text.contains("exact post-tool obligation"));
     assert!(text.contains("do not describe it as completed unless the suffix itself contains"));
     assert!(!text.contains("<spine_compact_instruction>"));
 
     let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
+    assert!(output.contains("Base: /tmp/spine"));
     assert!(output.contains("Node trajs: nodes/1/1/trajs.jsonl"));
     assert!(output.contains("Raw mirror: /tmp/raw.jsonl"));
     assert!(!output.contains("Compact instruction:"));
@@ -274,6 +284,7 @@ fn codex_builtin_prompt_and_worklog_include_compact_instruction_when_present() {
     assert!(text.contains("</spine_compact_instruction>"));
 
     let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
+    assert!(output.contains("Base: /tmp/spine"));
     assert!(output.contains("Compact instruction:\nKeep failed command and verification status."));
 }
 
