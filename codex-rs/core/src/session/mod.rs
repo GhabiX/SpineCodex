@@ -184,6 +184,7 @@ use crate::spine::compact::SpineCompactInput;
 use crate::spine::compact::build_suffix_replacement_history;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
 use crate::spine::compact::plan_suffix_fold;
+use crate::spine::compact::render_auto_compact_worklog;
 use crate::spine::compact::render_spine_ir_item;
 use crate::spine::store::SpineOperation;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
@@ -2810,6 +2811,213 @@ impl Session {
         let message = message.into();
         *self.spine_compact_poison.lock().await = Some(message.clone());
         CodexErr::Fatal(message)
+    }
+
+    pub(crate) async fn spine_runtime_is_mutable(&self) -> bool {
+        let Some(spine) = self.spine.as_ref() else {
+            return false;
+        };
+        spine.lock().await.is_mutable()
+    }
+
+    pub(crate) async fn install_spine_root_epoch_compaction(
+        &self,
+        turn_context: &TurnContext,
+        history: Vec<ResponseItem>,
+        compact_summary: String,
+    ) -> CodexResult<()> {
+        let spine = self
+            .spine
+            .as_ref()
+            .ok_or_else(|| CodexErr::Fatal("spine runtime is not initialized".to_string()))?;
+        let store = { spine.lock().await.store().clone() };
+        let boundary = spine
+            .lock()
+            .await
+            .plan_root_epoch_archive()
+            .map_err(|err| CodexErr::Fatal(format!("Spine root archive planning failed: {err}")))?;
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to resolve rollout path: {err:#}")))?
+            .ok_or_else(|| {
+                CodexErr::Fatal("spine root archive requires a local rollout path".to_string())
+            })?;
+        let compact_index_rollout_path = rollout_path
+            .file_name()
+            .map(|file_name| format!("../{}", file_name.to_string_lossy()))
+            .unwrap_or_else(|| rollout_path.to_string_lossy().into_owned());
+        let spine_tree = spine
+            .lock()
+            .await
+            .render_tree_for_prompt()
+            .map_err(|err| CodexErr::Fatal(format!("failed to render spine tree: {err}")))?;
+        let input = SpineCompactInput {
+            op: boundary.op,
+            node_id: boundary.node_id.clone(),
+            scope_node_id: None,
+            cut_ordinal: boundary.cut_ordinal,
+            fold_end_ordinal: boundary.fold_end_ordinal,
+            spine_tree,
+            prefix_items: Vec::new(),
+            suffix_items: Vec::new(),
+            transition_summary: boundary.transition_summary.clone(),
+            compact_instruction: None,
+            rollout_path,
+            raw_mirror_path: store.raw_rollout_path(),
+            sidecar_root: store.root().to_path_buf(),
+        };
+        let plan = plan_suffix_fold(
+            &history,
+            boundary.cut_ordinal,
+            boundary.fold_end_ordinal,
+            input,
+        )?;
+        let compact_id = deterministic_spine_compact_id(&boundary);
+        store
+            .append_compact_started(
+                &compact_id,
+                &boundary.node_id,
+                boundary.op,
+                boundary.cut_ordinal,
+                boundary.fold_end_ordinal,
+                CODEX_BUILTIN_TEXT_STRATEGY,
+                compact_index_rollout_path,
+            )
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to record spine root archive start: {err}"))
+            })?;
+
+        let compacted_body = compact_summary
+            .strip_prefix(crate::compact::SUMMARY_PREFIX)
+            .map(str::trim)
+            .filter(|body| !body.is_empty())
+            .unwrap_or(compact_summary.as_str());
+        let worklog_markdown = render_auto_compact_worklog(&plan.input, compacted_body);
+        let worklog_body = store
+            .worklog_with_appended_section(&boundary.node_id, &worklog_markdown)
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to stage spine root archive worklog: {err}"))
+            })?;
+        let worklog_rel_path = plan
+            .worklog_path
+            .strip_prefix(store.root())
+            .unwrap_or(plan.worklog_path.as_path())
+            .to_path_buf();
+        let rendered_ir_items = vec![render_spine_ir_item(
+            &boundary.node_id,
+            boundary.op,
+            &boundary.transition_summary,
+            &worklog_rel_path,
+            &worklog_body,
+            boundary.cut_ordinal,
+            boundary.fold_end_ordinal,
+        )];
+        let replacement_history = build_suffix_replacement_history(
+            &history,
+            plan.cut_index,
+            plan.fold_end_index,
+            rendered_ir_items,
+        );
+        let compact_message = format!(
+            "Spine compacted root epoch {} [{}, {})",
+            boundary.node_id, boundary.cut_ordinal, boundary.fold_end_ordinal
+        );
+        let compacted_item = CompactedItem {
+            message: compact_message.clone(),
+            replacement_history: Some(replacement_history.clone()),
+        };
+        let message_hash = sha1_digest(&compact_message);
+        if let Err(err) = self
+            .try_replace_compacted_history(replacement_history.clone(), None, compacted_item)
+            .await
+        {
+            store
+                .append_compact_failed(
+                    &compact_id,
+                    &boundary.node_id,
+                    boundary.op,
+                    boundary.cut_ordinal,
+                    boundary.fold_end_ordinal,
+                    CODEX_BUILTIN_TEXT_STRATEGY,
+                    err.to_string(),
+                )
+                .map_err(|store_err| {
+                    CodexErr::Fatal(format!(
+                        "failed to record spine root archive install failure after error {err}: {store_err}"
+                    ))
+                })?;
+            return Err(err);
+        }
+        if let Err(err) = store.append_worklog_section(&boundary.node_id, &worklog_markdown) {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to append installed spine root archive worklog after rollout checkpoint: {err}"
+                ))
+                .await);
+        }
+        let node_trajs_items = plan
+            .input
+            .suffix_items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect::<Vec<_>>();
+        if let Err(err) = store.append_node_trajs_items(&boundary.node_id, &node_trajs_items) {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to archive installed spine root epoch trajs after rollout checkpoint: {err}"
+                ))
+                .await);
+        }
+        if let Err(err) = store.append_raw_mirror_compact_checkpoint(
+            &compact_id,
+            &message_hash,
+            replacement_history.len(),
+        ) {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to record spine root archive raw mirror checkpoint after rollout checkpoint: {err}"
+                ))
+                .await);
+        }
+        let snapshot = {
+            let mut runtime = spine.lock().await;
+            runtime
+                .record_root_epoch_archive(
+                    boundary.transition_summary.clone(),
+                    boundary.fold_end_ordinal,
+                    &compact_id,
+                    &turn_context.sub_id,
+                )
+                .map_err(|err| {
+                    CodexErr::Fatal(format!("failed to record spine root epoch archive: {err}"))
+                })?;
+            runtime.build_tree_snapshot().map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to build spine tree snapshot after root archive: {err}"
+                ))
+            })?
+        };
+        if let Err(err) = store.append_compact_installed(
+            compact_id,
+            &boundary.node_id,
+            boundary.op,
+            boundary.cut_ordinal,
+            boundary.fold_end_ordinal,
+            replacement_history.len(),
+            worklog_rel_path.to_string_lossy().into_owned(),
+            message_hash,
+        ) {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to record installed spine root archive after rollout checkpoint: {err}"
+                ))
+                .await);
+        }
+        self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
+            .await;
+        Ok(())
     }
 
     async fn compact_spine_suffix_after_transition(

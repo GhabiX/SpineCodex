@@ -1081,6 +1081,7 @@ pub(crate) enum SpineOperation {
     Open,
     Next,
     Close,
+    Archive,
 }
 
 impl SpineOperation {
@@ -1093,6 +1094,7 @@ impl SpineOperation {
             SpineOperation::Open => state.open(summary),
             SpineOperation::Next => state.next(summary),
             SpineOperation::Close => state.close(summary),
+            SpineOperation::Archive => Err(SpineStateError::ArchiveIsInternal),
         }
     }
 }

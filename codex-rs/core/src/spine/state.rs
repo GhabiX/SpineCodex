@@ -276,6 +276,7 @@ pub(crate) struct Transition {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpineStateError {
+    ArchiveIsInternal,
     CannotCloseRoot,
     DuplicateNode(NodeId),
     EmptySummary,
@@ -287,6 +288,9 @@ pub(crate) enum SpineStateError {
 impl fmt::Display for SpineStateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            SpineStateError::ArchiveIsInternal => {
+                f.write_str("archive is an internal spine operation")
+            }
             SpineStateError::CannotCloseRoot => f.write_str("cannot close the root spine node"),
             SpineStateError::SummaryAlreadyWritten(node_id) => {
                 write!(f, "summary already written for {}", node_id.bracketed())

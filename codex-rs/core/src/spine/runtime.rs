@@ -261,7 +261,55 @@ impl SpineRuntime {
                     compact_instruction: committed.compact_instruction.clone(),
                 }))
             }
+            SpineOperation::Archive => Err(SpineRuntimeError::ArchiveIsInternal),
         }
+    }
+
+    pub(crate) fn plan_root_epoch_archive(
+        &self,
+    ) -> Result<SpineCompactBoundary, SpineRuntimeError> {
+        self.ensure_spine_mutation_allowed()?;
+        let node_id = self.state.current_root_epoch()?;
+        let node = self
+            .state
+            .node(&node_id)
+            .ok_or_else(|| SpineRuntimeError::UnknownNode(node_id.clone()))?;
+        let cut_ordinal =
+            node.raw_start_ordinal
+                .ok_or_else(|| SpineRuntimeError::MissingRawStartOrdinal {
+                    node_id: node_id.clone(),
+                })?;
+        let transition_summary = node
+            .summary
+            .clone()
+            .unwrap_or_else(|| "Context compacted".to_string());
+        Ok(SpineCompactBoundary {
+            op: SpineOperation::Archive,
+            node_id,
+            scope_node_id: None,
+            cut_ordinal,
+            fold_end_ordinal: self.next_raw_ordinal,
+            transition_summary,
+            compact_instruction: None,
+        })
+    }
+
+    pub(crate) fn record_root_epoch_archive(
+        &mut self,
+        summary: impl Into<String>,
+        raw_start_ordinal: u64,
+        compact_id: impl Into<String>,
+        source_turn_id: impl Into<String>,
+    ) -> Result<(), SpineRuntimeError> {
+        self.ensure_spine_mutation_allowed()?;
+        self.store.record_root_epoch_archive(
+            &mut self.state,
+            summary,
+            raw_start_ordinal,
+            compact_id,
+            source_turn_id,
+        )?;
+        Ok(())
     }
 
     fn ensure_spine_mutation_allowed(&self) -> Result<(), SpineRuntimeError> {
@@ -618,6 +666,8 @@ pub(crate) enum SpineRuntimeError {
     MissingSummary { node_id: NodeId },
     #[error("spine task tree is archived read-only: {reason}")]
     ArchivedReadOnly { reason: String },
+    #[error("archive is an internal spine compact operation")]
+    ArchiveIsInternal,
     #[error("unknown spine node {0}")]
     UnknownNode(NodeId),
     #[error("spine plan revision overflow")]

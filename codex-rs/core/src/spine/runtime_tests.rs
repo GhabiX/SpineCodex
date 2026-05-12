@@ -1125,6 +1125,52 @@ fn stage_uses_state_validation_without_mutating_runtime() {
 }
 
 #[test]
+fn root_epoch_archive_plans_internal_archive_boundary() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    runtime
+        .after_response_items_recorded(
+            "turn-1",
+            &[spine_call("open-1"), function_call_output("open-1")],
+            0,
+            2,
+        )
+        .expect("commit open");
+    runtime
+        .after_response_items_recorded("turn-2", &[assistant_message("child work")], 2, 3)
+        .expect("record child work");
+
+    let boundary = runtime
+        .plan_root_epoch_archive()
+        .expect("plan root archive");
+
+    assert_eq!(boundary.op, SpineOperation::Archive);
+    assert_eq!(boundary.node_id, id(&[1, 1]));
+    assert_eq!(boundary.cut_ordinal, 2);
+    assert_eq!(boundary.fold_end_ordinal, 3);
+    assert_eq!(boundary.transition_summary, "Context compacted");
+
+    runtime
+        .record_root_epoch_archive(
+            boundary.transition_summary,
+            boundary.fold_end_ordinal,
+            "compact-1",
+            "turn-compact",
+        )
+        .expect("record archive");
+
+    assert_eq!(runtime.cursor(), &id(&[1, 2]));
+}
+
+#[test]
 fn zero_raw_items_are_noop() {
     let (_temp, mut runtime) = temp_runtime();
 

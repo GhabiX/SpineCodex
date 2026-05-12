@@ -27,7 +27,14 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();
-        let _ = if crate::compact::should_use_remote_compact_task(ctx.provider.info()) {
+        let _ = if session.spine_runtime_is_mutable().await {
+            session.services.session_telemetry.counter(
+                "codex.task.compact",
+                /*inc*/ 1,
+                &[("type", "spine-root-archive")],
+            );
+            crate::compact::run_spine_aware_compact_task(session.clone(), ctx, input).await
+        } else if crate::compact::should_use_remote_compact_task(ctx.provider.info()) {
             session.services.session_telemetry.counter(
                 "codex.task.compact",
                 /*inc*/ 1,

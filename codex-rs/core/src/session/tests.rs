@@ -1892,6 +1892,72 @@ async fn spine_transition_compaction_boundary_waits_for_sampling_completion() ->
     Ok(())
 }
 
+#[tokio::test]
+async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let mut runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    session.spine = Some(Arc::new(Mutex::new(runtime)));
+    session
+        .try_record_conversation_items(
+            &turn_context,
+            &[
+                spine_function_call("open-1"),
+                function_call_output("open-1"),
+                assistant_message("ROOT_EPOCH_DETAIL should be archived"),
+            ],
+        )
+        .await?;
+    session
+        .spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .take_last_committed_transition();
+    let history = session.clone_history().await.raw_items().to_vec();
+
+    session
+        .install_spine_root_epoch_compaction(
+            &turn_context,
+            history,
+            format!("{}\nroot compact fact", crate::compact::SUMMARY_PREFIX),
+        )
+        .await?;
+
+    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
+    assert!(rendered_history.contains("<spine_ir"));
+    assert!(rendered_history.contains("op=\\\"archive\\\""));
+    assert!(rendered_history.contains("root compact fact"));
+    assert!(!rendered_history.contains("ROOT_EPOCH_DETAIL should be archived"));
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(
+        runtime.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![1, 2])
+    );
+    assert!(
+        runtime
+            .store()
+            .read_worklog(&crate::spine::ids::NodeId::from_segments(vec![1, 1]))?
+            .contains("root compact fact")
+    );
+    let tree = std::fs::read_to_string(runtime.store().tree_path())?;
+    assert!(tree.contains("\"type\":\"root_epoch_archived\""));
+    assert!(tree.contains("\"compact_id\":\""));
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Result<()> {
     let server = start_mock_server().await;

@@ -50,7 +50,7 @@ Use Spine as your task plan and context manager. Completed scopes are folded int
 Use Spine proactively and reasonably to keep active work focused while reducing avoidable context cost.
 At the start, form a compact Spine plan: one node for simple tasks, or a small tree of focused scopes for longer work. Revise the tree when new evidence changes the task structure.
 Default to staying in the current live node while it remains focused. Use update_plan as the checklist inside the current active scope for local steps, verification items, and short-lived task tracking.
-Move Spine when a completed scope can be carried forward by generated worklog IR:
+Move Spine when a completed scope has accumulated substantial raw history and future work is likely to reuse its generated worklog IR:
 - spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context.
 - spine.next: finish the current leaf and move to its next sibling.
 - spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling. Root cannot be closed.
@@ -62,7 +62,7 @@ Do not create one node per shell command, checklist item, short reply, or conver
 After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `nodes/1/1/worklog.md`; later context shows the Spine Tree plus `1.1` worklog, not `1.1` raw trace.
 After spine.close from `1.1.2` to `1.2`, the runtime folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes that were already folded are carried through the Spine Tree/worklog IR, while raw child traces stay expandable out of band.
 After spine.next or spine.close, if unfinished work remains, immediately call update_plan in the new current node to rebuild the checklist from the handoff summary and current evidence; the runtime does not carry old checklist items forward.
-Prefer scopes large enough to produce useful generated worklogs and small enough to stop carrying irrelevant raw history. Keep working in the current node when the next work still depends on the current raw details.
+Keep working in the current node when the raw transcript is still small, the same details are still active, or only a short review/final response remains. Cost is reduced only when the folded worklog IR will be reused enough future turns to pay for compacting it.
 When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar trajs/worklog files only when you need historical details.
 In Plan mode, do not call mutating spine operations.
 </spine_view>"#;

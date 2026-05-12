@@ -244,7 +244,10 @@ fn extract_spine_compact_worklog(text: &str) -> CodexResult<String> {
     Ok(body.to_string())
 }
 
-fn render_auto_compact_worklog(input: &SpineCompactInput, compacted_suffix: &str) -> String {
+pub(crate) fn render_auto_compact_worklog(
+    input: &SpineCompactInput,
+    compacted_suffix: &str,
+) -> String {
     let raw_mirror_path = input
         .raw_mirror_path
         .strip_prefix(&input.sidecar_root)

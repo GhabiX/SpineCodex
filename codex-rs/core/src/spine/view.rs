@@ -130,6 +130,7 @@ pub(crate) fn op_label(op: SpineOperation) -> &'static str {
         SpineOperation::Open => "open",
         SpineOperation::Next => "next",
         SpineOperation::Close => "close",
+        SpineOperation::Archive => "archive",
     }
 }
 
