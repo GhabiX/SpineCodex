@@ -12,7 +12,6 @@ use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
-use crate::session::session::initial_spine_has_spine_history;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
@@ -23,7 +22,6 @@ use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
-use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
@@ -1139,18 +1137,6 @@ impl ThreadManagerState {
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
-        if matches!(&initial_history, InitialHistory::Forked(_))
-            && config.features.enabled(Feature::SpineTaskTree)
-            && initial_spine_has_spine_history(&initial_history)
-                .await
-                .map_err(|err| {
-                    CodexErr::Fatal(format!("failed to inspect forked spine history: {err}"))
-                })?
-        {
-            return Err(CodexErr::InvalidRequest(
-                "spine task tree does not yet support forked thread history".to_string(),
-            ));
-        }
         if let InitialHistory::Resumed(resumed) = &initial_history {
             let mut threads = self.threads.write().await;
             if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {

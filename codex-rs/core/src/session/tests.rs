@@ -9,6 +9,7 @@ use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
+use crate::spine::ids::NodeId;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
@@ -3029,7 +3030,7 @@ async fn thread_rollback_fails_without_persisted_thread_history() {
 }
 
 #[tokio::test]
-async fn thread_rollback_fails_when_spine_runtime_is_active() -> anyhow::Result<()> {
+async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
     let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
     let rollout_path = attach_thread_persistence(
         Arc::get_mut(&mut sess).expect("session should not have additional references"),
@@ -3041,22 +3042,91 @@ async fn thread_rollback_fails_when_spine_runtime_is_active() -> anyhow::Result<
         .expect("session should not have additional references")
         .spine = Some(Arc::new(Mutex::new(spine)));
 
-    let initial_context = sess.build_initial_context(tc.as_ref()).await;
-    sess.record_into_history(&initial_context, tc.as_ref())
-        .await;
+    sess.try_record_conversation_items(tc.as_ref(), &[user_message("turn 1 user")])
+        .await?;
+    sess.spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )?;
+    sess.try_record_conversation_items(
+        tc.as_ref(),
+        &[
+            spine_function_call("open-1"),
+            function_call_output("open-1"),
+        ],
+    )
+    .await?;
+    sess.try_record_conversation_items(tc.as_ref(), &[user_message("turn 2 user")])
+        .await?;
+    sess.spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .stage_transition(
+            "next-1",
+            "turn-2",
+            SpineOperation::Next,
+            "rolled back next",
+            /*compact_instruction*/ None,
+        )?;
+    sess.try_record_conversation_items(
+        tc.as_ref(),
+        &[
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "next".to_string(),
+                namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+                arguments: r#"{"summary":"rolled back next"}"#.to_string(),
+                call_id: "next-1".to_string(),
+            },
+            function_call_output("next-1"),
+        ],
+    )
+    .await?;
 
     handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
 
-    let error_event = wait_for_thread_rollback_failed(&rx).await;
-    assert_eq!(
-        error_event.message,
-        "spine task tree does not yet support thread rollback"
+    let mut saw_spine_projection = false;
+    let mut saw_rollback = false;
+    let deadline = StdDuration::from_secs(2);
+    let start = std::time::Instant::now();
+    while !(saw_spine_projection && saw_rollback) {
+        let remaining = deadline.saturating_sub(start.elapsed());
+        let event = tokio::time::timeout(remaining, rx.recv())
+            .await
+            .expect("timeout waiting for rollback events")
+            .expect("event");
+        match event.msg {
+            EventMsg::SpineTreeUpdate(snapshot) => {
+                saw_spine_projection = true;
+                assert_eq!(snapshot.active_node_id, "1.1");
+                assert!(snapshot.nodes.iter().all(|node| node.node_id != "1.2"));
+            }
+            EventMsg::ThreadRolledBack(rollback) => {
+                saw_rollback = true;
+                assert_eq!(rollback.num_turns, 1);
+            }
+            _ => {}
+        }
+    }
+    let runtime = sess.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(runtime.cursor().to_string(), "1.1");
+    assert!(
+        runtime
+            .state()
+            .node(&NodeId::from_segments(vec![1, 2]))
+            .is_none()
     );
-    assert_eq!(
-        error_event.codex_error_info,
-        Some(CodexErrorInfo::ThreadRollbackFailed)
-    );
-    assert_eq!(sess.clone_history().await.raw_items(), initial_context);
+    assert!(std::fs::read_to_string(runtime.store().tree_path())?.contains("\"projection_reset\""));
     Ok(())
 }
 

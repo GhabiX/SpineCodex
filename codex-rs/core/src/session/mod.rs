@@ -432,6 +432,24 @@ pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 
+fn should_disable_spine_for_filtered_fork(
+    conversation_history: &InitialHistory,
+    session_source: &SessionSource,
+    thread_source: Option<ThreadSource>,
+) -> bool {
+    matches!(conversation_history, InitialHistory::Forked(_))
+        && (session_source.is_non_root_agent() || thread_source == Some(ThreadSource::Subagent))
+        && conversation_history.scan_rollout_items(|item| match item {
+            RolloutItem::Compacted(compacted) => compacted.message.starts_with("Spine compacted "),
+            RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::FunctionCall {
+                name,
+                namespace,
+                ..
+            }) => crate::spine::is_spine_history_tool(name, namespace.as_deref()),
+            _ => false,
+        })
+}
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -508,6 +526,13 @@ impl Codex {
         {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
+        }
+        if should_disable_spine_for_filtered_fork(
+            &conversation_history,
+            &session_source,
+            thread_source,
+        ) {
+            let _ = config.features.disable(Feature::SpineTaskTree);
         }
 
         let primary_environment = environment_selections.primary_environment();
@@ -1290,6 +1315,42 @@ impl Session {
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
         previous_turn_settings
+    }
+
+    pub(crate) async fn project_spine_from_rollout(
+        &self,
+        turn_context: &TurnContext,
+        rollout_items: &[RolloutItem],
+        reason: impl Into<String>,
+        source_turn_id: Option<String>,
+    ) -> CodexResult<()> {
+        let Some(spine) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let projection = crate::spine::projection::project_spine_state_from_rollout(rollout_items)
+            .map_err(|err| CodexErr::Fatal(format!("failed to project spine state: {err}")))?;
+        let snapshot = {
+            let mut runtime = spine.lock().await;
+            runtime
+                .record_projection_reset(
+                    projection.state,
+                    projection.response_item_count,
+                    reason,
+                    source_turn_id,
+                )
+                .map_err(|err| {
+                    CodexErr::Fatal(format!("failed to record spine projection reset: {err}"))
+                })?;
+            runtime.build_tree_snapshot().map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to build spine tree snapshot after projection reset: {err}"
+                ))
+            })?
+        };
+        self.pending_spine_compact_boundaries.lock().await.clear();
+        self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
+            .await;
+        Ok(())
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {

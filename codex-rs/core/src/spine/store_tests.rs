@@ -509,6 +509,42 @@ fn compact_index_started_without_terminal_fails_load() {
 }
 
 #[test]
+fn projection_reset_replays_projected_state_and_copies_artifacts() {
+    let (temp, source_store) = temp_store();
+    let mut source_state = source_store.create().expect("create source");
+    source_store
+        .record_transition(&mut source_state, SpineOperation::Open, "source scope", 2)
+        .expect("record source transition");
+    source_store
+        .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsource worklog\n")
+        .expect("write source worklog");
+
+    let child_rollout = temp.path().join("rollout-child.jsonl");
+    let child_store = SpineSidecarStore::for_rollout(child_rollout).expect("child store");
+    child_store.create().expect("create child");
+    child_store
+        .record_projection_reset(source_state.clone(), "fork_seed", None)
+        .expect("record projection reset");
+    child_store
+        .copy_node_artifacts_from(&source_store, source_state.nodes().keys())
+        .expect("copy artifacts");
+
+    let replayed = child_store.load().expect("load child projection");
+    assert_eq!(replayed.cursor(), &id(&[1, 1]));
+    assert_eq!(
+        replayed.node(&id(&[1])).expect("root").summary.as_deref(),
+        Some("source scope")
+    );
+    assert!(
+        child_store
+            .read_worklog(&id(&[1, 1]))
+            .expect("read copied worklog")
+            .contains("source worklog")
+    );
+    assert_eq!(read_json_lines(child_store.tree_path()).len(), 2);
+}
+
+#[test]
 fn compact_index_started_then_installed_loads() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");

@@ -511,18 +511,6 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         return;
     }
 
-    if sess.spine.is_some() {
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                message: "spine task tree does not yet support thread rollback".to_string(),
-                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-            }),
-        })
-        .await;
-        return;
-    }
-
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
     let live_thread = match sess.live_thread_for_persistence("rollback thread") {
         Ok(live_thread) => live_thread,
@@ -588,6 +576,26 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
             }),
         )
         .await;
+    }
+
+    if let Err(err) = sess
+        .project_spine_from_rollout(
+            turn_context.as_ref(),
+            replay_items.as_slice(),
+            "rollback",
+            Some(turn_context.sub_id.clone()),
+        )
+        .await
+    {
+        sess.send_event(
+            turn_context.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: format!("rolled back thread history, but failed to project spine: {err}"),
+                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+            }),
+        )
+        .await;
+        return;
     }
 
     sess.deliver_event_raw(Event {

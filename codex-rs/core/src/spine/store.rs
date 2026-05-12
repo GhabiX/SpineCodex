@@ -238,6 +238,38 @@ impl SpineSidecarStore {
         Ok(transition)
     }
 
+    pub(crate) fn record_projection_reset(
+        &self,
+        state: SpineState,
+        reason: impl Into<String>,
+        source_turn_id: Option<String>,
+    ) -> Result<(), SpineStoreError> {
+        for node_id in state.nodes().keys() {
+            self.ensure_node_dir(node_id)?;
+        }
+        let event = TreeEvent::ProjectionReset {
+            seq: self.next_tree_seq()?,
+            reason: reason.into(),
+            source_turn_id,
+            state: StateSnapshot::from_state(&state),
+        };
+        self.append_json_line(&self.tree_path(), &event)?;
+        self.write_state_cache(&state)
+    }
+
+    pub(crate) fn copy_node_artifacts_from<'a>(
+        &self,
+        source: &SpineSidecarStore,
+        node_ids: impl IntoIterator<Item = &'a NodeId>,
+    ) -> Result<(), SpineStoreError> {
+        for node_id in node_ids {
+            self.ensure_node_dir(node_id)?;
+            self.copy_node_file_if_present(source, node_id, WORKLOG_FILE)?;
+            self.copy_node_file_if_present(source, node_id, PLAN_FILE)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn write_plan<T: Serialize>(
         &self,
         node_id: &NodeId,
@@ -688,6 +720,11 @@ impl SpineSidecarStore {
                     }
                     state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
                 }
+                TreeEvent::ProjectionReset {
+                    state: snapshot, ..
+                } => {
+                    state = Some(spine_state_from_snapshot(snapshot)?);
+                }
             }
         }
 
@@ -1051,6 +1088,27 @@ impl SpineSidecarStore {
         std::fs::read_to_string(&path).map_err(|source| SpineStoreError::Io { path, source })
     }
 
+    fn copy_node_file_if_present(
+        &self,
+        source: &SpineSidecarStore,
+        node_id: &NodeId,
+        file_name: &str,
+    ) -> Result<(), SpineStoreError> {
+        let source_path = source.node_dir(node_id).join(file_name);
+        if !source_path.exists() {
+            return Ok(());
+        }
+        let destination_path = self.node_dir(node_id).join(file_name);
+        if destination_path.exists() {
+            return Ok(());
+        }
+        std::fs::copy(&source_path, &destination_path).map_err(|source| SpineStoreError::Io {
+            path: destination_path,
+            source,
+        })?;
+        Ok(())
+    }
+
     fn write_state_cache(&self, state: &SpineState) -> Result<(), SpineStoreError> {
         let path = self.state_path();
         let contents =
@@ -1135,6 +1193,12 @@ enum TreeEvent {
         compact_id: String,
         source_turn_id: String,
     },
+    ProjectionReset {
+        seq: u64,
+        reason: String,
+        source_turn_id: Option<String>,
+        state: StateSnapshot,
+    },
 }
 
 impl TreeEvent {
@@ -1143,7 +1207,8 @@ impl TreeEvent {
             TreeEvent::NodeCreated { seq, .. }
             | TreeEvent::TransitionApplied { seq, .. }
             | TreeEvent::TaskPlanUpdated { seq, .. }
-            | TreeEvent::RootEpochArchived { seq, .. } => *seq,
+            | TreeEvent::RootEpochArchived { seq, .. }
+            | TreeEvent::ProjectionReset { seq, .. } => *seq,
         }
     }
 }
@@ -1322,6 +1387,31 @@ impl StateSnapshot {
                 .collect(),
         }
     }
+}
+
+fn spine_state_from_snapshot(snapshot: StateSnapshot) -> Result<SpineState, SpineStoreError> {
+    let cursor = NodeId::parse(&snapshot.cursor)?;
+    let mut nodes = Vec::with_capacity(snapshot.nodes.len());
+    for node in snapshot.nodes {
+        nodes.push(super::state::NodeRecord {
+            node_id: NodeId::parse(&node.node_id)?,
+            parent_id: node.parent_id.as_deref().map(NodeId::parse).transpose()?,
+            raw_start_ordinal: node.raw_start_ordinal,
+            status: match node.status.as_str() {
+                "live" => NodeStatus::Live,
+                "opened" => NodeStatus::Opened,
+                "finished" => NodeStatus::Finished,
+                "closed" => NodeStatus::Closed,
+                other => {
+                    return Err(SpineStoreError::InvalidLedger(format!(
+                        "unknown spine node status in projection reset: {other}"
+                    )));
+                }
+            },
+            summary: node.summary,
+        });
+    }
+    SpineState::from_records(cursor, nodes).map_err(Into::into)
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]

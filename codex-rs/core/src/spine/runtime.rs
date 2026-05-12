@@ -312,6 +312,23 @@ impl SpineRuntime {
         Ok(())
     }
 
+    pub(crate) fn record_projection_reset(
+        &mut self,
+        state: SpineState,
+        next_raw_ordinal: u64,
+        reason: impl Into<String>,
+        source_turn_id: Option<String>,
+    ) -> Result<(), SpineRuntimeError> {
+        self.store
+            .record_projection_reset(state.clone(), reason, source_turn_id)?;
+        self.state = state;
+        self.next_raw_ordinal = next_raw_ordinal;
+        self.staged_transition = None;
+        self.last_committed_transition = None;
+        self.pending_spine_call_starts.clear();
+        Ok(())
+    }
+
     fn ensure_spine_mutation_allowed(&self) -> Result<(), SpineRuntimeError> {
         if let SpineRuntimeMode::ArchivedReadOnly { reason } = &self.mode {
             return Err(SpineRuntimeError::ArchivedReadOnly {

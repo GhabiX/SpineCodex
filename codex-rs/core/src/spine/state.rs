@@ -41,6 +41,33 @@ impl SpineState {
         }
     }
 
+    pub(crate) fn from_records(
+        cursor: NodeId,
+        records: Vec<NodeRecord>,
+    ) -> Result<Self, SpineStateError> {
+        let mut nodes = BTreeMap::new();
+        for record in records {
+            let node_id = record.node_id.clone();
+            if nodes.insert(node_id.clone(), record).is_some() {
+                return Err(SpineStateError::DuplicateNode(node_id));
+            }
+        }
+        if !nodes.contains_key(&NodeId::root()) {
+            return Err(SpineStateError::UnknownNode(NodeId::root()));
+        }
+        if !nodes.contains_key(&cursor) {
+            return Err(SpineStateError::UnknownNode(cursor));
+        }
+        for record in nodes.values() {
+            if let Some(parent_id) = &record.parent_id
+                && !nodes.contains_key(parent_id)
+            {
+                return Err(SpineStateError::UnknownNode(parent_id.clone()));
+            }
+        }
+        Ok(Self { cursor, nodes })
+    }
+
     pub(crate) fn cursor(&self) -> &NodeId {
         &self.cursor
     }

@@ -10,6 +10,8 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -18,6 +20,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -59,6 +62,26 @@ fn spine_call_msg(call_id: &str) -> ResponseItem {
         name: "spine".to_string(),
         namespace: None,
         arguments: "{}".to_string(),
+    }
+}
+
+fn spine_transition_msg(call_id: &str, op: &str, summary: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        call_id: call_id.to_string(),
+        name: op.to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: format!(r#"{{"summary":"{summary}"}}"#),
+    }
+}
+
+fn function_call_output(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("ok".to_string()),
+            success: Some(true),
+        },
     }
 }
 
@@ -877,7 +900,7 @@ async fn new_uses_active_provider_for_model_refresh() {
 }
 
 #[tokio::test]
-async fn forked_spine_history_is_rejected_when_spine_feature_is_enabled() {
+async fn forked_spine_history_without_source_thread_is_rejected_when_spine_feature_is_enabled() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -911,15 +934,209 @@ async fn forked_spine_history_is_rejected_when_spine_feature_is_enabled() {
         )
         .await;
     let err = match result {
-        Ok(_) => panic!("spine fork history should be rejected"),
+        Ok(_) => panic!("source-less spine fork history should be rejected"),
         Err(err) => err,
     };
 
     assert!(matches!(
         err,
-        CodexErr::InvalidRequest(message)
-            if message == "spine task tree does not yet support forked thread history"
+        CodexErr::Fatal(message)
+            if message.contains("forked spine history is missing a source thread id")
     ));
+}
+
+#[tokio::test]
+async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("source start"))]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let source_session = &source.thread.codex.session;
+    let source_turn = source_session.new_default_turn().await;
+    source_session
+        .spine
+        .as_ref()
+        .expect("source spine")
+        .lock()
+        .await
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            crate::spine::store::SpineOperation::Open,
+            "source scope",
+            /*compact_instruction*/ None,
+        )?;
+    source_session
+        .try_record_conversation_items(
+            source_turn.as_ref(),
+            &[
+                spine_transition_msg("open-1", crate::spine::SPINE_TOOL_OPEN, "source scope"),
+                function_call_output("open-1"),
+            ],
+        )
+        .await?;
+    source.thread.flush_rollout().await?;
+    let source_rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+    let source_store = crate::spine::store::SpineSidecarStore::for_rollout(&source_rollout_path)?;
+    let source_tree_before = std::fs::read_to_string(source_store.tree_path())?;
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config.clone(),
+            source_rollout_path,
+            Some(ThreadSource::User),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let child_rollout_path = forked
+        .thread
+        .rollout_path()
+        .expect("child rollout path should exist");
+    let child_store = crate::spine::store::SpineSidecarStore::for_rollout(&child_rollout_path)?;
+    assert_ne!(source_store.root(), child_store.root());
+    assert!(std::fs::read_to_string(child_store.tree_path())?.contains("\"projection_reset\""));
+    assert_eq!(
+        forked
+            .thread
+            .codex
+            .session
+            .spine
+            .as_ref()
+            .expect("child spine")
+            .lock()
+            .await
+            .cursor()
+            .to_string(),
+        "1.1"
+    );
+
+    let child_session = &forked.thread.codex.session;
+    let child_turn = child_session.new_default_turn().await;
+    child_session
+        .spine
+        .as_ref()
+        .expect("child spine")
+        .lock()
+        .await
+        .stage_transition(
+            "next-child",
+            "turn-child",
+            crate::spine::store::SpineOperation::Next,
+            "child-only next",
+            /*compact_instruction*/ None,
+        )?;
+    child_session
+        .try_record_conversation_items(
+            child_turn.as_ref(),
+            &[
+                spine_transition_msg(
+                    "next-child",
+                    crate::spine::SPINE_TOOL_NEXT,
+                    "child-only next",
+                ),
+                function_call_output("next-child"),
+            ],
+        )
+        .await?;
+
+    assert_eq!(
+        std::fs::read_to_string(source_store.tree_path())?,
+        source_tree_before
+    );
+    assert!(std::fs::read_to_string(child_store.tree_path())?.contains("child-only next"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn filtered_subagent_forked_spine_history_disables_spine() -> anyhow::Result<()> {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+    );
+
+    let forked = manager
+        .state
+        .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
+            config,
+            initial_history: InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+                spine_transition_msg("open-1", crate::spine::SPINE_TOOL_OPEN, "filtered"),
+            )]),
+            agent_control: manager.agent_control(),
+            session_source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::new(),
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            inherited_shell_snapshot: None,
+            inherited_exec_policy: None,
+        })
+        .await?;
+
+    assert!(forked.thread.codex.session.spine.is_none());
+    assert!(
+        !forked
+            .thread
+            .codex
+            .session
+            .get_base_instructions()
+            .await
+            .text
+            .contains("<spine_view>")
+    );
+    Ok(())
 }
 
 #[test]
