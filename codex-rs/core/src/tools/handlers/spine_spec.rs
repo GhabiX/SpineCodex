@@ -19,26 +19,47 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
             ResponsesApiNamespaceTool::Function(spine_transition_tool(
                 SPINE_TOOL_OPEN,
                 "Enter a child scope for a focused Spine subproblem.",
+                CompactInstructionParam::Excluded,
             )),
             ResponsesApiNamespaceTool::Function(spine_transition_tool(
                 SPINE_TOOL_NEXT,
                 "Finish the current Spine leaf and move to its next sibling.",
+                CompactInstructionParam::Included,
             )),
             ResponsesApiNamespaceTool::Function(spine_transition_tool(
                 SPINE_TOOL_CLOSE,
                 "Finish the current Spine leaf, close its non-root parent scope, and continue at the parent's next sibling.",
+                CompactInstructionParam::Included,
             )),
         ],
     })
 }
 
-fn spine_transition_tool(name: &str, description: &str) -> ResponsesApiTool {
-    let properties = BTreeMap::from([(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompactInstructionParam {
+    Excluded,
+    Included,
+}
+
+fn spine_transition_tool(
+    name: &str,
+    description: &str,
+    compact_instruction: CompactInstructionParam,
+) -> ResponsesApiTool {
+    let mut properties = BTreeMap::from([(
         "summary".to_string(),
         JsonSchema::string(Some(
             "Short Spine Tree display label for the transition".to_string(),
         )),
     )]);
+    if compact_instruction == CompactInstructionParam::Included {
+        properties.insert(
+            "instruction".to_string(),
+            JsonSchema::string(Some(
+                "Optional guidance for the automatic compact pass after this transition; use it to name what must be preserved or emphasized from the completed node or scope.".to_string(),
+            )),
+        );
+    }
 
     ResponsesApiTool {
         name: name.to_string(),

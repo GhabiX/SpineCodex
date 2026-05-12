@@ -1402,6 +1402,7 @@ async fn spine_resume_emits_initial_tree_update_after_session_configured() -> an
         "turn-1",
         crate::spine::store::SpineOperation::Open,
         "root scope",
+        /*compact_instruction*/ None,
     )?;
     runtime.after_response_items_recorded(
         "turn-1",
@@ -1744,12 +1745,32 @@ fn spine_compact_id_is_deterministic_for_same_boundary() {
         cut_ordinal: 4,
         fold_end_ordinal: 9,
         transition_summary: "leaf done".to_string(),
+        compact_instruction: None,
     };
 
     assert_eq!(
         deterministic_spine_compact_id(&boundary),
         deterministic_spine_compact_id(&boundary)
     );
+}
+
+#[test]
+fn spine_compact_id_changes_when_instruction_changes() {
+    let mut without_instruction = SpineCompactBoundary {
+        op: SpineOperation::Next,
+        node_id: crate::spine::ids::NodeId::from_segments(vec![1, 2]),
+        scope_node_id: None,
+        cut_ordinal: 4,
+        fold_end_ordinal: 9,
+        transition_summary: "leaf done".to_string(),
+        compact_instruction: None,
+    };
+    let without_instruction_id = deterministic_spine_compact_id(&without_instruction);
+
+    without_instruction.compact_instruction = Some("keep verification details".to_string());
+    let with_instruction_id = deterministic_spine_compact_id(&without_instruction);
+
+    assert_ne!(without_instruction_id, with_instruction_id);
 }
 
 #[tokio::test]
@@ -1816,7 +1837,13 @@ async fn spine_transition_compaction_boundary_waits_for_sampling_completion() ->
     let mut runtime =
         crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
     runtime
-        .stage_transition("open-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage open");
     runtime
         .after_response_items_recorded(
@@ -1831,7 +1858,13 @@ async fn spine_transition_compaction_boundary_waits_for_sampling_completion() ->
         .expect("commit open");
     runtime.take_last_committed_transition();
     runtime
-        .stage_transition("next-1", "turn-2", SpineOperation::Next, "leaf done")
+        .stage_transition(
+            "next-1",
+            "turn-2",
+            SpineOperation::Next,
+            "leaf done",
+            /*compact_instruction*/ None,
+        )
         .expect("stage next");
     session.spine = Some(Arc::new(Mutex::new(runtime)));
 

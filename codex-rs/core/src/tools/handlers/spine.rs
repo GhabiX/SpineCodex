@@ -78,6 +78,8 @@ impl SpineTool {
 #[serde(deny_unknown_fields)]
 struct SpineTransitionArgs {
     summary: String,
+    #[serde(default, rename = "instruction")]
+    compact_instruction: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,13 +201,36 @@ impl ToolHandler for SpineHandler {
             .tool
             .op()
             .expect("tree returned before transition handling");
+        let compact_instruction = match args.compact_instruction {
+            Some(instruction) => {
+                let instruction = instruction.trim().to_string();
+                if instruction.is_empty() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "spine instruction must not be empty when provided".to_string(),
+                    ));
+                }
+                Some(instruction)
+            }
+            None => None,
+        };
+        if op == SpineOperation::Open && compact_instruction.is_some() {
+            return Err(FunctionCallError::RespondToModel(
+                "spine instruction is only supported for next and close".to_string(),
+            ));
+        }
         let (op, cursor, tree, text) = {
             let mut runtime = spine.lock().await;
             let mut preview_state = runtime.state().clone();
             op.apply(&mut preview_state, args.summary.clone())
                 .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
             let staged = runtime
-                .stage_transition(call_id, turn.sub_id.clone(), op, args.summary)
+                .stage_transition(
+                    call_id,
+                    turn.sub_id.clone(),
+                    op,
+                    args.summary,
+                    compact_instruction,
+                )
                 .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
             if preview_state.node(&staged.to_node).is_none() {
                 return Err(FunctionCallError::RespondToModel(format!(

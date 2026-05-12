@@ -10,9 +10,14 @@ use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::spine_spec::create_spine_namespace_tool;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::config_types::ModeKind;
+use codex_tools::JsonSchemaPrimitiveType;
+use codex_tools::JsonSchemaType;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
@@ -58,6 +63,50 @@ fn transition_args() -> serde_json::Value {
 
 fn handler(tool: SpineTool) -> SpineHandler {
     SpineHandler { tool }
+}
+
+#[test]
+fn transition_schema_exposes_instruction_only_for_next_and_close() {
+    let ToolSpec::Namespace(namespace) = create_spine_namespace_tool() else {
+        panic!("expected namespace tool");
+    };
+    let expected_tools = [
+        (crate::spine::SPINE_TOOL_OPEN, false),
+        (crate::spine::SPINE_TOOL_NEXT, true),
+        (crate::spine::SPINE_TOOL_CLOSE, true),
+    ];
+
+    for (name, expect_instruction) in expected_tools {
+        let tool = namespace
+            .tools
+            .iter()
+            .find_map(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) if tool.name == name => Some(tool),
+                ResponsesApiNamespaceTool::Function(_) => None,
+            })
+            .unwrap_or_else(|| panic!("expected spine tool {name}"));
+        let properties = tool
+            .parameters
+            .properties
+            .as_ref()
+            .expect("transition tool should have properties");
+
+        assert!(properties.contains_key("summary"));
+        assert_eq!(properties.contains_key("instruction"), expect_instruction);
+        assert_eq!(
+            tool.parameters.required.as_ref(),
+            Some(&vec!["summary".to_string()])
+        );
+        if expect_instruction {
+            assert_eq!(
+                properties
+                    .get("instruction")
+                    .expect("instruction property")
+                    .schema_type,
+                Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::String))
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -135,6 +184,52 @@ async fn valid_next_returns_compact_tree_view() {
     assert_eq!(
         output.log_preview(),
         "Current:  2\n\n1: finished Completed reproduction and patch verification [worklog already in context]\n2: Current"
+    );
+}
+
+#[tokio::test]
+async fn next_accepts_instruction_and_stages_it() {
+    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    {
+        let spine = session.spine.as_ref().expect("spine runtime");
+        let mut runtime = spine.lock().await;
+        let mut state = runtime.state().clone();
+        runtime
+            .store()
+            .record_transition(
+                &mut state,
+                crate::spine::store::SpineOperation::Open,
+                "root scope",
+                0,
+            )
+            .expect("record open");
+        let store = runtime.store().clone();
+        *runtime = SpineRuntime::from_parts(store, state, 0);
+    }
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    handler(SpineTool::Next)
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "call-next",
+            SpineTool::Next,
+            json!({
+                "summary": "Completed reproduction and patch verification",
+                "instruction": " preserve failing command and verification result ",
+            }),
+        ))
+        .await
+        .expect("spine next should stage");
+
+    let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
+    let staged = runtime
+        .staged_transition()
+        .expect("transition should be staged");
+    assert_eq!(
+        staged.compact_instruction.as_deref(),
+        Some("preserve failing command and verification result")
     );
 }
 
@@ -238,6 +333,62 @@ async fn unexpected_transition_arg_rejects_without_staging() {
         panic!("expected model-visible parse error");
     };
     assert!(message.contains("failed to parse function arguments"));
+    let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
+    assert!(runtime.staged_transition().is_none());
+}
+
+#[tokio::test]
+async fn open_rejects_instruction_without_staging() {
+    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    let session = Arc::new(session);
+    let err = handler(SpineTool::Open)
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::new(turn),
+            "call-spine",
+            SpineTool::Open,
+            json!({
+                "summary": "root scope",
+                "instruction": "no compact happens on open",
+            }),
+        ))
+        .await
+        .expect_err("open instruction should reject");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "spine instruction is only supported for next and close".to_string()
+        )
+    );
+    let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
+    assert!(runtime.staged_transition().is_none());
+}
+
+#[tokio::test]
+async fn empty_instruction_rejects_without_staging() {
+    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    let session = Arc::new(session);
+    let err = handler(SpineTool::Next)
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::new(turn),
+            "call-spine",
+            SpineTool::Next,
+            json!({
+                "summary": "root done",
+                "instruction": "   ",
+            }),
+        ))
+        .await
+        .expect_err("empty instruction should reject");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "spine instruction must not be empty when provided".to_string()
+        )
+    );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     assert!(runtime.staged_transition().is_none());
 }

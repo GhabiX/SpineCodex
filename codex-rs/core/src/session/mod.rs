@@ -2866,6 +2866,7 @@ impl Session {
             prefix_items: Vec::new(),
             suffix_items: Vec::new(),
             transition_summary: boundary.transition_summary.clone(),
+            compact_instruction: boundary.compact_instruction.clone(),
             rollout_path,
             raw_mirror_path: store.raw_rollout_path(),
             sidecar_root: store.root().to_path_buf(),
@@ -3888,7 +3889,7 @@ fn sha1_digest(value: &str) -> String {
 
 fn deterministic_spine_compact_id(boundary: &SpineCompactBoundary) -> String {
     sha1_digest(&format!(
-        "spine-compact-v2\nop={:?}\nnode={}\nscope={}\ncut={}\nfold_end={}\nsummary={}",
+        "spine-compact-v3\nop={:?}\nnode={}\nscope={}\ncut={}\nfold_end={}\nsummary={}\ninstruction={}",
         boundary.op,
         boundary.node_id,
         boundary
@@ -3898,7 +3899,8 @@ fn deterministic_spine_compact_id(boundary: &SpineCompactBoundary) -> String {
             .unwrap_or_default(),
         boundary.cut_ordinal,
         boundary.fold_end_ordinal,
-        boundary.transition_summary
+        boundary.transition_summary,
+        boundary.compact_instruction.as_deref().unwrap_or_default()
     ))
 }
 

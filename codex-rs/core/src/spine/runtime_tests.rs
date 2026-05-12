@@ -278,7 +278,13 @@ fn stage_does_not_advance_cursor_or_write_transition() {
     let (_temp, mut runtime) = temp_runtime();
 
     let staged = runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage transition")
         .clone();
 
@@ -303,7 +309,13 @@ fn stage_does_not_advance_cursor_or_write_transition() {
 fn commit_moves_cursor_after_function_call_output_boundary() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage transition");
 
     let ranges = runtime
@@ -394,7 +406,13 @@ fn stage_after_recorded_call_preserves_function_call_start() {
         )
         .expect("record model output before tool dispatch");
     runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage transition after function call was recorded");
     runtime
         .after_response_items_recorded("turn-1", &[function_call_output("call-1")], 2, 3)
@@ -454,7 +472,13 @@ fn namespaced_transition_call_preserves_function_call_start() {
         )
         .expect("record namespaced model output before tool dispatch");
     runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage transition after function call was recorded");
     runtime
         .after_response_items_recorded("turn-1", &[function_call_output("call-1")], 2, 3)
@@ -472,7 +496,13 @@ fn namespaced_transition_call_preserves_function_call_start() {
 fn next_compact_boundary_uses_finished_leaf_raw_start() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition("open-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage open");
     runtime
         .after_response_items_recorded(
@@ -487,7 +517,13 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
         .after_response_items_recorded("turn-2", &[assistant_message("leaf work")], 2, 3)
         .expect("record leaf work");
     runtime
-        .stage_transition("next-1", "turn-2", SpineOperation::Next, "leaf done")
+        .stage_transition(
+            "next-1",
+            "turn-2",
+            SpineOperation::Next,
+            "leaf done",
+            Some("preserve test output".to_string()),
+        )
         .expect("stage next");
     runtime
         .after_response_items_recorded(
@@ -510,6 +546,10 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
     assert_eq!(boundary.node_id, id(&[1, 1]));
     assert_eq!(boundary.cut_ordinal, 2);
     assert_eq!(boundary.fold_end_ordinal, 5);
+    assert_eq!(
+        boundary.compact_instruction.as_deref(),
+        Some("preserve test output")
+    );
 }
 
 #[test]
@@ -523,7 +563,9 @@ fn transition_stage_fails_after_non_spine_compacted_history() {
         SpineOperation::Close,
     ] {
         let error = runtime
-            .stage_transition("spine-1", "turn-1", op, "summary")
+            .stage_transition(
+                "spine-1", "turn-1", op, "summary", /*compact_instruction*/ None,
+            )
             .expect_err("non-spine compacted history should fail fast");
         assert!(matches!(error, SpineRuntimeError::NonSpineCompactedHistory));
     }
@@ -533,7 +575,13 @@ fn transition_stage_fails_after_non_spine_compacted_history() {
 fn next_compact_fails_after_non_spine_compacted_history() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition("next-1", "turn-1", SpineOperation::Next, "root done")
+        .stage_transition(
+            "next-1",
+            "turn-1",
+            SpineOperation::Next,
+            "root done",
+            /*compact_instruction*/ None,
+        )
         .expect("stage next");
     runtime
         .after_response_items_recorded(
@@ -559,7 +607,13 @@ fn next_compact_fails_after_non_spine_compacted_history() {
 fn close_that_would_close_root_scope_is_rejected() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition("open-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage open");
     runtime
         .after_response_items_recorded(
@@ -575,7 +629,13 @@ fn close_that_would_close_root_scope_is_rejected() {
         .expect("record child work");
 
     let error = runtime
-        .stage_transition("close-1", "turn-2", SpineOperation::Close, "scope done")
+        .stage_transition(
+            "close-1",
+            "turn-2",
+            SpineOperation::Close,
+            "scope done",
+            /*compact_instruction*/ None,
+        )
         .expect_err("close should reject root scope");
 
     assert!(matches!(
@@ -590,7 +650,13 @@ fn close_that_would_close_root_scope_is_rejected() {
 fn close_context_outline_lists_scope_and_direct_children_only() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition("open-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage open");
     runtime
         .after_response_items_recorded(
@@ -602,7 +668,13 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
         .expect("commit open");
     runtime.take_last_committed_transition();
     runtime
-        .stage_transition("open-2", "turn-2", SpineOperation::Open, "child scope")
+        .stage_transition(
+            "open-2",
+            "turn-2",
+            SpineOperation::Open,
+            "child scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage nested open");
     runtime
         .after_response_items_recorded(
@@ -614,7 +686,13 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
         .expect("commit nested open");
     runtime.take_last_committed_transition();
     runtime
-        .stage_transition("next-1", "turn-3", SpineOperation::Next, "first child done")
+        .stage_transition(
+            "next-1",
+            "turn-3",
+            SpineOperation::Next,
+            "first child done",
+            /*compact_instruction*/ None,
+        )
         .expect("stage next");
     runtime
         .after_response_items_recorded(
@@ -631,6 +709,7 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
             "turn-4",
             SpineOperation::Close,
             "second child done",
+            Some("keep subtree decisions".to_string()),
         )
         .expect("stage close");
     runtime
@@ -641,6 +720,21 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
             8,
         )
         .expect("commit close");
+    let committed = runtime
+        .take_last_committed_transition()
+        .expect("close transition");
+    let boundary = runtime
+        .plan_compaction_after_transition(&committed)
+        .expect("compact boundary")
+        .expect("close should compact");
+
+    assert_eq!(boundary.op, SpineOperation::Close);
+    assert_eq!(boundary.node_id, id(&[1, 1]));
+    assert_eq!(boundary.transition_summary, "child scope");
+    assert_eq!(
+        boundary.compact_instruction.as_deref(),
+        Some("keep subtree decisions")
+    );
 
     let outline = runtime
         .render_context_compacted_outline(&id(&[1, 1]))
@@ -663,7 +757,13 @@ fn raw_items_after_commit_are_owned_by_new_cursor() {
         .after_response_items_recorded("model-call", &[spine_call("call-1")], 0, 1)
         .expect("record model call");
     runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage transition");
     runtime
         .after_response_items_recorded("spine-output", &[function_call_output("call-1")], 1, 2)
@@ -701,7 +801,13 @@ fn raw_items_after_commit_are_owned_by_new_cursor() {
 fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage transition");
 
     let ranges = runtime
@@ -772,11 +878,23 @@ fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
 fn rejects_second_staged_transition() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage first transition");
 
     let error = runtime
-        .stage_transition("call-2", "turn-1", SpineOperation::Next, "another")
+        .stage_transition(
+            "call-2",
+            "turn-1",
+            SpineOperation::Next,
+            "another",
+            /*compact_instruction*/ None,
+        )
         .expect_err("second staged transition should fail");
 
     assert!(matches!(
@@ -790,7 +908,13 @@ fn rejects_second_staged_transition() {
 fn commit_requires_matching_call_id() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Open, "root scope")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
         .expect("stage transition");
 
     let error = runtime
@@ -810,7 +934,13 @@ fn commit_requires_matching_call_id() {
 fn commit_requires_recorded_function_call_start() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Next, "root done")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Next,
+            "root done",
+            /*compact_instruction*/ None,
+        )
         .expect("stage transition without recorded call");
 
     let error = runtime
@@ -834,6 +964,7 @@ fn commit_failure_leaves_cursor_and_tree_unchanged() {
             "turn-1",
             SpineOperation::Open,
             "root scope",
+            /*compact_instruction*/ None,
         )
         .expect("stage transition");
 
@@ -886,7 +1017,13 @@ fn stage_uses_state_validation_without_mutating_runtime() {
     let (_temp, mut runtime) = temp_runtime();
 
     let error = runtime
-        .stage_transition("call-1", "turn-1", SpineOperation::Close, "root done")
+        .stage_transition(
+            "call-1",
+            "turn-1",
+            SpineOperation::Close,
+            "root done",
+            /*compact_instruction*/ None,
+        )
         .expect_err("close on root should fail");
 
     assert!(matches!(

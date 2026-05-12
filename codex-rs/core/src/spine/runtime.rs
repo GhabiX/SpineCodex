@@ -203,6 +203,7 @@ impl SpineRuntime {
                     cut_ordinal,
                     fold_end_ordinal: committed.boundary_end,
                     transition_summary: committed.summary.clone(),
+                    compact_instruction: committed.compact_instruction.clone(),
                 }))
             }
             SpineOperation::Close => {
@@ -237,6 +238,7 @@ impl SpineRuntime {
                     cut_ordinal,
                     fold_end_ordinal: committed.boundary_end,
                     transition_summary: scope_summary,
+                    compact_instruction: committed.compact_instruction.clone(),
                 }))
             }
         }
@@ -383,6 +385,7 @@ impl SpineRuntime {
         turn_id: impl Into<String>,
         op: SpineOperation,
         summary: impl Into<String>,
+        compact_instruction: Option<String>,
     ) -> Result<&StagedTransition, SpineRuntimeError> {
         self.ensure_spine_mutation_allowed()?;
         if let Some(staged) = self.staged_transition.as_ref() {
@@ -407,6 +410,7 @@ impl SpineRuntime {
             to_node: transition.to,
             visible_spine: validation_state.visible_spine(),
             summary,
+            compact_instruction,
             call_start_ordinal,
         });
         Ok(self
@@ -500,6 +504,7 @@ impl SpineRuntime {
             call_start_ordinal,
             boundary_end: boundary_end_ordinal,
             summary: staged.summary,
+            compact_instruction: staged.compact_instruction,
         };
         self.last_committed_transition = Some(committed.clone());
         Ok(committed)
@@ -533,6 +538,7 @@ pub(crate) struct StagedTransition {
     pub(crate) to_node: NodeId,
     pub(crate) visible_spine: Vec<NodeId>,
     pub(crate) summary: String,
+    pub(crate) compact_instruction: Option<String>,
     pub(crate) call_start_ordinal: Option<u64>,
 }
 
@@ -545,6 +551,7 @@ pub(crate) struct CommittedTransition {
     pub(crate) call_start_ordinal: u64,
     pub(crate) boundary_end: u64,
     pub(crate) summary: String,
+    pub(crate) compact_instruction: Option<String>,
 }
 
 #[derive(Debug, Error)]

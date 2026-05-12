@@ -198,6 +198,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
         prefix_items: vec![text_item("prefix must stay local")],
         suffix_items: vec![text_item("suffix goes to compactor")],
         transition_summary: "leaf done".to_string(),
+        compact_instruction: None,
         rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
         raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
         sidecar_root: Path::new("/tmp/spine").to_path_buf(),
@@ -233,10 +234,47 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(text.contains("For `next`, compact the completed target leaf"));
     assert!(text.contains("pending immediate obligation"));
     assert!(text.contains("do not describe it as completed unless the suffix itself contains"));
+    assert!(!text.contains("<spine_compact_instruction>"));
 
     let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
     assert!(output.contains("Node trajs: nodes/1/1/trajs.jsonl"));
     assert!(output.contains("Raw mirror: /tmp/raw.jsonl"));
+    assert!(!output.contains("Compact instruction:"));
+}
+
+#[test]
+fn codex_builtin_prompt_and_worklog_include_compact_instruction_when_present() {
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[1, 1]),
+        scope_node_id: None,
+        cut_ordinal: 1,
+        fold_end_ordinal: 3,
+        spine_tree: "1: finished leaf done [worklog already in context]".to_string(),
+        prefix_items: vec![text_item("prefix")],
+        suffix_items: vec![text_item("suffix")],
+        transition_summary: "leaf done".to_string(),
+        compact_instruction: Some("Keep failed command and verification status.".to_string()),
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let prompt = build_codex_builtin_prompt_input(&input, crate::compact::SUMMARIZATION_PROMPT);
+    let ResponseItem::Message { content, .. } = &prompt[2] else {
+        panic!("expected final compact instruction message");
+    };
+    let ContentItem::InputText { text } = &content[0] else {
+        panic!("expected compact instruction text");
+    };
+
+    assert!(text.contains("Additional compaction guidance from the latest spine transition"));
+    assert!(text.contains("<spine_compact_instruction>"));
+    assert!(text.contains("Keep failed command and verification status."));
+    assert!(text.contains("</spine_compact_instruction>"));
+
+    let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
+    assert!(output.contains("Compact instruction:\nKeep failed command and verification status."));
 }
 
 #[test]
@@ -251,6 +289,7 @@ fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
         prefix_items: vec![text_item("prefix")],
         suffix_items: vec![text_item("suffix")],
         transition_summary: "leaf done".to_string(),
+        compact_instruction: None,
         rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
         raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
         sidecar_root: Path::new("/tmp/spine").to_path_buf(),
