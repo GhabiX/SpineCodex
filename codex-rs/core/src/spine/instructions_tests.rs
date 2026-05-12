@@ -40,11 +40,15 @@ fn strip_spine_view_restores_original_base_suffix() {
 #[test]
 fn spine_view_instructions_discourage_turn_by_turn_fragmentation() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("not as a per-message or per-turn log"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("task plan and context manager"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("At the start, form a compact Spine plan"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Default to staying in the current live node"));
     assert!(
         SPINE_VIEW_INSTRUCTIONS.contains(
             "Move spine only when a scope boundary improves focus, cost, or future recall"
         )
     );
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("investigate/localize -> implement/verify"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("one node per shell command"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("one-turn-per-node fragmentation"));
 }
