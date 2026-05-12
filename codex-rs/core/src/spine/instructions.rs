@@ -8,6 +8,7 @@ Move Spine when a completed scope can be carried forward by generated worklog IR
 - spine.next: finish the current leaf and move to its next sibling.
 - spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling. Root cannot be closed.
 At root depth, use spine.next to finish a phase and continue with the next root sibling; use spine.close only from a nested scope when closing its parent and returning to the parent's next sibling.
+For spine.next or spine.close, use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope; keep summary as the short Spine Tree label, and do not use instruction with spine.open.
 Use spine.tree to inspect the current node and Spine Tree without moving the cursor.
 Do not move spine only because a new user message arrived, because you answered a short question, or because you updated progress within the same scope.
 Do not create one node per shell command, checklist item, short reply, or conversation turn.
