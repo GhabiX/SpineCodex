@@ -14,6 +14,7 @@ use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
+use crate::compact::run_inline_spine_aware_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
@@ -822,6 +823,16 @@ async fn run_auto_compact(
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<bool> {
+    if sess.spine_runtime_is_mutable().await {
+        run_inline_spine_aware_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            reason,
+            phase,
+        )
+        .await?;
+        return Ok(true);
+    }
     if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context.features.enabled(Feature::RemoteCompactionV2) {
             run_inline_remote_auto_compact_task_v2(

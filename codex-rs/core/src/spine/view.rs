@@ -59,7 +59,8 @@ fn format_subtree(
         line.push_str(" Current");
     } else {
         line.push(' ');
-        line.push_str(format_status(&node.status));
+        let undone_as_compact = is_unfinished_under_closed_ancestor(state, node_id);
+        line.push_str(format_status(&node.status, undone_as_compact));
         if let Some(summary) = node
             .summary
             .as_deref()
@@ -92,13 +93,37 @@ fn format_subtree(
     }
 }
 
-fn format_status(status: &NodeStatus) -> &'static str {
+fn format_status(status: &NodeStatus, undone_as_compact: bool) -> &'static str {
+    if undone_as_compact {
+        return "[undone as compact]";
+    }
     match status {
         NodeStatus::Live => "live",
         NodeStatus::Opened => "live",
         NodeStatus::Finished => "finished",
         NodeStatus::Closed => "closed",
     }
+}
+
+fn is_unfinished_under_closed_ancestor(state: &SpineState, node_id: &NodeId) -> bool {
+    let Some(node) = state.node(node_id) else {
+        return false;
+    };
+    if !matches!(node.status, NodeStatus::Live | NodeStatus::Opened) {
+        return false;
+    }
+
+    let mut parent_id = node.parent_id.as_ref();
+    while let Some(parent) = parent_id {
+        let Some(parent_node) = state.node(parent) else {
+            return false;
+        };
+        if matches!(parent_node.status, NodeStatus::Closed) {
+            return true;
+        }
+        parent_id = parent_node.parent_id.as_ref();
+    }
+    false
 }
 
 fn should_show_worklog_ref(status: &NodeStatus) -> bool {

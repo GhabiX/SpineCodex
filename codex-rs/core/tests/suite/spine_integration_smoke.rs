@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context;
+use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -18,6 +19,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
@@ -247,6 +249,88 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     );
     assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 2)?;
     assert_raw_mirror_has_raw_items_and_compact_metadata(&sidecar_dir)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-open"),
+                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY),
+                ev_completed_with_tokens("resp-open", 70_000),
+            ]),
+            sse(vec![
+                ev_response_created("resp-work"),
+                ev_assistant_message("msg-work", "work before pressure"),
+                ev_completed_with_tokens("resp-work", 330_000),
+            ]),
+            sse(vec![
+                ev_response_created("resp-auto-compact"),
+                ev_assistant_message("msg-auto-compact", "auto root archive summary"),
+                ev_completed_with_tokens("resp-auto-compact", 200),
+            ]),
+            sse(vec![
+                ev_response_created("resp-after"),
+                ev_spine_transition_call("post-archive-open-call", "open", "post archive scope"),
+                ev_completed_with_tokens("resp-after", 120),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.model_auto_compact_token_limit = Some(200_000);
+        config
+            .features
+            .enable(Feature::SpineTaskTree)
+            .expect("enable spine task tree");
+    });
+    let test = builder.build(&server).await?;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("session should expose rollout path");
+
+    test.submit_turn("open spine before pressure").await?;
+    test.submit_turn("raise token pressure").await?;
+    test.submit_turn("continue after auto compact").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4, "expected user, user, compact, follow-up");
+    assert!(
+        requests[2].body_contains_text(SUMMARIZATION_PROMPT),
+        "spine auto compact should use the normal compact prompt"
+    );
+    assert!(
+        requests[3]
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text.contains("<spine_ir") && text.contains("auto root archive summary")),
+        "follow-up should use a readable spine root-epoch IR checkpoint"
+    );
+
+    let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
+    let tree_text = std::fs::read_to_string(sidecar_dir.join("tree.jsonl"))
+        .with_context(|| format!("read {}", sidecar_dir.join("tree.jsonl").display()))?;
+    assert!(
+        tree_text.contains("\"root_epoch_archived\""),
+        "auto compact should persist root_epoch_archived: {tree_text}"
+    );
+    assert!(
+        tree_text.contains("post archive scope"),
+        "spine should remain mutable after auto root archive: {tree_text}"
+    );
+    let rollout_text = std::fs::read_to_string(&rollout_path)
+        .with_context(|| format!("read {}", rollout_path.display()))?;
+    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 1)?;
 
     Ok(())
 }

@@ -25,3 +25,18 @@ fn tree_view_shows_paths_for_hidden_finished_descendants() {
         "Current:  2\n\n1: closed child scope [worklog already in context]\n    1.1: finished first leaf done nodes/1/1/1/worklog.md\n    1.2: finished second leaf done nodes/1/1/2/worklog.md\n2: Current"
     );
 }
+
+#[test]
+fn tree_view_marks_unfinished_descendants_after_root_epoch_archive() {
+    let mut state = SpineState::new();
+    state.open("active scope").expect("open root epoch");
+    state.open("unfinished child").expect("open child");
+    state
+        .archive_current_root_epoch("context compacted")
+        .expect("archive root epoch");
+
+    assert_eq!(
+        render_tree_tool_output(&state, state.cursor()),
+        "Current:  2\n\n1: closed unfinished child [worklog already in context]\n    1.1: [undone as compact]\n2: Current"
+    );
+}

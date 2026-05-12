@@ -93,6 +93,60 @@ pub(crate) async fn run_inline_auto_compact_task(
     Ok(())
 }
 
+pub(crate) async fn run_inline_spine_aware_auto_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+) -> CodexResult<()> {
+    let prompt = turn_context.compact_prompt().to_string();
+    let input = vec![UserInput::Text {
+        text: prompt,
+        // Compaction prompt is synthesized; no UI element ranges to preserve.
+        text_elements: Vec::new(),
+    }];
+    let attempt = CompactionAnalyticsAttempt::begin(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        CompactionTrigger::Auto,
+        reason,
+        CompactionImplementation::Responses,
+        phase,
+    )
+    .await;
+    let pre_compact_outcome =
+        run_pre_compact_hooks(&sess, &turn_context, CompactionTrigger::Auto).await;
+    match pre_compact_outcome {
+        PreCompactHookOutcome::Continue => {}
+        PreCompactHookOutcome::Stopped { reason } => {
+            let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
+            attempt
+                .track(sess.as_ref(), CompactionStatus::Interrupted, Some(error))
+                .await;
+            return Err(CodexErr::TurnAborted);
+        }
+    }
+
+    let result = run_spine_aware_compact_task_inner_impl(
+        Arc::clone(&sess),
+        Arc::clone(&turn_context),
+        input,
+    )
+    .await;
+    let status = compaction_status_from_result(&result);
+    let error = result.as_ref().err().map(ToString::to_string);
+    if result.is_ok() {
+        let post_compact_outcome =
+            run_post_compact_hooks(&sess, &turn_context, CompactionTrigger::Auto).await;
+        if let PostCompactHookOutcome::Stopped = post_compact_outcome {
+            attempt.track(sess.as_ref(), status, error).await;
+            return Err(CodexErr::TurnAborted);
+        }
+    }
+    attempt.track(sess.as_ref(), status, error).await;
+    result.map(|_| ())
+}
+
 pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
