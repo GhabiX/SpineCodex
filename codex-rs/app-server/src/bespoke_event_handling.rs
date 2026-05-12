@@ -91,7 +91,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -109,6 +108,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequest
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1222,13 +1222,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::SpineTreeUpdate(spine_tree_event) => {
-            handle_spine_tree_update(
-                conversation_id,
-                &event_turn_id,
-                spine_tree_event,
-                &outgoing,
-            )
-            .await;
+            handle_spine_tree_update(conversation_id, &event_turn_id, spine_tree_event, &outgoing)
+                .await;
         }
         EventMsg::ShutdownComplete => {
             thread_watch_manager
@@ -2128,6 +2123,12 @@ mod tests {
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_protocol::protocol::UserMessageEvent;
+    use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
+    use codex_protocol::spine_tree::SpineTreeNodeStatus;
+    use codex_protocol::spine_tree::SpineTreePlanItemSnapshot;
+    use codex_protocol::spine_tree::SpineTreePlanItemStatus;
+    use codex_protocol::spine_tree::SpineTreePlanSnapshot;
+    use codex_protocol::spine_tree::SpineTreeUpdateEvent;
     use codex_thread_store::StoredThread;
     use codex_thread_store::StoredThreadHistory;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -3498,6 +3499,92 @@ mod tests {
                 assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);
                 assert_eq!(n.plan[1].step, "second");
                 assert_eq!(n.plan[1].status, TurnPlanStepStatus::Completed);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_spine_tree_update_emits_notification_for_v2() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            ThreadId::new(),
+        );
+        let update = SpineTreeUpdateEvent {
+            snapshot_seq: 7,
+            active_node_id: "1.1".to_string(),
+            nodes: vec![
+                SpineTreeNodeSnapshot {
+                    node_id: "1".to_string(),
+                    parent_id: None,
+                    summary: Some("root scope".to_string()),
+                    status: SpineTreeNodeStatus::Opened,
+                    plan: None,
+                },
+                SpineTreeNodeSnapshot {
+                    node_id: "1.1".to_string(),
+                    parent_id: Some("1".to_string()),
+                    summary: Some("focused leaf".to_string()),
+                    status: SpineTreeNodeStatus::Live,
+                    plan: Some(SpineTreePlanSnapshot {
+                        revision: 3,
+                        explanation: Some("track focused work".to_string()),
+                        items: vec![
+                            SpineTreePlanItemSnapshot {
+                                stable_task_id: "1.1:0".to_string(),
+                                step: "inspect inputs".to_string(),
+                                status: SpineTreePlanItemStatus::Completed,
+                            },
+                            SpineTreePlanItemSnapshot {
+                                stable_task_id: "1.1:1".to_string(),
+                                step: "run validation".to_string(),
+                                status: SpineTreePlanItemStatus::InProgress,
+                            },
+                        ],
+                    }),
+                },
+            ],
+        };
+
+        let conversation_id = ThreadId::new();
+
+        handle_spine_tree_update(conversation_id, "turn-123", update, &outgoing).await;
+
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::SpineTreeUpdated(n)) => {
+                assert_eq!(n.thread_id, conversation_id.to_string());
+                assert_eq!(n.turn_id, "turn-123");
+                assert_eq!(n.snapshot_seq, 7);
+                assert_eq!(n.active_node_id, "1.1");
+                assert_eq!(n.nodes.len(), 2);
+                assert_eq!(n.nodes[0].node_id, "1");
+                assert_eq!(
+                    n.nodes[0].status,
+                    codex_app_server_protocol::SpineTreeNodeStatus::Opened
+                );
+                assert_eq!(n.nodes[1].parent_id.as_deref(), Some("1"));
+                let plan = n.nodes[1].plan.as_ref().expect("leaf plan");
+                assert_eq!(plan.revision, 3);
+                assert_eq!(plan.explanation.as_deref(), Some("track focused work"));
+                assert_eq!(plan.items[0].stable_task_id, "1.1:0");
+                assert_eq!(
+                    plan.items[0].status,
+                    codex_app_server_protocol::SpineTreePlanItemStatus::Completed
+                );
+                assert_eq!(plan.items[1].step, "run validation");
+                assert_eq!(
+                    plan.items[1].status,
+                    codex_app_server_protocol::SpineTreePlanItemStatus::InProgress
+                );
             }
             other => bail!("unexpected message: {other:?}"),
         }

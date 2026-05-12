@@ -804,6 +804,112 @@ async fn live_app_server_model_verification_renders_warning() {
 }
 
 #[tokio::test]
+async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let spine_tree = codex_app_server_protocol::SpineTreeUpdatedNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        snapshot_seq: 4,
+        active_node_id: "1.1".to_string(),
+        nodes: vec![
+            codex_app_server_protocol::SpineTreeNode {
+                node_id: "1".to_string(),
+                parent_id: None,
+                summary: Some("root scope".to_string()),
+                status: codex_app_server_protocol::SpineTreeNodeStatus::Opened,
+                plan: None,
+            },
+            codex_app_server_protocol::SpineTreeNode {
+                node_id: "1.1".to_string(),
+                parent_id: Some("1".to_string()),
+                summary: Some("focused leaf".to_string()),
+                status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
+                plan: Some(codex_app_server_protocol::SpineTreePlan {
+                    revision: 2,
+                    explanation: Some("track focused work".to_string()),
+                    items: vec![
+                        codex_app_server_protocol::SpineTreePlanItem {
+                            stable_task_id: "1.1:0".to_string(),
+                            step: "inspect inputs".to_string(),
+                            status: codex_app_server_protocol::SpineTreePlanItemStatus::Completed,
+                        },
+                        codex_app_server_protocol::SpineTreePlanItem {
+                            stable_task_id: "1.1:1".to_string(),
+                            step: "run validation".to_string(),
+                            status: codex_app_server_protocol::SpineTreePlanItemStatus::InProgress,
+                        },
+                    ],
+                }),
+            },
+        ],
+    };
+
+    chat.handle_server_notification(
+        ServerNotification::SpineTreeUpdated(spine_tree),
+        /*replay_kind*/ None,
+    );
+
+    let (turn_id, snapshot) = match rx.try_recv() {
+        Ok(AppEvent::UpsertSpineTreeCell { turn_id, snapshot }) => (turn_id, snapshot),
+        other => panic!("expected spine tree upsert event, got {other:?}"),
+    };
+    let rendered = {
+        let cell = crate::history_cell::new_spine_tree_update(turn_id, snapshot);
+        lines_to_single_string(&crate::history_cell::HistoryCell::display_lines(&cell, 80))
+    };
+    assert!(rendered.contains("Spine Tree"));
+    assert!(rendered.contains("1 root scope"));
+    assert!(rendered.contains("1.1 focused leaf current"));
+    assert!(rendered.contains("inspect inputs"));
+    assert!(rendered.contains("run validation"));
+
+    chat.handle_server_notification(
+        ServerNotification::TurnPlanUpdated(
+            codex_app_server_protocol::TurnPlanUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                explanation: Some("flat duplicate".to_string()),
+                plan: vec![codex_app_server_protocol::TurnPlanStep {
+                    step: "this should not render".to_string(),
+                    status: codex_app_server_protocol::TurnPlanStepStatus::Pending,
+                }],
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert!(
+        rx.try_recv().is_err(),
+        "flat plan update should be suppressed after spine tree update"
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_spine_tree_update_omits_missing_summary_placeholder() {
+    let snapshot = codex_app_server_protocol::SpineTreeUpdatedNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        snapshot_seq: 5,
+        active_node_id: "1".to_string(),
+        nodes: vec![codex_app_server_protocol::SpineTreeNode {
+            node_id: "1".to_string(),
+            parent_id: None,
+            summary: None,
+            status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
+            plan: None,
+        }],
+    };
+
+    let cell = crate::history_cell::new_spine_tree_update(snapshot.turn_id.clone(), snapshot);
+    let rendered =
+        lines_to_single_string(&crate::history_cell::HistoryCell::display_lines(&cell, 80));
+
+    assert!(rendered.contains("Spine Tree"));
+    assert!(rendered.contains("1 current"));
+    assert!(!rendered.contains("(no summary)"));
+}
+
+#[tokio::test]
 async fn live_app_server_invalid_thread_name_update_is_ignored() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();

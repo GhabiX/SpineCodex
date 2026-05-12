@@ -470,7 +470,11 @@ impl From<CoreSpineTreePlanSnapshot> for SpineTreePlan {
         Self {
             revision: value.revision,
             explanation: value.explanation,
-            items: value.items.into_iter().map(SpineTreePlanItem::from).collect(),
+            items: value
+                .items
+                .into_iter()
+                .map(SpineTreePlanItem::from)
+                .collect(),
         }
     }
 }

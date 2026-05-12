@@ -3183,12 +3183,13 @@ impl HistoryCell for SpineTreeUpdateCell {
                 .summary
                 .as_deref()
                 .map(str::trim)
-                .filter(|text| !text.is_empty())
-                .unwrap_or("(no summary)");
-            lines.push(Line::from(format!(
-                "{prefix}{marker}{} {summary}",
-                node.node.node_id
-            )));
+                .filter(|text| !text.is_empty());
+            let mut line = format!("{prefix}{marker}{}", node.node.node_id);
+            if let Some(summary) = summary {
+                line.push(' ');
+                line.push_str(summary);
+            }
+            lines.push(Line::from(line));
             if let Some(plan) = &node.node.plan {
                 for item in &plan.items {
                     lines.push(Line::from(format!(
@@ -3258,14 +3259,15 @@ fn render_spine_tree_node(
         .summary
         .as_deref()
         .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .unwrap_or("(no summary)");
+        .filter(|text| !text.is_empty());
     let mut spans = vec![
         Span::from(prefix.clone()).dim(),
         Span::from(node.node_id.clone()).cyan().bold(),
-        Span::from(" "),
-        Span::from(summary.to_string()),
     ];
+    if let Some(summary) = summary {
+        spans.push(Span::from(" "));
+        spans.push(Span::from(summary.to_string()));
+    }
     if active {
         spans.push(Span::from(" current").cyan().bold());
     }
