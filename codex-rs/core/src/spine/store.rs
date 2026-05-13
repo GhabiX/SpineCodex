@@ -967,6 +967,7 @@ impl SpineSidecarStore {
                     from_node,
                     to_node,
                     to_parent_id,
+                    summary: _,
                     raw_start_ordinal,
                     ..
                 } => {
@@ -1059,7 +1060,7 @@ impl SpineSidecarStore {
                     let next_leaf_id = NodeId::parse(&next_leaf_id)?;
                     let next_parent_id =
                         next_parent_id.as_deref().map(NodeId::parse).transpose()?;
-                    let transition = state.reset_root_epoch(summary, raw_start_ordinal)?;
+                    let transition = state.reset_root_epoch(raw_start_ordinal)?;
                     if transition.from != root_id || transition.to != next_leaf_id {
                         return Err(SpineStoreError::InvalidLedger(format!(
                             "root epoch reset replay mismatch: expected {} -> {}, got {} -> {}",
