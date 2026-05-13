@@ -209,7 +209,7 @@ fn spine_function_call(call_id: &str) -> ResponseItem {
         id: None,
         name: "spine".to_string(),
         namespace: None,
-        arguments: r#"{"op":"open","summary":"root scope"}"#.to_string(),
+        arguments: r#"{"op":"open"}"#.to_string(),
         call_id: call_id.to_string(),
     }
 }
@@ -1345,7 +1345,10 @@ async fn spine_runtime_initializes_root_when_feature_is_on() -> anyhow::Result<(
     .await?;
     let spine = session.spine.as_ref().expect("spine runtime").lock().await;
 
-    assert_eq!(spine.cursor(), &crate::spine::ids::NodeId::root());
+    assert_eq!(
+        spine.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![1, 1])
+    );
     assert_eq!(spine.current_ordinal(), 0);
     Ok(())
 }
@@ -1402,7 +1405,7 @@ async fn spine_resume_emits_initial_tree_update_after_session_configured() -> an
         "spine-open",
         "turn-1",
         crate::spine::store::SpineOperation::Open,
-        "root scope",
+        None,
         /*compact_instruction*/ None,
     )?;
     runtime.after_response_items_recorded(
@@ -1481,8 +1484,8 @@ async fn spine_resume_emits_initial_tree_update_after_session_configured() -> an
     let EventMsg::SpineTreeUpdate(snapshot) = second.msg else {
         panic!("expected spine tree update after session configured");
     };
-    assert_eq!(snapshot.active_node_id, "1.1");
-    assert_eq!(snapshot.nodes.len(), 2);
+    assert_eq!(snapshot.active_node_id, "1.1.1");
+    assert_eq!(snapshot.nodes.len(), 3);
     Ok(())
 }
 
@@ -1614,7 +1617,10 @@ fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()>
     let runtime =
         crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
 
-    assert_eq!(runtime.cursor(), &crate::spine::ids::NodeId::root());
+    assert_eq!(
+        runtime.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![1, 1])
+    );
     assert!(
         crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?
             .tree_path()
@@ -1632,7 +1638,10 @@ fn initial_spine_runtime_loads_existing_sidecar_without_transition_history() -> 
     let runtime =
         crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
 
-    assert_eq!(runtime.cursor(), &crate::spine::ids::NodeId::root());
+    assert_eq!(
+        runtime.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![1, 1])
+    );
     assert!(
         crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?
             .tree_path()
@@ -1856,7 +1865,7 @@ async fn spine_transition_compaction_boundary_waits_for_sampling_completion() ->
             "open-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage open");
@@ -1902,7 +1911,7 @@ async fn spine_transition_compaction_boundary_waits_for_sampling_completion() ->
     assert_eq!(pending.len(), 1);
     assert_eq!(
         pending[0].node_id,
-        crate::spine::ids::NodeId::from_segments(vec![1, 1])
+        crate::spine::ids::NodeId::from_segments(vec![1, 1, 1])
     );
     Ok(())
 }
@@ -1918,7 +1927,7 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
             "open-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage open");
@@ -1959,16 +1968,19 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     assert_eq!(
         runtime.cursor(),
-        &crate::spine::ids::NodeId::from_segments(vec![1, 2])
+        &crate::spine::ids::NodeId::from_segments(vec![1, 1])
     );
-    assert!(
-        runtime
-            .store()
-            .read_worklog(&crate::spine::ids::NodeId::from_segments(vec![1, 1]))?
-            .contains("root compact fact")
-    );
+    let root_epochs_dir = runtime.store().root().join("root-epochs");
+    let mut root_epoch_worklogs = String::new();
+    for entry in std::fs::read_dir(root_epochs_dir)? {
+        let worklog_path = entry?.path().join("worklog.md");
+        if worklog_path.exists() {
+            root_epoch_worklogs.push_str(&std::fs::read_to_string(worklog_path)?);
+        }
+    }
+    assert!(root_epoch_worklogs.contains("root compact fact"));
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
-    assert!(tree.contains("\"type\":\"root_epoch_archived\""));
+    assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     assert!(tree.contains("\"compact_id\":\""));
     Ok(())
 }
@@ -1992,7 +2004,7 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
                     "call-open",
                     "spine",
                     "open",
-                    r#"{"summary":"focused leaf"}"#,
+                    r#"{}"#,
                 ),
                 ev_completed("resp-open"),
             ]),
@@ -2007,14 +2019,14 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
                 ),
                 ev_completed("resp-next"),
             ]),
-            sse(vec![
-                ev_response_created("resp-compact"),
-                ev_assistant_message(
-                    "msg-compact",
-                    "<spine_compact_worklog>\ncompact leaf fact\n\nPending continuation: respond exactly FINAL_AFTER_SPINE_COMPACT.\n</spine_compact_worklog>",
-                ),
-                ev_completed("resp-compact"),
-            ]),
+	            sse(vec![
+	                ev_response_created("resp-compact"),
+	                ev_assistant_message(
+	                    "msg-compact",
+	                    "<spine_compact_worklog>\ncompact leaf fact\nNext expected response token: FINAL_AFTER_SPINE_COMPACT.\n</spine_compact_worklog>",
+	                ),
+	                ev_completed("resp-compact"),
+	            ]),
             sse(vec![
                 ev_response_created("resp-final"),
                 ev_assistant_message("msg-final", "Done after compact."),
@@ -2040,15 +2052,15 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     let requests = responses.requests();
     assert_eq!(requests.len(), 4);
     let compact_request = &requests[2];
-    assert!(compact_request.body_contains_text("SpineJIT suffix compaction request"));
+    assert!(compact_request.body_contains_text("Compact only the target suffix represented"));
     assert!(compact_request.tool_by_name("spine", "next").is_some());
 
     let followup_request = &requests[3];
     assert!(followup_request.body_contains_text("<spine_ir"));
     assert!(followup_request.body_contains_text("compact leaf fact"));
-    assert!(followup_request.body_contains_text("Pending continuation"));
+    assert!(!followup_request.body_contains_text("Pending continuation"));
     assert!(followup_request.body_contains_text("FINAL_AFTER_SPINE_COMPACT"));
-    assert!(followup_request.body_contains_text("Continue the active user turn"));
+    assert!(!followup_request.body_contains_text("Continue the active user turn"));
     assert!(
         !followup_request.body_contains_text("RAW_SUFFIX_DETAIL should be folded"),
         "the main follow-up request should see replacement history, not the raw folded suffix"
@@ -2507,7 +2519,7 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
         "open-1",
         "turn-1",
         crate::spine::store::SpineOperation::Open,
-        "root scope",
+        None,
         /*compact_instruction*/ None,
     )?;
     runtime.after_response_items_recorded(
@@ -2537,7 +2549,7 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
         3,
         6,
     )?;
-    assert_eq!(runtime.cursor().to_string(), "1.2");
+    assert_eq!(runtime.cursor().to_string(), "1.1.2");
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: ThreadId::default(),
@@ -2548,7 +2560,7 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
         .await?
         .expect("rollback spine history should project");
     assert_eq!(projection.response_item_count, 3);
-    assert_eq!(projection.state.cursor().to_string(), "1.1");
+    assert_eq!(projection.state.cursor().to_string(), "1.1.1");
 
     let projected_runtime = crate::session::session::load_initial_spine_runtime(
         &rollout_path,
@@ -2557,7 +2569,7 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
         /*has_non_spine_compaction*/ false,
         Some(&projection),
     )?;
-    assert_eq!(projected_runtime.cursor().to_string(), "1.1");
+    assert_eq!(projected_runtime.cursor().to_string(), "1.1.1");
     assert!(
         std::fs::read_to_string(projected_runtime.store().tree_path())?
             .contains("\"projection_reset\"")
@@ -3157,7 +3169,7 @@ async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
             "open-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )?;
     sess.try_record_conversation_items(
@@ -3212,8 +3224,8 @@ async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
         match event.msg {
             EventMsg::SpineTreeUpdate(snapshot) => {
                 saw_spine_projection = true;
-                assert_eq!(snapshot.active_node_id, "1.1");
-                assert!(snapshot.nodes.iter().all(|node| node.node_id != "1.2"));
+                assert_eq!(snapshot.active_node_id, "1.1.1");
+                assert!(snapshot.nodes.iter().all(|node| node.node_id != "1.1.2"));
             }
             EventMsg::ThreadRolledBack(rollback) => {
                 saw_rollback = true;
@@ -3223,11 +3235,11 @@ async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
         }
     }
     let runtime = sess.spine.as_ref().expect("spine").lock().await;
-    assert_eq!(runtime.cursor().to_string(), "1.1");
+    assert_eq!(runtime.cursor().to_string(), "1.1.1");
     assert!(
         runtime
             .state()
-            .node(&NodeId::from_segments(vec![1, 2]))
+            .node(&NodeId::from_segments(vec![1, 1, 2]))
             .is_none()
     );
     assert!(std::fs::read_to_string(runtime.store().tree_path())?.contains("\"projection_reset\""));

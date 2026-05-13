@@ -23,7 +23,11 @@ fn spine_call(call_id: &str, op: &str, summary: &str) -> RolloutItem {
         id: None,
         name: op.to_string(),
         namespace: Some(SPINE_NAMESPACE.to_string()),
-        arguments: format!(r#"{{"summary":"{summary}"}}"#),
+        arguments: if op == SPINE_TOOL_OPEN {
+            "{}".to_string()
+        } else {
+            format!(r#"{{"summary":"{summary}"}}"#)
+        },
         call_id: call_id.to_string(),
     })
 }
@@ -69,11 +73,11 @@ fn projects_committed_spine_transitions_from_rollout_prefix() {
     .expect("project");
 
     assert_eq!(projection.response_item_count, 5);
-    assert_eq!(projection.state.cursor().to_string(), "1.2");
+    assert_eq!(projection.state.cursor().to_string(), "1.1.2");
     assert_eq!(
         projection
             .state
-            .node(&NodeId::from_segments(vec![1, 1]))
+            .node(&NodeId::from_segments(vec![1, 1, 1]))
             .expect("node")
             .summary
             .as_deref(),
@@ -97,7 +101,7 @@ fn projection_applies_thread_rollback_markers() {
     .expect("project");
 
     assert_eq!(projection.response_item_count, 3);
-    assert_eq!(projection.state.cursor().to_string(), "1.1");
+    assert_eq!(projection.state.cursor().to_string(), "1.1.1");
     assert!(
         projection
             .state

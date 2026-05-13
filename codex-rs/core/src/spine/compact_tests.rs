@@ -49,6 +49,16 @@ fn function_call_output(call_id: &str) -> ResponseItem {
     }
 }
 
+fn function_call(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "tree".to_string(),
+        namespace: Some("spine".to_string()),
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
 #[test]
 fn raw_ordinals_map_to_synthetic_spine_ir_boundaries_only() {
     let ir_item = render_spine_ir_item(
@@ -236,6 +246,115 @@ fn suffix_fold_preserves_prefix_tool_closure_before_ir() {
 }
 
 #[test]
+fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
+    let history = vec![
+        text_item("prefix"),
+        render_spine_ir_item(
+            &id(&[1, 1]),
+            SpineOperation::Archive,
+            "previous root epoch",
+            Path::new("/tmp/spine"),
+            Path::new("root-epochs/previous/worklog.md"),
+            "previous body",
+            1,
+            7,
+        ),
+        user_item("current tree?"),
+        function_call("tree-1"),
+        function_call_output("tree-1"),
+        text_item("assistant answered tree"),
+        user_item("tail after compact request"),
+    ];
+    let input = SpineCompactInput {
+        op: SpineOperation::Archive,
+        node_id: id(&[1, 1]),
+        scope_node_id: None,
+        cut_ordinal: 7,
+        fold_end_ordinal: 9,
+        spine_tree: "1: Current".to_string(),
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: "Context compacted".to_string(),
+        compact_instruction: None,
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let plan = plan_suffix_fold(&history, 7, 9, input).expect("plan suffix fold");
+
+    assert_eq!(plan.cut_index, 2);
+    assert_eq!(plan.fold_end_index, 5);
+    assert_eq!(plan.input.cut_ordinal, 7);
+    assert_eq!(plan.input.fold_end_ordinal, 10);
+    assert_eq!(plan.input.suffix_items[1], function_call("tree-1"));
+    assert_eq!(plan.input.suffix_items[2], function_call_output("tree-1"));
+    assert_eq!(
+        plan.replacement_tail,
+        vec![
+            text_item("assistant answered tree"),
+            user_item("tail after compact request")
+        ]
+    );
+
+    let replacement = build_suffix_replacement_history(
+        &history,
+        plan.cut_index,
+        plan.fold_end_index,
+        vec![render_spine_ir_item(
+            &id(&[1, 1]),
+            SpineOperation::Archive,
+            "Context compacted",
+            Path::new("/tmp/spine"),
+            Path::new("root-epochs/compact/worklog.md"),
+            "compacted tree tool call",
+            plan.input.cut_ordinal,
+            plan.input.fold_end_ordinal,
+        )],
+    );
+    assert!(
+        !replacement
+            .iter()
+            .any(|item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "tree-1")),
+        "replacement history must not leave the tool output orphaned after folding its call"
+    );
+}
+
+#[test]
+fn suffix_fold_pulls_call_back_when_output_is_inside_range() {
+    let history = vec![
+        user_item("previous turn"),
+        function_call("shell-1"),
+        function_call_output("shell-1"),
+        text_item("assistant final"),
+    ];
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[1, 1]),
+        scope_node_id: None,
+        cut_ordinal: 2,
+        fold_end_ordinal: 3,
+        spine_tree: "1: finished leaf [worklog already in context]\n2: Current".to_string(),
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: "leaf done".to_string(),
+        compact_instruction: None,
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let plan = plan_suffix_fold(&history, 2, 3, input).expect("plan suffix fold");
+
+    assert_eq!(plan.cut_index, 1);
+    assert_eq!(plan.fold_end_index, 3);
+    assert_eq!(plan.input.cut_ordinal, 1);
+    assert_eq!(plan.input.fold_end_ordinal, 3);
+    assert_eq!(plan.input.suffix_items[0], function_call("shell-1"));
+    assert_eq!(plan.input.suffix_items[1], function_call_output("shell-1"));
+}
+
+#[test]
 fn render_ir_item_embeds_summary_path_and_fold_bounds() {
     let item = render_spine_ir_item(
         &id(&[1, 2]),
@@ -249,7 +368,7 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
     );
     let text = match &item {
         ResponseItem::Message { content, .. } => match &content[0] {
-            ContentItem::InputText { text } => text.clone(),
+            ContentItem::OutputText { text } => text.clone(),
             _ => panic!("unexpected content item"),
         },
         _ => panic!("unexpected item type"),
@@ -262,8 +381,8 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
     assert!(text.contains("fold_end=\"17\""));
     assert!(text.contains("Base: /tmp/spine"));
     assert!(text.contains("Worklog path: nodes/1/2/worklog.md"));
-    assert!(text.contains("Continue the active user turn"));
-    assert!(text.contains("do not repeat older tool calls"));
+    assert!(!text.contains("Continue the active user turn"));
+    assert!(!text.contains("do not repeat older tool calls"));
     assert!(text.contains("scope body"));
     let ResponseItem::Message { id, .. } = item else {
         panic!("unexpected item type");
@@ -274,7 +393,6 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
 #[test]
 fn codex_builtin_prompt_uses_fork_full_history_shape() {
     let mut state = SpineState::new();
-    state.open("parent").expect("open parent");
     state.next("leaf done").expect("finish leaf");
     let spine_tree = render_tree(&state, state.cursor());
     let input = SpineCompactInput {
@@ -302,8 +420,8 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(!rendered.contains("quoted_suffix_response_items_json"));
     assert!(!rendered.contains("Target suffix item count"));
     assert!(rendered.contains("<spine_tree>"));
-    assert!(rendered.contains("1: finished leaf done [worklog already in context]"));
-    assert!(rendered.contains("2: Current"));
+    assert!(rendered.contains("1.1: finished leaf done [worklog already in context]"));
+    assert!(rendered.contains("1.2: Current"));
     assert!(rendered.contains("<spine_compact_worklog>"));
     assert!(rendered.contains("</spine_compact_worklog>"));
     assert_eq!(prompt[0], input.prefix_items[0]);
@@ -315,16 +433,15 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
         panic!("expected compact instruction text");
     };
     assert!(text.starts_with(crate::compact::SUMMARIZATION_PROMPT));
-    assert!(text.contains("Use the Spine Tree representation below as the node tag"));
-    assert!(text.contains("Target tree node: 1"));
+    assert!(text.contains("Compact only the target suffix represented by node `1.1`"));
+    assert!(text.contains("Target tree node: 1.1"));
     assert!(text.contains("Internal node id: 1.1"));
-    assert!(text.contains("match the target node by its rendered tree id"));
-    assert!(text.contains("target tree node `1` in this Spine Tree"));
-    assert!(text.contains("For `next`, compact the completed target leaf"));
-    assert!(text.contains("pending immediate obligation"));
-    assert!(text.contains("include a `Pending continuation` bullet"));
-    assert!(text.contains("exact post-tool obligation"));
-    assert!(text.contains("do not describe it as completed unless the suffix itself contains"));
+    assert!(text.contains("Target operation: next"));
+    assert!(text.contains("Spine Tree summary label: leaf done"));
+    assert!(
+        text.contains("Drop chatter, duplicate instructions, and imperative continuation text")
+    );
+    assert!(!text.contains("Pending continuation"));
     assert!(!text.contains("<spine_compact_instruction>"));
 
     let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
@@ -335,7 +452,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
 }
 
 #[test]
-fn codex_builtin_prompt_and_worklog_include_compact_instruction_when_present() {
+fn codex_builtin_prompt_includes_compact_instruction_when_present() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 1]),
@@ -360,14 +477,13 @@ fn codex_builtin_prompt_and_worklog_include_compact_instruction_when_present() {
         panic!("expected compact instruction text");
     };
 
-    assert!(text.contains("Additional compaction guidance from the latest spine transition"));
-    assert!(text.contains("<spine_compact_instruction>"));
+    assert!(text.contains("Additional compaction guidance:"));
     assert!(text.contains("Keep failed command and verification status."));
-    assert!(text.contains("</spine_compact_instruction>"));
+    assert!(!text.contains("<spine_compact_instruction>"));
 
     let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
     assert!(output.contains("Base: /tmp/spine"));
-    assert!(output.contains("Compact instruction:\nKeep failed command and verification status."));
+    assert!(!output.contains("Compact instruction:"));
 }
 
 #[test]

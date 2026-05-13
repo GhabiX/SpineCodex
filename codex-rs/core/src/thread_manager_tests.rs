@@ -62,7 +62,11 @@ fn spine_transition_msg(call_id: &str, op: &str, summary: &str) -> ResponseItem 
         call_id: call_id.to_string(),
         name: op.to_string(),
         namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
-        arguments: format!(r#"{{"summary":"{summary}"}}"#),
+        arguments: if op == crate::spine::SPINE_TOOL_OPEN {
+            "{}".to_string()
+        } else {
+            format!(r#"{{"summary":"{summary}"}}"#)
+        },
     }
 }
 
@@ -986,7 +990,7 @@ async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
             "open-1",
             "turn-1",
             crate::spine::store::SpineOperation::Open,
-            "source scope",
+            None,
             /*compact_instruction*/ None,
         )?;
     source_session
@@ -1035,7 +1039,7 @@ async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
             .await
             .cursor()
             .to_string(),
-        "1.1"
+        "1.1.1"
     );
 
     let child_session = &forked.thread.codex.session;
@@ -1121,7 +1125,7 @@ async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> an
             "open-1",
             "turn-1",
             crate::spine::store::SpineOperation::Open,
-            "source scope",
+            None,
             /*compact_instruction*/ None,
         )?;
     source_session
@@ -1191,7 +1195,7 @@ async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> an
         .lock()
         .await;
 
-    assert_eq!(child_runtime.cursor().to_string(), "1.1");
+    assert_eq!(child_runtime.cursor().to_string(), "1.1.1");
     // Interrupted fork snapshots append the same model-visible interrupt marker
     // used by the live interrupt path. That marker is a response item and must
     // be counted so the next Spine raw ordinal aligns with the forked history.
@@ -1199,7 +1203,7 @@ async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> an
     assert!(
         child_runtime
             .state()
-            .node(&crate::spine::ids::NodeId::from_segments(vec![1, 2]))
+            .node(&crate::spine::ids::NodeId::from_segments(vec![1, 1, 2]))
             .is_none()
     );
     Ok(())

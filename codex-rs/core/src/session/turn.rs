@@ -44,6 +44,7 @@ use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::spine::view::SpineContextBudgetHint;
 use crate::spine::view::render_size_hint;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
@@ -1082,7 +1083,23 @@ async fn append_spine_size_hint_for_request(
     let Some(hint) = hint else {
         return Ok(input);
     };
-    let text = render_size_hint(&hint).trim().to_string();
+    let budget =
+        if let Some(limit_tokens) = turn_context.model_info.auto_compact_token_limit() {
+            let used_tokens = sess.get_total_token_usage().await;
+            let used_tokens = u64::try_from(used_tokens).map_err(|_| {
+                CodexErr::Fatal("Spine context budget used token count is negative".to_string())
+            })?;
+            let limit_tokens = u64::try_from(limit_tokens).map_err(|_| {
+                CodexErr::Fatal("Spine context budget limit token count is negative".to_string())
+            })?;
+            Some(SpineContextBudgetHint {
+                used_tokens,
+                limit_tokens,
+            })
+        } else {
+            None
+        };
+    let text = render_size_hint(&hint, budget.as_ref()).trim().to_string();
     input.push(ResponseItem::Message {
         id: None,
         role: "developer".to_string(),
@@ -2508,9 +2525,13 @@ async fn try_run_sampling_request(
                 turn_context.as_ref(),
                 client_session,
                 prompt,
+                &cancellation_token,
             )
             .await
         {
+            if matches!(err, CodexErr::TurnAborted | CodexErr::Interrupted) {
+                return Err(CodexErr::TurnAborted);
+            }
             sess.send_event(
                 &turn_context,
                 EventMsg::Error(
@@ -2550,6 +2571,8 @@ mod spine_tool_order_tests {
     use super::*;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadMemoryMode;
+    use codex_protocol::protocol::TokenUsage;
+    use codex_protocol::protocol::TokenUsageInfo;
     use codex_thread_store::CreateThreadParams;
     use codex_thread_store::LiveThread;
     use codex_thread_store::ThreadEventPersistenceMode;
@@ -2684,7 +2707,21 @@ mod spine_tool_order_tests {
 
     #[tokio::test]
     async fn request_boundary_appends_spine_size_hint_once() {
-        let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let (mut session, mut turn_context) =
+            crate::session::tests::make_session_and_context().await;
+        turn_context.model_info.context_window = Some(1_000_000);
+        turn_context.model_info.auto_compact_token_limit = Some(900_000);
+        session.state.lock().await.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                total_tokens: 812_300,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                total_tokens: 812_300,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(1_000_000),
+        }));
         let config = session.get_config().await;
         let live_thread = LiveThread::create(
             Arc::clone(&session.services.thread_store),
@@ -2753,7 +2790,7 @@ mod spine_tool_order_tests {
                             && matches!(
                                 content.as_slice(),
                                 [ContentItem::InputText { text }]
-                                    if text.contains("Spine hint: current node raw trace is about")
+                                    if text.contains("Spine hint:")
                             )
                 )
             }),
@@ -2796,19 +2833,22 @@ mod spine_tool_order_tests {
         assert_eq!(role, "developer");
         assert!(matches!(
             content.as_slice(),
-            [ContentItem::InputText { text }] if text.contains("Spine hint: current node raw trace is about")
+            [ContentItem::InputText { text }]
+                if text.contains("Spine hint: context is about 812k/900k tokens (88k left); current live node is about")
+                    && text.contains("At a natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch.")
         ));
         let history_after_first = session.clone_history().await.raw_items().to_vec();
         assert!(
             history_after_first.iter().any(|item| matches!(
                 item,
                 ResponseItem::Message { role, content, .. }
-                    if role == "developer"
-                        && matches!(
-                            content.as_slice(),
-                            [ContentItem::InputText { text }]
-                                if text.contains("Spine hint: current node raw trace is about")
-                        )
+                        if role == "developer"
+                            && matches!(
+                                content.as_slice(),
+                                [ContentItem::InputText { text }]
+                                    if text.contains("Spine hint: context is about 812k/900k tokens (88k left); current live node is about")
+                                        && text.contains("At a natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch.")
+                            )
             )),
             "hint must be persisted into history so the next request preserves the previous request prefix"
         );
@@ -2851,14 +2891,20 @@ mod spine_tool_order_tests {
         assert_eq!(role, "developer");
         assert!(matches!(
             content.as_slice(),
-            [ContentItem::InputText { text }] if text.contains("Spine hint: current node raw trace is about")
+            [ContentItem::InputText { text }]
+                if text.contains("Spine hint: context is about")
+                    && text.contains("/900k tokens")
+                    && text.contains("left); current live node is about")
         ));
         let spine = session.spine.as_ref().expect("spine runtime");
         let runtime = spine.lock().await;
         assert!(
             runtime
                 .store()
-                .has_size_hint_emitted(&crate::spine::ids::NodeId::root(), 50_000)
+                .has_size_hint_emitted(
+                    &crate::spine::ids::NodeId::from_segments(vec![1, 1]),
+                    50_000,
+                )
                 .expect("query 50k hint event"),
             "request boundary must record the 50k threshold exactly once"
         );

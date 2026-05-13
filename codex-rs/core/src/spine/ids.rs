@@ -6,7 +6,7 @@ pub(crate) struct NodeId(Vec<u32>);
 
 impl NodeId {
     pub(crate) fn root() -> Self {
-        Self(vec![1])
+        Self(Vec::new())
     }
 
     pub(crate) fn from_segments(segments: Vec<u32>) -> Self {
@@ -91,6 +91,9 @@ impl FromStr for NodeId {
 
 impl fmt::Display for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.is_empty() {
+            return f.write_str("root");
+        }
         for (index, segment) in self.0.iter().enumerate() {
             if index > 0 {
                 f.write_str(".")?;

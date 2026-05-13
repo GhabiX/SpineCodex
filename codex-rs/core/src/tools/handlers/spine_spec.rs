@@ -16,11 +16,7 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
         description: "Inspect and move the feature-gated Spine task tree cursor.".to_string(),
         tools: vec![
             ResponsesApiNamespaceTool::Function(spine_tree_tool()),
-            ResponsesApiNamespaceTool::Function(spine_transition_tool(
-                SPINE_TOOL_OPEN,
-                "Enter a child scope for a focused Spine subproblem.",
-                CompactInstructionParam::Excluded,
-            )),
+            ResponsesApiNamespaceTool::Function(spine_open_tool()),
             ResponsesApiNamespaceTool::Function(spine_transition_tool(
                 SPINE_TOOL_NEXT,
                 "Finish the current Spine leaf and move to its next sibling.",
@@ -35,9 +31,19 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
     })
 }
 
+fn spine_open_tool() -> ResponsesApiTool {
+    ResponsesApiTool {
+        name: SPINE_TOOL_OPEN.to_string(),
+        description: "Enter a child scope for a focused Spine subproblem.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(false.into())),
+        output_schema: None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CompactInstructionParam {
-    Excluded,
     Included,
 }
 

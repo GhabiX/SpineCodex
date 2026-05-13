@@ -6,24 +6,22 @@ use std::path::Path;
 #[test]
 fn tree_view_omits_root_and_marks_visible_worklogs() {
     let mut state = SpineState::new();
-    state.open("parent scope").expect("open parent");
     state.next("first child done").expect("finish child");
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  2\n\n1: finished first child done [worklog already in context]\n2: Current"
+        "Current:  1.2\n\n1.1: finished first child done [worklog already in context]\n1.2: Current"
     );
 }
 
 #[test]
 fn tree_tool_view_can_include_base_path() {
     let mut state = SpineState::new();
-    state.open("parent scope").expect("open parent");
     state.next("first child done").expect("finish child");
 
     assert_eq!(
         render_tree_tool_output_with_base(&state, state.cursor(), Path::new("/tmp/spine")),
-        "Current:  2\nBase: /tmp/spine\n\n1: finished first child done [worklog already in context]\n2: Current"
+        "Current:  1.2\nBase: /tmp/spine\n\n1.1: finished first child done [worklog already in context]\n1.2: Current"
     );
 }
 
@@ -36,36 +34,52 @@ fn renders_runtime_size_hint_as_standalone_observation_text() {
     };
 
     assert_eq!(
-        render_size_hint(&hint),
-        "\n\nSpine hint: current node raw trace is about 63k tokens and is carried into every request. At the next natural boundary, use spine.next or spine.close if finished work can be carried by the worklog."
+        render_size_hint(
+            &hint,
+            Some(&SpineContextBudgetHint {
+                used_tokens: 812_300,
+                limit_tokens: 900_000,
+            }),
+        ),
+        "\n\nSpine hint: context is about 812k/900k tokens (88k left); current live node is about 63k. At a natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch."
+    );
+}
+
+#[test]
+fn renders_runtime_size_hint_without_budget_as_node_only_text() {
+    let hint = SpineRuntimeHint {
+        node_id: NodeId::from_segments(vec![1]),
+        estimated_tokens: 63_200,
+        threshold_tokens: 60_000,
+    };
+
+    assert_eq!(
+        render_size_hint(&hint, None),
+        "\n\nSpine hint: current live node is about 63k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a worklog."
     );
 }
 
 #[test]
 fn tree_view_shows_paths_for_hidden_finished_descendants() {
     let mut state = SpineState::new();
-    state.open("parent scope").expect("open parent");
-    state.open("child scope").expect("open child");
+    state.open().expect("open child scope");
     state.next("first leaf done").expect("finish first leaf");
-    state.close("second leaf done").expect("close child scope");
+    state.close("child scope").expect("close child scope");
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  2\n\n1: closed child scope [worklog already in context]\n    1.1: finished first leaf done nodes/1/1/1/worklog.md\n    1.2: finished second leaf done nodes/1/1/2/worklog.md\n2: Current"
+        "Current:  1.2\n\n1.1: closed child scope [worklog already in context]\n    1.1.1: finished first leaf done nodes/1/1/1/worklog.md\n    1.1.2: finished nodes/1/1/2/worklog.md\n1.2: Current"
     );
 }
 
 #[test]
-fn tree_view_marks_unfinished_descendants_after_root_epoch_archive() {
+fn tree_view_resets_after_root_epoch_reset() {
     let mut state = SpineState::new();
-    state.open("active scope").expect("open root epoch");
-    state.open("unfinished child").expect("open child");
-    state
-        .archive_current_root_epoch("context compacted")
-        .expect("archive root epoch");
+    state.open().expect("open child");
+    state.reset_root_epoch(7).expect("reset root epoch");
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  2\n\n1: closed unfinished child [worklog already in context]\n    1.1: [undone as compact]\n2: Current"
+        "Current:  1.1\n\n1.1: Current"
     );
 }

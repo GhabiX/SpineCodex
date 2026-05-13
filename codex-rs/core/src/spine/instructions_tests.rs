@@ -58,7 +58,7 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.next"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.close"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("optional instruction argument"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("do not use instruction with spine.open"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("Do not use summary or instruction with spine.open"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Completed Spine nodes are read-only"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("A node is a working scope, not a checklist item"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("The node summary is only a short tree label"));

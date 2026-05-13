@@ -107,7 +107,7 @@ fn spine_call(call_id: &str) -> ResponseItem {
         id: None,
         name: "spine".to_string(),
         namespace: None,
-        arguments: r#"{"op":"open","summary":"root scope"}"#.to_string(),
+        arguments: r#"{"op":"open"}"#.to_string(),
         call_id: call_id.to_string(),
     }
 }
@@ -147,6 +147,36 @@ fn response_item(text: &str) -> ResponseItem {
     assistant_message(text)
 }
 
+fn initial_tree_event(raw_start_ordinal: u64) -> Value {
+    json!({
+        "type": "spine_initialized",
+        "seq": 1,
+        "state": {
+            "cursor": "1.1",
+            "nodes": [
+                {
+                    "node_id": "1",
+                    "parent_id": null,
+                    "raw_start_ordinal": 0,
+                    "status": "opened",
+                    "summary": null,
+                    "worklog_path": "nodes/1/worklog.md",
+                    "plan_path": "nodes/1/plan.json",
+                },
+                {
+                    "node_id": "1.1",
+                    "parent_id": "1",
+                    "raw_start_ordinal": raw_start_ordinal,
+                    "status": "live",
+                    "summary": null,
+                    "worklog_path": "nodes/1/1/worklog.md",
+                    "plan_path": "nodes/1/1/plan.json",
+                },
+            ],
+        },
+    })
+}
+
 #[test]
 fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
     let (_temp, mut runtime) = temp_runtime();
@@ -157,7 +187,7 @@ fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
         .expect("record plan update");
 
     assert_eq!(runtime.state(), &initial_state);
-    assert_eq!(snapshot.node_id, "1");
+    assert_eq!(snapshot.node_id, "1.1");
     assert_eq!(snapshot.revision, 1);
     assert_eq!(snapshot.source_turn_id, "turn-1");
     assert_eq!(snapshot.event_seq, 2);
@@ -166,8 +196,8 @@ fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
     assert_eq!(snapshot.items[0].step, "Inspect root");
     assert_eq!(snapshot.items[0].status, "in_progress");
 
-    let plan = read_json(runtime.store().plan_path(&id(&[1])));
-    assert_eq!(plan["node_id"], "1");
+    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
+    assert_eq!(plan["node_id"], "1.1");
     assert_eq!(plan["revision"], 1);
     assert_eq!(plan["event_seq"], 2);
     assert_eq!(plan["source_turn_id"], "turn-1");
@@ -176,7 +206,7 @@ fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
     let tree = read_json_lines(runtime.store().tree_path());
     assert_eq!(tree[1]["type"], "task_plan_updated");
     assert_eq!(tree[1]["seq"], 2);
-    assert_eq!(tree[1]["node_id"], "1");
+    assert_eq!(tree[1]["node_id"], "1.1");
     assert_eq!(tree[1]["revision"], 1);
     assert_eq!(tree[1]["items"][0]["stable_task_id"], "step-1");
     assert_eq!(tree[1]["items"][0]["step"], "Inspect root");
@@ -220,7 +250,7 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
         .maybe_emit_size_hint("runtime_observation")
         .expect("emit first hint")
         .expect("hint should appear");
-    assert_eq!(first.node_id, id(&[1]));
+    assert_eq!(first.node_id, id(&[1, 1]));
     assert!(first.estimated_tokens >= 30_000);
     assert_eq!(first.threshold_tokens, 30_000);
 
@@ -246,7 +276,7 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
         .maybe_emit_size_hint("runtime_observation")
         .expect("emit second threshold")
         .expect("second threshold should appear");
-    assert_eq!(second.node_id, id(&[1]));
+    assert_eq!(second.node_id, id(&[1, 1]));
     assert_eq!(second.threshold_tokens, 50_000);
 }
 
@@ -282,7 +312,7 @@ fn record_plan_update_reuses_task_ids_after_insert_and_reorder() {
     assert_eq!(second.items[0].stable_task_id, "step-2");
     assert_eq!(second.items[1].stable_task_id, "step-3");
     assert_eq!(second.items[2].stable_task_id, "step-1");
-    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
 }
 
 #[test]
@@ -295,14 +325,26 @@ fn build_tree_snapshot_includes_node_local_plans() {
     let snapshot = runtime.build_tree_snapshot().expect("build snapshot");
 
     assert_eq!(snapshot.snapshot_seq, 2);
-    assert_eq!(snapshot.active_node_id, "1");
-    assert_eq!(snapshot.nodes.len(), 1);
-    let root = &snapshot.nodes[0];
+    assert_eq!(snapshot.active_node_id, "1.1");
+    assert_eq!(snapshot.nodes.len(), 2);
+    let root = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1")
+        .expect("root node");
     assert_eq!(root.node_id, "1");
     assert_eq!(root.parent_id, None);
     assert_eq!(root.summary, None);
-    assert_eq!(root.status, SpineTreeNodeStatus::Live);
-    let plan = root.plan.as_ref().expect("root plan");
+    assert_eq!(root.status, SpineTreeNodeStatus::Opened);
+    assert!(root.plan.is_none());
+    let leaf = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1")
+        .expect("initial leaf node");
+    assert_eq!(leaf.parent_id.as_deref(), Some("1"));
+    assert_eq!(leaf.status, SpineTreeNodeStatus::Live);
+    let plan = leaf.plan.as_ref().expect("leaf plan");
     assert_eq!(plan.revision, 1);
     assert_eq!(plan.items[0].stable_task_id, "step-1");
     assert_eq!(plan.items[0].step, "Inspect root");
@@ -337,7 +379,7 @@ fn projection_reset_filters_plan_from_non_surviving_turn() {
         .expect("root node");
 
     assert!(root.plan.is_none());
-    assert!(runtime.store().plan_path(&id(&[1])).exists());
+    assert!(runtime.store().plan_path(&id(&[1, 1])).exists());
 }
 
 #[test]
@@ -367,11 +409,11 @@ fn record_plan_update_writes_plantree_without_moving_cursor() {
         .expect("record PlanTree");
 
     assert_eq!(runtime.state(), &initial_state);
-    assert_eq!(runtime.cursor(), &id(&[1]));
-    assert_eq!(snapshot.node_id, "1");
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
+    assert_eq!(snapshot.node_id, "1.1");
     assert_eq!(snapshot.event_seq, 2);
 
-    let plan = read_json(runtime.store().plan_path(&id(&[1])));
+    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
     let spine_plantree = &plan["spine_plantree"];
     assert_eq!(spine_plantree["anchor_node_id"], "1");
     assert_eq!(spine_plantree["root"]["summary"], "Editable task scope");
@@ -403,7 +445,13 @@ fn record_plan_update_writes_plantree_without_moving_cursor() {
         .iter()
         .find(|node| node.node_id == "1")
         .expect("root node");
-    let plan = root.plan.as_ref().expect("root plan");
+    assert!(root.plan.is_none());
+    let leaf = tree_snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1")
+        .expect("initial leaf node");
+    let plan = leaf.plan.as_ref().expect("leaf plan");
     let spine_plantree = plan.spine_plantree.as_ref().expect("root PlanTree");
     assert_eq!(spine_plantree.anchor_node_id, "1");
     assert_eq!(spine_plantree.root.children.len(), 2);
@@ -446,7 +494,7 @@ fn record_plan_update_preserves_plantree_when_omitted() {
     assert_eq!(spine_plantree.anchor_node_id, "1");
     assert_eq!(spine_plantree.root.children[0].summary, "Verify scope");
 
-    let plan = read_json(runtime.store().plan_path(&id(&[1])));
+    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
     assert_eq!(
         plan["spine_plantree"]["root"]["children"][0]["summary"],
         "Verify scope"
@@ -482,7 +530,7 @@ fn record_plan_update_can_clear_plantree_explicitly() {
         .expect("clear PlanTree");
 
     assert!(cleared.spine_plantree.is_none());
-    let plan = read_json(runtime.store().plan_path(&id(&[1])));
+    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
     assert!(plan.get("spine_plantree").is_none());
 }
 
@@ -494,7 +542,7 @@ fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
             "open-1",
             "turn-open",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage open");
@@ -515,8 +563,8 @@ fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
         )
         .expect("record PlanTree at open parent");
 
-    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
-    assert_eq!(plan["spine_plantree"]["anchor_node_id"], "1");
+    let plan = read_json(runtime.store().plan_path(&id(&[1, 1, 1])));
+    assert_eq!(plan["spine_plantree"]["anchor_node_id"], "1.1");
 
     let snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
     let root = snapshot
@@ -527,7 +575,7 @@ fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
     let child = snapshot
         .nodes
         .iter()
-        .find(|node| node.node_id == "1.1")
+        .find(|node| node.node_id == "1.1.1")
         .expect("child node");
     assert!(root.plan.is_none());
     assert!(child.plan.is_some());
@@ -536,7 +584,7 @@ fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
         .as_ref()
         .and_then(|plan| plan.spine_plantree.as_ref())
         .expect("child PlanTree");
-    assert_eq!(spine_plantree.anchor_node_id, "1");
+    assert_eq!(spine_plantree.anchor_node_id, "1.1");
 }
 
 #[test]
@@ -547,7 +595,7 @@ fn plantree_rejects_finished_scope_nodes() {
             "open-1",
             "turn-open",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage open");
@@ -585,9 +633,9 @@ fn plantree_rejects_finished_scope_nodes() {
         .record_plan_update(
             "turn-invalid",
             plan_args_with_plantree(
-                Some("1"),
+                Some("1.1"),
                 vec![(
-                    Some("1.1"),
+                    Some("1.1.1"),
                     "Rewrite finished child",
                     vec!["should be rejected"],
                 )],
@@ -598,11 +646,11 @@ fn plantree_rejects_finished_scope_nodes() {
     assert!(matches!(
         error,
         SpineRuntimeError::InvalidPlanTree { message }
-            if message.contains("plantree scope [1.1] is read-only")
+            if message.contains("plantree scope [1.1.1] is read-only")
     ));
     assert_eq!(runtime.state(), &initial_state);
     assert_eq!(read_json_lines(runtime.store().tree_path()), initial_tree);
-    assert!(!runtime.store().plan_path(&id(&[1, 2])).exists());
+    assert!(!runtime.store().plan_path(&id(&[1, 1, 2])).exists());
 }
 
 #[test]
@@ -620,7 +668,7 @@ fn build_tree_snapshot_includes_only_current_node_plan() {
             "open-1",
             "turn-open",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage open");
@@ -667,25 +715,32 @@ fn build_tree_snapshot_includes_only_current_node_plan() {
         .expect("record sibling plan");
     let snapshot = runtime.build_tree_snapshot().expect("build snapshot");
 
-    assert_eq!(snapshot.active_node_id, "1.2");
+    assert_eq!(snapshot.active_node_id, "1.1.2");
     let root = snapshot
         .nodes
         .iter()
         .find(|node| node.node_id == "1")
         .expect("root node");
-    let child = snapshot
+    let scope = snapshot
         .nodes
         .iter()
         .find(|node| node.node_id == "1.1")
+        .expect("scope node");
+    let child = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1.1")
         .expect("child node");
     let sibling = snapshot
         .nodes
         .iter()
-        .find(|node| node.node_id == "1.2")
+        .find(|node| node.node_id == "1.1.2")
         .expect("sibling node");
 
     assert_eq!(root.status, SpineTreeNodeStatus::Opened);
     assert_eq!(root.plan, None);
+    assert_eq!(scope.status, SpineTreeNodeStatus::Opened);
+    assert_eq!(scope.plan, None);
     assert_eq!(child.status, SpineTreeNodeStatus::Finished);
     assert_eq!(child.plan, None);
     assert_eq!(sibling.status, SpineTreeNodeStatus::Live);
@@ -713,17 +768,11 @@ fn load_or_create_initializes_then_replays_existing_sidecar() {
 
     let loaded = SpineRuntime::load_or_create(store, 2).expect("load existing sidecar");
 
-    assert_eq!(loaded.cursor(), &id(&[1]));
+    assert_eq!(loaded.cursor(), &id(&[1, 1]));
     assert_eq!(loaded.current_ordinal(), 2);
     assert_eq!(
         read_json_lines(loaded.store().tree_path()),
-        vec![json!({
-            "type": "node_created",
-            "seq": 1,
-            "node_id": "1",
-            "parent_id": null,
-            "raw_start_ordinal": 0,
-        })]
+        vec![initial_tree_event(0)]
     );
 }
 
@@ -749,7 +798,7 @@ fn records_raw_item_ranges_for_current_cursor() {
     assert_eq!(
         first,
         RawOrdinalRange {
-            node_id: id(&[1]),
+            node_id: id(&[1, 1]),
             start: 0,
             end: 3,
         }
@@ -760,7 +809,7 @@ fn records_raw_item_ranges_for_current_cursor() {
         vec![json!({
             "type": "raw_items_recorded",
             "seq": 1,
-            "node_id": "1",
+            "node_id": "1.1",
             "turn_id": "turn-1",
             "start": 0,
             "end": 3,
@@ -777,26 +826,20 @@ fn stage_does_not_advance_cursor_or_write_transition() {
             "call-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage transition")
         .clone();
 
-    assert_eq!(staged.from_node, id(&[1]));
-    assert_eq!(staged.to_node, id(&[1, 1]));
-    assert_eq!(runtime.cursor(), &id(&[1]));
-    assert_eq!(runtime.state().visible_spine(), vec![id(&[1])]);
-    assert!(!runtime.store().worklog_path(&id(&[1])).exists());
+    assert_eq!(staged.from_node, id(&[1, 1]));
+    assert_eq!(staged.to_node, id(&[1, 1, 1]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
+    assert_eq!(runtime.state().visible_spine(), vec![id(&[1]), id(&[1, 1])]);
+    assert!(!runtime.store().worklog_path(&id(&[1, 1])).exists());
     assert_eq!(
         read_json_lines(runtime.store().tree_path()),
-        vec![json!({
-            "type": "node_created",
-            "seq": 1,
-            "node_id": "1",
-            "parent_id": null,
-            "raw_start_ordinal": 0,
-        })]
+        vec![initial_tree_event(0)]
     );
 }
 
@@ -808,7 +851,7 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
             "call-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage transition");
@@ -825,14 +868,14 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
     assert_eq!(
         ranges,
         vec![RawOrdinalRange {
-            node_id: id(&[1]),
+            node_id: id(&[1, 1]),
             start: 0,
             end: 2,
         }]
     );
     assert_eq!(
         runtime.cursor(),
-        &id(&[1, 1]),
+        &id(&[1, 1, 1]),
         "cursor moves after the FunctionCallOutput is recorded"
     );
     assert!(runtime.staged_transition().is_none());
@@ -845,21 +888,15 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
     assert_eq!(
         read_json_lines(runtime.store().tree_path()),
         vec![
-            json!({
-                "type": "node_created",
-                "seq": 1,
-                "node_id": "1",
-                "parent_id": null,
-                "raw_start_ordinal": 0,
-            }),
+            initial_tree_event(0),
             json!({
                 "type": "transition_applied",
                 "seq": 2,
                 "op": "open",
-                "from_node": "1",
-                "to_node": "1.1",
-                "to_parent_id": "1",
-                "summary": "root scope",
+                "from_node": "1.1",
+                "to_node": "1.1.1",
+                "to_parent_id": "1.1",
+                "summary": null,
                 "raw_start_ordinal": 2,
                 "source_turn_id": "turn-1",
             }),
@@ -871,7 +908,7 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
             json!({
                 "type": "raw_items_recorded",
                 "seq": 1,
-                "node_id": "1",
+                "node_id": "1.1",
                 "turn_id": "turn-1",
                 "start": 0,
                 "end": 2,
@@ -881,8 +918,8 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
                 "seq": 2,
                 "call_id": "call-1",
                 "op": "open",
-                "from_node": "1",
-                "to_node": "1.1",
+                "from_node": "1.1",
+                "to_node": "1.1.1",
                 "call_start_ordinal": 0,
                 "boundary_end": 2,
             }),
@@ -906,7 +943,7 @@ fn stage_after_recorded_call_preserves_function_call_start() {
             "call-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage transition after function call was recorded");
@@ -926,7 +963,7 @@ fn stage_after_recorded_call_preserves_function_call_start() {
             json!({
                 "type": "raw_items_recorded",
                 "seq": 1,
-                "node_id": "1",
+                "node_id": "1.1",
                 "turn_id": "turn-1",
                 "start": 0,
                 "end": 2,
@@ -934,7 +971,7 @@ fn stage_after_recorded_call_preserves_function_call_start() {
             json!({
                 "type": "raw_items_recorded",
                 "seq": 2,
-                "node_id": "1",
+                "node_id": "1.1",
                 "turn_id": "turn-1",
                 "start": 2,
                 "end": 3,
@@ -944,8 +981,8 @@ fn stage_after_recorded_call_preserves_function_call_start() {
                 "seq": 3,
                 "call_id": "call-1",
                 "op": "open",
-                "from_node": "1",
-                "to_node": "1.1",
+                "from_node": "1.1",
+                "to_node": "1.1.1",
                 "call_start_ordinal": 1,
                 "boundary_end": 3,
             }),
@@ -972,7 +1009,7 @@ fn namespaced_transition_call_preserves_function_call_start() {
             "call-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage transition after function call was recorded");
@@ -996,7 +1033,7 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
             "open-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage open");
@@ -1039,7 +1076,7 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
         .expect("next should compact");
 
     assert_eq!(boundary.op, SpineOperation::Next);
-    assert_eq!(boundary.node_id, id(&[1, 1]));
+    assert_eq!(boundary.node_id, id(&[1, 1, 1]));
     assert_eq!(boundary.cut_ordinal, 2);
     assert_eq!(boundary.fold_end_ordinal, 5);
     assert_eq!(
@@ -1103,31 +1140,13 @@ fn next_compact_fails_after_non_spine_compacted_history() {
 fn close_that_would_close_root_scope_is_rejected() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .stage_transition(
-            "open-1",
-            "turn-1",
-            SpineOperation::Open,
-            "root scope",
-            /*compact_instruction*/ None,
-        )
-        .expect("stage open");
-    runtime
-        .after_response_items_recorded(
-            "turn-1",
-            &[spine_call("open-1"), function_call_output("open-1")],
-            0,
-            2,
-        )
-        .expect("commit open");
-    runtime.take_last_committed_transition();
-    runtime
-        .after_response_items_recorded("turn-2", &[assistant_message("child work")], 2, 3)
+        .after_response_items_recorded("turn-1", &[assistant_message("root child work")], 0, 1)
         .expect("record child work");
 
     let error = runtime
         .stage_transition(
             "close-1",
-            "turn-2",
+            "turn-1",
             SpineOperation::Close,
             "scope done",
             /*compact_instruction*/ None,
@@ -1150,7 +1169,7 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
             "open-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage open");
@@ -1168,7 +1187,7 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
             "open-2",
             "turn-2",
             SpineOperation::Open,
-            "child scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage nested open");
@@ -1225,26 +1244,26 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
         .expect("close should compact");
 
     assert_eq!(boundary.op, SpineOperation::Close);
-    assert_eq!(boundary.node_id, id(&[1, 1]));
-    assert_eq!(boundary.transition_summary, "child scope");
+    assert_eq!(boundary.node_id, id(&[1, 1, 1]));
+    assert_eq!(boundary.transition_summary, "second child done");
     assert_eq!(
         boundary.compact_instruction.as_deref(),
         Some("keep subtree decisions")
     );
 
     let outline = runtime
-        .render_context_compacted_outline(&id(&[1, 1]))
+        .render_context_compacted_outline(&id(&[1, 1, 1]))
         .expect("render outline");
     let base = runtime.store().root().display().to_string();
 
     assert!(outline.contains("## Context Compacted"));
     assert!(outline.contains(&format!("Base: {base}")));
-    assert!(outline.contains("[1.1] child scope (nodes/1/1/worklog.md)"));
-    assert!(outline.contains("|-- [1.1.1] first child done (nodes/1/1/1/worklog.md)"));
-    assert!(outline.contains("|-- [1.1.2] second child done (nodes/1/1/2/worklog.md)"));
+    assert!(outline.contains("[1.1.1] second child done (nodes/1/1/1/worklog.md)"));
+    assert!(outline.contains("|-- [1.1.1.1] first child done (nodes/1/1/1/1/worklog.md)"));
+    assert!(outline.contains("|-- [1.1.1.2] finished (nodes/1/1/1/2/worklog.md)"));
     assert!(
-        outline.find("|-- [1.1.1]").expect("first child row")
-            < outline.find("|-- [1.1.2]").expect("second child row")
+        outline.find("|-- [1.1.1.1]").expect("first child row")
+            < outline.find("|-- [1.1.1.2]").expect("second child row")
     );
 }
 
@@ -1259,7 +1278,7 @@ fn raw_items_after_commit_are_owned_by_new_cursor() {
             "call-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage transition");
@@ -1287,7 +1306,7 @@ fn raw_items_after_commit_are_owned_by_new_cursor() {
     assert_eq!(
         next,
         RawOrdinalRange {
-            node_id: id(&[1, 1]),
+            node_id: id(&[1, 1, 1]),
             start: 2,
             end: 4,
         }
@@ -1303,7 +1322,7 @@ fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
             "call-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage transition");
@@ -1325,27 +1344,27 @@ fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
         ranges,
         vec![
             RawOrdinalRange {
-                node_id: id(&[1]),
+                node_id: id(&[1, 1]),
                 start: 0,
                 end: 2,
             },
             RawOrdinalRange {
-                node_id: id(&[1, 1]),
+                node_id: id(&[1, 1, 1]),
                 start: 2,
                 end: 3,
             },
         ]
     );
-    assert_eq!(runtime.cursor(), &id(&[1, 1]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1, 1]));
     assert_eq!(runtime.current_ordinal(), 3);
-    assert_eq!(runtime.raw_start_ordinal(&id(&[1, 1])), Some(2));
+    assert_eq!(runtime.raw_start_ordinal(&id(&[1, 1, 1])), Some(2));
     assert_eq!(
         read_json_lines(runtime.store().trajs_index_path()),
         vec![
             json!({
                 "type": "raw_items_recorded",
                 "seq": 1,
-                "node_id": "1",
+                "node_id": "1.1",
                 "turn_id": "turn-1",
                 "start": 0,
                 "end": 2,
@@ -1355,15 +1374,15 @@ fn items_after_staged_output_in_same_batch_are_owned_by_new_cursor() {
                 "seq": 2,
                 "call_id": "call-1",
                 "op": "open",
-                "from_node": "1",
-                "to_node": "1.1",
+                "from_node": "1.1",
+                "to_node": "1.1.1",
                 "call_start_ordinal": 0,
                 "boundary_end": 2,
             }),
             json!({
                 "type": "raw_items_recorded",
                 "seq": 3,
-                "node_id": "1.1",
+                "node_id": "1.1.1",
                 "turn_id": "turn-1",
                 "start": 2,
                 "end": 3,
@@ -1380,7 +1399,7 @@ fn rejects_second_staged_transition() {
             "call-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage first transition");
@@ -1399,7 +1418,7 @@ fn rejects_second_staged_transition() {
         error,
         SpineRuntimeError::TransitionAlreadyStaged { call_id } if call_id == "call-1"
     ));
-    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
 }
 
 #[test]
@@ -1410,7 +1429,7 @@ fn commit_requires_matching_call_id() {
             "call-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage transition");
@@ -1424,7 +1443,7 @@ fn commit_requires_matching_call_id() {
         SpineRuntimeError::StagedCallIdMismatch { expected, actual }
             if expected == "call-1" && actual == "call-2"
     ));
-    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
     assert!(runtime.staged_transition().is_some());
 }
 
@@ -1449,7 +1468,7 @@ fn commit_requires_recorded_function_call_start() {
         error,
         SpineRuntimeError::MissingCallStartOrdinal { call_id } if call_id == "call-1"
     ));
-    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
     assert!(runtime.staged_transition().is_some());
 }
 
@@ -1461,7 +1480,7 @@ fn commit_failure_leaves_cursor_and_tree_unchanged() {
             "__spine_fail_transition_commit__",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage transition");
@@ -1483,26 +1502,20 @@ fn commit_failure_leaves_cursor_and_tree_unchanged() {
         SpineRuntimeError::Store(crate::spine::store::SpineStoreError::InvalidLedger(message))
             if message == "injected transition commit failure"
     ));
-    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
     assert_eq!(runtime.current_ordinal(), 2);
     assert!(runtime.staged_transition().is_some());
     assert!(!runtime.store().worklog_path(&id(&[1])).exists());
     assert_eq!(
         read_json_lines(runtime.store().tree_path()),
-        vec![json!({
-            "type": "node_created",
-            "seq": 1,
-            "node_id": "1",
-            "parent_id": null,
-            "raw_start_ordinal": 0,
-        })]
+        vec![initial_tree_event(0)]
     );
     assert_eq!(
         read_json_lines(runtime.store().trajs_index_path()),
         vec![json!({
             "type": "raw_items_recorded",
             "seq": 1,
-            "node_id": "1",
+            "node_id": "1.1",
             "turn_id": "turn-1",
             "start": 0,
             "end": 2,
@@ -1528,7 +1541,7 @@ fn stage_uses_state_validation_without_mutating_runtime() {
         error,
         SpineRuntimeError::State(SpineStateError::CannotCloseRoot)
     ));
-    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
     assert!(runtime.staged_transition().is_none());
 }
 
@@ -1540,7 +1553,7 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
             "open-1",
             "turn-1",
             SpineOperation::Open,
-            "root scope",
+            None,
             /*compact_instruction*/ None,
         )
         .expect("stage open");
@@ -1561,8 +1574,8 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
         .expect("plan root archive");
 
     assert_eq!(boundary.op, SpineOperation::Archive);
-    assert_eq!(boundary.node_id, id(&[1, 1]));
-    assert_eq!(boundary.cut_ordinal, 2);
+    assert_eq!(boundary.node_id, id(&[1]));
+    assert_eq!(boundary.cut_ordinal, 0);
     assert_eq!(boundary.fold_end_ordinal, 3);
     assert_eq!(boundary.transition_summary, "Context compacted");
 
@@ -1575,7 +1588,7 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
         )
         .expect("record archive");
 
-    assert_eq!(runtime.cursor(), &id(&[1, 2]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
 }
 
 #[test]
@@ -1590,7 +1603,7 @@ fn root_epoch_archive_plans_materialized_epoch_when_cursor_is_hidden_root() {
         .expect("plan root archive");
 
     assert_eq!(boundary.op, SpineOperation::Archive);
-    assert_eq!(boundary.node_id, id(&[1, 1]));
+    assert_eq!(boundary.node_id, id(&[1]));
     assert_eq!(boundary.cut_ordinal, 0);
     assert_eq!(boundary.fold_end_ordinal, 1);
 
@@ -1603,7 +1616,7 @@ fn root_epoch_archive_plans_materialized_epoch_when_cursor_is_hidden_root() {
         )
         .expect("record archive");
 
-    assert_eq!(runtime.cursor(), &id(&[1, 2]));
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
     assert_eq!(
         runtime
             .state()

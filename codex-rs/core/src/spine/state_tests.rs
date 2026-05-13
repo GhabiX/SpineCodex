@@ -20,32 +20,14 @@ fn summaries(state: &SpineState) -> Vec<(NodeId, Option<String>, NodeStatus)> {
 }
 
 #[test]
-fn initializes_root_node() {
+fn initializes_root_with_initial_leaf() {
     let state = SpineState::new();
 
-    assert_eq!(state.cursor(), &id(&[1]));
-    assert_eq!(summaries(&state), vec![(id(&[1]), None, NodeStatus::Live)]);
-    assert_eq!(state.visible_spine(), vec![id(&[1])]);
-}
-
-#[test]
-fn open_writes_summary_and_enters_first_child() {
-    let mut state = SpineState::new();
-
-    let transition = state.open("root scope").expect("open should succeed");
-
-    assert_eq!(
-        transition,
-        Transition {
-            from: id(&[1]),
-            to: id(&[1, 1]),
-        }
-    );
     assert_eq!(state.cursor(), &id(&[1, 1]));
     assert_eq!(
         summaries(&state),
         vec![
-            (id(&[1]), Some("root scope".to_string()), NodeStatus::Opened,),
+            (id(&[1]), None, NodeStatus::Opened),
             (id(&[1, 1]), None, NodeStatus::Live),
         ]
     );
@@ -53,9 +35,32 @@ fn open_writes_summary_and_enters_first_child() {
 }
 
 #[test]
+fn open_enters_first_child_without_summary() {
+    let mut state = SpineState::new();
+
+    let transition = state.open().expect("open should succeed");
+
+    assert_eq!(
+        transition,
+        Transition {
+            from: id(&[1, 1]),
+            to: id(&[1, 1, 1]),
+        }
+    );
+    assert_eq!(state.cursor(), &id(&[1, 1, 1]));
+    assert_eq!(
+        summaries(&state),
+        vec![
+            (id(&[1]), None, NodeStatus::Opened),
+            (id(&[1, 1]), None, NodeStatus::Opened),
+            (id(&[1, 1, 1]), None, NodeStatus::Live),
+        ]
+    );
+}
+
+#[test]
 fn next_finishes_leaf_and_enters_next_sibling() {
     let mut state = SpineState::new();
-    state.open("root scope").expect("open should succeed");
 
     let transition = state.next("first child done").expect("next should succeed");
 
@@ -70,7 +75,7 @@ fn next_finishes_leaf_and_enters_next_sibling() {
     assert_eq!(
         summaries(&state),
         vec![
-            (id(&[1]), Some("root scope".to_string()), NodeStatus::Opened,),
+            (id(&[1]), None, NodeStatus::Opened),
             (
                 id(&[1, 1]),
                 Some("first child done".to_string()),
@@ -86,37 +91,29 @@ fn next_finishes_leaf_and_enters_next_sibling() {
 }
 
 #[test]
-fn next_on_root_finishes_root_and_enters_next_root_sibling() {
-    let mut state = SpineState::new();
+fn next_on_root_fails_without_mutating_state() {
+    let mut state = SpineState::from_records(
+        id(&[1]),
+        vec![NodeRecord {
+            node_id: id(&[1]),
+            parent_id: None,
+            raw_start_ordinal: Some(0),
+            status: NodeStatus::Live,
+            summary: None,
+        }],
+    )
+    .expect("construct root cursor state");
+    let before = state.clone();
 
-    let transition = state.next("root done").expect("root next should succeed");
+    let error = state.next("root done").expect_err("root next should fail");
 
-    assert_eq!(
-        transition,
-        Transition {
-            from: id(&[1]),
-            to: id(&[2]),
-        }
-    );
-    assert_eq!(state.cursor(), &id(&[2]));
-    assert_eq!(
-        summaries(&state),
-        vec![
-            (
-                id(&[1]),
-                Some("root done".to_string()),
-                NodeStatus::Finished,
-            ),
-            (id(&[2]), None, NodeStatus::Live),
-        ]
-    );
-    assert_eq!(state.visible_spine(), vec![id(&[1]), id(&[2])]);
+    assert_eq!(error, SpineStateError::CannotAdvanceRoot);
+    assert_eq!(state, before);
 }
 
 #[test]
 fn repeated_next_allocates_consecutive_siblings() {
     let mut state = SpineState::new();
-    state.open("root scope").expect("open should succeed");
     state
         .next("first child done")
         .expect("first next should succeed");
@@ -141,11 +138,10 @@ fn repeated_next_allocates_consecutive_siblings() {
 #[test]
 fn close_that_would_close_root_scope_fails_without_mutating_state() {
     let mut state = SpineState::new();
-    state.open("root scope").expect("open should succeed");
     let before = state.clone();
 
     let error = state
-        .close("child scope done")
+        .close("root child done")
         .expect_err("close should reject root scope");
 
     assert_eq!(error, SpineStateError::CannotCloseRoot);
@@ -155,13 +151,10 @@ fn close_that_would_close_root_scope_fails_without_mutating_state() {
 #[test]
 fn deep_close_returns_to_parent_sibling() {
     let mut state = SpineState::new();
-    state.open("root scope").expect("root open should succeed");
-    state
-        .open("child scope")
-        .expect("child open should succeed");
+    state.open().expect("nested open should succeed");
 
     let transition = state
-        .close("nested done")
+        .close("nested scope done")
         .expect("deep close should succeed");
 
     assert_eq!(
@@ -177,6 +170,18 @@ fn deep_close_returns_to_parent_sibling() {
         Some(NodeStatus::Closed)
     );
     assert_eq!(
+        state
+            .node(&id(&[1, 1]))
+            .and_then(|node| node.summary.clone()),
+        Some("nested scope done".to_string())
+    );
+    assert_eq!(
+        state
+            .node(&id(&[1, 1, 1]))
+            .map(|node| node.status.clone()),
+        Some(NodeStatus::Finished)
+    );
+    assert_eq!(
         state.visible_spine(),
         vec![id(&[1]), id(&[1, 1]), id(&[1, 2])]
     );
@@ -184,7 +189,17 @@ fn deep_close_returns_to_parent_sibling() {
 
 #[test]
 fn close_on_root_fails_without_mutating_state() {
-    let mut state = SpineState::new();
+    let mut state = SpineState::from_records(
+        id(&[1]),
+        vec![NodeRecord {
+            node_id: id(&[1]),
+            parent_id: None,
+            raw_start_ordinal: Some(0),
+            status: NodeStatus::Live,
+            summary: None,
+        }],
+    )
+    .expect("construct root cursor state");
     let before = state.clone();
 
     let error = state
@@ -196,82 +211,34 @@ fn close_on_root_fails_without_mutating_state() {
 }
 
 #[test]
-fn archive_current_root_epoch_closes_active_epoch_and_enters_next_root() {
+fn reset_root_epoch_replaces_live_tree_under_stable_root() {
     let mut state = SpineState::new();
-    state.open("root scope").expect("open should succeed");
-    state
-        .open("child scope")
-        .expect("nested open should succeed");
+    state.open().expect("nested open should succeed");
 
     let transition = state
-        .archive_current_root_epoch("context compacted")
-        .expect("archive root epoch");
+        .reset_root_epoch(21)
+        .expect("reset root epoch should succeed");
 
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1, 1]),
-            to: id(&[1, 2]),
+            from: id(&[1]),
+            to: id(&[1, 1]),
         }
     );
-    assert_eq!(state.cursor(), &id(&[1, 2]));
+    assert_eq!(state.cursor(), &id(&[1, 1]));
     assert_eq!(
-        state.node(&id(&[1, 1])).map(|node| node.status.clone()),
-        Some(NodeStatus::Closed)
+        summaries(&state),
+        vec![
+            (id(&[1]), None, NodeStatus::Opened),
+            (id(&[1, 1]), None, NodeStatus::Live),
+        ]
     );
     assert_eq!(
         state
             .node(&id(&[1, 1]))
-            .and_then(|node| node.summary.clone()),
-        Some("child scope".to_string())
-    );
-    assert_eq!(
-        state.node(&id(&[1, 1, 1])).map(|node| node.status.clone()),
-        Some(NodeStatus::Live)
-    );
-}
-
-#[test]
-fn archive_current_root_epoch_handles_root_cursor() {
-    let mut state = SpineState::new();
-
-    let transition = state
-        .archive_current_root_epoch("context compacted")
-        .expect("archive root cursor");
-
-    assert_eq!(
-        transition,
-        Transition {
-            from: id(&[1, 1]),
-            to: id(&[1, 2]),
-        }
-    );
-    assert_eq!(state.cursor(), &id(&[1, 2]));
-    assert_eq!(
-        state.node(&id(&[1])).map(|node| node.status.clone()),
-        Some(NodeStatus::Live)
-    );
-    assert_eq!(
-        state.node(&id(&[1, 1])).map(|node| node.status.clone()),
-        Some(NodeStatus::Closed)
-    );
-    assert_eq!(
-        state
-            .node(&id(&[1, 1]))
-            .and_then(|node| node.summary.clone()),
-        Some("context compacted".to_string())
-    );
-    assert_eq!(
-        state
-            .node(&id(&[1, 1]))
-            .and_then(|node| node.parent_id.clone()),
-        Some(id(&[1]))
-    );
-    assert_eq!(
-        state
-            .node(&id(&[1, 2]))
-            .and_then(|node| node.parent_id.clone()),
-        Some(id(&[1]))
+            .and_then(|node| node.raw_start_ordinal),
+        Some(21)
     );
 }
 
@@ -280,7 +247,7 @@ fn empty_summary_fails_without_mutating_state() {
     let mut state = SpineState::new();
     let before = state.clone();
 
-    let empty_summary = state.open(" ").expect_err("empty summary should fail");
+    let empty_summary = state.next(" ").expect_err("empty summary should fail");
     assert_eq!(empty_summary, SpineStateError::EmptySummary);
     assert_eq!(state, before);
 }
@@ -288,10 +255,7 @@ fn empty_summary_fails_without_mutating_state() {
 #[test]
 fn visible_spine_excludes_left_sibling_descendants() {
     let mut state = SpineState::new();
-    state.open("root scope").expect("open should succeed");
-    state
-        .open("first child scope")
-        .expect("nested open should succeed");
+    state.open().expect("nested open should succeed");
     state
         .close("nested done")
         .expect("nested close should succeed");

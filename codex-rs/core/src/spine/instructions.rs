@@ -4,11 +4,11 @@ Use Spine effectively and efficiently.
 At the start, use update_plan with spine_plantree to maintain one compact task tree draft for the current editable scope. This is planning only; it does not create Spine nodes or move the cursor.
 Default to staying in the current live node while it remains focused. Use update_plan to revise the current PlanTree when new evidence changes the task structure.
 Move Spine when a completed scope has accumulated substantial raw history and future work is likely to reuse its generated worklog IR:
-- spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context.
+- spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context; it takes no arguments.
 - spine.next: finish the current leaf and move to its next sibling.
 - spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling. Root cannot be closed.
-At root depth, use spine.next to finish a phase and continue with the next root sibling; use spine.close only from a nested scope when closing its parent and returning to the parent's next sibling.
-For spine.next or spine.close, use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope; keep summary as the short Spine Tree label, and do not use instruction with spine.open.
+At root depth, use spine.next to finish the current root child and continue with its next sibling; use spine.close only from a nested scope when closing its parent and returning to the parent's next sibling.
+For spine.next or spine.close, use summary as the short completion-time Spine Tree label. Use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope. Do not use summary or instruction with spine.open.
 Use spine.tree to inspect the current node and Spine Tree without moving the cursor.
 Do not move spine only because a new user message arrived, because you answered a short question, or because you updated progress within the same scope.
 Do not create one node per shell command, checklist item, short reply, or conversation turn.

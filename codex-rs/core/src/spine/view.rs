@@ -7,6 +7,11 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
+pub(crate) struct SpineContextBudgetHint {
+    pub(crate) used_tokens: u64,
+    pub(crate) limit_tokens: u64,
+}
+
 pub(crate) fn render_tool_output(
     _op: SpineOperation,
     state: &SpineState,
@@ -56,9 +61,22 @@ fn render_spine_tree_view_with_base(
     )
 }
 
-pub(crate) fn render_size_hint(hint: &SpineRuntimeHint) -> String {
+pub(crate) fn render_size_hint(
+    hint: &SpineRuntimeHint,
+    budget: Option<&SpineContextBudgetHint>,
+) -> String {
+    if let Some(budget) = budget {
+        let remaining_tokens = budget.limit_tokens.saturating_sub(budget.used_tokens);
+        return format!(
+            "\n\nSpine hint: context is about {}k/{}k tokens ({}k left); current live node is about {}k. At a natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch.",
+            rounded_k_tokens(budget.used_tokens),
+            rounded_k_tokens(budget.limit_tokens),
+            rounded_k_tokens(remaining_tokens),
+            rounded_k_tokens(hint.estimated_tokens)
+        );
+    }
     format!(
-        "\n\nSpine hint: current node raw trace is about {}k tokens and is carried into every request. At the next natural boundary, use spine.next or spine.close if finished work can be carried by the worklog.",
+        "\n\nSpine hint: current live node is about {}k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a worklog.",
         rounded_k_tokens(hint.estimated_tokens)
     )
 }
@@ -69,14 +87,22 @@ fn rounded_k_tokens(tokens: u64) -> u64 {
 
 pub(crate) fn render_tree(state: &SpineState, cursor: &NodeId) -> String {
     let visible = state.visible_spine().into_iter().collect::<HashSet<_>>();
+    let active_epoch = root_epoch_for(cursor);
+    let previous_epoch = active_epoch.as_ref().and_then(previous_root_epoch);
     let rows = state
         .nodes()
         .iter()
-        .filter(|(node_id, node)| {
-            *node_id != &NodeId::root()
-                && (node.parent_id.is_none() || node.parent_id.as_ref() == Some(&NodeId::root()))
+        .filter(|(_, node)| node.parent_id.is_none())
+        .map(|(node_id, _)| {
+            format_subtree(
+                state,
+                node_id,
+                cursor,
+                &visible,
+                previous_epoch.as_ref(),
+                0,
+            )
         })
-        .map(|(node_id, _)| format_subtree(state, node_id, cursor, &visible, 0))
         .collect::<Vec<_>>();
     if rows.is_empty() {
         "(empty)".to_string()
@@ -90,6 +116,7 @@ fn format_subtree(
     node_id: &NodeId,
     cursor: &NodeId,
     visible: &HashSet<NodeId>,
+    previous_epoch: Option<&NodeId>,
     depth: usize,
 ) -> String {
     let node = state
@@ -113,7 +140,7 @@ fn format_subtree(
         }
         if should_show_worklog_ref(&node.status) {
             line.push(' ');
-            if visible.contains(node_id) {
+            if visible.contains(node_id) || Some(node_id) == previous_epoch {
                 line.push_str("[worklog already in context]");
             } else {
                 line.push_str(&relative_worklog_path(node_id).display().to_string());
@@ -126,13 +153,35 @@ fn format_subtree(
         .nodes()
         .iter()
         .filter(|(_, child)| child.parent_id.as_ref() == Some(node_id))
-        .map(|(child_id, _)| format_subtree(state, child_id, cursor, visible, child_depth))
+        .map(|(child_id, _)| {
+            format_subtree(
+                state,
+                child_id,
+                cursor,
+                visible,
+                previous_epoch,
+                child_depth,
+            )
+        })
         .collect::<Vec<_>>();
     if children.is_empty() {
         line
     } else {
         format!("{line}\n{}", children.join("\n"))
     }
+}
+
+fn root_epoch_for(node_id: &NodeId) -> Option<NodeId> {
+    let first = *node_id.segments().first()?;
+    Some(NodeId::from_segments(vec![first]))
+}
+
+fn previous_root_epoch(node_id: &NodeId) -> Option<NodeId> {
+    let segments = node_id.segments();
+    if segments.len() != 1 || segments[0] <= 1 {
+        return None;
+    }
+    Some(NodeId::from_segments(vec![segments[0] - 1]))
 }
 
 fn format_status(status: &NodeStatus, undone_as_compact: bool) -> &'static str {
@@ -173,23 +222,7 @@ fn should_show_worklog_ref(status: &NodeStatus) -> bool {
 }
 
 pub(crate) fn display_node_id(node_id: &NodeId) -> String {
-    let segments = node_id.segments();
-    let display_segments = if segments == [1] {
-        return "root".to_string();
-    } else if segments.len() > 1 && segments.first() == Some(&1) {
-        &segments[1..]
-    } else {
-        segments
-    };
-    if display_segments.is_empty() {
-        "root".to_string()
-    } else {
-        display_segments
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(".")
-    }
+    node_id.to_string()
 }
 
 pub(crate) fn op_label(op: SpineOperation) -> &'static str {

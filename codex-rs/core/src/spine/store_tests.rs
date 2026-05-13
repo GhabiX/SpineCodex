@@ -108,11 +108,27 @@ fn for_rollout_migrates_default_sidecar_without_locator() {
     std::fs::write(
         root.join("tree.jsonl"),
         serde_json::to_string(&json!({
-            "type": "node_created",
+            "type": "spine_initialized",
             "seq": 1,
-            "node_id": "1",
-            "parent_id": null,
-            "raw_start_ordinal": 0,
+            "state": {
+                "cursor": "1.1",
+                "nodes": [
+                    {
+                        "node_id": "1",
+                        "parent_id": null,
+                        "raw_start_ordinal": 0,
+                        "status": "opened",
+                        "summary": null,
+                    },
+                    {
+                        "node_id": "1.1",
+                        "parent_id": "1",
+                        "raw_start_ordinal": 0,
+                        "status": "live",
+                        "summary": null,
+                    },
+                ],
+            },
         }))
         .expect("serialize root event")
             + "\n",
@@ -125,7 +141,7 @@ fn for_rollout_migrates_default_sidecar_without_locator() {
     assert_eq!(store.root(), root.as_path());
     assert_eq!(
         store.load().expect("load migrated sidecar").cursor(),
-        &id(&[1])
+        &id(&[1, 1])
     );
     assert_eq!(
         read_json(SpineSidecarStore::locator_path_for_rollout(&rollout_path).expect("locator")),
@@ -166,33 +182,65 @@ fn create_writes_root_ledger_and_state_cache() {
 
     let state = store.create().expect("create sidecar");
 
-    assert_eq!(state.cursor(), &id(&[1]));
+    assert_eq!(state.cursor(), &id(&[1, 1]));
     assert_eq!(
         read_json_lines(store.tree_path()),
         vec![json!({
-            "type": "node_created",
+            "type": "spine_initialized",
             "seq": 1,
-            "node_id": "1",
-            "parent_id": null,
-            "raw_start_ordinal": 0,
+            "state": {
+                "cursor": "1.1",
+                "nodes": [
+                    {
+                        "node_id": "1",
+                        "parent_id": null,
+                        "raw_start_ordinal": 0,
+                        "status": "opened",
+                        "summary": null,
+                        "worklog_path": "nodes/1/worklog.md",
+                        "plan_path": "nodes/1/plan.json",
+                    },
+                    {
+                        "node_id": "1.1",
+                        "parent_id": "1",
+                        "raw_start_ordinal": 0,
+                        "status": "live",
+                        "summary": null,
+                        "worklog_path": "nodes/1/1/worklog.md",
+                        "plan_path": "nodes/1/1/plan.json",
+                    },
+                ],
+            },
         })]
     );
     assert_eq!(
         read_json(store.state_path()),
         json!({
-            "cursor": "1",
-            "nodes": [{
-                "node_id": "1",
-                "parent_id": null,
-                "raw_start_ordinal": 0,
-                "status": "live",
-                "summary": null,
-                "worklog_path": "nodes/1/worklog.md",
-                "plan_path": "nodes/1/plan.json",
-            }]
+            "cursor": "1.1",
+            "nodes": [
+                {
+                    "node_id": "1",
+                    "parent_id": null,
+                    "raw_start_ordinal": 0,
+                    "status": "opened",
+                    "summary": null,
+                    "worklog_path": "nodes/1/worklog.md",
+                    "plan_path": "nodes/1/plan.json",
+                },
+                {
+                    "node_id": "1.1",
+                    "parent_id": "1",
+                    "raw_start_ordinal": 0,
+                    "status": "live",
+                    "summary": null,
+                    "worklog_path": "nodes/1/1/worklog.md",
+                    "plan_path": "nodes/1/1/plan.json",
+                },
+            ],
         })
     );
     assert!(store.root().join("nodes").join("1").is_dir());
+    assert!(store.root().join("nodes").join("1").join("1").is_dir());
     assert!(store.trajs_index_path().exists());
     assert!(store.compact_index_path().exists());
     assert!(store.raw_rollout_path().exists());
@@ -204,41 +252,43 @@ fn records_transition_summary_and_replays_from_tree() {
     let mut state = store.create().expect("create sidecar");
 
     let transition = store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
+        .record_transition(&mut state, SpineOperation::Open, None, 8, "turn-1")
         .expect("record transition");
 
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1]),
-            to: id(&[1, 1]),
+            from: id(&[1, 1]),
+            to: id(&[1, 1, 1]),
         }
     );
-    assert!(!store.worklog_path(&id(&[1])).exists());
-    assert!(store.root().join("nodes").join("1").join("1").is_dir());
+    assert!(!store.worklog_path(&id(&[1, 1])).exists());
+    assert!(
+        store
+            .root()
+            .join("nodes")
+            .join("1")
+            .join("1")
+            .join("1")
+            .is_dir()
+    );
     assert!(!store.root().join("nodes").join("1.1").exists());
+    let tree = read_json_lines(store.tree_path());
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree[0]["type"], "spine_initialized");
     assert_eq!(
-        read_json_lines(store.tree_path()),
-        vec![
-            json!({
-                "type": "node_created",
-                "seq": 1,
-                "node_id": "1",
-                "parent_id": null,
-                "raw_start_ordinal": 0,
-            }),
-            json!({
-                "type": "transition_applied",
-                "seq": 2,
-                "op": "open",
-                "from_node": "1",
-                "to_node": "1.1",
-                "to_parent_id": "1",
-                "summary": "root scope",
-                "raw_start_ordinal": 8,
-                "source_turn_id": "turn-1",
-            }),
-        ]
+        tree[1],
+        json!({
+            "type": "transition_applied",
+            "seq": 2,
+            "op": "open",
+            "from_node": "1.1",
+            "to_node": "1.1.1",
+            "to_parent_id": "1.1",
+            "summary": null,
+            "raw_start_ordinal": 8,
+            "source_turn_id": "turn-1",
+        })
     );
 
     let loaded = store.load().expect("load sidecar");
@@ -246,7 +296,7 @@ fn records_transition_summary_and_replays_from_tree() {
     assert_eq!(loaded, state);
     assert_eq!(
         loaded
-            .node(&id(&[1, 1]))
+            .node(&id(&[1, 1, 1]))
             .and_then(|node| node.raw_start_ordinal),
         Some(8)
     );
@@ -257,16 +307,10 @@ fn records_root_epoch_archive_and_replays_from_tree() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
+        .record_transition(&mut state, SpineOperation::Open, None, 8, "turn-1")
         .expect("record root open");
     store
-        .record_transition(
-            &mut state,
-            SpineOperation::Open,
-            "child scope",
-            13,
-            "turn-2",
-        )
+        .record_transition(&mut state, SpineOperation::Open, None, 13, "turn-2")
         .expect("record nested open");
 
     let transition = store
@@ -282,18 +326,18 @@ fn records_root_epoch_archive_and_replays_from_tree() {
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1, 1]),
-            to: id(&[1, 2]),
+            from: id(&[1]),
+            to: id(&[1, 1]),
         }
     );
-    assert!(store.root().join("nodes").join("1").join("2").is_dir());
+    assert!(store.root().join("nodes").join("1").join("1").is_dir());
     assert_eq!(
         read_json_lines(store.tree_path())[3],
         json!({
-            "type": "root_epoch_archived",
+            "type": "root_epoch_reset",
             "seq": 4,
-            "archived_root_id": "1.1",
-            "next_root_id": "1.2",
+            "root_id": "1",
+            "next_leaf_id": "1.1",
             "next_parent_id": "1",
             "summary": "context compacted",
             "raw_start_ordinal": 21,
@@ -305,14 +349,10 @@ fn records_root_epoch_archive_and_replays_from_tree() {
     let loaded = store.load().expect("load archived sidecar");
 
     assert_eq!(loaded, state);
-    assert_eq!(loaded.cursor(), &id(&[1, 2]));
-    assert_eq!(
-        loaded.node(&id(&[1, 1])).map(|node| node.status.clone()),
-        Some(NodeStatus::Closed)
-    );
+    assert_eq!(loaded.cursor(), &id(&[1, 1]));
     assert_eq!(
         loaded
-            .node(&id(&[1, 2]))
+            .node(&id(&[1, 1]))
             .and_then(|node| node.raw_start_ordinal),
         Some(21)
     );
@@ -336,17 +376,17 @@ fn root_cursor_archive_parent_links_survive_reload() {
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1, 1]),
-            to: id(&[1, 2]),
+            from: id(&[1]),
+            to: id(&[1, 1]),
         }
     );
     assert_eq!(
         read_json_lines(store.tree_path())[1],
         json!({
-            "type": "root_epoch_archived",
+            "type": "root_epoch_reset",
             "seq": 2,
-            "archived_root_id": "1.1",
-            "next_root_id": "1.2",
+            "root_id": "1",
+            "next_leaf_id": "1.1",
             "next_parent_id": "1",
             "summary": "context compacted",
             "raw_start_ordinal": 7,
@@ -356,7 +396,7 @@ fn root_cursor_archive_parent_links_survive_reload() {
     );
 
     let loaded = store.load().expect("load archived sidecar");
-    assert_eq!(loaded.cursor(), &id(&[1, 2]));
+    assert_eq!(loaded.cursor(), &id(&[1, 1]));
     assert_eq!(
         loaded
             .node(&id(&[1]))
@@ -369,12 +409,7 @@ fn root_cursor_archive_parent_links_survive_reload() {
             .and_then(|node| node.parent_id.clone()),
         Some(id(&[1]))
     );
-    assert_eq!(
-        loaded
-            .node(&id(&[1, 2]))
-            .and_then(|node| node.parent_id.clone()),
-        Some(id(&[1]))
-    );
+    assert_eq!(loaded.nodes().len(), 2);
 }
 
 #[test]
@@ -382,7 +417,7 @@ fn generated_worklog_sections_do_not_break_transition_replay_hash() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
+        .record_transition(&mut state, SpineOperation::Open, None, 8, "turn-1")
         .expect("record transition");
 
     store
@@ -403,7 +438,7 @@ fn appends_node_trajs_next_to_worklog() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
+        .record_transition(&mut state, SpineOperation::Open, None, 8, "turn-1")
         .expect("record transition");
 
     store
@@ -439,7 +474,7 @@ fn state_cache_mismatch_fails_fast() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
+        .record_transition(&mut state, SpineOperation::Open, None, 8, "turn-1")
         .expect("record transition");
     let mut cache = read_json(store.state_path());
     cache["cursor"] = json!("9");
@@ -536,54 +571,48 @@ fn writes_plan_snapshot_with_plantree_and_replays_without_mutating_state() {
             .expect("read plan snapshot"),
         Some(snapshot)
     );
+    let tree = read_json_lines(store.tree_path());
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree[0]["type"], "spine_initialized");
     assert_eq!(
-        read_json_lines(store.tree_path()),
-        vec![
-            json!({
-                "type": "node_created",
-                "seq": 1,
-                "node_id": "1",
-                "parent_id": null,
-                "raw_start_ordinal": 0,
-            }),
-            json!({
-                "type": "task_plan_updated",
-                "seq": 2,
-                "node_id": "1",
-                "revision": 1,
-                "explanation": "group upcoming checkpoints",
-                "items": [
-                    {
-                        "stable_task_id": "step-1",
-                        "step": "plan scope tree",
-                        "status": "in_progress",
-                    }
-                ],
-                "spine_plantree": {
-                    "anchor_node_id": "1",
-                    "root": {
-                        "existing_node_id": "1",
-                        "summary": "Fix task",
-                        "status": "in_progress",
-                        "children": [
-                            {
-                                "existing_node_id": null,
-                                "summary": "Reproduce",
-                                "status": "pending",
-                                "checkpoints": [{"task": "run repro", "status": "pending"}],
-                            },
-                            {
-                                "existing_node_id": "1",
-                                "summary": "Continue root",
-                                "status": "pending",
-                                "checkpoints": [{"task": "keep root task focused", "status": "pending"}],
-                            },
-                        ],
-                    },
+        tree[1],
+        json!({
+            "type": "task_plan_updated",
+            "seq": 2,
+            "node_id": "1",
+            "revision": 1,
+            "explanation": "group upcoming checkpoints",
+            "items": [
+                {
+                    "stable_task_id": "step-1",
+                    "step": "plan scope tree",
+                    "status": "in_progress",
+                }
+            ],
+            "spine_plantree": {
+                "anchor_node_id": "1",
+                "root": {
+                    "existing_node_id": "1",
+                    "summary": "Fix task",
+                    "status": "in_progress",
+                    "children": [
+                        {
+                            "existing_node_id": null,
+                            "summary": "Reproduce",
+                            "status": "pending",
+                            "checkpoints": [{"task": "run repro", "status": "pending"}],
+                        },
+                        {
+                            "existing_node_id": "1",
+                            "summary": "Continue root",
+                            "status": "pending",
+                            "checkpoints": [{"task": "keep root task focused", "status": "pending"}],
+                        },
+                    ],
                 },
-                "source_turn_id": "turn-alloc",
-            }),
-        ]
+            },
+            "source_turn_id": "turn-alloc",
+        })
     );
     assert_eq!(store.load().expect("reload sidecar"), state);
 }
@@ -845,13 +874,7 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
     let (temp, source_store) = temp_store();
     let mut source_state = source_store.create().expect("create source");
     source_store
-        .record_transition(
-            &mut source_state,
-            SpineOperation::Open,
-            "source scope",
-            2,
-            "turn-1",
-        )
+        .record_transition(&mut source_state, SpineOperation::Open, None, 2, "turn-1")
         .expect("record source transition");
     source_store
         .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsource worklog\n")
@@ -868,11 +891,8 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
         .expect("copy artifacts");
 
     let replayed = child_store.load().expect("load child projection");
-    assert_eq!(replayed.cursor(), &id(&[1, 1]));
-    assert_eq!(
-        replayed.node(&id(&[1])).expect("root").summary.as_deref(),
-        Some("source scope")
-    );
+    assert_eq!(replayed.cursor(), &id(&[1, 1, 1]));
+    assert_eq!(replayed.node(&id(&[1])).expect("root").summary, None);
     assert!(
         child_store
             .read_worklog(&id(&[1, 1]))
@@ -900,17 +920,17 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1, 1]),
-            to: id(&[1, 2]),
+            from: id(&[1]),
+            to: id(&[1, 1]),
         }
     );
     assert_eq!(
         read_json_lines(store.tree_path())[1],
         json!({
-            "type": "root_epoch_archived",
+            "type": "root_epoch_reset",
             "seq": 2,
-            "archived_root_id": "1.1",
-            "next_root_id": "1.2",
+            "root_id": "1",
+            "next_leaf_id": "1.1",
             "next_parent_id": "1",
             "summary": "context compacted",
             "raw_start_ordinal": 7,
@@ -920,7 +940,7 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
     );
 
     let loaded = store.load().expect("load archived sidecar");
-    assert_eq!(loaded.cursor(), &id(&[1, 2]));
+    assert_eq!(loaded.cursor(), &id(&[1, 1]));
     assert_eq!(
         loaded
             .node(&id(&[1]))
@@ -933,12 +953,7 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
             .and_then(|node| node.parent_id.clone()),
         Some(id(&[1]))
     );
-    assert_eq!(
-        loaded
-            .node(&id(&[1, 2]))
-            .and_then(|node| node.parent_id.clone()),
-        Some(id(&[1]))
-    );
+    assert_eq!(loaded.nodes().len(), 2);
 }
 
 #[test]
@@ -949,16 +964,19 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
         .record_transition(
             &mut source_state,
             SpineOperation::Open,
-            "source scope",
+            None,
             2,
             "surviving-turn",
         )
         .expect("record source transition");
     source_store
-        .append_worklog_section(&id(&[1]), "\n\n## Auto Compact\n\nsurviving worklog\n")
+        .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsurviving worklog\n")
         .expect("write surviving worklog");
     source_store
-        .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nrolled back worklog\n")
+        .append_worklog_section(
+            &id(&[1, 1, 1]),
+            "\n\n## Auto Compact\n\nrolled back worklog\n",
+        )
         .expect("write rolled back worklog");
     source_store
         .write_plan_snapshot(
@@ -997,12 +1015,12 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
 
     assert!(
         child_store
-            .read_worklog(&id(&[1]))
+            .read_worklog(&id(&[1, 1]))
             .expect("read copied surviving worklog")
             .contains("surviving worklog")
     );
     assert!(matches!(
-        child_store.read_worklog(&id(&[1, 1])),
+        child_store.read_worklog(&id(&[1, 1, 1])),
         Err(SpineStoreError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound
     ));
     assert!(!child_store.plan_path(&id(&[1, 1])).exists());

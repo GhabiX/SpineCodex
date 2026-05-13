@@ -5,6 +5,7 @@ use super::plan_bridge::PlanSnapshotItem;
 use super::plan_bridge::PlanTreeScope;
 use super::plan_bridge::PlanTreeSnapshot;
 use super::state::NodeStatus;
+use super::state::SpineOperationName;
 use super::state::SpineState;
 use super::state::SpineStateError;
 use super::state::Transition;
@@ -36,6 +37,7 @@ const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
+const ROOT_EPOCHS_DIR: &str = "root-epochs";
 const GENERATED_WORKLOG_SECTION_MARKER: &str = "\n\n<!-- spine:auto-compact-generated -->\n";
 const SPINE_BASE_LOCATOR_VERSION: u32 = 1;
 
@@ -189,6 +191,24 @@ impl SpineSidecarStore {
         self.node_dir(node_id).join(NODE_TRAJS_FILE)
     }
 
+    pub(crate) fn root_epoch_worklog_path(&self, compact_id: &str) -> PathBuf {
+        self.root
+            .join(ROOT_EPOCHS_DIR)
+            .join(compact_id)
+            .join(WORKLOG_FILE)
+    }
+
+    pub(crate) fn root_epoch_trajs_path(&self, compact_id: &str) -> PathBuf {
+        self.root
+            .join(ROOT_EPOCHS_DIR)
+            .join(compact_id)
+            .join(NODE_TRAJS_FILE)
+    }
+
+    pub(crate) fn root_epoch_worklog_rel_path(compact_id: &str) -> String {
+        [ROOT_EPOCHS_DIR, compact_id, WORKLOG_FILE].join("/")
+    }
+
     pub(crate) fn plan_path(&self, node_id: &NodeId) -> PathBuf {
         self.node_dir(node_id).join(PLAN_FILE)
     }
@@ -202,20 +222,19 @@ impl SpineSidecarStore {
         }
 
         self.ensure_sidecar_dir()?;
-        self.ensure_node_dir(&NodeId::root())?;
+        self.ensure_node_dir(&NodeId::root_sibling(1))?;
+        self.ensure_node_dir(&NodeId::root_sibling(1).child(1))?;
         self.create_trajs_index_file()?;
         self.create_compact_index_file()?;
         self.create_raw_rollout_file()?;
 
-        let event = TreeEvent::NodeCreated {
+        let state = SpineState::new();
+        let event = TreeEvent::SpineInitialized {
             seq: 1,
-            node_id: NodeId::root().to_string(),
-            parent_id: None,
-            raw_start_ordinal: 0,
+            state: StateSnapshot::from_state(&state),
         };
         self.append_json_line(&tree_path, &event)?;
 
-        let state = SpineState::new();
         self.write_state_cache(&state)?;
         Ok(state)
     }
@@ -238,11 +257,11 @@ impl SpineSidecarStore {
         &self,
         state: &mut SpineState,
         op: SpineOperation,
-        summary: impl Into<String>,
+        summary: impl TransitionSummaryArg,
         raw_start_ordinal: u64,
         source_turn_id: impl Into<String>,
     ) -> Result<Transition, SpineStoreError> {
-        let summary = summary.into();
+        let summary = summary.into_transition_summary();
         let source_turn_id = source_turn_id.into();
         let mut next_state = state.clone();
         let transition = op.apply(&mut next_state, summary.clone())?;
@@ -285,8 +304,7 @@ impl SpineSidecarStore {
         let compact_id = compact_id.into();
         let source_turn_id = source_turn_id.into();
         let mut next_state = state.clone();
-        let transition = next_state.archive_current_root_epoch(summary.clone())?;
-        next_state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
+        let transition = next_state.reset_root_epoch(raw_start_ordinal)?;
         let to_parent_id = next_state
             .node(&transition.to)
             .ok_or_else(|| {
@@ -298,10 +316,10 @@ impl SpineSidecarStore {
 
         self.ensure_node_dir(&transition.to)?;
 
-        let event = TreeEvent::RootEpochArchived {
+        let event = TreeEvent::RootEpochReset {
             seq: self.next_tree_seq()?,
-            archived_root_id: transition.from.to_string(),
-            next_root_id: transition.to.to_string(),
+            root_id: transition.from.to_string(),
+            next_leaf_id: transition.to.to_string(),
             next_parent_id: to_parent_id,
             summary,
             raw_start_ordinal,
@@ -313,6 +331,26 @@ impl SpineSidecarStore {
         *state = next_state;
         self.write_state_cache(state)?;
         Ok(transition)
+    }
+
+    pub(crate) fn record_raw_start_ordinal(
+        &self,
+        state: &mut SpineState,
+        node_id: &NodeId,
+        raw_start_ordinal: u64,
+        source_turn_id: impl Into<String>,
+    ) -> Result<(), SpineStoreError> {
+        let mut next_state = state.clone();
+        next_state.set_raw_start_ordinal(node_id, raw_start_ordinal)?;
+        let event = TreeEvent::RawStartOrdinalUpdated {
+            seq: self.next_tree_seq()?,
+            node_id: node_id.to_string(),
+            raw_start_ordinal,
+            source_turn_id: source_turn_id.into(),
+        };
+        self.append_json_line(&self.tree_path(), &event)?;
+        *state = next_state;
+        self.write_state_cache(state)
     }
 
     pub(crate) fn record_projection_reset(
@@ -836,6 +874,74 @@ impl SpineSidecarStore {
         Ok(worklog)
     }
 
+    pub(crate) fn root_epoch_worklog_with_appended_section(
+        &self,
+        compact_id: &str,
+        section: &str,
+    ) -> Result<String, SpineStoreError> {
+        let path = self.root_epoch_worklog_path(compact_id);
+        let mut worklog = match std::fs::read_to_string(&path) {
+            Ok(worklog) => worklog,
+            Err(source) if source.kind() == ErrorKind::NotFound => String::new(),
+            Err(source) => {
+                return Err(SpineStoreError::Io {
+                    path: path.clone(),
+                    source,
+                });
+            }
+        };
+        worklog.push_str(GENERATED_WORKLOG_SECTION_MARKER);
+        worklog.push_str(section);
+        Ok(worklog)
+    }
+
+    pub(crate) fn append_root_epoch_worklog_section(
+        &self,
+        compact_id: &str,
+        section: &str,
+    ) -> Result<(), SpineStoreError> {
+        let path = self.root_epoch_worklog_path(compact_id);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| SpineStoreError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.write_all(GENERATED_WORKLOG_SECTION_MARKER.as_bytes())
+            .map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.write_all(section.as_bytes())
+            .map_err(|source| SpineStoreError::Io { path, source })
+    }
+
+    pub(crate) fn append_root_epoch_trajs_items(
+        &self,
+        compact_id: &str,
+        items: &[RolloutItem],
+    ) -> Result<(), SpineStoreError> {
+        let path = self.root_epoch_trajs_path(compact_id);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| SpineStoreError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        for item in items {
+            self.append_json_line(&path, item)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn read_worklog(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
         self.read_worklog_file(node_id)
     }
@@ -846,33 +952,21 @@ impl SpineSidecarStore {
 
         for event in events {
             match event {
-                TreeEvent::NodeCreated {
-                    node_id,
-                    parent_id,
-                    raw_start_ordinal,
-                    ..
+                TreeEvent::SpineInitialized {
+                    state: snapshot, ..
                 } => {
                     if state.is_some() {
                         return Err(SpineStoreError::InvalidLedger(
-                            "root node was created more than once".to_string(),
+                            "spine was initialized more than once".to_string(),
                         ));
                     }
-                    let node_id = NodeId::parse(&node_id)?;
-                    if node_id != NodeId::root() || parent_id.is_some() {
-                        return Err(SpineStoreError::InvalidLedger(
-                            "first node_created event must create the root node".to_string(),
-                        ));
-                    }
-                    let mut root_state = SpineState::new();
-                    root_state.set_raw_start_ordinal(&node_id, raw_start_ordinal)?;
-                    state = Some(root_state);
+                    state = Some(spine_state_from_snapshot(snapshot)?);
                 }
                 TreeEvent::TransitionApplied {
                     op,
                     from_node,
                     to_node,
                     to_parent_id,
-                    summary,
                     raw_start_ordinal,
                     ..
                 } => {
@@ -940,8 +1034,17 @@ impl SpineSidecarStore {
                     }
                 }
                 TreeEvent::RootEpochArchived {
-                    archived_root_id,
-                    next_root_id,
+                    archived_root_id: _,
+                    next_root_id: _,
+                    ..
+                } => {
+                    return Err(SpineStoreError::InvalidLedger(
+                        "legacy root_epoch_archived event is not supported".to_string(),
+                    ));
+                }
+                TreeEvent::RootEpochReset {
+                    root_id,
+                    next_leaf_id,
                     next_parent_id,
                     summary,
                     raw_start_ordinal,
@@ -952,16 +1055,16 @@ impl SpineSidecarStore {
                             "root_epoch_archived appeared before root node creation".to_string(),
                         )
                     })?;
-                    let archived_root_id = NodeId::parse(&archived_root_id)?;
-                    let next_root_id = NodeId::parse(&next_root_id)?;
+                    let root_id = NodeId::parse(&root_id)?;
+                    let next_leaf_id = NodeId::parse(&next_leaf_id)?;
                     let next_parent_id =
                         next_parent_id.as_deref().map(NodeId::parse).transpose()?;
-                    let transition = state.archive_current_root_epoch(summary)?;
-                    if transition.from != archived_root_id || transition.to != next_root_id {
+                    let transition = state.reset_root_epoch(summary, raw_start_ordinal)?;
+                    if transition.from != root_id || transition.to != next_leaf_id {
                         return Err(SpineStoreError::InvalidLedger(format!(
-                            "root epoch archive replay mismatch: expected {} -> {}, got {} -> {}",
-                            archived_root_id.bracketed(),
-                            next_root_id.bracketed(),
+                            "root epoch reset replay mismatch: expected {} -> {}, got {} -> {}",
+                            root_id.bracketed(),
+                            next_leaf_id.bracketed(),
                             transition.from.bracketed(),
                             transition.to.bracketed()
                         )));
@@ -971,11 +1074,24 @@ impl SpineSidecarStore {
                         .and_then(|node| node.parent_id.clone());
                     if actual_parent_id != next_parent_id {
                         return Err(SpineStoreError::InvalidLedger(format!(
-                            "root epoch archive target parent mismatch for {}",
+                            "root epoch reset target parent mismatch for {}",
                             transition.to.bracketed()
                         )));
                     }
-                    state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
+                }
+                TreeEvent::RawStartOrdinalUpdated {
+                    node_id,
+                    raw_start_ordinal,
+                    ..
+                } => {
+                    let state = state.as_mut().ok_or_else(|| {
+                        SpineStoreError::InvalidLedger(
+                            "raw_start_ordinal_updated appeared before spine initialization"
+                                .to_string(),
+                        )
+                    })?;
+                    let node_id = NodeId::parse(&node_id)?;
+                    state.set_raw_start_ordinal(&node_id, raw_start_ordinal)?;
                 }
                 TreeEvent::ProjectionReset {
                     state: snapshot, ..
@@ -1377,6 +1493,11 @@ impl SpineSidecarStore {
                     source_turn_id,
                     ..
                 } if archived_root_id == node_id => Some(source_turn_id),
+                TreeEvent::RootEpochReset {
+                    root_id,
+                    source_turn_id,
+                    ..
+                } if root_id == node_id => Some(source_turn_id),
                 _ => None,
             };
             if let Some(source_turn_id) = source_turn_id {
@@ -1440,16 +1561,45 @@ pub(crate) enum SpineOperation {
     Archive,
 }
 
+pub(crate) trait TransitionSummaryArg {
+    fn into_transition_summary(self) -> Option<String>;
+}
+
+impl TransitionSummaryArg for Option<String> {
+    fn into_transition_summary(self) -> Option<String> {
+        self
+    }
+}
+
+impl TransitionSummaryArg for String {
+    fn into_transition_summary(self) -> Option<String> {
+        Some(self)
+    }
+}
+
+impl TransitionSummaryArg for &str {
+    fn into_transition_summary(self) -> Option<String> {
+        Some(self.to_string())
+    }
+}
+
 impl SpineOperation {
     pub(crate) fn apply(
         self,
         state: &mut SpineState,
-        summary: impl Into<String>,
+        summary: Option<String>,
     ) -> Result<Transition, SpineStateError> {
         match self {
-            SpineOperation::Open => state.open(summary),
-            SpineOperation::Next => state.next(summary),
-            SpineOperation::Close => state.close(summary),
+            SpineOperation::Open => {
+                if summary.is_some() {
+                    return Err(SpineStateError::UnexpectedSummary(SpineOperationName::Open));
+                }
+                state.open()
+            }
+            SpineOperation::Next => state
+                .next(summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Next))?),
+            SpineOperation::Close => state
+                .close(summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Close))?),
             SpineOperation::Archive => Err(SpineStateError::ArchiveIsInternal),
         }
     }
@@ -1458,11 +1608,9 @@ impl SpineOperation {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum TreeEvent {
-    NodeCreated {
+    SpineInitialized {
         seq: u64,
-        node_id: String,
-        parent_id: Option<String>,
-        raw_start_ordinal: u64,
+        state: StateSnapshot,
     },
     TransitionApplied {
         seq: u64,
@@ -1470,7 +1618,7 @@ enum TreeEvent {
         from_node: String,
         to_node: String,
         to_parent_id: Option<String>,
-        summary: String,
+        summary: Option<String>,
         raw_start_ordinal: u64,
         #[serde(default)]
         source_turn_id: String,
@@ -1495,6 +1643,22 @@ enum TreeEvent {
         compact_id: String,
         source_turn_id: String,
     },
+    RootEpochReset {
+        seq: u64,
+        root_id: String,
+        next_leaf_id: String,
+        next_parent_id: Option<String>,
+        summary: String,
+        raw_start_ordinal: u64,
+        compact_id: String,
+        source_turn_id: String,
+    },
+    RawStartOrdinalUpdated {
+        seq: u64,
+        node_id: String,
+        raw_start_ordinal: u64,
+        source_turn_id: String,
+    },
     ProjectionReset {
         seq: u64,
         reason: String,
@@ -1513,10 +1677,12 @@ enum TreeEvent {
 impl TreeEvent {
     fn seq(&self) -> u64 {
         match self {
-            TreeEvent::NodeCreated { seq, .. }
+            TreeEvent::SpineInitialized { seq, .. }
             | TreeEvent::TransitionApplied { seq, .. }
             | TreeEvent::TaskPlanUpdated { seq, .. }
             | TreeEvent::RootEpochArchived { seq, .. }
+            | TreeEvent::RootEpochReset { seq, .. }
+            | TreeEvent::RawStartOrdinalUpdated { seq, .. }
             | TreeEvent::ProjectionReset { seq, .. }
             | TreeEvent::SpineHintEmitted { seq, .. } => *seq,
         }

@@ -2591,6 +2591,32 @@ impl Session {
         Ok(())
     }
 
+    async fn record_spine_prelude_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
+        if let Err(err) = self
+            .try_record_spine_prelude_items(turn_context, items)
+            .await
+        {
+            error!("failed to record Spine prelude items: {err}");
+            let _ = self
+                .poison_spine_compact(format!("failed to record Spine prelude items: {err}"))
+                .await;
+        }
+    }
+
+    async fn try_record_spine_prelude_items(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) -> CodexResult<()> {
+        let spine_start_ordinal = self.spine_current_ordinal().await;
+        self.record_into_history(items, turn_context).await;
+        self.try_persist_rollout_response_items(items).await?;
+        self.send_raw_response_items(turn_context, items).await;
+        self.after_spine_prelude_items_recorded(turn_context, items, spine_start_ordinal)
+            .await?;
+        Ok(())
+    }
+
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
@@ -2797,6 +2823,36 @@ impl Session {
         Ok(())
     }
 
+    async fn after_spine_prelude_items_recorded(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        start_ordinal: Option<u64>,
+    ) -> CodexResult<()> {
+        let Some(spine) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let Some(start_ordinal) = start_ordinal else {
+            return Ok(());
+        };
+        let item_count = u64::try_from(items.len()).map_err(|_| {
+            CodexErr::Fatal("too many response items for spine ordinal tracking".to_string())
+        })?;
+        let end_ordinal = start_ordinal
+            .checked_add(item_count)
+            .ok_or_else(|| CodexErr::Fatal("spine response item ordinal overflow".to_string()))?;
+        spine
+            .lock()
+            .await
+            .after_prelude_items_recorded(&turn_context.sub_id, items, start_ordinal, end_ordinal)
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "Spine prelude recording failed after response items were recorded. The turn was aborted before the next model request; spine cursor was not advanced. Cause: {err}"
+                ))
+            })?;
+        Ok(())
+    }
+
     pub(crate) async fn compact_pending_spine_transition(
         &self,
         turn_context: &TurnContext,
@@ -2839,6 +2895,7 @@ impl Session {
         turn_context: &TurnContext,
         client_session: &mut ModelClientSession,
         prompt_envelope: &Prompt,
+        cancellation_token: &CancellationToken,
     ) -> CodexResult<()> {
         loop {
             let boundary = {
@@ -2857,6 +2914,7 @@ impl Session {
                 client_session,
                 prompt_envelope,
                 boundary,
+                cancellation_token,
             ))
             .await?;
         }
@@ -2937,6 +2995,7 @@ impl Session {
         )?;
         let effective_boundary = SpineCompactBoundary {
             cut_ordinal: plan.input.cut_ordinal,
+            fold_end_ordinal: plan.input.fold_end_ordinal,
             ..boundary.clone()
         };
         let compact_id = deterministic_spine_compact_id(&effective_boundary);
@@ -2946,7 +3005,7 @@ impl Session {
                 &boundary.node_id,
                 boundary.op,
                 effective_boundary.cut_ordinal,
-                boundary.fold_end_ordinal,
+                effective_boundary.fold_end_ordinal,
                 CODEX_BUILTIN_TEXT_STRATEGY,
                 compact_index_rollout_path,
             )
@@ -2961,24 +3020,21 @@ impl Session {
             .unwrap_or(compact_summary.as_str());
         let worklog_markdown = render_auto_compact_worklog(&plan.input, compacted_body);
         let worklog_body = store
-            .worklog_with_appended_section(&boundary.node_id, &worklog_markdown)
+            .root_epoch_worklog_with_appended_section(&compact_id, &worklog_markdown)
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to stage spine root archive worklog: {err}"))
             })?;
-        let worklog_rel_path = plan
-            .worklog_path
-            .strip_prefix(store.root())
-            .unwrap_or(plan.worklog_path.as_path())
-            .to_path_buf();
+        let worklog_rel_path =
+            crate::spine::store::SpineSidecarStore::root_epoch_worklog_rel_path(&compact_id);
         let rendered_ir_items = vec![render_spine_ir_item(
             &boundary.node_id,
             boundary.op,
             &boundary.transition_summary,
             store.root(),
-            &worklog_rel_path,
+            std::path::Path::new(&worklog_rel_path),
             &worklog_body,
             effective_boundary.cut_ordinal,
-            boundary.fold_end_ordinal,
+            effective_boundary.fold_end_ordinal,
         )];
         let replacement_history = build_suffix_replacement_history(
             &history,
@@ -2988,7 +3044,7 @@ impl Session {
         );
         let compact_message = format!(
             "Spine compacted root epoch {} [{}, {})",
-            boundary.node_id, effective_boundary.cut_ordinal, boundary.fold_end_ordinal
+            boundary.node_id, effective_boundary.cut_ordinal, effective_boundary.fold_end_ordinal
         );
         let compacted_item = CompactedItem {
             message: compact_message.clone(),
@@ -3005,7 +3061,7 @@ impl Session {
                     &boundary.node_id,
                     boundary.op,
                     effective_boundary.cut_ordinal,
-                    boundary.fold_end_ordinal,
+                    effective_boundary.fold_end_ordinal,
                     CODEX_BUILTIN_TEXT_STRATEGY,
                     err.to_string(),
                 )
@@ -3016,7 +3072,7 @@ impl Session {
                 })?;
             return Err(err);
         }
-        if let Err(err) = store.append_worklog_section(&boundary.node_id, &worklog_markdown) {
+        if let Err(err) = store.append_root_epoch_worklog_section(&compact_id, &worklog_markdown) {
             return Err(self
                 .poison_spine_compact(format!(
                     "failed to append installed spine root archive worklog after rollout checkpoint: {err}"
@@ -3030,7 +3086,7 @@ impl Session {
             .cloned()
             .map(RolloutItem::ResponseItem)
             .collect::<Vec<_>>();
-        if let Err(err) = store.append_node_trajs_items(&boundary.node_id, &node_trajs_items) {
+        if let Err(err) = store.append_root_epoch_trajs_items(&compact_id, &node_trajs_items) {
             return Err(self
                 .poison_spine_compact(format!(
                     "failed to archive installed spine root epoch trajs after rollout checkpoint: {err}"
@@ -3053,7 +3109,7 @@ impl Session {
             runtime
                 .record_root_epoch_archive(
                     boundary.transition_summary.clone(),
-                    boundary.fold_end_ordinal,
+                    effective_boundary.fold_end_ordinal,
                     &compact_id,
                     &turn_context.sub_id,
                 )
@@ -3071,9 +3127,9 @@ impl Session {
             &boundary.node_id,
             boundary.op,
             effective_boundary.cut_ordinal,
-            boundary.fold_end_ordinal,
+            effective_boundary.fold_end_ordinal,
             replacement_history.len(),
-            worklog_rel_path.to_string_lossy().into_owned(),
+            worklog_rel_path,
             message_hash,
         ) {
             return Err(self
@@ -3093,6 +3149,7 @@ impl Session {
         client_session: &mut ModelClientSession,
         prompt_envelope: &Prompt,
         boundary: SpineCompactBoundary,
+        cancellation_token: &CancellationToken,
     ) -> CodexResult<()> {
         let spine = self
             .spine
@@ -3154,6 +3211,7 @@ impl Session {
         )?;
         let effective_boundary = SpineCompactBoundary {
             cut_ordinal: plan.input.cut_ordinal,
+            fold_end_ordinal: plan.input.fold_end_ordinal,
             ..boundary.clone()
         };
         let compact_id = deterministic_spine_compact_id(&effective_boundary);
@@ -3163,7 +3221,7 @@ impl Session {
                 &boundary.node_id,
                 boundary.op,
                 effective_boundary.cut_ordinal,
-                boundary.fold_end_ordinal,
+                effective_boundary.fold_end_ordinal,
                 CODEX_BUILTIN_TEXT_STRATEGY,
                 compact_index_rollout_path,
             )
@@ -3177,6 +3235,7 @@ impl Session {
             client_session,
             prompt_envelope,
             plan.input.clone(),
+            cancellation_token,
         ))
         .await
         {
@@ -3188,7 +3247,7 @@ impl Session {
                         &boundary.node_id,
                         boundary.op,
                         effective_boundary.cut_ordinal,
-                        boundary.fold_end_ordinal,
+                        effective_boundary.fold_end_ordinal,
                         CODEX_BUILTIN_TEXT_STRATEGY,
                         err.to_string(),
                     )
@@ -3223,7 +3282,7 @@ impl Session {
             &worklog_rel_path,
             &worklog_body,
             effective_boundary.cut_ordinal,
-            boundary.fold_end_ordinal,
+            effective_boundary.fold_end_ordinal,
         )];
         let replacement_history = build_suffix_replacement_history(
             &history,
@@ -3246,7 +3305,7 @@ impl Session {
                     &boundary.node_id,
                     boundary.op,
                     effective_boundary.cut_ordinal,
-                    boundary.fold_end_ordinal,
+                    effective_boundary.fold_end_ordinal,
                     CODEX_BUILTIN_TEXT_STRATEGY,
                     err.to_string(),
                 )
@@ -3294,7 +3353,7 @@ impl Session {
             &boundary.node_id,
             boundary.op,
             effective_boundary.cut_ordinal,
-            boundary.fold_end_ordinal,
+            effective_boundary.fold_end_ordinal,
             replacement_history.len(),
             worklog_rel_path.to_string_lossy().into_owned(),
             message_hash,
@@ -3632,8 +3691,13 @@ impl Session {
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
-            self.record_conversation_items(turn_context, &context_items)
-                .await;
+            if should_inject_full_context && self.spine.is_some() {
+                self.record_spine_prelude_items(turn_context, &context_items)
+                    .await;
+            } else {
+                self.record_conversation_items(turn_context, &context_items)
+                    .await;
+            }
         }
         // Persist one `TurnContextItem` per real user turn so resume/lazy replay can recover the
         // latest durable baseline even when this turn emitted no model-visible context diffs.

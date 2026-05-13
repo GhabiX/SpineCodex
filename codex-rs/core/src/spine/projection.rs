@@ -87,8 +87,7 @@ pub(crate) fn project_spine_state_from_rollout(
                     .message
                     .starts_with(ROOT_EPOCH_COMPACT_MESSAGE_PREFIX) =>
             {
-                let transition = state.archive_current_root_epoch("Context compacted")?;
-                state.set_raw_start_ordinal(&transition.to, raw_ordinal)?;
+                state.reset_root_epoch(raw_ordinal)?;
             }
             _ => {}
         }
@@ -189,18 +188,24 @@ fn turn_start_index(items: &[&RolloutItem], user_boundary_idx: usize) -> usize {
 struct PendingTransition {
     call_id: String,
     op: SpineOperation,
+    summary: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamespacedOpenArgs {}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamespacedSummaryArgs {
     summary: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct NamespacedSpineArgs {
-    summary: String,
-}
-
-#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LegacySpineArgs {
     op: String,
-    summary: String,
+    summary: Option<String>,
 }
 
 fn spine_transition_from_response_item(
@@ -218,22 +223,41 @@ fn spine_transition_from_response_item(
     };
 
     if namespace.as_deref() == Some(SPINE_NAMESPACE) {
-        let op = match name.as_str() {
-            SPINE_TOOL_OPEN => SpineOperation::Open,
-            SPINE_TOOL_NEXT => SpineOperation::Next,
-            SPINE_TOOL_CLOSE => SpineOperation::Close,
-            _ => return Ok(None),
-        };
-        let args = serde_json::from_str::<NamespacedSpineArgs>(arguments).map_err(|source| {
-            SpineProjectionError::ArgsJson {
-                call_id: call_id.clone(),
-                source,
-            }
-        })?;
+        let (op, summary) =
+            match name.as_str() {
+                SPINE_TOOL_OPEN => {
+                    serde_json::from_str::<NamespacedOpenArgs>(arguments).map_err(|source| {
+                        SpineProjectionError::ArgsJson {
+                            call_id: call_id.clone(),
+                            source,
+                        }
+                    })?;
+                    (SpineOperation::Open, None)
+                }
+                SPINE_TOOL_NEXT => {
+                    let args = serde_json::from_str::<NamespacedSummaryArgs>(arguments).map_err(
+                        |source| SpineProjectionError::ArgsJson {
+                            call_id: call_id.clone(),
+                            source,
+                        },
+                    )?;
+                    (SpineOperation::Next, Some(args.summary))
+                }
+                SPINE_TOOL_CLOSE => {
+                    let args = serde_json::from_str::<NamespacedSummaryArgs>(arguments).map_err(
+                        |source| SpineProjectionError::ArgsJson {
+                            call_id: call_id.clone(),
+                            source,
+                        },
+                    )?;
+                    (SpineOperation::Close, Some(args.summary))
+                }
+                _ => return Ok(None),
+            };
         return Ok(Some(PendingTransition {
             call_id: call_id.clone(),
             op,
-            summary: args.summary,
+            summary,
         }));
     }
 

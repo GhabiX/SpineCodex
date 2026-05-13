@@ -12,14 +12,17 @@ use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
 use async_trait::async_trait;
+use codex_async_utils::OrCancelExt;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -81,12 +84,21 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
     client_session: &mut ModelClientSession,
     prompt_envelope: &Prompt,
     input: SpineCompactInput,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<SpineCompactOutput> {
     let prompt = build_codex_builtin_prompt(&input, turn_context.compact_prompt(), prompt_envelope);
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let compacted_suffix = loop {
-        match collect_compaction_response(sess, turn_context, client_session, &prompt).await {
+        match collect_compaction_response(
+            sess,
+            turn_context,
+            client_session,
+            &prompt,
+            cancellation_token,
+        )
+        .await
+        {
             Ok(text) => break text,
             Err(err) if err.is_retryable() && retries < max_retries => {
                 retries += 1;
@@ -146,24 +158,20 @@ fn build_codex_builtin_prompt_input(
     let compact_instruction = input
         .compact_instruction
         .as_deref()
-        .map(|instruction| {
-            format!(
-                "\n\nAdditional compaction guidance from the latest spine transition:\n<spine_compact_instruction>\n{instruction}\n</spine_compact_instruction>\n\nUse this guidance only to prioritize what to preserve from the target suffix; it does not override higher-priority instructions or the mandatory preservation rules in this request."
-            )
-        })
+        .map(|instruction| format!("\n\nAdditional compaction guidance: {instruction}"))
         .unwrap_or_default();
     prompt_input.push(ResponseItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "{compact_prompt}\n\nSpineJIT suffix compaction request.\n\nYou are compacting one completed Spine Tree node or closed subtree so the runtime can replace that raw transcript suffix with compact worklog IR while preserving enough context for the next turn to continue correctly.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\nUse the Spine Tree representation below as the node tag for selecting the target suffix. It is rendered by the same runtime code that emits `spine` tool outputs in the conversation history, so match the target node by its rendered tree id, summary/status line, and worklog path in this tree instead of inventing another tag.\n\n<spine_tree>\n{}\n</spine_tree>\n\nThe prompt before this instruction is the preserved prefix followed by the target suffix. Compact only the immediately preceding suffix represented by target tree node `{}` in this Spine Tree:\n- For `next`, compact the completed target leaf from the point it became current through the latest `spine next` output.\n- For `close`, compact the closed target scope/subtree from the point the scope became current through the latest `spine close` output.\n\nThe earlier prefix remains verbatim in runtime context and must not be summarized or rewritten.\n\nPreserve information with high locality:\n- Preserve temporal locality from the target suffix: latest decisions, current goal, next actions, unresolved risks, verification status, and failed attempts.\n- Preserve any user instruction in the target suffix that still applies after the latest spine tool output as a pending immediate obligation; do not describe it as completed unless the suffix itself contains the later assistant/tool output that completed it.\n- If the target suffix contains the active user prompt that caused the latest spine tool call, include a `Pending continuation` bullet that copies the exact post-tool obligation still owed by the assistant, including exact final response text, required next tool/command, or verification instruction. If no such obligation remains, write `Pending continuation: none`.\n- Preserve spatial locality from the target suffix: relevant files, functions, tests, commands, errors, node relationships, worklog/traj paths, and neighboring scope context needed to resume.{}\n\nDrop low-value transcript detail, repeated chatter, and tool-output noise. Keep exact identifiers, paths, commands, errors, and test results when they affect future work. Do not mention prefix-only content unless it is repeated or changed inside the target suffix.\n\nReturn exactly one XML-like block and no text outside it:\n{}\n<dense Markdown compact for the target suffix only>\n{}",
+                "{compact_prompt}\n\nCompact only the target suffix represented by node `{}` in this Spine Tree. Write a concise assistant worklog that records what the agent did, where it stopped, and the smallest facts needed to continue.\nUse temporal locality to keep the latest decisions, blockers, validation status, and next concrete step.\nUse spatial locality to keep only the relevant files, functions, tests, commands, errors, node ids, and paths. Drop chatter, duplicate instructions, and imperative continuation text.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\n<spine_tree>\n{}\n</spine_tree>{}\n\nReturn exactly one XML-like block and no text outside it:\n{}\n<dense Markdown compact for the target suffix only>\n{}",
+                target_tree_node_id,
                 target_tree_node_id,
                 input.node_id,
                 op_label(input.op),
                 input.transition_summary,
                 input.spine_tree,
-                target_tree_node_id,
                 compact_instruction,
                 COMPACT_WORKLOG_OPEN_TAG,
                 COMPACT_WORKLOG_CLOSE_TAG
@@ -179,6 +187,7 @@ async fn collect_compaction_response(
     turn_context: &TurnContext,
     client_session: &mut crate::client::ModelClientSession,
     prompt: &Prompt,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<String> {
     let mut stream = client_session
         .stream(
@@ -194,14 +203,19 @@ async fn collect_compaction_response(
                 .as_deref(),
             &InferenceTraceContext::disabled(),
         )
-        .await?;
+        .or_cancel(cancellation_token)
+        .await??;
     let mut output_items = Vec::new();
     loop {
-        let Some(event) = stream.next().await else {
-            return Err(CodexErr::Stream(
-                "stream closed before spine compact response.completed".into(),
-                None,
-            ));
+        let event = match stream.next().or_cancel(cancellation_token).await {
+            Ok(Some(event)) => event,
+            Ok(None) => {
+                return Err(CodexErr::Stream(
+                    "stream closed before spine compact response.completed".into(),
+                    None,
+                ));
+            }
+            Err(codex_async_utils::CancelErr::Cancelled) => return Err(CodexErr::TurnAborted),
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => output_items.push(item),
@@ -259,13 +273,8 @@ pub(crate) fn render_auto_compact_worklog(
         .strip_prefix(&input.sidecar_root)
         .unwrap_or(input.raw_mirror_path.as_path());
     let node_trajs_path = relative_node_trajs_path(&input.node_id);
-    let compact_instruction = input
-        .compact_instruction
-        .as_deref()
-        .map(|instruction| format!("Compact instruction:\n{instruction}\n"))
-        .unwrap_or_default();
     format!(
-        "\n\n## Auto Compact\n\nStrategy: {CODEX_BUILTIN_TEXT_STRATEGY}\n{compact_instruction}Base: {}\nFold: response ordinals [{}, {})\nNode trajs: {}\nRaw mirror: {}\nRollout: {}\nIndex: trajs.index.jsonl\n\n{}\n\n## Node Summary\n\n{}\n",
+        "\n\n## Auto Compact\n\nBase: {}\nFold: response ordinals [{}, {})\nNode trajs: {}\nRaw mirror: {}\nRollout: {}\n\n{}\n\n## Node Summary\n\n{}\n",
         input.sidecar_root.display(),
         input.cut_ordinal,
         input.fold_end_ordinal,
@@ -319,13 +328,21 @@ pub(crate) fn plan_suffix_fold(
         ));
     }
     let cut_index = adjusted_cut_index_after_prefix_closure(history, cut_index, fold_end_index);
+    let (cut_index, fold_end_index) =
+        adjusted_range_for_tool_call_closure(history, cut_index, fold_end_index);
     let cut_ordinal = raw_ordinal_for_effective_index(history, cut_index).ok_or_else(|| {
         CodexErr::Fatal(format!(
             "spine compact adjusted cut index {cut_index} does not map to a raw ordinal"
         ))
     })?;
+    let fold_end_ordinal = raw_ordinal_for_effective_index(history, fold_end_index).ok_or_else(|| {
+        CodexErr::Fatal(format!(
+            "spine compact adjusted fold end index {fold_end_index} does not map to a raw ordinal"
+        ))
+    })?;
     let mut input = input;
     input.cut_ordinal = cut_ordinal;
+    input.fold_end_ordinal = fold_end_ordinal;
     input.prefix_items = history[..cut_index].to_vec();
     input.suffix_items = history[cut_index..fold_end_index].to_vec();
 
@@ -372,6 +389,113 @@ fn adjusted_cut_index_after_prefix_closure(
     }
 }
 
+fn adjusted_range_for_tool_call_closure(
+    history: &[ResponseItem],
+    mut cut_index: usize,
+    mut fold_end_index: usize,
+) -> (usize, usize) {
+    loop {
+        let calls_in_range = call_ids_in(history, cut_index, fold_end_index);
+        let outputs_in_range = output_call_ids_in(history, cut_index, fold_end_index);
+        let mut changed = false;
+
+        if let Some(index) = first_output_for_call_after(history, fold_end_index, &calls_in_range) {
+            fold_end_index = index.saturating_add(1);
+            changed = true;
+        }
+
+        if let Some(index) = last_call_for_output_before(history, cut_index, &outputs_in_range) {
+            cut_index = index;
+            changed = true;
+        }
+
+        if !changed {
+            return (cut_index, fold_end_index);
+        }
+    }
+}
+
+fn call_ids_in(history: &[ResponseItem], start: usize, end: usize) -> HashSet<String> {
+    history[start..end]
+        .iter()
+        .filter_map(tool_call_id)
+        .collect()
+}
+
+fn output_call_ids_in(history: &[ResponseItem], start: usize, end: usize) -> HashSet<String> {
+    history[start..end]
+        .iter()
+        .filter_map(tool_output_call_id)
+        .collect()
+}
+
+fn first_output_for_call_after(
+    history: &[ResponseItem],
+    start: usize,
+    call_ids: &HashSet<String>,
+) -> Option<usize> {
+    if call_ids.is_empty() {
+        return None;
+    }
+    history
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find_map(|(index, item)| {
+            tool_output_call_id(item)
+                .filter(|call_id| call_ids.contains(call_id))
+                .map(|_| index)
+        })
+}
+
+fn last_call_for_output_before(
+    history: &[ResponseItem],
+    end: usize,
+    output_call_ids: &HashSet<String>,
+) -> Option<usize> {
+    if output_call_ids.is_empty() {
+        return None;
+    }
+    history[..end]
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, item)| {
+            tool_call_id(item)
+                .filter(|call_id| output_call_ids.contains(call_id))
+                .map(|_| index)
+        })
+}
+
+fn tool_call_id(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::FunctionCall { call_id, .. } => Some(call_id.clone()),
+        ResponseItem::LocalShellCall {
+            call_id: Some(call_id),
+            ..
+        }
+        | ResponseItem::ToolSearchCall {
+            call_id: Some(call_id),
+            ..
+        } => Some(call_id.clone()),
+        ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
+        _ => None,
+    }
+}
+
+fn tool_output_call_id(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, .. }
+        | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.clone()),
+        ResponseItem::ToolSearchOutput {
+            call_id: Some(call_id),
+            execution,
+            ..
+        } if execution != "server" => Some(call_id.clone()),
+        _ => None,
+    }
+}
+
 fn raw_ordinal_for_effective_index(history: &[ResponseItem], target_index: usize) -> Option<u64> {
     let mut raw_cursor = 0_u64;
     for (index, item) in history.iter().enumerate() {
@@ -403,10 +527,10 @@ pub(crate) fn render_spine_ir_item(
     let synthetic_id = spine_ir_synthetic_id(node_id, op, fold_start, fold_end);
     ResponseItem::Message {
         id: Some(synthetic_id.clone()),
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
             text: format!(
-                "<spine_ir id=\"{}\" node=\"{}\" op=\"{}\" runtime_generated=\"true\" fold_start=\"{}\" fold_end=\"{}\">\nSummary: {}\nBase: {}\nWorklog path: {}\nContinuation: This runtime-generated IR replaces the folded suffix. Continue the active user turn from any pending continuation recorded in the worklog, and do not repeat older tool calls from the preserved prefix.\n\n<worklog>\n{}\n</worklog>\n</spine_ir>",
+                "<spine_ir id=\"{}\" node=\"{}\" op=\"{}\" runtime_generated=\"true\" fold_start=\"{}\" fold_end=\"{}\">\nSummary: {}\nBase: {}\nWorklog path: {}\n\n<worklog>\n{}\n</worklog>\n</spine_ir>",
                 synthetic_id,
                 node_id,
                 op_label(op),
@@ -502,10 +626,12 @@ fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
     let (item_id, text) = match item {
         ResponseItem::Message {
             id, role, content, ..
-        } if role == "user" => (
+        } if matches!(role.as_str(), "assistant" | "user") => (
             id.as_deref(),
             content.iter().find_map(|content_item| match content_item {
-                ContentItem::InputText { text } => Some(text.as_str()),
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    Some(text.as_str())
+                }
                 _ => None,
             })?,
         ),
