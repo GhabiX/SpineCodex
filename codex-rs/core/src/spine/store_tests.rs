@@ -319,7 +319,7 @@ fn records_root_epoch_archive_and_replays_from_tree() {
 }
 
 #[test]
-fn root_cursor_archive_creates_epoch_under_hidden_root() {
+fn root_cursor_archive_parent_links_survive_reload() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
 
@@ -972,7 +972,7 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
                     step: "rolled back plan".to_string(),
                     status: "in_progress".to_string(),
                 }],
-                scope_allocation: None,
+                spine_plantree: None,
                 source_turn_id: "rolled-back-turn".to_string(),
                 event_seq: source_store
                     .next_tree_event_seq()
