@@ -176,9 +176,7 @@ fn deep_close_returns_to_parent_sibling() {
         Some("nested scope done".to_string())
     );
     assert_eq!(
-        state
-            .node(&id(&[1, 1, 1]))
-            .map(|node| node.status.clone()),
+        state.node(&id(&[1, 1, 1])).map(|node| node.status.clone()),
         Some(NodeStatus::Finished)
     );
     assert_eq!(
@@ -216,29 +214,52 @@ fn reset_root_epoch_replaces_live_tree_under_stable_root() {
     state.open().expect("nested open should succeed");
 
     let transition = state
-        .reset_root_epoch(21)
+        .reset_root_epoch("context compacted", 21)
         .expect("reset root epoch should succeed");
 
     assert_eq!(
         transition,
         Transition {
             from: id(&[1]),
-            to: id(&[1, 1]),
+            to: id(&[2, 1]),
         }
     );
-    assert_eq!(state.cursor(), &id(&[1, 1]));
+    assert_eq!(state.cursor(), &id(&[2, 1]));
     assert_eq!(
         summaries(&state),
         vec![
-            (id(&[1]), None, NodeStatus::Opened),
-            (id(&[1, 1]), None, NodeStatus::Live),
+            (
+                id(&[1]),
+                Some("context compacted".to_string()),
+                NodeStatus::Closed,
+            ),
+            (id(&[1, 1]), None, NodeStatus::Opened),
+            (id(&[1, 1, 1]), None, NodeStatus::Live),
+            (id(&[2]), None, NodeStatus::Opened),
+            (id(&[2, 1]), None, NodeStatus::Live),
         ]
     );
     assert_eq!(
         state
-            .node(&id(&[1, 1]))
+            .node(&id(&[2, 1]))
             .and_then(|node| node.raw_start_ordinal),
         Some(21)
+    );
+
+    let transition = state
+        .reset_root_epoch("context compacted again", 34)
+        .expect("second reset root epoch should succeed");
+    assert_eq!(
+        transition,
+        Transition {
+            from: id(&[2]),
+            to: id(&[3, 1]),
+        }
+    );
+    assert_eq!(state.cursor(), &id(&[3, 1]));
+    assert_eq!(
+        state.node(&id(&[2])).and_then(|node| node.summary.clone()),
+        Some("context compacted again".to_string())
     );
 }
 

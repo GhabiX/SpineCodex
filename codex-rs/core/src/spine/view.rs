@@ -1,4 +1,5 @@
 use super::ids::NodeId;
+use super::ids::NodeIdParseError;
 use super::runtime::SpineRuntimeHint;
 use super::state::NodeStatus;
 use super::state::SpineState;
@@ -87,19 +88,24 @@ fn rounded_k_tokens(tokens: u64) -> u64 {
 
 pub(crate) fn render_tree(state: &SpineState, cursor: &NodeId) -> String {
     let visible = state.visible_spine().into_iter().collect::<HashSet<_>>();
-    let active_epoch = root_epoch_for(cursor);
-    let previous_epoch = active_epoch.as_ref().and_then(previous_root_epoch);
-    let rows = state
+    let current_root_epoch = state.current_root_epoch().ok();
+    let previous_root_epoch = current_root_epoch.as_ref().and_then(previous_root_epoch_id);
+    let top_level_nodes = state
         .nodes()
         .iter()
         .filter(|(_, node)| node.parent_id.is_none())
-        .map(|(node_id, _)| {
+        .map(|(node_id, _)| node_id.clone())
+        .collect::<Vec<_>>();
+    let rows = top_level_nodes
+        .iter()
+        .map(|node_id| {
             format_subtree(
                 state,
                 node_id,
                 cursor,
                 &visible,
-                previous_epoch.as_ref(),
+                current_root_epoch.as_ref(),
+                previous_root_epoch.as_ref(),
                 0,
             )
         })
@@ -116,6 +122,7 @@ fn format_subtree(
     node_id: &NodeId,
     cursor: &NodeId,
     visible: &HashSet<NodeId>,
+    current_root_epoch: Option<&NodeId>,
     previous_epoch: Option<&NodeId>,
     depth: usize,
 ) -> String {
@@ -140,7 +147,13 @@ fn format_subtree(
         }
         if should_show_worklog_ref(&node.status) {
             line.push(' ');
-            if visible.contains(node_id) || Some(node_id) == previous_epoch {
+            if worklog_is_already_in_context(
+                state,
+                node_id,
+                visible,
+                current_root_epoch,
+                previous_epoch,
+            ) {
                 line.push_str("[worklog already in context]");
             } else {
                 line.push_str(&relative_worklog_path(node_id).display().to_string());
@@ -159,6 +172,7 @@ fn format_subtree(
                 child_id,
                 cursor,
                 visible,
+                current_root_epoch,
                 previous_epoch,
                 child_depth,
             )
@@ -171,12 +185,38 @@ fn format_subtree(
     }
 }
 
+fn worklog_is_already_in_context(
+    state: &SpineState,
+    node_id: &NodeId,
+    visible: &HashSet<NodeId>,
+    current_root_epoch: Option<&NodeId>,
+    previous_root_epoch: Option<&NodeId>,
+) -> bool {
+    if is_root_epoch(state, node_id) {
+        return previous_root_epoch == Some(node_id);
+    }
+
+    let Some(root_epoch) = root_epoch_for(node_id) else {
+        return false;
+    };
+    if Some(&root_epoch) != current_root_epoch {
+        return false;
+    }
+    visible.contains(node_id)
+}
+
 fn root_epoch_for(node_id: &NodeId) -> Option<NodeId> {
     let first = *node_id.segments().first()?;
     Some(NodeId::from_segments(vec![first]))
 }
 
-fn previous_root_epoch(node_id: &NodeId) -> Option<NodeId> {
+fn is_root_epoch(state: &SpineState, node_id: &NodeId) -> bool {
+    state
+        .node(node_id)
+        .is_some_and(|node| node.parent_id.is_none())
+}
+
+fn previous_root_epoch_id(node_id: &NodeId) -> Option<NodeId> {
     let segments = node_id.segments();
     if segments.len() != 1 || segments[0] <= 1 {
         return None;
@@ -222,7 +262,14 @@ fn should_show_worklog_ref(status: &NodeStatus) -> bool {
 }
 
 pub(crate) fn display_node_id(node_id: &NodeId) -> String {
+    if node_id.segments().is_empty() {
+        return "root".to_string();
+    }
     node_id.to_string()
+}
+
+pub(crate) fn parse_display_node_id(value: &str) -> Result<NodeId, NodeIdParseError> {
+    NodeId::parse(value)
 }
 
 pub(crate) fn op_label(op: SpineOperation) -> &'static str {

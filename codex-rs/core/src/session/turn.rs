@@ -1083,22 +1083,21 @@ async fn append_spine_size_hint_for_request(
     let Some(hint) = hint else {
         return Ok(input);
     };
-    let budget =
-        if let Some(limit_tokens) = turn_context.model_info.auto_compact_token_limit() {
-            let used_tokens = sess.get_total_token_usage().await;
-            let used_tokens = u64::try_from(used_tokens).map_err(|_| {
-                CodexErr::Fatal("Spine context budget used token count is negative".to_string())
-            })?;
-            let limit_tokens = u64::try_from(limit_tokens).map_err(|_| {
-                CodexErr::Fatal("Spine context budget limit token count is negative".to_string())
-            })?;
-            Some(SpineContextBudgetHint {
-                used_tokens,
-                limit_tokens,
-            })
-        } else {
-            None
-        };
+    let budget = if let Some(limit_tokens) = turn_context.model_info.auto_compact_token_limit() {
+        let used_tokens = sess.get_total_token_usage().await;
+        let used_tokens = u64::try_from(used_tokens).map_err(|_| {
+            CodexErr::Fatal("Spine context budget used token count is negative".to_string())
+        })?;
+        let limit_tokens = u64::try_from(limit_tokens).map_err(|_| {
+            CodexErr::Fatal("Spine context budget limit token count is negative".to_string())
+        })?;
+        Some(SpineContextBudgetHint {
+            used_tokens,
+            limit_tokens,
+        })
+    } else {
+        None
+    };
     let text = render_size_hint(&hint, budget.as_ref()).trim().to_string();
     input.push(ResponseItem::Message {
         id: None,
@@ -2711,17 +2710,21 @@ mod spine_tool_order_tests {
             crate::session::tests::make_session_and_context().await;
         turn_context.model_info.context_window = Some(1_000_000);
         turn_context.model_info.auto_compact_token_limit = Some(900_000);
-        session.state.lock().await.set_token_info(Some(TokenUsageInfo {
-            total_token_usage: TokenUsage {
-                total_tokens: 812_300,
-                ..TokenUsage::default()
-            },
-            last_token_usage: TokenUsage {
-                total_tokens: 812_300,
-                ..TokenUsage::default()
-            },
-            model_context_window: Some(1_000_000),
-        }));
+        session
+            .state
+            .lock()
+            .await
+            .set_token_info(Some(TokenUsageInfo {
+                total_token_usage: TokenUsage {
+                    total_tokens: 812_300,
+                    ..TokenUsage::default()
+                },
+                last_token_usage: TokenUsage {
+                    total_tokens: 812_300,
+                    ..TokenUsage::default()
+                },
+                model_context_window: Some(1_000_000),
+            }));
         let config = session.get_config().await;
         let live_thread = LiveThread::create(
             Arc::clone(&session.services.thread_store),
@@ -2782,18 +2785,23 @@ mod spine_tool_order_tests {
             "request boundary must not emit a Spine hint below 30k"
         );
         assert!(
-            !session.clone_history().await.raw_items().iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "developer"
-                            && matches!(
-                                content.as_slice(),
-                                [ContentItem::InputText { text }]
-                                    if text.contains("Spine hint:")
-                            )
-                )
-            }),
+            !session
+                .clone_history()
+                .await
+                .raw_items()
+                .iter()
+                .any(|item| {
+                    matches!(
+                        item,
+                        ResponseItem::Message { role, content, .. }
+                            if role == "developer"
+                                && matches!(
+                                    content.as_slice(),
+                                    [ContentItem::InputText { text }]
+                                        if text.contains("Spine hint:")
+                                )
+                    )
+                }),
             "below-threshold checks must not persist a Spine hint into history"
         );
 

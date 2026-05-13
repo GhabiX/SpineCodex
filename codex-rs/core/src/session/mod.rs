@@ -3020,18 +3020,21 @@ impl Session {
             .unwrap_or(compact_summary.as_str());
         let worklog_markdown = render_auto_compact_worklog(&plan.input, compacted_body);
         let worklog_body = store
-            .root_epoch_worklog_with_appended_section(&compact_id, &worklog_markdown)
+            .worklog_with_appended_section(&boundary.node_id, &worklog_markdown)
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to stage spine root archive worklog: {err}"))
             })?;
-        let worklog_rel_path =
-            crate::spine::store::SpineSidecarStore::root_epoch_worklog_rel_path(&compact_id);
+        let worklog_rel_path = plan
+            .worklog_path
+            .strip_prefix(store.root())
+            .unwrap_or(plan.worklog_path.as_path())
+            .to_path_buf();
         let rendered_ir_items = vec![render_spine_ir_item(
             &boundary.node_id,
             boundary.op,
             &boundary.transition_summary,
             store.root(),
-            std::path::Path::new(&worklog_rel_path),
+            &worklog_rel_path,
             &worklog_body,
             effective_boundary.cut_ordinal,
             effective_boundary.fold_end_ordinal,
@@ -3072,7 +3075,7 @@ impl Session {
                 })?;
             return Err(err);
         }
-        if let Err(err) = store.append_root_epoch_worklog_section(&compact_id, &worklog_markdown) {
+        if let Err(err) = store.append_worklog_section(&boundary.node_id, &worklog_markdown) {
             return Err(self
                 .poison_spine_compact(format!(
                     "failed to append installed spine root archive worklog after rollout checkpoint: {err}"
@@ -3086,7 +3089,7 @@ impl Session {
             .cloned()
             .map(RolloutItem::ResponseItem)
             .collect::<Vec<_>>();
-        if let Err(err) = store.append_root_epoch_trajs_items(&compact_id, &node_trajs_items) {
+        if let Err(err) = store.append_node_trajs_items(&boundary.node_id, &node_trajs_items) {
             return Err(self
                 .poison_spine_compact(format!(
                     "failed to archive installed spine root epoch trajs after rollout checkpoint: {err}"
@@ -3129,7 +3132,7 @@ impl Session {
             effective_boundary.cut_ordinal,
             effective_boundary.fold_end_ordinal,
             replacement_history.len(),
-            worklog_rel_path,
+            worklog_rel_path.to_string_lossy().into_owned(),
             message_hash,
         ) {
             return Err(self
@@ -3241,8 +3244,8 @@ impl Session {
         {
             Ok(output) => output,
             Err(err) => {
-                store
-                    .append_compact_failed(
+                let terminal = if matches!(err, CodexErr::TurnAborted | CodexErr::Interrupted) {
+                    store.append_compact_interrupted(
                         &compact_id,
                         &boundary.node_id,
                         boundary.op,
@@ -3251,11 +3254,22 @@ impl Session {
                         CODEX_BUILTIN_TEXT_STRATEGY,
                         err.to_string(),
                     )
-                    .map_err(|store_err| {
-                        CodexErr::Fatal(format!(
-                            "failed to record spine compact failure after strategy error {err}: {store_err}"
-                        ))
-                    })?;
+                } else {
+                    store.append_compact_failed(
+                        &compact_id,
+                        &boundary.node_id,
+                        boundary.op,
+                        effective_boundary.cut_ordinal,
+                        effective_boundary.fold_end_ordinal,
+                        CODEX_BUILTIN_TEXT_STRATEGY,
+                        err.to_string(),
+                    )
+                };
+                terminal.map_err(|store_err| {
+                    CodexErr::Fatal(format!(
+                        "failed to record spine compact terminal state after strategy error {err}: {store_err}"
+                    ))
+                })?;
                 return Err(err);
             }
         };

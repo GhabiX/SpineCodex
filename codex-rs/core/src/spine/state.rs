@@ -31,7 +31,7 @@ impl SpineState {
     }
 
     pub(crate) fn new_with_initial_leaf_raw_start(initial_leaf_raw_start_ordinal: u64) -> Self {
-        let initial_epoch = NodeId::root_sibling(1);
+        let initial_epoch = NodeId::root_epoch(1);
         let initial_leaf = initial_epoch.child(1);
         let initial_epoch_record = NodeRecord {
             node_id: initial_epoch.clone(),
@@ -185,30 +185,37 @@ impl SpineState {
 
     pub(crate) fn reset_root_epoch(
         &mut self,
+        summary: impl Into<String>,
         initial_leaf_raw_start_ordinal: u64,
     ) -> Result<Transition, SpineStateError> {
-        let from = NodeId::root_sibling(1);
-        let to = from.child(1);
-        *self = Self::new_with_initial_leaf_raw_start(initial_leaf_raw_start_ordinal);
-        Ok(Transition { from, to })
+        let from = self.current_root_epoch()?;
+        let next_epoch = NodeId::root_epoch(self.next_child_index(None)?);
+        let next_leaf = next_epoch.child(1);
+
+        self.write_summary_if_absent(&from, summary)?;
+        self.set_status(&from, NodeStatus::Closed)?;
+        self.insert_node(next_epoch.clone(), None)?;
+        self.set_status(&next_epoch, NodeStatus::Opened)?;
+        self.set_raw_start_ordinal(&next_epoch, initial_leaf_raw_start_ordinal)?;
+        self.insert_node(next_leaf.clone(), Some(next_epoch))?;
+        self.set_raw_start_ordinal(&next_leaf, initial_leaf_raw_start_ordinal)?;
+        self.cursor = next_leaf.clone();
+
+        Ok(Transition {
+            from,
+            to: next_leaf,
+        })
     }
 
     pub(crate) fn root_epoch_archive_target(&self) -> Result<NodeId, SpineStateError> {
-        Ok(NodeId::root_sibling(1))
+        self.current_root_epoch()
     }
 
     pub(crate) fn root_epoch_cut_ordinal(&self) -> Result<u64, SpineStateError> {
-        let root_epoch = NodeId::root_sibling(1);
-        let first_leaf = self
-            .nodes
-            .values()
-            .filter(|node| node.parent_id.as_ref() == Some(&root_epoch))
-            .map(|node| node.node_id.clone())
-            .min()
-            .ok_or_else(|| SpineStateError::UnknownNode(root_epoch.child(1)))?;
-        self.node(&first_leaf)
+        let root_epoch = self.current_root_epoch()?;
+        self.node(&root_epoch)
             .and_then(|node| node.raw_start_ordinal)
-            .ok_or(SpineStateError::MissingRawStartOrdinal(first_leaf))
+            .ok_or(SpineStateError::MissingRawStartOrdinal(root_epoch))
     }
 
     pub(crate) fn current_root_epoch(&self) -> Result<NodeId, SpineStateError> {
@@ -219,11 +226,14 @@ impl SpineState {
                 .filter(|node| node.parent_id.is_none())
                 .map(|node| node.node_id.clone())
                 .min()
-                .ok_or_else(|| SpineStateError::UnknownNode(NodeId::root_sibling(1)))?;
+                .ok_or_else(|| SpineStateError::UnknownNode(NodeId::root_epoch(1)))?;
             return Ok(first_epoch);
         }
 
         let segments = self.cursor.segments();
+        if segments.is_empty() {
+            return Err(SpineStateError::UnknownNode(self.cursor.clone()));
+        }
         let root_epoch = NodeId::from_segments(vec![segments[0]]);
         if self.nodes.contains_key(&root_epoch) {
             Ok(root_epoch)
@@ -242,7 +252,7 @@ impl SpineState {
     fn next_sibling_id(&self, parent_id: Option<&NodeId>) -> Result<NodeId, SpineStateError> {
         match parent_id {
             Some(parent) => Ok(parent.child(self.next_child_index(Some(parent))?)),
-            None => Ok(NodeId::root_sibling(self.next_child_index(None)?)),
+            None => Ok(NodeId::root_epoch(self.next_child_index(None)?)),
         }
     }
 

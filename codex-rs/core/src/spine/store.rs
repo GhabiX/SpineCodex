@@ -37,7 +37,6 @@ const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
-const ROOT_EPOCHS_DIR: &str = "root-epochs";
 const GENERATED_WORKLOG_SECTION_MARKER: &str = "\n\n<!-- spine:auto-compact-generated -->\n";
 const SPINE_BASE_LOCATOR_VERSION: u32 = 1;
 
@@ -191,24 +190,6 @@ impl SpineSidecarStore {
         self.node_dir(node_id).join(NODE_TRAJS_FILE)
     }
 
-    pub(crate) fn root_epoch_worklog_path(&self, compact_id: &str) -> PathBuf {
-        self.root
-            .join(ROOT_EPOCHS_DIR)
-            .join(compact_id)
-            .join(WORKLOG_FILE)
-    }
-
-    pub(crate) fn root_epoch_trajs_path(&self, compact_id: &str) -> PathBuf {
-        self.root
-            .join(ROOT_EPOCHS_DIR)
-            .join(compact_id)
-            .join(NODE_TRAJS_FILE)
-    }
-
-    pub(crate) fn root_epoch_worklog_rel_path(compact_id: &str) -> String {
-        [ROOT_EPOCHS_DIR, compact_id, WORKLOG_FILE].join("/")
-    }
-
     pub(crate) fn plan_path(&self, node_id: &NodeId) -> PathBuf {
         self.node_dir(node_id).join(PLAN_FILE)
     }
@@ -222,8 +203,8 @@ impl SpineSidecarStore {
         }
 
         self.ensure_sidecar_dir()?;
-        self.ensure_node_dir(&NodeId::root_sibling(1))?;
-        self.ensure_node_dir(&NodeId::root_sibling(1).child(1))?;
+        self.ensure_node_dir(&NodeId::root_epoch(1))?;
+        self.ensure_node_dir(&NodeId::root_epoch(1).child(1))?;
         self.create_trajs_index_file()?;
         self.create_compact_index_file()?;
         self.create_raw_rollout_file()?;
@@ -304,7 +285,7 @@ impl SpineSidecarStore {
         let compact_id = compact_id.into();
         let source_turn_id = source_turn_id.into();
         let mut next_state = state.clone();
-        let transition = next_state.reset_root_epoch(raw_start_ordinal)?;
+        let transition = next_state.reset_root_epoch(summary.clone(), raw_start_ordinal)?;
         let to_parent_id = next_state
             .node(&transition.to)
             .ok_or_else(|| {
@@ -833,6 +814,31 @@ impl SpineSidecarStore {
         self.append_json_line(&path, &event)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn append_compact_interrupted(
+        &self,
+        compact_id: impl Into<String>,
+        node_id: &NodeId,
+        op: SpineOperation,
+        cut_ordinal: u64,
+        fold_end_ordinal: u64,
+        strategy: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Result<(), SpineStoreError> {
+        let path = self.compact_index_path();
+        let event = CompactIndexEvent::CompactInterrupted {
+            seq: self.next_jsonl_seq(&path)?,
+            compact_id: compact_id.into(),
+            node_id: node_id.to_string(),
+            op,
+            cut_ordinal,
+            fold_end_ordinal,
+            strategy: strategy.into(),
+            error: error.into(),
+        };
+        self.append_json_line(&path, &event)
+    }
+
     pub(crate) fn append_worklog_section(
         &self,
         node_id: &NodeId,
@@ -872,74 +878,6 @@ impl SpineSidecarStore {
         worklog.push_str(GENERATED_WORKLOG_SECTION_MARKER);
         worklog.push_str(section);
         Ok(worklog)
-    }
-
-    pub(crate) fn root_epoch_worklog_with_appended_section(
-        &self,
-        compact_id: &str,
-        section: &str,
-    ) -> Result<String, SpineStoreError> {
-        let path = self.root_epoch_worklog_path(compact_id);
-        let mut worklog = match std::fs::read_to_string(&path) {
-            Ok(worklog) => worklog,
-            Err(source) if source.kind() == ErrorKind::NotFound => String::new(),
-            Err(source) => {
-                return Err(SpineStoreError::Io {
-                    path: path.clone(),
-                    source,
-                });
-            }
-        };
-        worklog.push_str(GENERATED_WORKLOG_SECTION_MARKER);
-        worklog.push_str(section);
-        Ok(worklog)
-    }
-
-    pub(crate) fn append_root_epoch_worklog_section(
-        &self,
-        compact_id: &str,
-        section: &str,
-    ) -> Result<(), SpineStoreError> {
-        let path = self.root_epoch_worklog_path(compact_id);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| SpineStoreError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        file.write_all(GENERATED_WORKLOG_SECTION_MARKER.as_bytes())
-            .map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        file.write_all(section.as_bytes())
-            .map_err(|source| SpineStoreError::Io { path, source })
-    }
-
-    pub(crate) fn append_root_epoch_trajs_items(
-        &self,
-        compact_id: &str,
-        items: &[RolloutItem],
-    ) -> Result<(), SpineStoreError> {
-        let path = self.root_epoch_trajs_path(compact_id);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| SpineStoreError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-        for item in items {
-            self.append_json_line(&path, item)?;
-        }
-        Ok(())
     }
 
     pub(crate) fn read_worklog(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
@@ -1047,7 +985,7 @@ impl SpineSidecarStore {
                     root_id,
                     next_leaf_id,
                     next_parent_id,
-                    summary: _,
+                    summary,
                     raw_start_ordinal,
                     ..
                 } => {
@@ -1060,7 +998,7 @@ impl SpineSidecarStore {
                     let next_leaf_id = NodeId::parse(&next_leaf_id)?;
                     let next_parent_id =
                         next_parent_id.as_deref().map(NodeId::parse).transpose()?;
-                    let transition = state.reset_root_epoch(raw_start_ordinal)?;
+                    let transition = state.reset_root_epoch(summary, raw_start_ordinal)?;
                     if transition.from != root_id || transition.to != next_leaf_id {
                         return Err(SpineStoreError::InvalidLedger(format!(
                             "root epoch reset replay mismatch: expected {} -> {}, got {} -> {}",
@@ -1314,6 +1252,24 @@ impl SpineSidecarStore {
                         cut_ordinal,
                         fold_end_ordinal,
                         "compact_failed",
+                    )?;
+                }
+                CompactIndexEvent::CompactInterrupted {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    ..
+                } => {
+                    record_compact_terminal(
+                        &mut attempts,
+                        compact_id,
+                        node_id,
+                        op,
+                        cut_ordinal,
+                        fold_end_ordinal,
+                        "compact_interrupted",
                     )?;
                 }
             }
@@ -1764,6 +1720,16 @@ enum CompactIndexEvent {
         strategy: String,
         error: String,
     },
+    CompactInterrupted {
+        seq: u64,
+        compact_id: String,
+        node_id: String,
+        op: SpineOperation,
+        cut_ordinal: u64,
+        fold_end_ordinal: u64,
+        strategy: String,
+        error: String,
+    },
 }
 
 impl CompactIndexEvent {
@@ -1771,7 +1737,8 @@ impl CompactIndexEvent {
         match self {
             CompactIndexEvent::CompactStarted { seq, .. }
             | CompactIndexEvent::CompactInstalled { seq, .. }
-            | CompactIndexEvent::CompactFailed { seq, .. } => *seq,
+            | CompactIndexEvent::CompactFailed { seq, .. }
+            | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq,
         }
     }
 }

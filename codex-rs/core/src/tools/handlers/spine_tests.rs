@@ -139,7 +139,7 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
     assert_eq!(
         output.log_preview(),
         format!(
-            "Current:  1.1.1\nBase: {}\n\n1.1: live\n    1.1.1: Current",
+            "Current:  1.1.1\nBase: {}\n\n1: live\n    1.1: live\n        1.1.1: Current",
             spine_base(&temp)
         )
     );
@@ -188,7 +188,7 @@ async fn valid_next_returns_compact_tree_view() {
     assert_eq!(
         output.log_preview(),
         format!(
-            "Current:  1.2\nBase: {}\n\n1.1: finished Completed reproduction and patch verification [worklog already in context]\n1.2: Current",
+            "Current:  1.2\nBase: {}\n\n1: live\n    1.1: finished Completed reproduction and patch verification [worklog already in context]\n    1.2: Current",
             spine_base(&temp)
         )
     );
@@ -450,7 +450,10 @@ async fn tree_prints_current_tree_without_staging() {
 
     assert_eq!(
         output.log_preview(),
-        format!("Current:  1.1\nBase: {}\n\n1.1: Current", spine_base(&temp))
+        format!(
+            "Current:  1.1\nBase: {}\n\n1: live\n    1.1: Current",
+            spine_base(&temp)
+        )
     );
     assert_eq!(
         output.code_mode_result(&ToolPayload::Function {
@@ -459,7 +462,7 @@ async fn tree_prints_current_tree_without_staging() {
         json!({
             "op": null,
             "cursor": "[1.1]",
-            "tree": "1.1: Current",
+            "tree": "1: live\n    1.1: Current",
         })
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;

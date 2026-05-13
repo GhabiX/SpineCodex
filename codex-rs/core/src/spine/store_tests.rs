@@ -327,18 +327,18 @@ fn records_root_epoch_archive_and_replays_from_tree() {
         transition,
         Transition {
             from: id(&[1]),
-            to: id(&[1, 1]),
+            to: id(&[2, 1]),
         }
     );
-    assert!(store.root().join("nodes").join("1").join("1").is_dir());
+    assert!(store.root().join("nodes").join("2").join("1").is_dir());
     assert_eq!(
         read_json_lines(store.tree_path())[3],
         json!({
             "type": "root_epoch_reset",
             "seq": 4,
             "root_id": "1",
-            "next_leaf_id": "1.1",
-            "next_parent_id": "1",
+            "next_leaf_id": "2.1",
+            "next_parent_id": "2",
             "summary": "context compacted",
             "raw_start_ordinal": 21,
             "compact_id": "compact-1",
@@ -349,10 +349,10 @@ fn records_root_epoch_archive_and_replays_from_tree() {
     let loaded = store.load().expect("load archived sidecar");
 
     assert_eq!(loaded, state);
-    assert_eq!(loaded.cursor(), &id(&[1, 1]));
+    assert_eq!(loaded.cursor(), &id(&[2, 1]));
     assert_eq!(
         loaded
-            .node(&id(&[1, 1]))
+            .node(&id(&[2, 1]))
             .and_then(|node| node.raw_start_ordinal),
         Some(21)
     );
@@ -377,7 +377,7 @@ fn root_cursor_archive_parent_links_survive_reload() {
         transition,
         Transition {
             from: id(&[1]),
-            to: id(&[1, 1]),
+            to: id(&[2, 1]),
         }
     );
     assert_eq!(
@@ -386,8 +386,8 @@ fn root_cursor_archive_parent_links_survive_reload() {
             "type": "root_epoch_reset",
             "seq": 2,
             "root_id": "1",
-            "next_leaf_id": "1.1",
-            "next_parent_id": "1",
+            "next_leaf_id": "2.1",
+            "next_parent_id": "2",
             "summary": "context compacted",
             "raw_start_ordinal": 7,
             "compact_id": "compact-root",
@@ -396,7 +396,7 @@ fn root_cursor_archive_parent_links_survive_reload() {
     );
 
     let loaded = store.load().expect("load archived sidecar");
-    assert_eq!(loaded.cursor(), &id(&[1, 1]));
+    assert_eq!(loaded.cursor(), &id(&[2, 1]));
     assert_eq!(
         loaded
             .node(&id(&[1]))
@@ -405,11 +405,23 @@ fn root_cursor_archive_parent_links_survive_reload() {
     );
     assert_eq!(
         loaded
+            .node(&id(&[2]))
+            .and_then(|node| node.parent_id.clone()),
+        None
+    );
+    assert_eq!(
+        loaded
+            .node(&id(&[2, 1]))
+            .and_then(|node| node.parent_id.clone()),
+        Some(id(&[2]))
+    );
+    assert_eq!(
+        loaded
             .node(&id(&[1, 1]))
             .and_then(|node| node.parent_id.clone()),
         Some(id(&[1]))
     );
-    assert_eq!(loaded.nodes().len(), 2);
+    assert_eq!(loaded.nodes().len(), 4);
 }
 
 #[test]
@@ -921,7 +933,7 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
         transition,
         Transition {
             from: id(&[1]),
-            to: id(&[1, 1]),
+            to: id(&[2, 1]),
         }
     );
     assert_eq!(
@@ -930,8 +942,8 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
             "type": "root_epoch_reset",
             "seq": 2,
             "root_id": "1",
-            "next_leaf_id": "1.1",
-            "next_parent_id": "1",
+            "next_leaf_id": "2.1",
+            "next_parent_id": "2",
             "summary": "context compacted",
             "raw_start_ordinal": 7,
             "compact_id": "compact-root",
@@ -940,7 +952,7 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
     );
 
     let loaded = store.load().expect("load archived sidecar");
-    assert_eq!(loaded.cursor(), &id(&[1, 1]));
+    assert_eq!(loaded.cursor(), &id(&[2, 1]));
     assert_eq!(
         loaded
             .node(&id(&[1]))
@@ -949,11 +961,23 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
     );
     assert_eq!(
         loaded
+            .node(&id(&[2]))
+            .and_then(|node| node.parent_id.clone()),
+        None
+    );
+    assert_eq!(
+        loaded
+            .node(&id(&[2, 1]))
+            .and_then(|node| node.parent_id.clone()),
+        Some(id(&[2]))
+    );
+    assert_eq!(
+        loaded
             .node(&id(&[1, 1]))
             .and_then(|node| node.parent_id.clone()),
         Some(id(&[1]))
     );
-    assert_eq!(loaded.nodes().len(), 2);
+    assert_eq!(loaded.nodes().len(), 4);
 }
 
 #[test]
@@ -1085,6 +1109,52 @@ fn compact_index_started_then_failed_loads() {
         .expect("append compact failed");
 
     store.load().expect("failed compact should be terminal");
+}
+
+#[test]
+fn compact_index_started_then_interrupted_loads() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append compact started");
+    store
+        .append_compact_interrupted(
+            "compact-1",
+            &id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            "codex_builtin_text",
+            "turn aborted",
+        )
+        .expect("append compact interrupted");
+
+    assert_eq!(
+        read_json_lines(store.compact_index_path())[1],
+        json!({
+            "type": "compact_interrupted",
+            "seq": 2,
+            "compact_id": "compact-1",
+            "node_id": "1",
+            "op": "next",
+            "cut_ordinal": 4,
+            "fold_end_ordinal": 9,
+            "strategy": "codex_builtin_text",
+            "error": "turn aborted",
+        })
+    );
+    store
+        .load()
+        .expect("interrupted compact should be terminal");
 }
 
 #[test]

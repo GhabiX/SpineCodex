@@ -415,7 +415,7 @@ fn record_plan_update_writes_plantree_without_moving_cursor() {
 
     let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
     let spine_plantree = &plan["spine_plantree"];
-    assert_eq!(spine_plantree["anchor_node_id"], "1");
+    assert_eq!(spine_plantree["anchor_node_id"], "1.1");
     assert_eq!(spine_plantree["root"]["summary"], "Editable task scope");
     assert_eq!(
         spine_plantree["root"]["children"][0]["existing_node_id"],
@@ -437,7 +437,7 @@ fn record_plan_update_writes_plantree_without_moving_cursor() {
     assert_eq!(tree.len(), 2);
     assert_eq!(tree[1]["type"], "task_plan_updated");
     assert_eq!(tree[1]["seq"], 2);
-    assert_eq!(tree[1]["spine_plantree"]["anchor_node_id"], "1");
+    assert_eq!(tree[1]["spine_plantree"]["anchor_node_id"], "1.1");
 
     let tree_snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
     let root = tree_snapshot
@@ -453,7 +453,7 @@ fn record_plan_update_writes_plantree_without_moving_cursor() {
         .expect("initial leaf node");
     let plan = leaf.plan.as_ref().expect("leaf plan");
     let spine_plantree = plan.spine_plantree.as_ref().expect("root PlanTree");
-    assert_eq!(spine_plantree.anchor_node_id, "1");
+    assert_eq!(spine_plantree.anchor_node_id, "1.1");
     assert_eq!(spine_plantree.root.children.len(), 2);
     assert_eq!(spine_plantree.root.children[0].existing_node_id, None);
     assert_eq!(spine_plantree.root.children[0].summary, "Reproduce failure");
@@ -491,7 +491,7 @@ fn record_plan_update_preserves_plantree_when_omitted() {
         .spine_plantree
         .as_ref()
         .expect("omitted PlanTree should inherit previous snapshot");
-    assert_eq!(spine_plantree.anchor_node_id, "1");
+    assert_eq!(spine_plantree.anchor_node_id, "1.1");
     assert_eq!(spine_plantree.root.children[0].summary, "Verify scope");
 
     let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
@@ -1588,7 +1588,7 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
         )
         .expect("record archive");
 
-    assert_eq!(runtime.cursor(), &id(&[1, 1]));
+    assert_eq!(runtime.cursor(), &id(&[2, 1]));
 }
 
 #[test]
@@ -1616,13 +1616,13 @@ fn root_epoch_archive_plans_materialized_epoch_when_cursor_is_hidden_root() {
         )
         .expect("record archive");
 
-    assert_eq!(runtime.cursor(), &id(&[1, 1]));
+    assert_eq!(runtime.cursor(), &id(&[2, 1]));
     assert_eq!(
         runtime
             .state()
-            .node(&id(&[1, 1]))
+            .node(&id(&[2, 1]))
             .and_then(|node| node.parent_id.clone()),
-        Some(id(&[1]))
+        Some(id(&[2]))
     );
 }
 

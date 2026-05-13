@@ -10,7 +10,7 @@ fn tree_view_omits_root_and_marks_visible_worklogs() {
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  1.2\n\n1.1: finished first child done [worklog already in context]\n1.2: Current"
+        "Current:  1.2\n\n1: live\n    1.1: finished first child done [worklog already in context]\n    1.2: Current"
     );
 }
 
@@ -21,7 +21,7 @@ fn tree_tool_view_can_include_base_path() {
 
     assert_eq!(
         render_tree_tool_output_with_base(&state, state.cursor(), Path::new("/tmp/spine")),
-        "Current:  1.2\nBase: /tmp/spine\n\n1.1: finished first child done [worklog already in context]\n1.2: Current"
+        "Current:  1.2\nBase: /tmp/spine\n\n1: live\n    1.1: finished first child done [worklog already in context]\n    1.2: Current"
     );
 }
 
@@ -68,7 +68,7 @@ fn tree_view_shows_paths_for_hidden_finished_descendants() {
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  1.2\n\n1.1: closed child scope [worklog already in context]\n    1.1.1: finished first leaf done nodes/1/1/1/worklog.md\n    1.1.2: finished nodes/1/1/2/worklog.md\n1.2: Current"
+        "Current:  1.2\n\n1: live\n    1.1: closed child scope [worklog already in context]\n        1.1.1: finished first leaf done nodes/1/1/1/worklog.md\n        1.1.2: finished nodes/1/1/2/worklog.md\n    1.2: Current"
     );
 }
 
@@ -76,10 +76,28 @@ fn tree_view_shows_paths_for_hidden_finished_descendants() {
 fn tree_view_resets_after_root_epoch_reset() {
     let mut state = SpineState::new();
     state.open().expect("open child");
-    state.reset_root_epoch(7).expect("reset root epoch");
+    state
+        .reset_root_epoch("Context compacted", 7)
+        .expect("reset root epoch");
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  1.1\n\n1.1: Current"
+        "Current:  2.1\n\n1: closed Context compacted [worklog already in context]\n    1.1: [undone as compact]\n        1.1.1: [undone as compact]\n2: live\n    2.1: Current"
+    );
+}
+
+#[test]
+fn tree_view_marks_previous_root_epoch_worklog_as_context() {
+    let mut state = SpineState::new();
+    state
+        .reset_root_epoch("first compact", 7)
+        .expect("first reset root epoch");
+    state
+        .reset_root_epoch("second compact", 14)
+        .expect("second reset root epoch");
+
+    assert_eq!(
+        render_tree_tool_output(&state, state.cursor()),
+        "Current:  3.1\n\n1: closed first compact nodes/1/worklog.md\n    1.1: [undone as compact]\n2: closed second compact [worklog already in context]\n    2.1: [undone as compact]\n3: live\n    3.1: Current"
     );
 }

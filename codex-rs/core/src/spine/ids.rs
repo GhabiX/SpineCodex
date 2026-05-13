@@ -17,7 +17,7 @@ impl NodeId {
         value.parse()
     }
 
-    pub(crate) fn root_sibling(index: u32) -> Self {
+    pub(crate) fn root_epoch(index: u32) -> Self {
         Self(vec![index])
     }
 

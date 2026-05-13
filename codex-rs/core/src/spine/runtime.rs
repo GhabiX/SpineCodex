@@ -13,6 +13,7 @@ use super::store::SpineStoreError;
 use super::store::TransitionSummaryArg;
 use super::trajs::RawOrdinalRange;
 use super::view::display_node_id;
+use super::view::parse_display_node_id;
 use super::view::render_tree;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::plan_tool::SpinePlanTreeArg;
@@ -398,6 +399,13 @@ impl SpineRuntime {
             },
             end_ordinal,
         )?;
+        let root_epoch = self.state.current_root_epoch()?;
+        self.store.record_raw_start_ordinal(
+            &mut self.state,
+            &root_epoch,
+            end_ordinal,
+            turn_id.clone(),
+        )?;
         let cursor = self.cursor().clone();
         self.store
             .record_raw_start_ordinal(&mut self.state, &cursor, end_ordinal, turn_id)?;
@@ -457,8 +465,10 @@ impl SpineRuntime {
             }
             None
         } else if let Some(plantree) = plantree {
+            let mut plantree = plantree;
             let anchor_node_id = self.resolve_plantree_anchor(&plantree)?;
             self.validate_plantree(&anchor_node_id, &plantree)?;
+            normalize_plantree_node_ids(&mut plantree)?;
             Some(PlanTreeSnapshot::from_update(&anchor_node_id, plantree))
         } else {
             previous
@@ -482,6 +492,9 @@ impl SpineRuntime {
         let snapshot_seq = self.store.next_tree_event_seq()?.saturating_sub(1);
         let mut nodes = Vec::with_capacity(self.state.nodes().len());
         for (node_id, node) in self.state.nodes() {
+            if node_id == &NodeId::root() {
+                continue;
+            }
             let plan = if node_id == self.cursor() {
                 self.store
                     .read_projected_plan_snapshot(node_id, self.surviving_turn_ids.as_ref())?
@@ -516,7 +529,7 @@ impl SpineRuntime {
         plantree: &SpinePlanTreeArg,
     ) -> Result<NodeId, SpineRuntimeError> {
         let anchor = if let Some(anchor) = &plantree.anchor {
-            NodeId::parse(anchor).map_err(|_| SpineRuntimeError::InvalidPlanTree {
+            parse_display_node_id(anchor).map_err(|_| SpineRuntimeError::InvalidPlanTree {
                 message: format!("invalid plantree anchor node id {anchor}"),
             })?
         } else {
@@ -533,6 +546,7 @@ impl SpineRuntime {
             .node(cursor)
             .ok_or_else(|| SpineRuntimeError::UnknownNode(cursor.clone()))?;
         if let Some(parent_id) = &cursor_node.parent_id
+            && !self.is_root_epoch(parent_id)
             && matches!(
                 self.state.node(parent_id).map(|node| &node.status),
                 Some(super::state::NodeStatus::Opened)
@@ -541,6 +555,12 @@ impl SpineRuntime {
             return Ok(parent_id.clone());
         }
         Ok(cursor.clone())
+    }
+
+    fn is_root_epoch(&self, node_id: &NodeId) -> bool {
+        self.state
+            .node(node_id)
+            .is_some_and(|node| node.parent_id.is_none())
     }
 
     fn validate_plantree(
@@ -569,7 +589,7 @@ impl SpineRuntime {
             }
         }
         if let Some(existing_node_id) = &scope.node {
-            let existing_node_id = NodeId::parse(existing_node_id).map_err(|_| {
+            let existing_node_id = parse_display_node_id(existing_node_id).map_err(|_| {
                 SpineRuntimeError::InvalidPlanTree {
                     message: format!("invalid plantree scope node id {existing_node_id}"),
                 }
@@ -844,6 +864,33 @@ fn visible_parent_id(parent_id: Option<&NodeId>) -> Option<String> {
     }
 }
 
+fn normalize_plantree_node_ids(plantree: &mut SpinePlanTreeArg) -> Result<(), SpineRuntimeError> {
+    if let Some(anchor) = &mut plantree.anchor {
+        *anchor = parse_display_node_id(anchor)
+            .map_err(|_| SpineRuntimeError::InvalidPlanTree {
+                message: format!("invalid plantree anchor node id {anchor}"),
+            })?
+            .to_string();
+    }
+    normalize_plantree_scope_node_ids(&mut plantree.root)
+}
+
+fn normalize_plantree_scope_node_ids(
+    scope: &mut SpinePlanTreeScopeArg,
+) -> Result<(), SpineRuntimeError> {
+    if let Some(node) = &mut scope.node {
+        *node = parse_display_node_id(node)
+            .map_err(|_| SpineRuntimeError::InvalidPlanTree {
+                message: format!("invalid plantree scope node id {node}"),
+            })?
+            .to_string();
+    }
+    for child in &mut scope.children {
+        normalize_plantree_scope_node_ids(child)?;
+    }
+    Ok(())
+}
+
 fn compact_outline_status_label(status: &super::state::NodeStatus) -> &'static str {
     match status {
         super::state::NodeStatus::Live | super::state::NodeStatus::Opened => "live",
@@ -1007,7 +1054,7 @@ fn spine_tree_plan_snapshot(
 
 fn spine_tree_plantree_snapshot(snapshot: PlanTreeSnapshot) -> SpineTreePlanTreeSnapshot {
     SpineTreePlanTreeSnapshot {
-        anchor_node_id: snapshot.anchor_node_id,
+        anchor_node_id: display_node_id_from_str(&snapshot.anchor_node_id),
         root: spine_tree_plantree_scope_snapshot(snapshot.root),
     }
 }
@@ -1016,7 +1063,10 @@ fn spine_tree_plantree_scope_snapshot(
     scope: super::plan_bridge::PlanTreeScope,
 ) -> SpineTreePlanTreeScopeSnapshot {
     SpineTreePlanTreeScopeSnapshot {
-        existing_node_id: scope.existing_node_id,
+        existing_node_id: scope
+            .existing_node_id
+            .as_deref()
+            .map(display_node_id_from_str),
         summary: scope.summary,
         status: scope.status.and_then(spine_tree_plan_item_status),
         checkpoints: scope
@@ -1035,6 +1085,12 @@ fn spine_tree_plantree_scope_snapshot(
             .map(spine_tree_plantree_scope_snapshot)
             .collect(),
     }
+}
+
+fn display_node_id_from_str(node_id: &str) -> String {
+    NodeId::parse(node_id)
+        .map(|node_id| display_node_id(&node_id))
+        .unwrap_or_else(|_| node_id.to_string())
 }
 
 fn spine_tree_plan_item_status(status: impl AsRef<str>) -> Option<SpineTreePlanItemStatus> {

@@ -87,7 +87,7 @@ pub(crate) fn project_spine_state_from_rollout(
                     .message
                     .starts_with(ROOT_EPOCH_COMPACT_MESSAGE_PREFIX) =>
             {
-                state.reset_root_epoch(raw_ordinal)?;
+                state.reset_root_epoch("Context compacted", raw_ordinal)?;
             }
             _ => {}
         }

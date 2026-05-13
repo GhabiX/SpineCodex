@@ -224,6 +224,16 @@ fn function_call_output(call_id: &str) -> ResponseItem {
     }
 }
 
+fn spine_tree_function_call(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "tree".to_string(),
+        namespace: Some("spine".to_string()),
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
 fn test_session_telemetry_without_metadata() -> SessionTelemetry {
     let exporter = InMemoryMetricExporter::default();
     let metrics = MetricsClient::new(
@@ -1968,20 +1978,101 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     assert_eq!(
         runtime.cursor(),
-        &crate::spine::ids::NodeId::from_segments(vec![1, 1])
+        &crate::spine::ids::NodeId::from_segments(vec![2, 1])
     );
-    let root_epochs_dir = runtime.store().root().join("root-epochs");
-    let mut root_epoch_worklogs = String::new();
-    for entry in std::fs::read_dir(root_epochs_dir)? {
-        let worklog_path = entry?.path().join("worklog.md");
-        if worklog_path.exists() {
-            root_epoch_worklogs.push_str(&std::fs::read_to_string(worklog_path)?);
-        }
-    }
-    assert!(root_epoch_worklogs.contains("root compact fact"));
+    let root_epoch = crate::spine::ids::NodeId::from_segments(vec![1]);
+    let root_epoch_worklog = std::fs::read_to_string(runtime.store().worklog_path(&root_epoch))?;
+    assert!(root_epoch_worklog.contains("root compact fact"));
+    assert!(runtime.store().node_trajs_path(&root_epoch).exists());
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     assert!(tree.contains("\"compact_id\":\""));
+    Ok(())
+}
+
+#[tokio::test]
+async fn repeated_spine_root_compaction_does_not_leave_orphan_tree_output() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    session.spine = Some(Arc::new(Mutex::new(runtime)));
+
+    session
+        .try_record_conversation_items(&turn_context, &[assistant_message("first root epoch raw")])
+        .await?;
+    let first_history = session.clone_history().await.raw_items().to_vec();
+    session
+        .install_spine_root_epoch_compaction(
+            &turn_context,
+            first_history,
+            format!(
+                "{}\nfirst root compact fact",
+                crate::compact::SUMMARY_PREFIX
+            ),
+        )
+        .await?;
+
+    session
+        .try_record_conversation_items(
+            &turn_context,
+            &[
+                user_message("当前的 spine tree 是？"),
+                spine_tree_function_call("tree-after-first-compact"),
+                function_call_output("tree-after-first-compact"),
+                assistant_message("当前 Spine 在节点 2.1。"),
+            ],
+        )
+        .await?;
+    let second_history = session.clone_history().await.raw_items().to_vec();
+    session
+        .install_spine_root_epoch_compaction(
+            &turn_context,
+            second_history,
+            format!(
+                "{}\nsecond root compact fact",
+                crate::compact::SUMMARY_PREFIX
+            ),
+        )
+        .await?;
+
+    let replacement = session.clone_history().await.raw_items().to_vec();
+    assert!(
+        !replacement.iter().any(|item| matches!(
+            item,
+            ResponseItem::FunctionCallOutput { call_id, .. }
+                if call_id == "tree-after-first-compact"
+        )),
+        "root compaction must not leave a tool output without its tree call"
+    );
+    assert!(
+        !replacement.iter().any(|item| matches!(
+            item,
+            ResponseItem::FunctionCall { call_id, .. }
+                if call_id == "tree-after-first-compact"
+        )),
+        "root compaction should fold the whole tree tool call pair into the prior epoch IR"
+    );
+    let rendered_history = serde_json::to_string(&replacement)?;
+    assert!(rendered_history.contains("second root compact fact"));
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(
+        runtime.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![3, 1])
+    );
+    assert!(
+        runtime
+            .store()
+            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
+            .exists()
+    );
+    assert!(
+        runtime
+            .store()
+            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![2]))
+            .exists()
+    );
     Ok(())
 }
 
@@ -2065,6 +2156,79 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
         !followup_request.body_contains_text("RAW_SUFFIX_DETAIL should be folded"),
         "the main follow-up request should see replacement history, not the raw folded suffix"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_suffix_compaction_cancellation_records_interrupted_terminal() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let mut runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    runtime
+        .stage_transition(
+            "next-1",
+            "turn-1",
+            SpineOperation::Next,
+            "leaf done",
+            /*compact_instruction*/ None,
+        )
+        .expect("stage next");
+    session.spine = Some(Arc::new(Mutex::new(runtime)));
+    session
+        .try_record_conversation_items(
+            &turn_context,
+            &[
+                spine_function_call("next-1"),
+                function_call_output("next-1"),
+            ],
+        )
+        .await?;
+    session
+        .compact_pending_spine_transition(&turn_context)
+        .await?;
+
+    let mut client_session = test_model_client_session();
+    let prompt = Prompt {
+        input: Vec::new(),
+        tools: Vec::new(),
+        parallel_tool_calls: false,
+        base_instructions: BaseInstructions::default(),
+        personality: None,
+        output_schema: None,
+        output_schema_strict: true,
+    };
+    let cancellation_token = CancellationToken::new();
+    cancellation_token.cancel();
+    let error = session
+        .install_pending_spine_compactions_with_prompt(
+            &turn_context,
+            &mut client_session,
+            &prompt,
+            &cancellation_token,
+        )
+        .await
+        .expect_err("cancelled suffix compaction should abort");
+
+    assert!(matches!(error, CodexErr::TurnAborted));
+    session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect("interrupted compact should not poison session");
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    assert_eq!(compact_events.len(), 2);
+    assert_eq!(compact_events[1]["type"], "compact_interrupted");
+    assert!(
+        !runtime
+            .store()
+            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![1, 1]))
+            .exists()
+    );
+    runtime
+        .store()
+        .load()
+        .expect("interrupted compact terminal should replay");
     Ok(())
 }
 
