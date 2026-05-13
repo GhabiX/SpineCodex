@@ -483,7 +483,11 @@ pub(crate) fn load_initial_spine_runtime(
         }
         SpineRuntime::load(store, next_raw_ordinal)?
     } else {
-        let store = SpineSidecarStore::create_for_rollout(rollout_path)?;
+        let store = if SpineSidecarStore::has_sidecar_for_rollout(rollout_path)? {
+            SpineSidecarStore::for_rollout(rollout_path)?
+        } else {
+            SpineSidecarStore::create_for_rollout(rollout_path)?
+        };
         SpineRuntime::load_or_create(store, next_raw_ordinal)?
     };
     if let Some(projection) = projection

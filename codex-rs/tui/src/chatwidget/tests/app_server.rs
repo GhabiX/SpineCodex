@@ -818,16 +818,6 @@ async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
                 summary: Some("root scope".to_string()),
                 status: codex_app_server_protocol::SpineTreeNodeStatus::Opened,
                 plan: None,
-                allocation: Some(codex_app_server_protocol::SpineTreeAllocation {
-                    anchor_node_id: "1".to_string(),
-                    revision: 1,
-                    explanation: Some("group upcoming work".to_string()),
-                    scopes: vec![codex_app_server_protocol::SpineTreeAllocationScope {
-                        existing_node_id: None,
-                        summary: "Verify scope".to_string(),
-                        checkpoints: vec!["run focused validation".to_string()],
-                    }],
-                }),
             },
             codex_app_server_protocol::SpineTreeNode {
                 node_id: "1.1".to_string(),
@@ -837,6 +827,14 @@ async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
                 plan: Some(codex_app_server_protocol::SpineTreePlan {
                     revision: 2,
                     explanation: Some("track focused work".to_string()),
+                    scope_allocation: Some(codex_app_server_protocol::SpineTreeScopeAllocation {
+                        anchor_node_id: "1".to_string(),
+                        scopes: vec![codex_app_server_protocol::SpineTreeScopeAllocationScope {
+                            existing_node_id: None,
+                            summary: "Verify scope".to_string(),
+                            checkpoints: vec!["run focused validation".to_string()],
+                        }],
+                    }),
                     items: vec![
                         codex_app_server_protocol::SpineTreePlanItem {
                             stable_task_id: "1.1:0".to_string(),
@@ -850,7 +848,6 @@ async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
                         },
                     ],
                 }),
-                allocation: None,
             },
         ],
     };
@@ -911,7 +908,6 @@ async fn live_app_server_spine_tree_update_omits_missing_summary_placeholder() {
             summary: None,
             status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
             plan: None,
-            allocation: None,
         }],
     };
 

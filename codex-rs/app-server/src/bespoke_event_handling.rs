@@ -2123,13 +2123,13 @@ mod tests {
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_protocol::protocol::UserMessageEvent;
-    use codex_protocol::spine_tree::SpineTreeAllocationScopeSnapshot;
-    use codex_protocol::spine_tree::SpineTreeAllocationSnapshot;
     use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
     use codex_protocol::spine_tree::SpineTreeNodeStatus;
     use codex_protocol::spine_tree::SpineTreePlanItemSnapshot;
     use codex_protocol::spine_tree::SpineTreePlanItemStatus;
     use codex_protocol::spine_tree::SpineTreePlanSnapshot;
+    use codex_protocol::spine_tree::SpineTreeScopeAllocationScopeSnapshot;
+    use codex_protocol::spine_tree::SpineTreeScopeAllocationSnapshot;
     use codex_protocol::spine_tree::SpineTreeUpdateEvent;
     use codex_thread_store::StoredThread;
     use codex_thread_store::StoredThreadHistory;
@@ -3531,16 +3531,6 @@ mod tests {
                     summary: Some("root scope".to_string()),
                     status: SpineTreeNodeStatus::Opened,
                     plan: None,
-                    allocation: Some(SpineTreeAllocationSnapshot {
-                        anchor_node_id: "1".to_string(),
-                        revision: 1,
-                        explanation: Some("group upcoming work".to_string()),
-                        scopes: vec![SpineTreeAllocationScopeSnapshot {
-                            existing_node_id: None,
-                            summary: "Verify scope".to_string(),
-                            checkpoints: vec!["run focused validation".to_string()],
-                        }],
-                    }),
                 },
                 SpineTreeNodeSnapshot {
                     node_id: "1.1".to_string(),
@@ -3550,6 +3540,14 @@ mod tests {
                     plan: Some(SpineTreePlanSnapshot {
                         revision: 3,
                         explanation: Some("track focused work".to_string()),
+                        scope_allocation: Some(SpineTreeScopeAllocationSnapshot {
+                            anchor_node_id: "1".to_string(),
+                            scopes: vec![SpineTreeScopeAllocationScopeSnapshot {
+                                existing_node_id: None,
+                                summary: "Verify scope".to_string(),
+                                checkpoints: vec!["run focused validation".to_string()],
+                            }],
+                        }),
                         items: vec![
                             SpineTreePlanItemSnapshot {
                                 stable_task_id: "1.1:0".to_string(),
@@ -3563,7 +3561,6 @@ mod tests {
                             },
                         ],
                     }),
-                    allocation: None,
                 },
             ],
         };
@@ -3585,18 +3582,20 @@ mod tests {
                     n.nodes[0].status,
                     codex_app_server_protocol::SpineTreeNodeStatus::Opened
                 );
-                let allocation = n.nodes[0].allocation.as_ref().expect("root allocation");
-                assert_eq!(allocation.anchor_node_id, "1");
-                assert_eq!(allocation.revision, 1);
-                assert_eq!(allocation.scopes[0].summary, "Verify scope");
-                assert_eq!(
-                    allocation.scopes[0].checkpoints,
-                    vec!["run focused validation"]
-                );
                 assert_eq!(n.nodes[1].parent_id.as_deref(), Some("1"));
                 let plan = n.nodes[1].plan.as_ref().expect("leaf plan");
                 assert_eq!(plan.revision, 3);
                 assert_eq!(plan.explanation.as_deref(), Some("track focused work"));
+                let scope_allocation = plan
+                    .scope_allocation
+                    .as_ref()
+                    .expect("leaf plan scope allocation");
+                assert_eq!(scope_allocation.anchor_node_id, "1");
+                assert_eq!(scope_allocation.scopes[0].summary, "Verify scope");
+                assert_eq!(
+                    scope_allocation.scopes[0].checkpoints,
+                    vec!["run focused validation"]
+                );
                 assert_eq!(plan.items[0].stable_task_id, "1.1:0");
                 assert_eq!(
                     plan.items[0].status,

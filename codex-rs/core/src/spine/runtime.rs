@@ -3,7 +3,7 @@ use super::compact::render_context_compacted_outline;
 use super::ids::NodeId;
 use super::is_legacy_spine_transition_tool;
 use super::is_spine_transition_tool;
-use super::plan_bridge::PlanAllocationSnapshot;
+use super::plan_bridge::PlanScopeAllocationSnapshot;
 use super::plan_bridge::PlanSnapshot;
 use super::state::SpineState;
 use super::state::SpineStateError;
@@ -15,13 +15,13 @@ use super::view::render_tree;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::plan_tool::SpineAllocationArg;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::spine_tree::SpineTreeAllocationScopeSnapshot;
-use codex_protocol::spine_tree::SpineTreeAllocationSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use codex_protocol::spine_tree::SpineTreePlanItemSnapshot;
 use codex_protocol::spine_tree::SpineTreePlanItemStatus;
 use codex_protocol::spine_tree::SpineTreePlanSnapshot;
+use codex_protocol::spine_tree::SpineTreeScopeAllocationScopeSnapshot;
+use codex_protocol::spine_tree::SpineTreeScopeAllocationSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::HashMap;
 use std::path::Path;
@@ -53,7 +53,7 @@ impl SpineRuntime {
         next_raw_ordinal: u64,
     ) -> Result<Self, SpineRuntimeError> {
         let rollout_path = rollout_path.as_ref();
-        let store = if SpineSidecarStore::locator_path_for_rollout(rollout_path)?.exists() {
+        let store = if SpineSidecarStore::has_sidecar_for_rollout(rollout_path)? {
             SpineSidecarStore::for_rollout(rollout_path)?
         } else {
             SpineSidecarStore::create_for_rollout(rollout_path)?
@@ -408,28 +408,12 @@ impl SpineRuntime {
             .checked_add(1)
             .ok_or(SpineRuntimeError::PlanRevisionOverflow)?;
         let event_seq = self.store.next_tree_event_seq()?;
-        let allocation_snapshot = if let Some(allocation) = allocation {
+        let scope_allocation = if let Some(allocation) = allocation {
             let anchor_node_id = self.resolve_allocation_anchor(&allocation)?;
             self.validate_allocation(&anchor_node_id, &allocation)?;
-            let allocation_revision = self
-                .store
-                .read_allocation_revision(&anchor_node_id)?
-                .unwrap_or(0)
-                .checked_add(1)
-                .ok_or(SpineRuntimeError::PlanRevisionOverflow)?;
-            let allocation_event_seq = event_seq
-                .checked_add(1)
-                .ok_or(SpineRuntimeError::PlanRevisionOverflow)?;
-            Some((
-                anchor_node_id.clone(),
-                PlanAllocationSnapshot::from_update(
-                    &anchor_node_id,
-                    allocation_revision,
-                    allocation_event_seq,
-                    turn_id.clone(),
-                    args.explanation.clone(),
-                    allocation,
-                ),
+            Some(PlanScopeAllocationSnapshot::from_update(
+                &anchor_node_id,
+                allocation,
             ))
         } else {
             None
@@ -440,33 +424,21 @@ impl SpineRuntime {
             event_seq,
             turn_id,
             args,
+            scope_allocation,
             previous.as_ref(),
         );
         self.store.write_plan_snapshot(self.cursor(), &snapshot)?;
-        if let Some((anchor_node_id, allocation_snapshot)) = allocation_snapshot {
-            self.store
-                .write_allocation_snapshot(&anchor_node_id, &allocation_snapshot)?;
-        }
         Ok(snapshot)
     }
 
     pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineRuntimeError> {
         let snapshot_seq = self.store.next_tree_event_seq()?.saturating_sub(1);
-        let allocation_anchor = self.default_allocation_anchor()?;
         let mut nodes = Vec::with_capacity(self.state.nodes().len());
         for (node_id, node) in self.state.nodes() {
             let plan = if node_id == self.cursor() {
                 self.store
                     .read_plan_snapshot(node_id)?
                     .map(spine_tree_plan_snapshot)
-                    .transpose()?
-            } else {
-                None
-            };
-            let allocation = if node_id == &allocation_anchor {
-                self.store
-                    .read_allocation_snapshot(node_id)?
-                    .map(spine_tree_allocation_snapshot)
                     .transpose()?
             } else {
                 None
@@ -482,7 +454,6 @@ impl SpineRuntime {
                     super::state::NodeStatus::Closed => SpineTreeNodeStatus::Closed,
                 },
                 plan,
-                allocation,
             });
         }
 
@@ -953,6 +924,9 @@ fn spine_tree_plan_snapshot(
     Ok(SpineTreePlanSnapshot {
         revision: snapshot.revision,
         explanation: snapshot.explanation,
+        scope_allocation: snapshot
+            .scope_allocation
+            .map(spine_tree_scope_allocation_snapshot),
         items: snapshot
             .items
             .into_iter()
@@ -975,23 +949,21 @@ fn spine_tree_plan_snapshot(
     })
 }
 
-fn spine_tree_allocation_snapshot(
-    snapshot: PlanAllocationSnapshot,
-) -> Result<SpineTreeAllocationSnapshot, SpineRuntimeError> {
-    Ok(SpineTreeAllocationSnapshot {
+fn spine_tree_scope_allocation_snapshot(
+    snapshot: PlanScopeAllocationSnapshot,
+) -> SpineTreeScopeAllocationSnapshot {
+    SpineTreeScopeAllocationSnapshot {
         anchor_node_id: snapshot.anchor_node_id,
-        revision: snapshot.revision,
-        explanation: snapshot.explanation,
         scopes: snapshot
             .scopes
             .into_iter()
-            .map(|scope| SpineTreeAllocationScopeSnapshot {
+            .map(|scope| SpineTreeScopeAllocationScopeSnapshot {
                 existing_node_id: scope.existing_node_id,
                 summary: scope.summary,
                 checkpoints: scope.checkpoints,
             })
             .collect(),
-    })
+    }
 }
 
 fn is_node_within_anchor(node_id: &NodeId, anchor: &NodeId) -> bool {

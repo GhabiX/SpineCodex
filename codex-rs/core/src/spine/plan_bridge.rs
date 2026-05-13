@@ -11,6 +11,8 @@ pub(crate) struct PlanSnapshot {
     pub(crate) revision: u64,
     pub(crate) explanation: Option<String>,
     pub(crate) items: Vec<PlanSnapshotItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scope_allocation: Option<PlanScopeAllocationSnapshot>,
     pub(crate) source_turn_id: String,
     pub(crate) event_seq: u64,
 }
@@ -22,6 +24,7 @@ impl PlanSnapshot {
         event_seq: u64,
         source_turn_id: impl Into<String>,
         args: UpdatePlanArgs,
+        scope_allocation: Option<PlanScopeAllocationSnapshot>,
         previous: Option<&PlanSnapshot>,
     ) -> Self {
         let mut id_allocator = StableTaskIdAllocator::new(previous);
@@ -38,6 +41,7 @@ impl PlanSnapshot {
                     status: step_status_label(&item.status).to_string(),
                 })
                 .collect(),
+            scope_allocation,
             source_turn_id: source_turn_id.into(),
             event_seq,
         }
@@ -52,28 +56,15 @@ pub(crate) struct PlanSnapshotItem {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub(crate) struct PlanAllocationSnapshot {
+pub(crate) struct PlanScopeAllocationSnapshot {
     pub(crate) anchor_node_id: String,
-    pub(crate) revision: u64,
-    pub(crate) explanation: Option<String>,
     pub(crate) scopes: Vec<PlanAllocationScope>,
-    pub(crate) source_turn_id: String,
-    pub(crate) event_seq: u64,
 }
 
-impl PlanAllocationSnapshot {
-    pub(crate) fn from_update(
-        anchor_node_id: &NodeId,
-        revision: u64,
-        event_seq: u64,
-        source_turn_id: impl Into<String>,
-        explanation: Option<String>,
-        allocation: SpineAllocationArg,
-    ) -> Self {
+impl PlanScopeAllocationSnapshot {
+    pub(crate) fn from_update(anchor_node_id: &NodeId, allocation: SpineAllocationArg) -> Self {
         Self {
             anchor_node_id: anchor_node_id.to_string(),
-            revision,
-            explanation,
             scopes: allocation
                 .scopes
                 .into_iter()
@@ -83,8 +74,6 @@ impl PlanAllocationSnapshot {
                     checkpoints: scope.checkpoints,
                 })
                 .collect(),
-            source_turn_id: source_turn_id.into(),
-            event_seq,
         }
     }
 }

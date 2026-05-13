@@ -19,7 +19,6 @@ pub struct SpineTreeNodeSnapshot {
     pub summary: Option<String>,
     pub status: SpineTreeNodeStatus,
     pub plan: Option<SpineTreePlanSnapshot>,
-    pub allocation: Option<SpineTreeAllocationSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
@@ -36,6 +35,7 @@ pub enum SpineTreeNodeStatus {
 pub struct SpineTreePlanSnapshot {
     pub revision: u64,
     pub explanation: Option<String>,
+    pub scope_allocation: Option<SpineTreeScopeAllocationSnapshot>,
     pub items: Vec<SpineTreePlanItemSnapshot>,
 }
 
@@ -57,16 +57,14 @@ pub enum SpineTreePlanItemStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SpineTreeAllocationSnapshot {
+pub struct SpineTreeScopeAllocationSnapshot {
     pub anchor_node_id: String,
-    pub revision: u64,
-    pub explanation: Option<String>,
-    pub scopes: Vec<SpineTreeAllocationScopeSnapshot>,
+    pub scopes: Vec<SpineTreeScopeAllocationScopeSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SpineTreeAllocationScopeSnapshot {
+pub struct SpineTreeScopeAllocationScopeSnapshot {
     pub existing_node_id: Option<String>,
     pub summary: String,
     pub checkpoints: Vec<String>,

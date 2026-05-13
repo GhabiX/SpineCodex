@@ -1,7 +1,6 @@
 use super::ids::NodeId;
 use super::ids::NodeIdParseError;
-use super::plan_bridge::PlanAllocationScope;
-use super::plan_bridge::PlanAllocationSnapshot;
+use super::plan_bridge::PlanScopeAllocationSnapshot;
 use super::plan_bridge::PlanSnapshot;
 use super::plan_bridge::PlanSnapshotItem;
 use super::state::NodeStatus;
@@ -31,7 +30,6 @@ const NODES_DIR: &str = "nodes";
 const WORKLOG_FILE: &str = "worklog.md";
 const NODE_TRAJS_FILE: &str = "trajs.jsonl";
 const PLAN_FILE: &str = "plan.json";
-const ALLOCATION_FILE: &str = "allocation.json";
 const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
@@ -48,6 +46,12 @@ impl SpineSidecarStore {
     pub(crate) fn for_rollout(rollout_path: impl AsRef<Path>) -> Result<Self, SpineStoreError> {
         let rollout_path = rollout_path.as_ref();
         let locator_path = Self::locator_path_for_rollout(rollout_path)?;
+        if !locator_path.exists() {
+            let root = Self::default_sidecar_dir_for_rollout(rollout_path)?;
+            if root.exists() {
+                Self::write_base_locator(rollout_path, &locator_path, &root)?;
+            }
+        }
         let locator = read_base_locator(&locator_path)?;
         let parent = rollout_parent(rollout_path)?;
         let base = PathBuf::from(locator.base);
@@ -66,6 +70,20 @@ impl SpineSidecarStore {
             return Err(SpineStoreError::AlreadyInitialized { path: locator_path });
         }
         let root = Self::default_sidecar_dir_for_rollout(rollout_path)?;
+        Self::write_base_locator(rollout_path, &locator_path, &root)?;
+        Ok(Self { root })
+    }
+
+    pub(crate) fn has_sidecar_for_rollout(rollout_path: &Path) -> Result<bool, SpineStoreError> {
+        Ok(Self::locator_path_for_rollout(rollout_path)?.exists()
+            || Self::default_sidecar_dir_for_rollout(rollout_path)?.exists())
+    }
+
+    fn write_base_locator(
+        rollout_path: &Path,
+        locator_path: &Path,
+        root: &Path,
+    ) -> Result<(), SpineStoreError> {
         let base = root
             .file_name()
             .and_then(OsStr::to_str)
@@ -80,7 +98,7 @@ impl SpineSidecarStore {
         };
         let contents =
             serde_json::to_string_pretty(&locator).map_err(|source| SpineStoreError::Json {
-                path: locator_path.clone(),
+                path: locator_path.to_path_buf(),
                 source,
             })? + "\n";
         if let Some(parent) = locator_path.parent() {
@@ -89,11 +107,10 @@ impl SpineSidecarStore {
                 source,
             })?;
         }
-        std::fs::write(&locator_path, contents).map_err(|source| SpineStoreError::Io {
-            path: locator_path,
+        std::fs::write(locator_path, contents).map_err(|source| SpineStoreError::Io {
+            path: locator_path.to_path_buf(),
             source,
-        })?;
-        Ok(Self { root })
+        })
     }
 
     pub(crate) fn locator_path_for_rollout(
@@ -172,10 +189,6 @@ impl SpineSidecarStore {
 
     pub(crate) fn plan_path(&self, node_id: &NodeId) -> PathBuf {
         self.node_dir(node_id).join(PLAN_FILE)
-    }
-
-    pub(crate) fn allocation_path(&self, node_id: &NodeId) -> PathBuf {
-        self.node_dir(node_id).join(ALLOCATION_FILE)
     }
 
     pub(crate) fn create(&self) -> Result<SpineState, SpineStoreError> {
@@ -325,7 +338,6 @@ impl SpineSidecarStore {
             self.ensure_node_dir(node_id)?;
             self.copy_node_file_if_present(source, node_id, WORKLOG_FILE)?;
             self.copy_node_file_if_present(source, node_id, PLAN_FILE)?;
-            self.copy_node_file_if_present(source, node_id, ALLOCATION_FILE)?;
         }
         Ok(())
     }
@@ -360,46 +372,11 @@ impl SpineSidecarStore {
             revision: snapshot.revision,
             explanation: snapshot.explanation.clone(),
             items: snapshot.items.clone(),
+            scope_allocation: snapshot.scope_allocation.clone(),
             source_turn_id: snapshot.source_turn_id.clone(),
         };
         self.append_json_line(&self.tree_path(), &event)?;
         self.write_plan(node_id, snapshot)
-    }
-
-    fn write_allocation(
-        &self,
-        node_id: &NodeId,
-        allocation: &impl Serialize,
-    ) -> Result<PathBuf, SpineStoreError> {
-        self.ensure_node_dir(node_id)?;
-        let path = self.allocation_path(node_id);
-        let contents =
-            serde_json::to_string_pretty(allocation).map_err(|source| SpineStoreError::Json {
-                path: path.clone(),
-                source,
-            })? + "\n";
-        std::fs::write(&path, contents).map_err(|source| SpineStoreError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(path)
-    }
-
-    pub(crate) fn write_allocation_snapshot(
-        &self,
-        anchor_node_id: &NodeId,
-        snapshot: &PlanAllocationSnapshot,
-    ) -> Result<PathBuf, SpineStoreError> {
-        let event = TreeEvent::TaskAllocationUpdated {
-            seq: snapshot.event_seq,
-            anchor_node_id: anchor_node_id.to_string(),
-            revision: snapshot.revision,
-            explanation: snapshot.explanation.clone(),
-            scopes: snapshot.scopes.clone(),
-            source_turn_id: snapshot.source_turn_id.clone(),
-        };
-        self.append_json_line(&self.tree_path(), &event)?;
-        self.write_allocation(anchor_node_id, snapshot)
     }
 
     pub(crate) fn read_plan_snapshot(
@@ -442,53 +419,6 @@ impl SpineSidecarStore {
                 continue;
             };
             if event_node_id == node_id {
-                latest_revision = Some(revision);
-            }
-        }
-        Ok(latest_revision)
-    }
-
-    pub(crate) fn read_allocation_snapshot(
-        &self,
-        anchor_node_id: &NodeId,
-    ) -> Result<Option<PlanAllocationSnapshot>, SpineStoreError> {
-        let path = self.allocation_path(anchor_node_id);
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(contents) => contents,
-            Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(source) => {
-                return Err(SpineStoreError::Io {
-                    path: path.clone(),
-                    source,
-                });
-            }
-        };
-        let snapshot =
-            serde_json::from_str::<PlanAllocationSnapshot>(&contents).map_err(|source| {
-                SpineStoreError::Json {
-                    path: path.clone(),
-                    source,
-                }
-            })?;
-        Ok(Some(snapshot))
-    }
-
-    pub(crate) fn read_allocation_revision(
-        &self,
-        anchor_node_id: &NodeId,
-    ) -> Result<Option<u64>, SpineStoreError> {
-        let anchor_node_id = anchor_node_id.to_string();
-        let mut latest_revision = None;
-        for event in self.read_tree_events()? {
-            let TreeEvent::TaskAllocationUpdated {
-                anchor_node_id: event_anchor_node_id,
-                revision,
-                ..
-            } = event
-            else {
-                continue;
-            };
-            if event_anchor_node_id == anchor_node_id {
                 latest_revision = Some(revision);
             }
         }
@@ -932,7 +862,10 @@ impl SpineSidecarStore {
                     state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
                 }
                 TreeEvent::TaskPlanUpdated {
-                    node_id, revision, ..
+                    node_id,
+                    revision,
+                    scope_allocation,
+                    ..
                 } => {
                     if revision == 0 {
                         return Err(SpineStoreError::InvalidLedger(
@@ -951,41 +884,25 @@ impl SpineSidecarStore {
                             node_id.bracketed()
                         )));
                     }
-                }
-                TreeEvent::TaskAllocationUpdated {
-                    anchor_node_id,
-                    revision,
-                    scopes,
-                    ..
-                } => {
-                    if revision == 0 {
-                        return Err(SpineStoreError::InvalidLedger(
-                            "task_allocation_updated revision must be non-zero".to_string(),
-                        ));
-                    }
-                    let state = state.as_ref().ok_or_else(|| {
-                        SpineStoreError::InvalidLedger(
-                            "task_allocation_updated appeared before root node creation"
-                                .to_string(),
-                        )
-                    })?;
-                    let anchor_node_id = NodeId::parse(&anchor_node_id)?;
-                    if state.node(&anchor_node_id).is_none() {
-                        return Err(SpineStoreError::InvalidLedger(format!(
-                            "task_allocation_updated references unknown anchor node {}",
-                            anchor_node_id.bracketed()
-                        )));
-                    }
-                    for scope in scopes {
-                        let Some(existing_node_id) = scope.existing_node_id else {
-                            continue;
-                        };
-                        let existing_node_id = NodeId::parse(&existing_node_id)?;
-                        if state.node(&existing_node_id).is_none() {
+                    if let Some(scope_allocation) = scope_allocation {
+                        let anchor_node_id = NodeId::parse(&scope_allocation.anchor_node_id)?;
+                        if state.node(&anchor_node_id).is_none() {
                             return Err(SpineStoreError::InvalidLedger(format!(
-                                "task_allocation_updated references unknown scope node {}",
-                                existing_node_id.bracketed()
+                                "task_plan_updated scope_allocation references unknown anchor node {}",
+                                anchor_node_id.bracketed()
                             )));
+                        }
+                        for scope in scope_allocation.scopes {
+                            let Some(existing_node_id) = scope.existing_node_id else {
+                                continue;
+                            };
+                            let existing_node_id = NodeId::parse(&existing_node_id)?;
+                            if state.node(&existing_node_id).is_none() {
+                                return Err(SpineStoreError::InvalidLedger(format!(
+                                    "task_plan_updated scope_allocation references unknown scope node {}",
+                                    existing_node_id.bracketed()
+                                )));
+                            }
                         }
                     }
                 }
@@ -1502,14 +1419,8 @@ enum TreeEvent {
         revision: u64,
         explanation: Option<String>,
         items: Vec<PlanSnapshotItem>,
-        source_turn_id: String,
-    },
-    TaskAllocationUpdated {
-        seq: u64,
-        anchor_node_id: String,
-        revision: u64,
-        explanation: Option<String>,
-        scopes: Vec<PlanAllocationScope>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_allocation: Option<PlanScopeAllocationSnapshot>,
         source_turn_id: String,
     },
     RootEpochArchived {
@@ -1543,7 +1454,6 @@ impl TreeEvent {
             TreeEvent::NodeCreated { seq, .. }
             | TreeEvent::TransitionApplied { seq, .. }
             | TreeEvent::TaskPlanUpdated { seq, .. }
-            | TreeEvent::TaskAllocationUpdated { seq, .. }
             | TreeEvent::RootEpochArchived { seq, .. }
             | TreeEvent::ProjectionReset { seq, .. }
             | TreeEvent::SpineHintEmitted { seq, .. } => *seq,

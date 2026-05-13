@@ -1624,6 +1624,24 @@ fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()>
 }
 
 #[test]
+fn initial_spine_runtime_loads_existing_sidecar_without_transition_history() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
+
+    let runtime =
+        crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
+
+    assert_eq!(runtime.cursor(), &crate::spine::ids::NodeId::root());
+    assert!(
+        crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?
+            .tree_path()
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
 fn initial_spine_runtime_rejects_missing_sidecar_for_existing_spine_history() -> anyhow::Result<()>
 {
     let temp = tempfile::tempdir()?;

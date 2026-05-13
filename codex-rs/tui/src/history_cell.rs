@@ -53,10 +53,10 @@ use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
 use codex_app_server_protocol::PermissionProfileNetworkPermissions;
-use codex_app_server_protocol::SpineTreeAllocationScope;
 use codex_app_server_protocol::SpineTreeNode;
 use codex_app_server_protocol::SpineTreePlanItem;
 use codex_app_server_protocol::SpineTreePlanItemStatus;
+use codex_app_server_protocol::SpineTreeScopeAllocationScope;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ToolRequestUserInputAnswer;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -3200,16 +3200,16 @@ impl HistoryCell for SpineTreeUpdateCell {
                         item.status, item.step
                     )));
                 }
-            }
-            if let Some(allocation) = &node.node.allocation {
-                for scope in &allocation.scopes {
-                    let scope_id = scope.existing_node_id.as_deref().unwrap_or("future");
-                    lines.push(Line::from(format!(
-                        "{prefix}  allocation {scope_id}: {}",
-                        scope.summary
-                    )));
-                    for checkpoint in &scope.checkpoints {
-                        lines.push(Line::from(format!("{prefix}    checkpoint: {checkpoint}")));
+                if let Some(scope_allocation) = &plan.scope_allocation {
+                    for scope in &scope_allocation.scopes {
+                        let scope_id = scope.existing_node_id.as_deref().unwrap_or("future");
+                        lines.push(Line::from(format!(
+                            "{prefix}  allocation {scope_id}: {}",
+                            scope.summary
+                        )));
+                        for checkpoint in &scope.checkpoints {
+                            lines.push(Line::from(format!("{prefix}    checkpoint: {checkpoint}")));
+                        }
                     }
                 }
             }
@@ -3302,26 +3302,26 @@ fn render_spine_tree_node(
                 width,
             ));
         }
-    }
-    if let Some(allocation) = &node.allocation {
-        let indent = format!("  {}  ", "  ".repeat(display_node.depth + 1));
-        out.push(Line::from(vec![
-            Span::from(indent).dim(),
-            Span::from("allocation").dim().italic(),
-        ]));
-        for scope in &allocation.scopes {
-            out.extend(render_spine_tree_allocation_scope(
-                scope,
-                display_node.depth + 1,
-                width,
-            ));
+        if let Some(scope_allocation) = &plan.scope_allocation {
+            let indent = format!("  {}  ", "  ".repeat(display_node.depth + 1));
+            out.push(Line::from(vec![
+                Span::from(indent).dim(),
+                Span::from("allocation").dim().italic(),
+            ]));
+            for scope in &scope_allocation.scopes {
+                out.extend(render_spine_tree_allocation_scope(
+                    scope,
+                    display_node.depth + 1,
+                    width,
+                ));
+            }
         }
     }
     out
 }
 
 fn render_spine_tree_allocation_scope(
-    scope: &SpineTreeAllocationScope,
+    scope: &SpineTreeScopeAllocationScope,
     depth: usize,
     width: u16,
 ) -> Vec<Line<'static>> {

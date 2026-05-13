@@ -322,24 +322,27 @@ fn record_plan_update_writes_scope_allocation_without_moving_cursor() {
     assert_eq!(snapshot.node_id, "1");
     assert_eq!(snapshot.event_seq, 2);
 
-    let allocation = read_json(runtime.store().allocation_path(&id(&[1])));
-    assert_eq!(allocation["anchor_node_id"], "1");
-    assert_eq!(allocation["revision"], 1);
-    assert_eq!(allocation["event_seq"], 3);
-    assert_eq!(allocation["source_turn_id"], "turn-alloc");
-    assert_eq!(allocation["scopes"][0]["existing_node_id"], Value::Null);
-    assert_eq!(allocation["scopes"][0]["summary"], "Reproduce failure");
+    let plan = read_json(runtime.store().plan_path(&id(&[1])));
+    let scope_allocation = &plan["scope_allocation"];
+    assert_eq!(scope_allocation["anchor_node_id"], "1");
     assert_eq!(
-        allocation["scopes"][0]["checkpoints"],
+        scope_allocation["scopes"][0]["existing_node_id"],
+        Value::Null
+    );
+    assert_eq!(
+        scope_allocation["scopes"][0]["summary"],
+        "Reproduce failure"
+    );
+    assert_eq!(
+        scope_allocation["scopes"][0]["checkpoints"],
         json!(["run focused repro", "capture failing assertion"])
     );
 
     let tree = read_json_lines(runtime.store().tree_path());
+    assert_eq!(tree.len(), 2);
     assert_eq!(tree[1]["type"], "task_plan_updated");
     assert_eq!(tree[1]["seq"], 2);
-    assert_eq!(tree[2]["type"], "task_allocation_updated");
-    assert_eq!(tree[2]["seq"], 3);
-    assert_eq!(tree[2]["anchor_node_id"], "1");
+    assert_eq!(tree[1]["scope_allocation"]["anchor_node_id"], "1");
 
     let tree_snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
     let root = tree_snapshot
@@ -347,14 +350,17 @@ fn record_plan_update_writes_scope_allocation_without_moving_cursor() {
         .iter()
         .find(|node| node.node_id == "1")
         .expect("root node");
-    let allocation = root.allocation.as_ref().expect("root allocation");
-    assert_eq!(allocation.anchor_node_id, "1");
-    assert_eq!(allocation.revision, 1);
-    assert_eq!(allocation.scopes.len(), 2);
-    assert_eq!(allocation.scopes[0].existing_node_id, None);
-    assert_eq!(allocation.scopes[0].summary, "Reproduce failure");
+    let plan = root.plan.as_ref().expect("root plan");
+    let scope_allocation = plan
+        .scope_allocation
+        .as_ref()
+        .expect("root scope allocation");
+    assert_eq!(scope_allocation.anchor_node_id, "1");
+    assert_eq!(scope_allocation.scopes.len(), 2);
+    assert_eq!(scope_allocation.scopes[0].existing_node_id, None);
+    assert_eq!(scope_allocation.scopes[0].summary, "Reproduce failure");
     assert_eq!(
-        allocation.scopes[0].checkpoints,
+        scope_allocation.scopes[0].checkpoints,
         vec!["run focused repro", "capture failing assertion"]
     );
 }
@@ -388,14 +394,8 @@ fn allocation_defaults_to_open_parent_scope_when_cursor_is_child() {
         )
         .expect("record allocation at open parent");
 
-    assert!(
-        runtime.store().allocation_path(&id(&[1])).exists(),
-        "default allocation anchor should be the opened parent"
-    );
-    assert!(
-        !runtime.store().allocation_path(&id(&[1, 1])).exists(),
-        "child plan update should not anchor allocation on the child by default"
-    );
+    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
+    assert_eq!(plan["scope_allocation"]["anchor_node_id"], "1");
 
     let snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
     let root = snapshot
@@ -408,9 +408,14 @@ fn allocation_defaults_to_open_parent_scope_when_cursor_is_child() {
         .iter()
         .find(|node| node.node_id == "1.1")
         .expect("child node");
-    assert!(root.allocation.is_some());
-    assert!(child.allocation.is_none());
+    assert!(root.plan.is_none());
     assert!(child.plan.is_some());
+    let scope_allocation = child
+        .plan
+        .as_ref()
+        .and_then(|plan| plan.scope_allocation.as_ref())
+        .expect("child plan scope allocation");
+    assert_eq!(scope_allocation.anchor_node_id, "1");
 }
 
 #[test]

@@ -98,6 +98,44 @@ fn for_rollout_requires_base_locator() {
 }
 
 #[test]
+fn for_rollout_migrates_default_sidecar_without_locator() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let rollout_path = temp.path().join("rollout-test.jsonl");
+    let root = SpineSidecarStore::default_sidecar_dir_for_rollout(&rollout_path)
+        .expect("default sidecar dir");
+    std::fs::create_dir_all(&root).expect("create legacy sidecar root");
+    std::fs::write(
+        root.join("tree.jsonl"),
+        serde_json::to_string(&json!({
+            "type": "node_created",
+            "seq": 1,
+            "node_id": "1",
+            "parent_id": null,
+            "raw_start_ordinal": 0,
+        }))
+        .expect("serialize root event")
+            + "\n",
+    )
+    .expect("write legacy tree");
+    std::fs::write(root.join("compact.index.jsonl"), "").expect("write compact index");
+
+    let store = SpineSidecarStore::for_rollout(&rollout_path).expect("load legacy sidecar");
+
+    assert_eq!(store.root(), root.as_path());
+    assert_eq!(
+        store.load().expect("load migrated sidecar").cursor(),
+        &id(&[1])
+    );
+    assert_eq!(
+        read_json(SpineSidecarStore::locator_path_for_rollout(&rollout_path).expect("locator")),
+        json!({
+            "version": 1,
+            "base": "spine-rollout-test",
+        })
+    );
+}
+
+#[test]
 fn create_for_rollout_writes_base_locator() {
     let temp = tempfile::tempdir().expect("tempdir");
     let rollout_path = temp
@@ -369,42 +407,50 @@ fn writes_plan_snapshot_without_planbridge_integration() {
 }
 
 #[test]
-fn writes_allocation_snapshot_and_replays_without_mutating_state() {
+fn writes_plan_snapshot_with_scope_allocation_and_replays_without_mutating_state() {
     let (_temp, store) = temp_store();
     let state = store.create().expect("create sidecar");
-    let snapshot = PlanAllocationSnapshot {
-        anchor_node_id: "1".to_string(),
+    let snapshot = PlanSnapshot {
+        node_id: "1".to_string(),
         revision: 1,
         explanation: Some("group upcoming checkpoints".to_string()),
-        scopes: vec![
-            PlanAllocationScope {
-                existing_node_id: None,
-                summary: "Reproduce".to_string(),
-                checkpoints: vec!["run repro".to_string()],
-            },
-            PlanAllocationScope {
-                existing_node_id: Some("1".to_string()),
-                summary: "Continue root".to_string(),
-                checkpoints: vec!["keep root task focused".to_string()],
-            },
-        ],
+        items: vec![PlanSnapshotItem {
+            stable_task_id: "step-1".to_string(),
+            step: "plan scope allocation".to_string(),
+            status: "in_progress".to_string(),
+        }],
+        scope_allocation: Some(PlanScopeAllocationSnapshot {
+            anchor_node_id: "1".to_string(),
+            scopes: vec![
+                crate::spine::plan_bridge::PlanAllocationScope {
+                    existing_node_id: None,
+                    summary: "Reproduce".to_string(),
+                    checkpoints: vec!["run repro".to_string()],
+                },
+                crate::spine::plan_bridge::PlanAllocationScope {
+                    existing_node_id: Some("1".to_string()),
+                    summary: "Continue root".to_string(),
+                    checkpoints: vec!["keep root task focused".to_string()],
+                },
+            ],
+        }),
         source_turn_id: "turn-alloc".to_string(),
         event_seq: 2,
     };
 
     let path = store
-        .write_allocation_snapshot(&id(&[1]), &snapshot)
-        .expect("write allocation snapshot");
+        .write_plan_snapshot(&id(&[1]), &snapshot)
+        .expect("write plan snapshot");
 
-    assert_eq!(path, store.root().join("nodes/1/allocation.json"));
+    assert_eq!(path, store.root().join("nodes/1/plan.json"));
     assert_eq!(
-        store.read_allocation_revision(&id(&[1])).expect("revision"),
+        store.read_plan_revision(&id(&[1])).expect("revision"),
         Some(1)
     );
     assert_eq!(
         store
-            .read_allocation_snapshot(&id(&[1]))
-            .expect("read allocation"),
+            .read_plan_snapshot(&id(&[1]))
+            .expect("read plan snapshot"),
         Some(snapshot)
     );
     assert_eq!(
@@ -418,23 +464,33 @@ fn writes_allocation_snapshot_and_replays_without_mutating_state() {
                 "raw_start_ordinal": 0,
             }),
             json!({
-                "type": "task_allocation_updated",
+                "type": "task_plan_updated",
                 "seq": 2,
-                "anchor_node_id": "1",
+                "node_id": "1",
                 "revision": 1,
                 "explanation": "group upcoming checkpoints",
-                "scopes": [
+                "items": [
                     {
-                        "existing_node_id": null,
-                        "summary": "Reproduce",
-                        "checkpoints": ["run repro"],
-                    },
-                    {
-                        "existing_node_id": "1",
-                        "summary": "Continue root",
-                        "checkpoints": ["keep root task focused"],
-                    },
+                        "stable_task_id": "step-1",
+                        "step": "plan scope allocation",
+                        "status": "in_progress",
+                    }
                 ],
+                "scope_allocation": {
+                    "anchor_node_id": "1",
+                    "scopes": [
+                        {
+                            "existing_node_id": null,
+                            "summary": "Reproduce",
+                            "checkpoints": ["run repro"],
+                        },
+                        {
+                            "existing_node_id": "1",
+                            "summary": "Continue root",
+                            "checkpoints": ["keep root task focused"],
+                        },
+                    ],
+                },
                 "source_turn_id": "turn-alloc",
             }),
         ]
