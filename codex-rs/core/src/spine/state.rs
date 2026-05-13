@@ -182,11 +182,11 @@ impl SpineState {
                 self.node(&root)
                     .and_then(|node| node.raw_start_ordinal)
                     .ok_or_else(|| SpineStateError::UnknownNode(root.clone()))?;
-            self.insert_node(archived.clone(), Some(self.cursor.clone()))?;
+            self.insert_node(archived.clone(), Some(root.clone()))?;
             self.set_raw_start_ordinal(&archived, root_raw_start_ordinal)?;
             self.write_summary_if_absent(&archived, summary)?;
             self.set_status(&archived, NodeStatus::Closed)?;
-            self.insert_node(next_epoch.clone(), Some(self.cursor.clone()))?;
+            self.insert_node(next_epoch.clone(), Some(root))?;
             self.cursor = next_epoch.clone();
 
             return Ok(Transition {

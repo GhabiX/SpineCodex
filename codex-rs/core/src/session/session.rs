@@ -498,6 +498,7 @@ pub(crate) fn load_initial_spine_runtime(
         runtime.record_projection_reset(
             projection.state.clone(),
             projection.response_item_count,
+            projection.surviving_turn_ids.clone(),
             "resume_projection",
             None,
         )?;
@@ -559,12 +560,12 @@ async fn seed_forked_spine_sidecar(
     }
 
     child_store.create()?;
-    child_store.record_projection_reset(
-        projection.state.clone(),
-        "fork_seed",
-        /*source_turn_id*/ None,
+    child_store.record_projection_reset(projection.state.clone(), "fork_seed", None)?;
+    child_store.copy_projected_node_artifacts_from(
+        &parent_store,
+        projection.node_ids(),
+        &projection.surviving_turn_ids,
     )?;
-    child_store.copy_node_artifacts_from(&parent_store, projection.node_ids())?;
     Ok(())
 }
 
@@ -635,6 +636,19 @@ impl Session {
             .unwrap_or(u64::MAX),
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
+        let initial_spine_has_spine_history = if config.features.enabled(Feature::SpineTaskTree) {
+            initial_spine_has_spine_history(&initial_history).await?
+        } else {
+            false
+        };
+        if config.features.enabled(Feature::SpineTaskTree)
+            && initial_spine_has_spine_history
+            && matches!(initial_history, InitialHistory::Forked(_))
+        {
+            initial_history.forked_from_id().ok_or_else(|| {
+                anyhow::anyhow!("forked spine history is missing a source thread id")
+            })?;
+        }
         let initial_spine_projection = if config.features.enabled(Feature::SpineTaskTree) {
             initial_spine_projection(&initial_history).await?
         } else {
@@ -654,11 +668,6 @@ impl Session {
             } else {
                 false
             };
-        let initial_spine_has_spine_history = if config.features.enabled(Feature::SpineTaskTree) {
-            initial_spine_has_spine_history(&initial_history).await?
-        } else {
-            false
-        };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info

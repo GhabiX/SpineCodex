@@ -10,6 +10,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
+use std::collections::HashSet;
 use thiserror::Error;
 
 const ROOT_EPOCH_COMPACT_MESSAGE_PREFIX: &str = "Spine compacted root epoch ";
@@ -18,6 +19,7 @@ const ROOT_EPOCH_COMPACT_MESSAGE_PREFIX: &str = "Spine compacted root epoch ";
 pub(crate) struct SpineProjection {
     pub(crate) state: SpineState,
     pub(crate) response_item_count: u64,
+    pub(crate) surviving_turn_ids: HashSet<String>,
 }
 
 impl SpineProjection {
@@ -51,6 +53,7 @@ pub(crate) fn project_spine_state_from_rollout(
     let mut state = SpineState::new();
     let mut raw_ordinal = 0_u64;
     let mut pending_transition: Option<PendingTransition> = None;
+    let surviving_turn_ids = surviving_turn_ids(&effective_items);
 
     for item in effective_items {
         match item {
@@ -94,6 +97,7 @@ pub(crate) fn project_spine_state_from_rollout(
     Ok(SpineProjection {
         state,
         response_item_count: raw_ordinal,
+        surviving_turn_ids,
     })
 }
 
@@ -110,8 +114,9 @@ fn effective_rollout_items(items: &[RolloutItem]) -> Vec<&RolloutItem> {
                 let mut cut_idx = None;
                 for (idx, item) in effective.iter().enumerate().rev() {
                     if rollout_item_is_user_turn_boundary(item) {
+                        let turn_start_idx = turn_start_index(&effective, idx);
                         remaining -= 1;
-                        cut_idx = Some(idx);
+                        cut_idx = Some(turn_start_idx);
                         if remaining == 0 {
                             break;
                         }
@@ -128,11 +133,56 @@ fn effective_rollout_items(items: &[RolloutItem]) -> Vec<&RolloutItem> {
     effective
 }
 
+fn surviving_turn_ids(items: &[&RolloutItem]) -> HashSet<String> {
+    let mut turn_ids = HashSet::new();
+    for item in items {
+        match item {
+            RolloutItem::TurnContext(context) => {
+                if let Some(turn_id) = &context.turn_id {
+                    turn_ids.insert(turn_id.clone());
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                turn_ids.insert(event.turn_id.clone());
+            }
+            RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+                turn_ids.insert(event.turn_id.clone());
+            }
+            RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                if let Some(turn_id) = &event.turn_id {
+                    turn_ids.insert(turn_id.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    turn_ids
+}
+
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => crate::context_manager::is_user_turn_boundary(item),
         _ => false,
     }
+}
+
+fn turn_start_index(items: &[&RolloutItem], user_boundary_idx: usize) -> usize {
+    let mut idx = user_boundary_idx;
+    while idx > 0 {
+        let previous_idx = idx - 1;
+        match items[previous_idx] {
+            RolloutItem::EventMsg(EventMsg::TurnStarted(_)) => return previous_idx,
+            RolloutItem::EventMsg(EventMsg::TurnComplete(_))
+            | RolloutItem::EventMsg(EventMsg::TurnAborted(_)) => return idx,
+            RolloutItem::EventMsg(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::SessionMeta(_) => {
+                idx = previous_idx;
+            }
+            RolloutItem::ResponseItem(_) | RolloutItem::Compacted(_) => return idx,
+        }
+    }
+    idx
 }
 
 #[derive(Debug)]

@@ -26,6 +26,7 @@ use codex_protocol::spine_tree::SpineTreePlanTreeScopeSnapshot;
 use codex_protocol::spine_tree::SpineTreePlanTreeSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use thiserror::Error;
 
@@ -41,6 +42,7 @@ pub(crate) struct SpineRuntime {
     last_committed_transition: Option<CommittedTransition>,
     pending_spine_call_starts: HashMap<String, u64>,
     mode: SpineRuntimeMode,
+    surviving_turn_ids: Option<HashSet<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,6 +103,7 @@ impl SpineRuntime {
             last_committed_transition: None,
             pending_spine_call_starts: HashMap::new(),
             mode: SpineRuntimeMode::Mutable,
+            surviving_turn_ids: None,
         }
     }
 
@@ -380,6 +383,7 @@ impl SpineRuntime {
         &mut self,
         state: SpineState,
         next_raw_ordinal: u64,
+        surviving_turn_ids: HashSet<String>,
         reason: impl Into<String>,
         source_turn_id: Option<String>,
     ) -> Result<(), SpineRuntimeError> {
@@ -387,6 +391,7 @@ impl SpineRuntime {
             .record_projection_reset(state.clone(), reason, source_turn_id)?;
         self.state = state;
         self.next_raw_ordinal = next_raw_ordinal;
+        self.surviving_turn_ids = Some(surviving_turn_ids);
         self.staged_transition = None;
         self.last_committed_transition = None;
         self.pending_spine_call_starts.clear();
@@ -454,7 +459,7 @@ impl SpineRuntime {
         for (node_id, node) in self.state.nodes() {
             let plan = if node_id == self.cursor() {
                 self.store
-                    .read_plan_snapshot(node_id)?
+                    .read_projected_plan_snapshot(node_id, self.surviving_turn_ids.as_ref())?
                     .map(spine_tree_plan_snapshot)
                     .transpose()?
             } else {
@@ -766,6 +771,7 @@ impl SpineRuntime {
             staged.op,
             staged.summary.clone(),
             boundary_end_ordinal,
+            staged.turn_id.clone(),
         )?;
         if transition.from != staged.from_node || transition.to != staged.to_node {
             return Err(SpineRuntimeError::StagedTransitionMismatch {

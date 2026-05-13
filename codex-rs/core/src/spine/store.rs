@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -239,8 +240,10 @@ impl SpineSidecarStore {
         op: SpineOperation,
         summary: impl Into<String>,
         raw_start_ordinal: u64,
+        source_turn_id: impl Into<String>,
     ) -> Result<Transition, SpineStoreError> {
         let summary = summary.into();
+        let source_turn_id = source_turn_id.into();
         let mut next_state = state.clone();
         let transition = op.apply(&mut next_state, summary.clone())?;
         next_state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
@@ -261,6 +264,7 @@ impl SpineSidecarStore {
             to_parent_id,
             summary,
             raw_start_ordinal,
+            source_turn_id,
         };
         self.append_json_line(&self.tree_path(), &event)?;
 
@@ -343,6 +347,30 @@ impl SpineSidecarStore {
         Ok(())
     }
 
+    pub(crate) fn copy_projected_node_artifacts_from<'a>(
+        &self,
+        source: &SpineSidecarStore,
+        node_ids: impl IntoIterator<Item = &'a NodeId>,
+        surviving_turn_ids: &HashSet<String>,
+    ) -> Result<(), SpineStoreError> {
+        for node_id in node_ids {
+            self.ensure_node_dir(node_id)?;
+            if source
+                .latest_worklog_source_turn_id(node_id)?
+                .is_some_and(|turn_id| surviving_turn_ids.contains(&turn_id))
+            {
+                self.copy_node_file_if_present(source, node_id, WORKLOG_FILE)?;
+            }
+            if source
+                .read_plan_snapshot(node_id)?
+                .is_some_and(|snapshot| surviving_turn_ids.contains(&snapshot.source_turn_id))
+            {
+                self.copy_node_file_if_present(source, node_id, PLAN_FILE)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn write_plan<T: Serialize>(
         &self,
         node_id: &NodeId,
@@ -402,6 +430,21 @@ impl SpineSidecarStore {
             }
         })?;
         Ok(Some(snapshot))
+    }
+
+    pub(crate) fn read_projected_plan_snapshot(
+        &self,
+        node_id: &NodeId,
+        surviving_turn_ids: Option<&HashSet<String>>,
+    ) -> Result<Option<PlanSnapshot>, SpineStoreError> {
+        let Some(snapshot) = self.read_plan_snapshot(node_id)? else {
+            return Ok(None);
+        };
+        if surviving_turn_ids.is_none_or(|turn_ids| turn_ids.contains(&snapshot.source_turn_id)) {
+            Ok(Some(snapshot))
+        } else {
+            Ok(None)
+        }
     }
 
     pub(crate) fn read_plan_revision(
@@ -1316,6 +1359,33 @@ impl SpineSidecarStore {
         std::fs::read_to_string(&path).map_err(|source| SpineStoreError::Io { path, source })
     }
 
+    fn latest_worklog_source_turn_id(
+        &self,
+        node_id: &NodeId,
+    ) -> Result<Option<String>, SpineStoreError> {
+        let node_id = node_id.to_string();
+        let mut latest_source_turn_id = None;
+        for event in self.read_tree_events()? {
+            let source_turn_id = match event {
+                TreeEvent::TransitionApplied {
+                    from_node,
+                    source_turn_id,
+                    ..
+                } if from_node == node_id => Some(source_turn_id),
+                TreeEvent::RootEpochArchived {
+                    archived_root_id,
+                    source_turn_id,
+                    ..
+                } if archived_root_id == node_id => Some(source_turn_id),
+                _ => None,
+            };
+            if let Some(source_turn_id) = source_turn_id {
+                latest_source_turn_id = Some(source_turn_id);
+            }
+        }
+        Ok(latest_source_turn_id)
+    }
+
     fn copy_node_file_if_present(
         &self,
         source: &SpineSidecarStore,
@@ -1402,6 +1472,8 @@ enum TreeEvent {
         to_parent_id: Option<String>,
         summary: String,
         raw_start_ordinal: u64,
+        #[serde(default)]
+        source_turn_id: String,
     },
     TaskPlanUpdated {
         seq: u64,

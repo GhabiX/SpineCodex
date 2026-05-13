@@ -1335,6 +1335,7 @@ impl Session {
                 .record_projection_reset(
                     projection.state,
                     projection.response_item_count,
+                    projection.surviving_turn_ids,
                     reason,
                     source_turn_id,
                 )

@@ -15,6 +15,7 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashSet;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -306,6 +307,37 @@ fn build_tree_snapshot_includes_node_local_plans() {
     assert_eq!(plan.items[0].stable_task_id, "step-1");
     assert_eq!(plan.items[0].step, "Inspect root");
     assert_eq!(plan.items[0].status, SpineTreePlanItemStatus::InProgress);
+}
+
+#[test]
+fn projection_reset_filters_plan_from_non_surviving_turn() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .record_plan_update(
+            "rolled-back-turn",
+            plan_args("Rolled back plan", StepStatus::InProgress),
+        )
+        .expect("record rolled back plan");
+
+    let projected_state = runtime.state().clone();
+    runtime
+        .record_projection_reset(
+            projected_state,
+            0,
+            HashSet::from(["surviving-turn".to_string()]),
+            "test_projection",
+            None,
+        )
+        .expect("record projection reset");
+    let snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
+    let root = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1")
+        .expect("root node");
+
+    assert!(root.plan.is_none());
+    assert!(runtime.store().plan_path(&id(&[1])).exists());
 }
 
 #[test]
@@ -829,6 +861,7 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
                 "to_parent_id": "1",
                 "summary": "root scope",
                 "raw_start_ordinal": 2,
+                "source_turn_id": "turn-1",
             }),
         ]
     );

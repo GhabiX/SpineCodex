@@ -2,6 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashSet;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -203,7 +204,7 @@ fn records_transition_summary_and_replays_from_tree() {
     let mut state = store.create().expect("create sidecar");
 
     let transition = store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
         .expect("record transition");
 
     assert_eq!(
@@ -235,6 +236,7 @@ fn records_transition_summary_and_replays_from_tree() {
                 "to_parent_id": "1",
                 "summary": "root scope",
                 "raw_start_ordinal": 8,
+                "source_turn_id": "turn-1",
             }),
         ]
     );
@@ -255,10 +257,16 @@ fn records_root_epoch_archive_and_replays_from_tree() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
         .expect("record root open");
     store
-        .record_transition(&mut state, SpineOperation::Open, "child scope", 13)
+        .record_transition(
+            &mut state,
+            SpineOperation::Open,
+            "child scope",
+            13,
+            "turn-2",
+        )
         .expect("record nested open");
 
     let transition = store
@@ -311,11 +319,70 @@ fn records_root_epoch_archive_and_replays_from_tree() {
 }
 
 #[test]
+fn root_cursor_archive_creates_epoch_under_hidden_root() {
+    let (_temp, store) = temp_store();
+    let mut state = store.create().expect("create sidecar");
+
+    let transition = store
+        .record_root_epoch_archive(
+            &mut state,
+            "context compacted",
+            7,
+            "compact-root",
+            "turn-compact",
+        )
+        .expect("record root cursor archive");
+
+    assert_eq!(
+        transition,
+        Transition {
+            from: id(&[1, 1]),
+            to: id(&[1, 2]),
+        }
+    );
+    assert_eq!(
+        read_json_lines(store.tree_path())[1],
+        json!({
+            "type": "root_epoch_archived",
+            "seq": 2,
+            "archived_root_id": "1.1",
+            "next_root_id": "1.2",
+            "next_parent_id": "1",
+            "summary": "context compacted",
+            "raw_start_ordinal": 7,
+            "compact_id": "compact-root",
+            "source_turn_id": "turn-compact",
+        })
+    );
+
+    let loaded = store.load().expect("load archived sidecar");
+    assert_eq!(loaded.cursor(), &id(&[1, 2]));
+    assert_eq!(
+        loaded
+            .node(&id(&[1]))
+            .and_then(|node| node.parent_id.clone()),
+        None
+    );
+    assert_eq!(
+        loaded
+            .node(&id(&[1, 1]))
+            .and_then(|node| node.parent_id.clone()),
+        Some(id(&[1]))
+    );
+    assert_eq!(
+        loaded
+            .node(&id(&[1, 2]))
+            .and_then(|node| node.parent_id.clone()),
+        Some(id(&[1]))
+    );
+}
+
+#[test]
 fn generated_worklog_sections_do_not_break_transition_replay_hash() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
         .expect("record transition");
 
     store
@@ -336,7 +403,7 @@ fn appends_node_trajs_next_to_worklog() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
         .expect("record transition");
 
     store
@@ -372,7 +439,7 @@ fn state_cache_mismatch_fails_fast() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
-        .record_transition(&mut state, SpineOperation::Open, "root scope", 8)
+        .record_transition(&mut state, SpineOperation::Open, "root scope", 8, "turn-1")
         .expect("record transition");
     let mut cache = read_json(store.state_path());
     cache["cursor"] = json!("9");
@@ -778,7 +845,13 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
     let (temp, source_store) = temp_store();
     let mut source_state = source_store.create().expect("create source");
     source_store
-        .record_transition(&mut source_state, SpineOperation::Open, "source scope", 2)
+        .record_transition(
+            &mut source_state,
+            SpineOperation::Open,
+            "source scope",
+            2,
+            "turn-1",
+        )
         .expect("record source transition");
     source_store
         .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsource worklog\n")
@@ -866,6 +939,73 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
             .and_then(|node| node.parent_id.clone()),
         Some(id(&[1]))
     );
+}
+
+#[test]
+fn projected_artifact_copy_filters_non_surviving_turn_files() {
+    let (temp, source_store) = temp_store();
+    let mut source_state = source_store.create().expect("create source");
+    source_store
+        .record_transition(
+            &mut source_state,
+            SpineOperation::Open,
+            "source scope",
+            2,
+            "surviving-turn",
+        )
+        .expect("record source transition");
+    source_store
+        .append_worklog_section(&id(&[1]), "\n\n## Auto Compact\n\nsurviving worklog\n")
+        .expect("write surviving worklog");
+    source_store
+        .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nrolled back worklog\n")
+        .expect("write rolled back worklog");
+    source_store
+        .write_plan_snapshot(
+            &id(&[1, 1]),
+            &PlanSnapshot {
+                node_id: "1.1".to_string(),
+                revision: 1,
+                explanation: None,
+                items: vec![PlanSnapshotItem {
+                    stable_task_id: "step-1".to_string(),
+                    step: "rolled back plan".to_string(),
+                    status: "in_progress".to_string(),
+                }],
+                scope_allocation: None,
+                source_turn_id: "rolled-back-turn".to_string(),
+                event_seq: source_store
+                    .next_tree_event_seq()
+                    .expect("next tree seq for plan"),
+            },
+        )
+        .expect("write rolled back plan");
+
+    let child_rollout = temp.path().join("rollout-child.jsonl");
+    let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
+    child_store.create().expect("create child");
+    child_store
+        .record_projection_reset(source_state.clone(), "fork_seed", None)
+        .expect("record projection reset");
+    child_store
+        .copy_projected_node_artifacts_from(
+            &source_store,
+            source_state.nodes().keys(),
+            &HashSet::from(["surviving-turn".to_string()]),
+        )
+        .expect("copy projected artifacts");
+
+    assert!(
+        child_store
+            .read_worklog(&id(&[1]))
+            .expect("read copied surviving worklog")
+            .contains("surviving worklog")
+    );
+    assert!(matches!(
+        child_store.read_worklog(&id(&[1, 1])),
+        Err(SpineStoreError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert!(!child_store.plan_path(&id(&[1, 1])).exists());
 }
 
 #[test]

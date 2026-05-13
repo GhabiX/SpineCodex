@@ -167,6 +167,7 @@ async fn valid_next_returns_compact_tree_view() {
                 crate::spine::store::SpineOperation::Open,
                 "root scope",
                 0,
+                "turn-1",
             )
             .expect("record open");
         let store = runtime.store().clone();
@@ -211,6 +212,7 @@ async fn next_accepts_instruction_and_stages_it() {
                 crate::spine::store::SpineOperation::Open,
                 "root scope",
                 0,
+                "turn-1",
             )
             .expect("record open");
         let store = runtime.store().clone();
