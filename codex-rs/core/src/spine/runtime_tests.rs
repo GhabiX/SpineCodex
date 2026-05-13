@@ -7,8 +7,9 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::SpineAllocationArg;
-use codex_protocol::plan_tool::SpineAllocationScopeArg;
+use codex_protocol::plan_tool::SpinePlanTreeArg;
+use codex_protocol::plan_tool::SpinePlanTreeCheckpointArg;
+use codex_protocol::plan_tool::SpinePlanTreeScopeArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use pretty_assertions::assert_eq;
@@ -56,31 +57,47 @@ fn plan_args_many(items: &[(&str, StepStatus)]) -> UpdatePlanArgs {
                 status: status.clone(),
             })
             .collect(),
-        spine_allocation: None,
+        spine_plantree: None,
+        clear_spine_plantree: false,
     }
 }
 
-fn plan_args_with_allocation(
+fn plan_args_with_plantree(
     anchor: Option<&str>,
-    scopes: Vec<(Option<&str>, &str, Vec<&str>)>,
+    children: Vec<(Option<&str>, &str, Vec<&str>)>,
 ) -> UpdatePlanArgs {
     UpdatePlanArgs {
-        explanation: Some("PlanBridge allocation test".to_string()),
+        explanation: Some("PlanBridge PlanTree test".to_string()),
         plan: vec![PlanItemArg {
-            step: "Plan scope allocation".to_string(),
+            step: "Plan scope tree".to_string(),
             status: StepStatus::InProgress,
         }],
-        spine_allocation: Some(SpineAllocationArg {
+        spine_plantree: Some(SpinePlanTreeArg {
             anchor: anchor.map(str::to_string),
-            scopes: scopes
-                .into_iter()
-                .map(|(node, summary, checkpoints)| SpineAllocationScopeArg {
-                    node: node.map(str::to_string),
-                    summary: summary.to_string(),
-                    checkpoints: checkpoints.into_iter().map(str::to_string).collect(),
-                })
-                .collect(),
+            root: SpinePlanTreeScopeArg {
+                node: anchor.map(str::to_string),
+                summary: "Editable task scope".to_string(),
+                status: Some(StepStatus::InProgress),
+                checkpoints: Vec::new(),
+                children: children
+                    .into_iter()
+                    .map(|(node, summary, checkpoints)| SpinePlanTreeScopeArg {
+                        node: node.map(str::to_string),
+                        summary: summary.to_string(),
+                        status: Some(StepStatus::Pending),
+                        checkpoints: checkpoints
+                            .into_iter()
+                            .map(|task| SpinePlanTreeCheckpointArg {
+                                task: task.to_string(),
+                                status: StepStatus::Pending,
+                            })
+                            .collect(),
+                        children: Vec::new(),
+                    })
+                    .collect(),
+            },
         }),
+        clear_spine_plantree: false,
     }
 }
 
@@ -292,14 +309,14 @@ fn build_tree_snapshot_includes_node_local_plans() {
 }
 
 #[test]
-fn record_plan_update_writes_scope_allocation_without_moving_cursor() {
+fn record_plan_update_writes_plantree_without_moving_cursor() {
     let (_temp, mut runtime) = temp_runtime();
     let initial_state = runtime.state().clone();
 
     let snapshot = runtime
         .record_plan_update(
             "turn-alloc",
-            plan_args_with_allocation(
+            plan_args_with_plantree(
                 None,
                 vec![
                     (
@@ -315,7 +332,7 @@ fn record_plan_update_writes_scope_allocation_without_moving_cursor() {
                 ],
             ),
         )
-        .expect("record allocation");
+        .expect("record PlanTree");
 
     assert_eq!(runtime.state(), &initial_state);
     assert_eq!(runtime.cursor(), &id(&[1]));
@@ -323,26 +340,30 @@ fn record_plan_update_writes_scope_allocation_without_moving_cursor() {
     assert_eq!(snapshot.event_seq, 2);
 
     let plan = read_json(runtime.store().plan_path(&id(&[1])));
-    let scope_allocation = &plan["scope_allocation"];
-    assert_eq!(scope_allocation["anchor_node_id"], "1");
+    let spine_plantree = &plan["spine_plantree"];
+    assert_eq!(spine_plantree["anchor_node_id"], "1");
+    assert_eq!(spine_plantree["root"]["summary"], "Editable task scope");
     assert_eq!(
-        scope_allocation["scopes"][0]["existing_node_id"],
+        spine_plantree["root"]["children"][0]["existing_node_id"],
         Value::Null
     );
     assert_eq!(
-        scope_allocation["scopes"][0]["summary"],
+        spine_plantree["root"]["children"][0]["summary"],
         "Reproduce failure"
     );
     assert_eq!(
-        scope_allocation["scopes"][0]["checkpoints"],
-        json!(["run focused repro", "capture failing assertion"])
+        spine_plantree["root"]["children"][0]["checkpoints"],
+        json!([
+            {"task": "run focused repro", "status": "pending"},
+            {"task": "capture failing assertion", "status": "pending"}
+        ])
     );
 
     let tree = read_json_lines(runtime.store().tree_path());
     assert_eq!(tree.len(), 2);
     assert_eq!(tree[1]["type"], "task_plan_updated");
     assert_eq!(tree[1]["seq"], 2);
-    assert_eq!(tree[1]["scope_allocation"]["anchor_node_id"], "1");
+    assert_eq!(tree[1]["spine_plantree"]["anchor_node_id"], "1");
 
     let tree_snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
     let root = tree_snapshot
@@ -351,22 +372,90 @@ fn record_plan_update_writes_scope_allocation_without_moving_cursor() {
         .find(|node| node.node_id == "1")
         .expect("root node");
     let plan = root.plan.as_ref().expect("root plan");
-    let scope_allocation = plan
-        .scope_allocation
-        .as_ref()
-        .expect("root scope allocation");
-    assert_eq!(scope_allocation.anchor_node_id, "1");
-    assert_eq!(scope_allocation.scopes.len(), 2);
-    assert_eq!(scope_allocation.scopes[0].existing_node_id, None);
-    assert_eq!(scope_allocation.scopes[0].summary, "Reproduce failure");
+    let spine_plantree = plan.spine_plantree.as_ref().expect("root PlanTree");
+    assert_eq!(spine_plantree.anchor_node_id, "1");
+    assert_eq!(spine_plantree.root.children.len(), 2);
+    assert_eq!(spine_plantree.root.children[0].existing_node_id, None);
+    assert_eq!(spine_plantree.root.children[0].summary, "Reproduce failure");
     assert_eq!(
-        scope_allocation.scopes[0].checkpoints,
+        spine_plantree.root.children[0]
+            .checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.task.as_str())
+            .collect::<Vec<_>>(),
         vec!["run focused repro", "capture failing assertion"]
     );
 }
 
 #[test]
-fn allocation_defaults_to_open_parent_scope_when_cursor_is_child() {
+fn record_plan_update_preserves_plantree_when_omitted() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .record_plan_update(
+            "turn-plantree",
+            plan_args_with_plantree(
+                None,
+                vec![(None, "Verify scope", vec!["run focused tests"])],
+            ),
+        )
+        .expect("record PlanTree");
+
+    let second = runtime
+        .record_plan_update(
+            "turn-progress",
+            plan_args("Run focused tests", StepStatus::InProgress),
+        )
+        .expect("record progress-only plan");
+
+    let spine_plantree = second
+        .spine_plantree
+        .as_ref()
+        .expect("omitted PlanTree should inherit previous snapshot");
+    assert_eq!(spine_plantree.anchor_node_id, "1");
+    assert_eq!(spine_plantree.root.children[0].summary, "Verify scope");
+
+    let plan = read_json(runtime.store().plan_path(&id(&[1])));
+    assert_eq!(
+        plan["spine_plantree"]["root"]["children"][0]["summary"],
+        "Verify scope"
+    );
+}
+
+#[test]
+fn record_plan_update_can_clear_plantree_explicitly() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .record_plan_update(
+            "turn-plantree",
+            plan_args_with_plantree(
+                None,
+                vec![(None, "Verify scope", vec!["run focused tests"])],
+            ),
+        )
+        .expect("record PlanTree");
+
+    let cleared = runtime
+        .record_plan_update(
+            "turn-clear",
+            UpdatePlanArgs {
+                explanation: Some("clear obsolete PlanTree".to_string()),
+                plan: vec![PlanItemArg {
+                    step: "Continue without a planned subtree".to_string(),
+                    status: StepStatus::InProgress,
+                }],
+                spine_plantree: None,
+                clear_spine_plantree: true,
+            },
+        )
+        .expect("clear PlanTree");
+
+    assert!(cleared.spine_plantree.is_none());
+    let plan = read_json(runtime.store().plan_path(&id(&[1])));
+    assert!(plan.get("spine_plantree").is_none());
+}
+
+#[test]
+fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
         .stage_transition(
@@ -390,12 +479,12 @@ fn allocation_defaults_to_open_parent_scope_when_cursor_is_child() {
     runtime
         .record_plan_update(
             "turn-child-plan",
-            plan_args_with_allocation(None, vec![(None, "Child next scope", vec!["finish child"])]),
+            plan_args_with_plantree(None, vec![(None, "Child next scope", vec!["finish child"])]),
         )
-        .expect("record allocation at open parent");
+        .expect("record PlanTree at open parent");
 
     let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
-    assert_eq!(plan["scope_allocation"]["anchor_node_id"], "1");
+    assert_eq!(plan["spine_plantree"]["anchor_node_id"], "1");
 
     let snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
     let root = snapshot
@@ -410,16 +499,16 @@ fn allocation_defaults_to_open_parent_scope_when_cursor_is_child() {
         .expect("child node");
     assert!(root.plan.is_none());
     assert!(child.plan.is_some());
-    let scope_allocation = child
+    let spine_plantree = child
         .plan
         .as_ref()
-        .and_then(|plan| plan.scope_allocation.as_ref())
-        .expect("child plan scope allocation");
-    assert_eq!(scope_allocation.anchor_node_id, "1");
+        .and_then(|plan| plan.spine_plantree.as_ref())
+        .expect("child PlanTree");
+    assert_eq!(spine_plantree.anchor_node_id, "1");
 }
 
 #[test]
-fn allocation_rejects_finished_scope_nodes() {
+fn plantree_rejects_finished_scope_nodes() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
         .stage_transition(
@@ -463,7 +552,7 @@ fn allocation_rejects_finished_scope_nodes() {
     let error = runtime
         .record_plan_update(
             "turn-invalid",
-            plan_args_with_allocation(
+            plan_args_with_plantree(
                 Some("1"),
                 vec![(
                     Some("1.1"),
@@ -472,12 +561,12 @@ fn allocation_rejects_finished_scope_nodes() {
                 )],
             ),
         )
-        .expect_err("finished nodes must be read-only for allocation");
+        .expect_err("finished nodes must be read-only for PlanTree");
 
     assert!(matches!(
         error,
-        SpineRuntimeError::InvalidPlanAllocation { message }
-            if message.contains("allocation scope [1.1] is read-only")
+        SpineRuntimeError::InvalidPlanTree { message }
+            if message.contains("plantree scope [1.1] is read-only")
     ));
     assert_eq!(runtime.state(), &initial_state);
     assert_eq!(read_json_lines(runtime.store().tree_path()), initial_tree);
@@ -1454,6 +1543,41 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
         .expect("record archive");
 
     assert_eq!(runtime.cursor(), &id(&[1, 2]));
+}
+
+#[test]
+fn root_epoch_archive_plans_materialized_epoch_when_cursor_is_hidden_root() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .after_response_items_recorded("turn-1", &[assistant_message("root work")], 0, 1)
+        .expect("record root work");
+
+    let boundary = runtime
+        .plan_root_epoch_archive()
+        .expect("plan root archive");
+
+    assert_eq!(boundary.op, SpineOperation::Archive);
+    assert_eq!(boundary.node_id, id(&[1, 1]));
+    assert_eq!(boundary.cut_ordinal, 0);
+    assert_eq!(boundary.fold_end_ordinal, 1);
+
+    runtime
+        .record_root_epoch_archive(
+            boundary.transition_summary,
+            boundary.fold_end_ordinal,
+            "compact-root",
+            "turn-compact",
+        )
+        .expect("record archive");
+
+    assert_eq!(runtime.cursor(), &id(&[1, 2]));
+    assert_eq!(
+        runtime
+            .state()
+            .node(&id(&[1, 1]))
+            .and_then(|node| node.parent_id.clone()),
+        Some(id(&[1]))
+    );
 }
 
 #[test]

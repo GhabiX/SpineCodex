@@ -242,18 +242,36 @@ fn archive_current_root_epoch_handles_root_cursor() {
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1]),
-            to: id(&[2]),
+            from: id(&[1, 1]),
+            to: id(&[1, 2]),
         }
     );
-    assert_eq!(state.cursor(), &id(&[2]));
+    assert_eq!(state.cursor(), &id(&[1, 2]));
     assert_eq!(
         state.node(&id(&[1])).map(|node| node.status.clone()),
+        Some(NodeStatus::Live)
+    );
+    assert_eq!(
+        state.node(&id(&[1, 1])).map(|node| node.status.clone()),
         Some(NodeStatus::Closed)
     );
     assert_eq!(
-        state.node(&id(&[1])).and_then(|node| node.summary.clone()),
+        state
+            .node(&id(&[1, 1]))
+            .and_then(|node| node.summary.clone()),
         Some("context compacted".to_string())
+    );
+    assert_eq!(
+        state
+            .node(&id(&[1, 1]))
+            .and_then(|node| node.parent_id.clone()),
+        Some(id(&[1]))
+    );
+    assert_eq!(
+        state
+            .node(&id(&[1, 2]))
+            .and_then(|node| node.parent_id.clone()),
+        Some(id(&[1]))
     );
 }
 

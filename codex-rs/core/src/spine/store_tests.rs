@@ -407,7 +407,7 @@ fn writes_plan_snapshot_without_planbridge_integration() {
 }
 
 #[test]
-fn writes_plan_snapshot_with_scope_allocation_and_replays_without_mutating_state() {
+fn writes_plan_snapshot_with_plantree_and_replays_without_mutating_state() {
     let (_temp, store) = temp_store();
     let state = store.create().expect("create sidecar");
     let snapshot = PlanSnapshot {
@@ -416,23 +416,39 @@ fn writes_plan_snapshot_with_scope_allocation_and_replays_without_mutating_state
         explanation: Some("group upcoming checkpoints".to_string()),
         items: vec![PlanSnapshotItem {
             stable_task_id: "step-1".to_string(),
-            step: "plan scope allocation".to_string(),
+            step: "plan scope tree".to_string(),
             status: "in_progress".to_string(),
         }],
-        scope_allocation: Some(PlanScopeAllocationSnapshot {
+        spine_plantree: Some(PlanTreeSnapshot {
             anchor_node_id: "1".to_string(),
-            scopes: vec![
-                crate::spine::plan_bridge::PlanAllocationScope {
-                    existing_node_id: None,
-                    summary: "Reproduce".to_string(),
-                    checkpoints: vec!["run repro".to_string()],
-                },
-                crate::spine::plan_bridge::PlanAllocationScope {
-                    existing_node_id: Some("1".to_string()),
-                    summary: "Continue root".to_string(),
-                    checkpoints: vec!["keep root task focused".to_string()],
-                },
-            ],
+            root: crate::spine::plan_bridge::PlanTreeScope {
+                existing_node_id: Some("1".to_string()),
+                summary: "Fix task".to_string(),
+                status: Some("in_progress".to_string()),
+                checkpoints: Vec::new(),
+                children: vec![
+                    crate::spine::plan_bridge::PlanTreeScope {
+                        existing_node_id: None,
+                        summary: "Reproduce".to_string(),
+                        status: Some("pending".to_string()),
+                        checkpoints: vec![crate::spine::plan_bridge::PlanTreeCheckpoint {
+                            task: "run repro".to_string(),
+                            status: "pending".to_string(),
+                        }],
+                        children: Vec::new(),
+                    },
+                    crate::spine::plan_bridge::PlanTreeScope {
+                        existing_node_id: Some("1".to_string()),
+                        summary: "Continue root".to_string(),
+                        status: Some("pending".to_string()),
+                        checkpoints: vec![crate::spine::plan_bridge::PlanTreeCheckpoint {
+                            task: "keep root task focused".to_string(),
+                            status: "pending".to_string(),
+                        }],
+                        children: Vec::new(),
+                    },
+                ],
+            },
         }),
         source_turn_id: "turn-alloc".to_string(),
         event_seq: 2,
@@ -472,24 +488,31 @@ fn writes_plan_snapshot_with_scope_allocation_and_replays_without_mutating_state
                 "items": [
                     {
                         "stable_task_id": "step-1",
-                        "step": "plan scope allocation",
+                        "step": "plan scope tree",
                         "status": "in_progress",
                     }
                 ],
-                "scope_allocation": {
+                "spine_plantree": {
                     "anchor_node_id": "1",
-                    "scopes": [
-                        {
-                            "existing_node_id": null,
-                            "summary": "Reproduce",
-                            "checkpoints": ["run repro"],
-                        },
-                        {
-                            "existing_node_id": "1",
-                            "summary": "Continue root",
-                            "checkpoints": ["keep root task focused"],
-                        },
-                    ],
+                    "root": {
+                        "existing_node_id": "1",
+                        "summary": "Fix task",
+                        "status": "in_progress",
+                        "children": [
+                            {
+                                "existing_node_id": null,
+                                "summary": "Reproduce",
+                                "status": "pending",
+                                "checkpoints": [{"task": "run repro", "status": "pending"}],
+                            },
+                            {
+                                "existing_node_id": "1",
+                                "summary": "Continue root",
+                                "status": "pending",
+                                "checkpoints": [{"task": "keep root task focused", "status": "pending"}],
+                            },
+                        ],
+                    },
                 },
                 "source_turn_id": "turn-alloc",
             }),
@@ -784,6 +807,65 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
             .contains("source worklog")
     );
     assert_eq!(read_json_lines(child_store.tree_path()).len(), 2);
+}
+
+#[test]
+fn root_cursor_archive_creates_epoch_under_hidden_root() {
+    let (_temp, store) = temp_store();
+    let mut state = store.create().expect("create sidecar");
+
+    let transition = store
+        .record_root_epoch_archive(
+            &mut state,
+            "context compacted",
+            7,
+            "compact-root",
+            "turn-compact",
+        )
+        .expect("record root cursor archive");
+
+    assert_eq!(
+        transition,
+        Transition {
+            from: id(&[1, 1]),
+            to: id(&[1, 2]),
+        }
+    );
+    assert_eq!(
+        read_json_lines(store.tree_path())[1],
+        json!({
+            "type": "root_epoch_archived",
+            "seq": 2,
+            "archived_root_id": "1.1",
+            "next_root_id": "1.2",
+            "next_parent_id": "1",
+            "summary": "context compacted",
+            "raw_start_ordinal": 7,
+            "compact_id": "compact-root",
+            "source_turn_id": "turn-compact",
+        })
+    );
+
+    let loaded = store.load().expect("load archived sidecar");
+    assert_eq!(loaded.cursor(), &id(&[1, 2]));
+    assert_eq!(
+        loaded
+            .node(&id(&[1]))
+            .and_then(|node| node.parent_id.clone()),
+        None
+    );
+    assert_eq!(
+        loaded
+            .node(&id(&[1, 1]))
+            .and_then(|node| node.parent_id.clone()),
+        Some(id(&[1]))
+    );
+    assert_eq!(
+        loaded
+            .node(&id(&[1, 2]))
+            .and_then(|node| node.parent_id.clone()),
+        Some(id(&[1]))
+    );
 }
 
 #[test]

@@ -21,6 +21,7 @@ use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -52,16 +53,6 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-    }
-}
-
-fn spine_call_msg(call_id: &str) -> ResponseItem {
-    ResponseItem::FunctionCall {
-        id: None,
-        call_id: call_id.to_string(),
-        name: "spine".to_string(),
-        namespace: None,
-        arguments: "{}".to_string(),
     }
 }
 
@@ -927,7 +918,11 @@ async fn forked_spine_history_without_source_thread_is_rejected_when_spine_featu
     let result = manager
         .resume_thread_with_history(
             config,
-            InitialHistory::Forked(vec![RolloutItem::ResponseItem(spine_call_msg("spine-1"))]),
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(spine_transition_msg(
+                "spine-1",
+                crate::spine::SPINE_TOOL_OPEN,
+                "source scope",
+            ))]),
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -1077,6 +1072,136 @@ async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
         source_tree_before
     );
     assert!(std::fs::read_to_string(child_store.tree_path())?.contains("child-only next"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> anyhow::Result<()> {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("source start"))]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let source_session = &source.thread.codex.session;
+    let source_turn = source_session.new_default_turn().await;
+    source_session
+        .spine
+        .as_ref()
+        .expect("source spine")
+        .lock()
+        .await
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            crate::spine::store::SpineOperation::Open,
+            "source scope",
+            /*compact_instruction*/ None,
+        )?;
+    source_session
+        .try_record_conversation_items(
+            source_turn.as_ref(),
+            &[
+                spine_transition_msg("open-1", crate::spine::SPINE_TOOL_OPEN, "source scope"),
+                function_call_output("open-1"),
+                user_msg("rolled back user turn"),
+            ],
+        )
+        .await?;
+    source_session
+        .spine
+        .as_ref()
+        .expect("source spine")
+        .lock()
+        .await
+        .stage_transition(
+            "next-rolled-back",
+            "turn-2",
+            crate::spine::store::SpineOperation::Next,
+            "rolled back next",
+            /*compact_instruction*/ None,
+        )?;
+    source_session
+        .try_record_conversation_items(
+            source_turn.as_ref(),
+            &[
+                spine_transition_msg(
+                    "next-rolled-back",
+                    crate::spine::SPINE_TOOL_NEXT,
+                    "rolled back next",
+                ),
+                function_call_output("next-rolled-back"),
+            ],
+        )
+        .await?;
+    source_session
+        .persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            ThreadRolledBackEvent { num_turns: 1 },
+        ))])
+        .await;
+    source.thread.flush_rollout().await?;
+    let source_rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            source_rollout_path,
+            Some(ThreadSource::User),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let child_runtime = forked
+        .thread
+        .codex
+        .session
+        .spine
+        .as_ref()
+        .expect("child spine")
+        .lock()
+        .await;
+
+    assert_eq!(child_runtime.cursor().to_string(), "1.1");
+    // Interrupted fork snapshots append the same model-visible interrupt marker
+    // used by the live interrupt path. That marker is a response item and must
+    // be counted so the next Spine raw ordinal aligns with the forked history.
+    assert_eq!(child_runtime.current_ordinal(), 4);
+    assert!(
+        child_runtime
+            .state()
+            .node(&crate::spine::ids::NodeId::from_segments(vec![1, 2]))
+            .is_none()
+    );
     Ok(())
 }
 

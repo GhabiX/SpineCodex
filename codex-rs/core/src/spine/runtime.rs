@@ -3,8 +3,8 @@ use super::compact::render_context_compacted_outline;
 use super::ids::NodeId;
 use super::is_legacy_spine_transition_tool;
 use super::is_spine_transition_tool;
-use super::plan_bridge::PlanScopeAllocationSnapshot;
 use super::plan_bridge::PlanSnapshot;
+use super::plan_bridge::PlanTreeSnapshot;
 use super::state::SpineState;
 use super::state::SpineStateError;
 use super::store::SpineOperation;
@@ -13,15 +13,17 @@ use super::store::SpineStoreError;
 use super::trajs::RawOrdinalRange;
 use super::view::render_tree;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::plan_tool::SpineAllocationArg;
+use codex_protocol::plan_tool::SpinePlanTreeArg;
+use codex_protocol::plan_tool::SpinePlanTreeScopeArg;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
+use codex_protocol::spine_tree::SpineTreePlanCheckpointSnapshot;
 use codex_protocol::spine_tree::SpineTreePlanItemSnapshot;
 use codex_protocol::spine_tree::SpineTreePlanItemStatus;
 use codex_protocol::spine_tree::SpineTreePlanSnapshot;
-use codex_protocol::spine_tree::SpineTreeScopeAllocationScopeSnapshot;
-use codex_protocol::spine_tree::SpineTreeScopeAllocationSnapshot;
+use codex_protocol::spine_tree::SpineTreePlanTreeScopeSnapshot;
+use codex_protocol::spine_tree::SpineTreePlanTreeSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::HashMap;
 use std::path::Path;
@@ -324,10 +326,17 @@ impl SpineRuntime {
         &self,
     ) -> Result<SpineCompactBoundary, SpineRuntimeError> {
         self.ensure_spine_mutation_allowed()?;
-        let node_id = self.state.current_root_epoch()?;
+        let node_id = self.state.root_epoch_archive_target()?;
         let node = self
             .state
             .node(&node_id)
+            .or_else(|| {
+                if self.state.cursor() == &NodeId::root() {
+                    self.state.node(self.state.cursor())
+                } else {
+                    None
+                }
+            })
             .ok_or_else(|| SpineRuntimeError::UnknownNode(node_id.clone()))?;
         let cut_ordinal =
             node.raw_start_ordinal
@@ -399,7 +408,8 @@ impl SpineRuntime {
         args: UpdatePlanArgs,
     ) -> Result<PlanSnapshot, SpineRuntimeError> {
         let turn_id = turn_id.into();
-        let allocation = args.spine_allocation.clone();
+        let plantree = args.spine_plantree.clone();
+        let clear_plantree = args.clear_spine_plantree;
         let previous = self.store.read_plan_snapshot(self.cursor())?;
         let revision = self
             .store
@@ -408,15 +418,22 @@ impl SpineRuntime {
             .checked_add(1)
             .ok_or(SpineRuntimeError::PlanRevisionOverflow)?;
         let event_seq = self.store.next_tree_event_seq()?;
-        let scope_allocation = if let Some(allocation) = allocation {
-            let anchor_node_id = self.resolve_allocation_anchor(&allocation)?;
-            self.validate_allocation(&anchor_node_id, &allocation)?;
-            Some(PlanScopeAllocationSnapshot::from_update(
-                &anchor_node_id,
-                allocation,
-            ))
-        } else {
+        let spine_plantree = if clear_plantree {
+            if plantree.is_some() {
+                return Err(SpineRuntimeError::InvalidPlanTree {
+                    message: "clear_spine_plantree cannot be combined with spine_plantree"
+                        .to_string(),
+                });
+            }
             None
+        } else if let Some(plantree) = plantree {
+            let anchor_node_id = self.resolve_plantree_anchor(&plantree)?;
+            self.validate_plantree(&anchor_node_id, &plantree)?;
+            Some(PlanTreeSnapshot::from_update(&anchor_node_id, plantree))
+        } else {
+            previous
+                .as_ref()
+                .and_then(|snapshot| snapshot.spine_plantree.clone())
         };
         let snapshot = PlanSnapshot::from_update(
             self.cursor(),
@@ -424,7 +441,7 @@ impl SpineRuntime {
             event_seq,
             turn_id,
             args,
-            scope_allocation,
+            spine_plantree,
             previous.as_ref(),
         );
         self.store.write_plan_snapshot(self.cursor(), &snapshot)?;
@@ -464,22 +481,22 @@ impl SpineRuntime {
         })
     }
 
-    fn resolve_allocation_anchor(
+    fn resolve_plantree_anchor(
         &self,
-        allocation: &SpineAllocationArg,
+        plantree: &SpinePlanTreeArg,
     ) -> Result<NodeId, SpineRuntimeError> {
-        let anchor = if let Some(anchor) = &allocation.anchor {
-            NodeId::parse(anchor).map_err(|_| SpineRuntimeError::InvalidPlanAllocation {
-                message: format!("invalid allocation anchor node id {anchor}"),
+        let anchor = if let Some(anchor) = &plantree.anchor {
+            NodeId::parse(anchor).map_err(|_| SpineRuntimeError::InvalidPlanTree {
+                message: format!("invalid plantree anchor node id {anchor}"),
             })?
         } else {
-            self.default_allocation_anchor()?
+            self.default_plantree_anchor()?
         };
-        self.ensure_editable_allocation_node(&anchor, "anchor")?;
+        self.ensure_editable_plantree_node(&anchor, "anchor")?;
         Ok(anchor)
     }
 
-    fn default_allocation_anchor(&self) -> Result<NodeId, SpineRuntimeError> {
+    fn default_plantree_anchor(&self) -> Result<NodeId, SpineRuntimeError> {
         let cursor = self.cursor();
         let cursor_node = self
             .state
@@ -496,61 +513,55 @@ impl SpineRuntime {
         Ok(cursor.clone())
     }
 
-    fn validate_allocation(
+    fn validate_plantree(
         &self,
         anchor: &NodeId,
-        allocation: &SpineAllocationArg,
+        plantree: &SpinePlanTreeArg,
     ) -> Result<(), SpineRuntimeError> {
-        if allocation.scopes.is_empty() {
-            return Err(SpineRuntimeError::InvalidPlanAllocation {
-                message: "spine_allocation.scopes must not be empty".to_string(),
+        self.validate_plantree_scope(anchor, &plantree.root)
+    }
+
+    fn validate_plantree_scope(
+        &self,
+        anchor: &NodeId,
+        scope: &SpinePlanTreeScopeArg,
+    ) -> Result<(), SpineRuntimeError> {
+        if scope.summary.trim().is_empty() {
+            return Err(SpineRuntimeError::InvalidPlanTree {
+                message: "spine_plantree scope summary must not be empty".to_string(),
             });
         }
-        for scope in &allocation.scopes {
-            if scope.summary.trim().is_empty() {
-                return Err(SpineRuntimeError::InvalidPlanAllocation {
-                    message: "spine_allocation scope summary must not be empty".to_string(),
+        for checkpoint in &scope.checkpoints {
+            if checkpoint.task.trim().is_empty() {
+                return Err(SpineRuntimeError::InvalidPlanTree {
+                    message: "spine_plantree checkpoint task must not be empty".to_string(),
                 });
             }
-            if scope.checkpoints.is_empty() {
-                return Err(SpineRuntimeError::InvalidPlanAllocation {
-                    message: "spine_allocation scope checkpoints must not be empty".to_string(),
-                });
-            }
-            if let Some(empty_checkpoint) = scope
-                .checkpoints
-                .iter()
-                .find(|checkpoint| checkpoint.trim().is_empty())
-            {
-                return Err(SpineRuntimeError::InvalidPlanAllocation {
-                    message: format!(
-                        "spine_allocation checkpoint must not be empty: {empty_checkpoint:?}"
-                    ),
-                });
-            }
-            let Some(existing_node_id) = &scope.node else {
-                continue;
-            };
+        }
+        if let Some(existing_node_id) = &scope.node {
             let existing_node_id = NodeId::parse(existing_node_id).map_err(|_| {
-                SpineRuntimeError::InvalidPlanAllocation {
-                    message: format!("invalid allocation scope node id {existing_node_id}"),
+                SpineRuntimeError::InvalidPlanTree {
+                    message: format!("invalid plantree scope node id {existing_node_id}"),
                 }
             })?;
-            self.ensure_editable_allocation_node(&existing_node_id, "scope")?;
+            self.ensure_editable_plantree_node(&existing_node_id, "scope")?;
             if !is_node_within_anchor(&existing_node_id, anchor) {
-                return Err(SpineRuntimeError::InvalidPlanAllocation {
+                return Err(SpineRuntimeError::InvalidPlanTree {
                     message: format!(
-                        "allocation scope {} is outside anchor {}",
+                        "plantree scope {} is outside anchor {}",
                         existing_node_id.bracketed(),
                         anchor.bracketed()
                     ),
                 });
             }
         }
+        for child in &scope.children {
+            self.validate_plantree_scope(anchor, child)?;
+        }
         Ok(())
     }
 
-    fn ensure_editable_allocation_node(
+    fn ensure_editable_plantree_node(
         &self,
         node_id: &NodeId,
         role: &str,
@@ -562,9 +573,9 @@ impl SpineRuntime {
         match node.status {
             super::state::NodeStatus::Live | super::state::NodeStatus::Opened => Ok(()),
             super::state::NodeStatus::Finished | super::state::NodeStatus::Closed => {
-                Err(SpineRuntimeError::InvalidPlanAllocation {
+                Err(SpineRuntimeError::InvalidPlanTree {
                     message: format!(
-                        "allocation {role} {} is read-only because it is {}",
+                        "plantree {role} {} is read-only because it is {}",
                         node_id.bracketed(),
                         match node.status {
                             super::state::NodeStatus::Finished => "finished",
@@ -879,8 +890,8 @@ pub(crate) enum SpineRuntimeError {
     PlanRevisionOverflow,
     #[error("unknown spine plan item status {0}")]
     UnknownPlanItemStatus(String),
-    #[error("invalid spine allocation: {message}")]
-    InvalidPlanAllocation { message: String },
+    #[error("invalid spine plantree: {message}")]
+    InvalidPlanTree { message: String },
     #[error(
         "staged spine transition mismatch: expected {expected_from} -> {expected_to}, got {actual_from} -> {actual_to}"
     )]
@@ -924,9 +935,7 @@ fn spine_tree_plan_snapshot(
     Ok(SpineTreePlanSnapshot {
         revision: snapshot.revision,
         explanation: snapshot.explanation,
-        scope_allocation: snapshot
-            .scope_allocation
-            .map(spine_tree_scope_allocation_snapshot),
+        spine_plantree: snapshot.spine_plantree.map(spine_tree_plantree_snapshot),
         items: snapshot
             .items
             .into_iter()
@@ -949,20 +958,44 @@ fn spine_tree_plan_snapshot(
     })
 }
 
-fn spine_tree_scope_allocation_snapshot(
-    snapshot: PlanScopeAllocationSnapshot,
-) -> SpineTreeScopeAllocationSnapshot {
-    SpineTreeScopeAllocationSnapshot {
+fn spine_tree_plantree_snapshot(snapshot: PlanTreeSnapshot) -> SpineTreePlanTreeSnapshot {
+    SpineTreePlanTreeSnapshot {
         anchor_node_id: snapshot.anchor_node_id,
-        scopes: snapshot
-            .scopes
+        root: spine_tree_plantree_scope_snapshot(snapshot.root),
+    }
+}
+
+fn spine_tree_plantree_scope_snapshot(
+    scope: super::plan_bridge::PlanTreeScope,
+) -> SpineTreePlanTreeScopeSnapshot {
+    SpineTreePlanTreeScopeSnapshot {
+        existing_node_id: scope.existing_node_id,
+        summary: scope.summary,
+        status: scope.status.and_then(spine_tree_plan_item_status),
+        checkpoints: scope
+            .checkpoints
             .into_iter()
-            .map(|scope| SpineTreeScopeAllocationScopeSnapshot {
-                existing_node_id: scope.existing_node_id,
-                summary: scope.summary,
-                checkpoints: scope.checkpoints,
+            .filter_map(|checkpoint| {
+                Some(SpineTreePlanCheckpointSnapshot {
+                    task: checkpoint.task,
+                    status: spine_tree_plan_item_status(checkpoint.status)?,
+                })
             })
             .collect(),
+        children: scope
+            .children
+            .into_iter()
+            .map(spine_tree_plantree_scope_snapshot)
+            .collect(),
+    }
+}
+
+fn spine_tree_plan_item_status(status: impl AsRef<str>) -> Option<SpineTreePlanItemStatus> {
+    match status.as_ref() {
+        "pending" => Some(SpineTreePlanItemStatus::Pending),
+        "in_progress" => Some(SpineTreePlanItemStatus::InProgress),
+        "completed" => Some(SpineTreePlanItemStatus::Completed),
+        _ => None,
     }
 }
 

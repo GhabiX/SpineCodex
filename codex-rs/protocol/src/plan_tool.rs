@@ -27,23 +27,36 @@ pub struct UpdatePlanArgs {
     pub explanation: Option<String>,
     pub plan: Vec<PlanItemArg>,
     #[serde(default)]
-    pub spine_allocation: Option<SpineAllocationArg>,
+    pub spine_plantree: Option<SpinePlanTreeArg>,
+    #[serde(default)]
+    pub clear_spine_plantree: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
-pub struct SpineAllocationArg {
+pub struct SpinePlanTreeArg {
     #[serde(default)]
     pub anchor: Option<String>,
-    pub scopes: Vec<SpineAllocationScopeArg>,
+    pub root: SpinePlanTreeScopeArg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
-pub struct SpineAllocationScopeArg {
+pub struct SpinePlanTreeScopeArg {
     #[serde(default)]
     pub node: Option<String>,
     pub summary: String,
     #[serde(default)]
-    pub checkpoints: Vec<String>,
+    pub status: Option<StepStatus>,
+    #[serde(default)]
+    pub checkpoints: Vec<SpinePlanTreeCheckpointArg>,
+    #[serde(default)]
+    pub children: Vec<SpinePlanTreeScopeArg>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SpinePlanTreeCheckpointArg {
+    pub task: String,
+    pub status: StepStatus,
 }

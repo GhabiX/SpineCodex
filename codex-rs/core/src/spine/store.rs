@@ -1,8 +1,9 @@
 use super::ids::NodeId;
 use super::ids::NodeIdParseError;
-use super::plan_bridge::PlanScopeAllocationSnapshot;
 use super::plan_bridge::PlanSnapshot;
 use super::plan_bridge::PlanSnapshotItem;
+use super::plan_bridge::PlanTreeScope;
+use super::plan_bridge::PlanTreeSnapshot;
 use super::state::NodeStatus;
 use super::state::SpineState;
 use super::state::SpineStateError;
@@ -372,7 +373,7 @@ impl SpineSidecarStore {
             revision: snapshot.revision,
             explanation: snapshot.explanation.clone(),
             items: snapshot.items.clone(),
-            scope_allocation: snapshot.scope_allocation.clone(),
+            spine_plantree: snapshot.spine_plantree.clone(),
             source_turn_id: snapshot.source_turn_id.clone(),
         };
         self.append_json_line(&self.tree_path(), &event)?;
@@ -864,7 +865,7 @@ impl SpineSidecarStore {
                 TreeEvent::TaskPlanUpdated {
                     node_id,
                     revision,
-                    scope_allocation,
+                    spine_plantree,
                     ..
                 } => {
                     if revision == 0 {
@@ -884,26 +885,15 @@ impl SpineSidecarStore {
                             node_id.bracketed()
                         )));
                     }
-                    if let Some(scope_allocation) = scope_allocation {
-                        let anchor_node_id = NodeId::parse(&scope_allocation.anchor_node_id)?;
+                    if let Some(spine_plantree) = spine_plantree {
+                        let anchor_node_id = NodeId::parse(&spine_plantree.anchor_node_id)?;
                         if state.node(&anchor_node_id).is_none() {
                             return Err(SpineStoreError::InvalidLedger(format!(
-                                "task_plan_updated scope_allocation references unknown anchor node {}",
+                                "task_plan_updated spine_plantree references unknown anchor node {}",
                                 anchor_node_id.bracketed()
                             )));
                         }
-                        for scope in scope_allocation.scopes {
-                            let Some(existing_node_id) = scope.existing_node_id else {
-                                continue;
-                            };
-                            let existing_node_id = NodeId::parse(&existing_node_id)?;
-                            if state.node(&existing_node_id).is_none() {
-                                return Err(SpineStoreError::InvalidLedger(format!(
-                                    "task_plan_updated scope_allocation references unknown scope node {}",
-                                    existing_node_id.bracketed()
-                                )));
-                            }
-                        }
+                        validate_plantree_scope_references(state, &spine_plantree.root)?;
                     }
                 }
                 TreeEvent::RootEpochArchived {
@@ -1420,7 +1410,7 @@ enum TreeEvent {
         explanation: Option<String>,
         items: Vec<PlanSnapshotItem>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        scope_allocation: Option<PlanScopeAllocationSnapshot>,
+        spine_plantree: Option<PlanTreeSnapshot>,
         source_turn_id: String,
     },
     RootEpochArchived {
@@ -1778,6 +1768,25 @@ fn validate_relative_base(base: &Path, rollout_path: &Path) -> Result<(), SpineS
             path: rollout_path.to_path_buf(),
             reason: "spine base locator must stay within the rollout directory",
         });
+    }
+    Ok(())
+}
+
+fn validate_plantree_scope_references(
+    state: &SpineState,
+    scope: &PlanTreeScope,
+) -> Result<(), SpineStoreError> {
+    if let Some(existing_node_id) = &scope.existing_node_id {
+        let existing_node_id = NodeId::parse(existing_node_id)?;
+        if state.node(&existing_node_id).is_none() {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "task_plan_updated spine_plantree references unknown scope node {}",
+                existing_node_id.bracketed()
+            )));
+        }
+    }
+    for child in &scope.children {
+        validate_plantree_scope_references(state, child)?;
     }
     Ok(())
 }

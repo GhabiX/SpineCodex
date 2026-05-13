@@ -35,7 +35,7 @@ pub enum SpineTreeNodeStatus {
 pub struct SpineTreePlanSnapshot {
     pub revision: u64,
     pub explanation: Option<String>,
-    pub scope_allocation: Option<SpineTreeScopeAllocationSnapshot>,
+    pub spine_plantree: Option<SpineTreePlanTreeSnapshot>,
     pub items: Vec<SpineTreePlanItemSnapshot>,
 }
 
@@ -57,15 +57,24 @@ pub enum SpineTreePlanItemStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SpineTreeScopeAllocationSnapshot {
+pub struct SpineTreePlanTreeSnapshot {
     pub anchor_node_id: String,
-    pub scopes: Vec<SpineTreeScopeAllocationScopeSnapshot>,
+    pub root: SpineTreePlanTreeScopeSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SpineTreeScopeAllocationScopeSnapshot {
+pub struct SpineTreePlanTreeScopeSnapshot {
     pub existing_node_id: Option<String>,
     pub summary: String,
-    pub checkpoints: Vec<String>,
+    pub status: Option<SpineTreePlanItemStatus>,
+    pub checkpoints: Vec<SpineTreePlanCheckpointSnapshot>,
+    pub children: Vec<SpineTreePlanTreeScopeSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SpineTreePlanCheckpointSnapshot {
+    pub task: String,
+    pub status: SpineTreePlanItemStatus,
 }

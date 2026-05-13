@@ -12,11 +12,12 @@ use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot as CoreSpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus as CoreSpineTreeNodeStatus;
+use codex_protocol::spine_tree::SpineTreePlanCheckpointSnapshot as CoreSpineTreePlanCheckpointSnapshot;
 use codex_protocol::spine_tree::SpineTreePlanItemSnapshot as CoreSpineTreePlanItemSnapshot;
 use codex_protocol::spine_tree::SpineTreePlanItemStatus as CoreSpineTreePlanItemStatus;
 use codex_protocol::spine_tree::SpineTreePlanSnapshot as CoreSpineTreePlanSnapshot;
-use codex_protocol::spine_tree::SpineTreeScopeAllocationScopeSnapshot as CoreSpineTreeScopeAllocationScopeSnapshot;
-use codex_protocol::spine_tree::SpineTreeScopeAllocationSnapshot as CoreSpineTreeScopeAllocationSnapshot;
+use codex_protocol::spine_tree::SpineTreePlanTreeScopeSnapshot as CoreSpineTreePlanTreeScopeSnapshot;
+use codex_protocol::spine_tree::SpineTreePlanTreeSnapshot as CoreSpineTreePlanTreeSnapshot;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -397,7 +398,7 @@ pub enum SpineTreeNodeStatus {
 pub struct SpineTreePlan {
     pub revision: u64,
     pub explanation: Option<String>,
-    pub scope_allocation: Option<SpineTreeScopeAllocation>,
+    pub spine_plantree: Option<SpineTreePlanTree>,
     pub items: Vec<SpineTreePlanItem>,
 }
 
@@ -422,18 +423,28 @@ pub enum SpineTreePlanItemStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct SpineTreeScopeAllocation {
+pub struct SpineTreePlanTree {
     pub anchor_node_id: String,
-    pub scopes: Vec<SpineTreeScopeAllocationScope>,
+    pub root: SpineTreePlanTreeScope,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct SpineTreeScopeAllocationScope {
+pub struct SpineTreePlanTreeScope {
     pub existing_node_id: Option<String>,
     pub summary: String,
-    pub checkpoints: Vec<String>,
+    pub status: Option<SpineTreePlanItemStatus>,
+    pub checkpoints: Vec<SpineTreePlanCheckpoint>,
+    pub children: Vec<SpineTreePlanTreeScope>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineTreePlanCheckpoint {
+    pub task: String,
+    pub status: SpineTreePlanItemStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -490,7 +501,7 @@ impl From<CoreSpineTreePlanSnapshot> for SpineTreePlan {
         Self {
             revision: value.revision,
             explanation: value.explanation,
-            scope_allocation: value.scope_allocation.map(SpineTreeScopeAllocation::from),
+            spine_plantree: value.spine_plantree.map(SpineTreePlanTree::from),
             items: value
                 .items
                 .into_iter()
@@ -520,25 +531,40 @@ impl From<CoreSpineTreePlanItemStatus> for SpineTreePlanItemStatus {
     }
 }
 
-impl From<CoreSpineTreeScopeAllocationSnapshot> for SpineTreeScopeAllocation {
-    fn from(value: CoreSpineTreeScopeAllocationSnapshot) -> Self {
+impl From<CoreSpineTreePlanTreeSnapshot> for SpineTreePlanTree {
+    fn from(value: CoreSpineTreePlanTreeSnapshot) -> Self {
         Self {
             anchor_node_id: value.anchor_node_id,
-            scopes: value
-                .scopes
+            root: SpineTreePlanTreeScope::from(value.root),
+        }
+    }
+}
+
+impl From<CoreSpineTreePlanTreeScopeSnapshot> for SpineTreePlanTreeScope {
+    fn from(value: CoreSpineTreePlanTreeScopeSnapshot) -> Self {
+        Self {
+            existing_node_id: value.existing_node_id,
+            summary: value.summary,
+            status: value.status.map(SpineTreePlanItemStatus::from),
+            checkpoints: value
+                .checkpoints
                 .into_iter()
-                .map(SpineTreeScopeAllocationScope::from)
+                .map(SpineTreePlanCheckpoint::from)
+                .collect(),
+            children: value
+                .children
+                .into_iter()
+                .map(SpineTreePlanTreeScope::from)
                 .collect(),
         }
     }
 }
 
-impl From<CoreSpineTreeScopeAllocationScopeSnapshot> for SpineTreeScopeAllocationScope {
-    fn from(value: CoreSpineTreeScopeAllocationScopeSnapshot) -> Self {
+impl From<CoreSpineTreePlanCheckpointSnapshot> for SpineTreePlanCheckpoint {
+    fn from(value: CoreSpineTreePlanCheckpointSnapshot) -> Self {
         Self {
-            existing_node_id: value.existing_node_id,
-            summary: value.summary,
-            checkpoints: value.checkpoints,
+            task: value.task,
+            status: value.status.into(),
         }
     }
 }

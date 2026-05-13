@@ -54,9 +54,10 @@ use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
 use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::SpineTreeNode;
+use codex_app_server_protocol::SpineTreePlanCheckpoint;
 use codex_app_server_protocol::SpineTreePlanItem;
 use codex_app_server_protocol::SpineTreePlanItemStatus;
-use codex_app_server_protocol::SpineTreeScopeAllocationScope;
+use codex_app_server_protocol::SpineTreePlanTreeScope;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ToolRequestUserInputAnswer;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -3200,17 +3201,16 @@ impl HistoryCell for SpineTreeUpdateCell {
                         item.status, item.step
                     )));
                 }
-                if let Some(scope_allocation) = &plan.scope_allocation {
-                    for scope in &scope_allocation.scopes {
-                        let scope_id = scope.existing_node_id.as_deref().unwrap_or("future");
-                        lines.push(Line::from(format!(
-                            "{prefix}  allocation {scope_id}: {}",
-                            scope.summary
-                        )));
-                        for checkpoint in &scope.checkpoints {
-                            lines.push(Line::from(format!("{prefix}    checkpoint: {checkpoint}")));
-                        }
-                    }
+                if let Some(spine_plantree) = &plan.spine_plantree {
+                    lines.push(Line::from(format!(
+                        "{prefix}  plantree anchor={}",
+                        spine_plantree.anchor_node_id
+                    )));
+                    append_spine_tree_plantree_raw_lines(
+                        &mut lines,
+                        &spine_plantree.root,
+                        node.depth + 1,
+                    );
                 }
             }
         }
@@ -3302,26 +3302,48 @@ fn render_spine_tree_node(
                 width,
             ));
         }
-        if let Some(scope_allocation) = &plan.scope_allocation {
+        if let Some(spine_plantree) = &plan.spine_plantree {
             let indent = format!("  {}  ", "  ".repeat(display_node.depth + 1));
             out.push(Line::from(vec![
                 Span::from(indent).dim(),
-                Span::from("allocation").dim().italic(),
+                Span::from(format!("plantree anchor={}", spine_plantree.anchor_node_id))
+                    .dim()
+                    .italic(),
             ]));
-            for scope in &scope_allocation.scopes {
-                out.extend(render_spine_tree_allocation_scope(
-                    scope,
-                    display_node.depth + 1,
-                    width,
-                ));
-            }
+            out.extend(render_spine_tree_plantree_scope(
+                &spine_plantree.root,
+                display_node.depth + 1,
+                width,
+            ));
         }
     }
     out
 }
 
-fn render_spine_tree_allocation_scope(
-    scope: &SpineTreeScopeAllocationScope,
+fn append_spine_tree_plantree_raw_lines(
+    lines: &mut Vec<Line<'static>>,
+    scope: &SpineTreePlanTreeScope,
+    depth: usize,
+) {
+    let prefix = "  ".repeat(depth);
+    let scope_id = scope.existing_node_id.as_deref().unwrap_or("future");
+    lines.push(Line::from(format!(
+        "{prefix}plantree [{scope_id}]: {}",
+        scope.summary
+    )));
+    for checkpoint in &scope.checkpoints {
+        lines.push(Line::from(format!(
+            "{prefix}  {:?}: {}",
+            checkpoint.status, checkpoint.task
+        )));
+    }
+    for child in &scope.children {
+        append_spine_tree_plantree_raw_lines(lines, child, depth + 1);
+    }
+}
+
+fn render_spine_tree_plantree_scope(
+    scope: &SpineTreePlanTreeScope,
     depth: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
@@ -3339,13 +3361,36 @@ fn render_spine_tree_allocation_scope(
     push_owned_lines(&wrapped, &mut out);
 
     for checkpoint in &scope.checkpoints {
-        let opts = RtOptions::new(width.saturating_sub(2).max(1) as usize)
-            .initial_indent(format!("{indent}  • ").into())
-            .subsequent_indent(format!("{indent}    ").into());
-        let line = Line::from(checkpoint.clone().dim());
-        let wrapped = adaptive_wrap_line(&line, opts);
-        push_owned_lines(&wrapped, &mut out);
+        out.extend(render_spine_tree_plan_checkpoint(
+            checkpoint,
+            depth + 1,
+            width,
+        ));
     }
+    for child in &scope.children {
+        out.extend(render_spine_tree_plantree_scope(child, depth + 1, width));
+    }
+    out
+}
+
+fn render_spine_tree_plan_checkpoint(
+    checkpoint: &SpineTreePlanCheckpoint,
+    depth: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let (box_str, step_style) = match checkpoint.status {
+        SpineTreePlanItemStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
+        SpineTreePlanItemStatus::InProgress => ("□ ", Style::default().cyan().bold()),
+        SpineTreePlanItemStatus::Pending => ("□ ", Style::default().dim()),
+    };
+    let indent = format!("  {}  ", "  ".repeat(depth));
+    let opts = RtOptions::new(width.saturating_sub(2).max(1) as usize)
+        .initial_indent(format!("{indent}{box_str}").into())
+        .subsequent_indent(format!("{indent}  ").into());
+    let line = Line::from(checkpoint.task.clone().set_style(step_style));
+    let wrapped = adaptive_wrap_line(&line, opts);
+    let mut out = Vec::new();
+    push_owned_lines(&wrapped, &mut out);
     out
 }
 
@@ -5700,7 +5745,8 @@ mod tests {
                     status: StepStatus::Pending,
                 },
             ],
-            spine_allocation: None,
+            spine_plantree: None,
+            clear_spine_plantree: false,
         };
 
         let cell = new_plan_update(update);
@@ -5724,7 +5770,8 @@ mod tests {
                     status: StepStatus::Pending,
                 },
             ],
-            spine_allocation: None,
+            spine_plantree: None,
+            clear_spine_plantree: false,
         };
 
         let cell = new_plan_update(update);
@@ -5746,7 +5793,8 @@ mod tests {
                 step: format!("Validate callbacks under {step_url} before rollout."),
                 status: StepStatus::InProgress,
             }],
-            spine_allocation: None,
+            spine_plantree: None,
+            clear_spine_plantree: false,
         };
 
         let cell = new_plan_update(update);

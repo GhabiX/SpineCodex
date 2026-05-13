@@ -47,7 +47,9 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("future work is likely to reuse"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("raw details are still useful"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("coherent work scope is complete"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("allocate upcoming checkpoints"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("task tree draft"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("current editable scope"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("planning only"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("does not create Spine nodes"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 30k raw tokens"));

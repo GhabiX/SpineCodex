@@ -1,5 +1,7 @@
 use super::ids::NodeId;
-use codex_protocol::plan_tool::SpineAllocationArg;
+use codex_protocol::plan_tool::SpinePlanTreeArg;
+use codex_protocol::plan_tool::SpinePlanTreeCheckpointArg;
+use codex_protocol::plan_tool::SpinePlanTreeScopeArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use serde::Deserialize;
@@ -12,7 +14,7 @@ pub(crate) struct PlanSnapshot {
     pub(crate) explanation: Option<String>,
     pub(crate) items: Vec<PlanSnapshotItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) scope_allocation: Option<PlanScopeAllocationSnapshot>,
+    pub(crate) spine_plantree: Option<PlanTreeSnapshot>,
     pub(crate) source_turn_id: String,
     pub(crate) event_seq: u64,
 }
@@ -24,7 +26,7 @@ impl PlanSnapshot {
         event_seq: u64,
         source_turn_id: impl Into<String>,
         args: UpdatePlanArgs,
-        scope_allocation: Option<PlanScopeAllocationSnapshot>,
+        spine_plantree: Option<PlanTreeSnapshot>,
         previous: Option<&PlanSnapshot>,
     ) -> Self {
         let mut id_allocator = StableTaskIdAllocator::new(previous);
@@ -41,7 +43,7 @@ impl PlanSnapshot {
                     status: step_status_label(&item.status).to_string(),
                 })
                 .collect(),
-            scope_allocation,
+            spine_plantree,
             source_turn_id: source_turn_id.into(),
             event_seq,
         }
@@ -56,33 +58,69 @@ pub(crate) struct PlanSnapshotItem {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub(crate) struct PlanScopeAllocationSnapshot {
+pub(crate) struct PlanTreeSnapshot {
     pub(crate) anchor_node_id: String,
-    pub(crate) scopes: Vec<PlanAllocationScope>,
+    pub(crate) root: PlanTreeScope,
 }
 
-impl PlanScopeAllocationSnapshot {
-    pub(crate) fn from_update(anchor_node_id: &NodeId, allocation: SpineAllocationArg) -> Self {
+impl PlanTreeSnapshot {
+    pub(crate) fn from_update(anchor_node_id: &NodeId, plantree: SpinePlanTreeArg) -> Self {
         Self {
             anchor_node_id: anchor_node_id.to_string(),
-            scopes: allocation
-                .scopes
+            root: PlanTreeScope::from_update(plantree.root),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(crate) struct PlanTreeScope {
+    pub(crate) existing_node_id: Option<String>,
+    pub(crate) summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) status: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) checkpoints: Vec<PlanTreeCheckpoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) children: Vec<PlanTreeScope>,
+}
+
+impl PlanTreeScope {
+    fn from_update(scope: SpinePlanTreeScopeArg) -> Self {
+        Self {
+            existing_node_id: scope.node,
+            summary: scope.summary,
+            status: scope
+                .status
+                .as_ref()
+                .map(step_status_label)
+                .map(str::to_string),
+            checkpoints: scope
+                .checkpoints
                 .into_iter()
-                .map(|scope| PlanAllocationScope {
-                    existing_node_id: scope.node,
-                    summary: scope.summary,
-                    checkpoints: scope.checkpoints,
-                })
+                .map(PlanTreeCheckpoint::from_update)
+                .collect(),
+            children: scope
+                .children
+                .into_iter()
+                .map(PlanTreeScope::from_update)
                 .collect(),
         }
     }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub(crate) struct PlanAllocationScope {
-    pub(crate) existing_node_id: Option<String>,
-    pub(crate) summary: String,
-    pub(crate) checkpoints: Vec<String>,
+pub(crate) struct PlanTreeCheckpoint {
+    pub(crate) task: String,
+    pub(crate) status: String,
+}
+
+impl PlanTreeCheckpoint {
+    fn from_update(checkpoint: SpinePlanTreeCheckpointArg) -> Self {
+        Self {
+            task: checkpoint.task,
+            status: step_status_label(&checkpoint.status).to_string(),
+        }
+    }
 }
 
 fn step_status_label(status: &StepStatus) -> &'static str {

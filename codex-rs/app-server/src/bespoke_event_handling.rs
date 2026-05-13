@@ -2125,11 +2125,12 @@ mod tests {
     use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
     use codex_protocol::spine_tree::SpineTreeNodeStatus;
+    use codex_protocol::spine_tree::SpineTreePlanCheckpointSnapshot;
     use codex_protocol::spine_tree::SpineTreePlanItemSnapshot;
     use codex_protocol::spine_tree::SpineTreePlanItemStatus;
     use codex_protocol::spine_tree::SpineTreePlanSnapshot;
-    use codex_protocol::spine_tree::SpineTreeScopeAllocationScopeSnapshot;
-    use codex_protocol::spine_tree::SpineTreeScopeAllocationSnapshot;
+    use codex_protocol::spine_tree::SpineTreePlanTreeScopeSnapshot;
+    use codex_protocol::spine_tree::SpineTreePlanTreeSnapshot;
     use codex_protocol::spine_tree::SpineTreeUpdateEvent;
     use codex_thread_store::StoredThread;
     use codex_thread_store::StoredThreadHistory;
@@ -3484,7 +3485,8 @@ mod tests {
                     status: StepStatus::Completed,
                 },
             ],
-            spine_allocation: None,
+            spine_plantree: None,
+            clear_spine_plantree: false,
         };
 
         let conversation_id = ThreadId::new();
@@ -3540,13 +3542,18 @@ mod tests {
                     plan: Some(SpineTreePlanSnapshot {
                         revision: 3,
                         explanation: Some("track focused work".to_string()),
-                        scope_allocation: Some(SpineTreeScopeAllocationSnapshot {
+                        spine_plantree: Some(SpineTreePlanTreeSnapshot {
                             anchor_node_id: "1".to_string(),
-                            scopes: vec![SpineTreeScopeAllocationScopeSnapshot {
+                            root: SpineTreePlanTreeScopeSnapshot {
                                 existing_node_id: None,
                                 summary: "Verify scope".to_string(),
-                                checkpoints: vec!["run focused validation".to_string()],
-                            }],
+                                status: Some(SpineTreePlanItemStatus::InProgress),
+                                checkpoints: vec![SpineTreePlanCheckpointSnapshot {
+                                    task: "run focused validation".to_string(),
+                                    status: SpineTreePlanItemStatus::InProgress,
+                                }],
+                                children: Vec::new(),
+                            },
                         }),
                         items: vec![
                             SpineTreePlanItemSnapshot {
@@ -3586,15 +3593,12 @@ mod tests {
                 let plan = n.nodes[1].plan.as_ref().expect("leaf plan");
                 assert_eq!(plan.revision, 3);
                 assert_eq!(plan.explanation.as_deref(), Some("track focused work"));
-                let scope_allocation = plan
-                    .scope_allocation
-                    .as_ref()
-                    .expect("leaf plan scope allocation");
-                assert_eq!(scope_allocation.anchor_node_id, "1");
-                assert_eq!(scope_allocation.scopes[0].summary, "Verify scope");
+                let spine_plantree = plan.spine_plantree.as_ref().expect("leaf plan tree");
+                assert_eq!(spine_plantree.anchor_node_id, "1");
+                assert_eq!(spine_plantree.root.summary, "Verify scope");
                 assert_eq!(
-                    scope_allocation.scopes[0].checkpoints,
-                    vec!["run focused validation"]
+                    spine_plantree.root.checkpoints[0].task,
+                    "run focused validation"
                 );
                 assert_eq!(plan.items[0].stable_task_id, "1.1:0");
                 assert_eq!(

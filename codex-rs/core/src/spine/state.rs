@@ -173,6 +173,28 @@ impl SpineState {
         &mut self,
         summary: impl Into<String>,
     ) -> Result<Transition, SpineStateError> {
+        let summary = summary.into();
+        if self.cursor == NodeId::root() {
+            let root = self.cursor.clone();
+            let archived = root.child(self.next_child_index(Some(&root))?);
+            let next_epoch = root.child(self.next_child_index(Some(&root))? + 1);
+            let root_raw_start_ordinal =
+                self.node(&root)
+                    .and_then(|node| node.raw_start_ordinal)
+                    .ok_or_else(|| SpineStateError::UnknownNode(root.clone()))?;
+            self.insert_node(archived.clone(), Some(self.cursor.clone()))?;
+            self.set_raw_start_ordinal(&archived, root_raw_start_ordinal)?;
+            self.write_summary_if_absent(&archived, summary)?;
+            self.set_status(&archived, NodeStatus::Closed)?;
+            self.insert_node(next_epoch.clone(), Some(self.cursor.clone()))?;
+            self.cursor = next_epoch.clone();
+
+            return Ok(Transition {
+                from: archived,
+                to: next_epoch,
+            });
+        }
+
         let archived = self.current_root_epoch()?;
         let parent = self.parent_id(&archived)?;
         let next_epoch = self.next_sibling_id(parent.as_ref())?;
@@ -186,6 +208,15 @@ impl SpineState {
             from: archived,
             to: next_epoch,
         })
+    }
+
+    pub(crate) fn root_epoch_archive_target(&self) -> Result<NodeId, SpineStateError> {
+        if self.cursor == NodeId::root() {
+            return Ok(self
+                .cursor
+                .child(self.next_child_index(Some(&self.cursor))?));
+        }
+        self.current_root_epoch()
     }
 
     pub(crate) fn current_root_epoch(&self) -> Result<NodeId, SpineStateError> {

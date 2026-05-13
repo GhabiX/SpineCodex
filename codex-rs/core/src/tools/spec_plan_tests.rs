@@ -188,15 +188,19 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
 }
 
 #[test]
-fn update_plan_schema_exposes_spine_allocation_planning_ir() {
+fn update_plan_schema_exposes_spine_plantree_planning_ir() {
     let ToolSpec::Function(tool) = create_update_plan_tool() else {
         panic!("expected function tool");
     };
-    assert!(tool.description.contains("spine_allocation"));
+    assert!(tool.description.contains("spine_plantree"));
     assert!(tool.description.contains("planning only"));
     assert!(
         tool.description
             .contains("does not create or move Spine nodes")
+    );
+    assert!(
+        tool.description
+            .contains("Omitting spine_plantree preserves")
     );
 
     let properties = tool
@@ -204,22 +208,22 @@ fn update_plan_schema_exposes_spine_allocation_planning_ir() {
         .properties
         .as_ref()
         .expect("update_plan object properties");
-    let allocation = properties
-        .get("spine_allocation")
-        .expect("spine_allocation schema");
-    assert_eq!(allocation.required, Some(vec!["scopes".to_string()]));
-    let allocation_properties = allocation
+    assert!(properties.contains_key("clear_spine_plantree"));
+    let plantree = properties
+        .get("spine_plantree")
+        .expect("spine_plantree schema");
+    assert_eq!(plantree.required, Some(vec!["root".to_string()]));
+    let plantree_properties = plantree
         .properties
         .as_ref()
-        .expect("allocation object properties");
-    let scopes = allocation_properties
-        .get("scopes")
-        .expect("allocation scopes schema");
-    let scope = scopes.items.as_ref().expect("scope item schema");
-    assert_eq!(
-        scope.required,
-        Some(vec!["summary".to_string(), "checkpoints".to_string()])
-    );
+        .expect("plantree object properties");
+    let root = plantree_properties
+        .get("root")
+        .expect("plantree root schema");
+    assert_eq!(root.required, Some(vec!["summary".to_string()]));
+    let root_properties = root.properties.as_ref().expect("root scope properties");
+    assert!(root_properties.contains_key("checkpoints"));
+    assert!(root_properties.contains_key("children"));
 }
 
 #[test]

@@ -443,7 +443,9 @@ pub(crate) async fn initial_spine_projection(
                     .transpose()?
             }
         }
-        InitialHistory::Forked(_) => None,
+        InitialHistory::Forked(items) => has_spine_history_items(items)
+            .then(|| project_spine_state_from_rollout(items))
+            .transpose()?,
     };
     Ok(projection)
 }
@@ -518,6 +520,9 @@ async fn seed_forked_spine_sidecar(
         return Ok(());
     }
 
+    let parent_thread_id = initial_history
+        .forked_from_id()
+        .ok_or_else(|| anyhow::anyhow!("forked spine history is missing a source thread id"))?;
     let child_store = if SpineSidecarStore::locator_path_for_rollout(child_rollout_path)?.exists() {
         SpineSidecarStore::for_rollout(child_rollout_path)?
     } else {
@@ -526,9 +531,6 @@ async fn seed_forked_spine_sidecar(
     if child_store.tree_path().exists() {
         return Ok(());
     }
-    let parent_thread_id = initial_history
-        .forked_from_id()
-        .ok_or_else(|| anyhow::anyhow!("forked spine history is missing a source thread id"))?;
     let parent = thread_store
         .read_thread(ReadThreadParams {
             thread_id: parent_thread_id,
@@ -550,7 +552,7 @@ async fn seed_forked_spine_sidecar(
     let projection = project_spine_state_from_rollout(rollout_items)?;
     let projected_response_count = projection.response_item_count;
     let expected_response_count = response_item_count(rollout_items);
-    if projected_response_count != expected_response_count {
+    if projected_response_count > expected_response_count {
         anyhow::bail!(
             "forked spine projection counted {projected_response_count} response items, expected {expected_response_count}"
         );

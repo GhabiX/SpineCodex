@@ -827,13 +827,30 @@ async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
                 plan: Some(codex_app_server_protocol::SpineTreePlan {
                     revision: 2,
                     explanation: Some("track focused work".to_string()),
-                    scope_allocation: Some(codex_app_server_protocol::SpineTreeScopeAllocation {
+                    spine_plantree: Some(codex_app_server_protocol::SpineTreePlanTree {
                         anchor_node_id: "1".to_string(),
-                        scopes: vec![codex_app_server_protocol::SpineTreeScopeAllocationScope {
-                            existing_node_id: None,
-                            summary: "Verify scope".to_string(),
-                            checkpoints: vec!["run focused validation".to_string()],
-                        }],
+                        root: codex_app_server_protocol::SpineTreePlanTreeScope {
+                            existing_node_id: Some("1".to_string()),
+                            summary: "root planning scope".to_string(),
+                            status: Some(
+                                codex_app_server_protocol::SpineTreePlanItemStatus::InProgress,
+                            ),
+                            checkpoints: Vec::new(),
+                            children: vec![codex_app_server_protocol::SpineTreePlanTreeScope {
+                                existing_node_id: None,
+                                summary: "Verify scope".to_string(),
+                                status: Some(
+                                    codex_app_server_protocol::SpineTreePlanItemStatus::Pending,
+                                ),
+                                checkpoints:
+                                    vec![codex_app_server_protocol::SpineTreePlanCheckpoint {
+                                        task: "run focused validation".to_string(),
+                                    status:
+                                        codex_app_server_protocol::SpineTreePlanItemStatus::Pending,
+                                }],
+                                children: Vec::new(),
+                            }],
+                        },
                     }),
                     items: vec![
                         codex_app_server_protocol::SpineTreePlanItem {
@@ -867,7 +884,7 @@ async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
     };
     assert!(rendered.contains("Spine Tree"));
     assert!(rendered.contains("1 root scope"));
-    assert!(rendered.contains("allocation"));
+    assert!(rendered.contains("plantree anchor=1"));
     assert!(rendered.contains("[future] Verify scope"));
     assert!(rendered.contains("run focused validation"));
     assert!(rendered.contains("1.1 focused leaf current"));
