@@ -96,6 +96,8 @@ pub(crate) async fn run_inline_auto_compact_task(
 pub(crate) async fn run_inline_spine_aware_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    client_session: &mut ModelClientSession,
+    prompt_envelope: &Prompt,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
@@ -131,6 +133,8 @@ pub(crate) async fn run_inline_spine_aware_auto_compact_task(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
         input,
+        client_session,
+        Some(prompt_envelope),
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -206,10 +210,13 @@ pub(crate) async fn run_spine_aware_compact_task(
         }
     }
 
+    let mut client_session = sess.services.model_client.new_session();
     let result = run_spine_aware_compact_task_inner_impl(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
         input,
+        &mut client_session,
+        None,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -279,6 +286,8 @@ async fn run_spine_aware_compact_task_inner_impl(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    client_session: &mut ModelClientSession,
+    prompt_envelope: Option<&Prompt>,
 ) -> CodexResult<String> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -294,24 +303,35 @@ async fn run_spine_aware_compact_task_inner_impl(
 
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
-    let mut client_session = sess.services.model_client.new_session();
 
     loop {
         let turn_input = history
             .clone()
             .for_prompt(&turn_context.model_info.input_modalities);
         let turn_input_len = turn_input.len();
-        let prompt = Prompt {
-            input: turn_input,
-            base_instructions: sess.get_base_instructions().await,
-            personality: turn_context.personality,
-            ..Default::default()
+        let prompt = if let Some(envelope) = prompt_envelope {
+            Prompt {
+                input: turn_input,
+                tools: envelope.tools.clone(),
+                parallel_tool_calls: envelope.parallel_tool_calls,
+                base_instructions: envelope.base_instructions.clone(),
+                personality: envelope.personality,
+                output_schema: None,
+                output_schema_strict: true,
+            }
+        } else {
+            Prompt {
+                input: turn_input,
+                base_instructions: sess.get_base_instructions().await,
+                personality: turn_context.personality,
+                ..Default::default()
+            }
         };
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         let attempt_result = drain_to_completed(
             &sess,
             turn_context.as_ref(),
-            &mut client_session,
+            client_session,
             turn_metadata_header.as_deref(),
             &prompt,
         )

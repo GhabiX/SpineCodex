@@ -316,6 +316,15 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
         "spine auto compact should use the normal compact prompt"
     );
     assert!(
+        tool_names(&requests[2]).iter().any(|name| name == "spine"),
+        "spine auto compact should keep the normal spine tool schema for cache-friendly request shape"
+    );
+    assert_eq!(
+        requests[2].body_json().get("parallel_tool_calls"),
+        requests[3].body_json().get("parallel_tool_calls"),
+        "spine auto compact should keep the same parallel tool-call envelope as the follow-up request"
+    );
+    assert!(
         requests[3]
             .message_input_texts("user")
             .iter()

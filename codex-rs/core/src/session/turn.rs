@@ -154,23 +154,31 @@ pub(crate) async fn run_turn(
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
+    let base_instructions = sess.get_base_instructions().await;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    let pre_sampling_compact =
-        match run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
-            Ok(pre_sampling_compact) => pre_sampling_compact,
-            Err(_) => {
-                error!("Failed to run pre-sampling compact");
-                return None;
-            }
-        };
+    let pre_sampling_compact = match run_pre_sampling_compact(
+        &sess,
+        &turn_context,
+        &mut client_session,
+        skills_outcome,
+        base_instructions.clone(),
+        &cancellation_token,
+    )
+    .await
+    {
+        Ok(pre_sampling_compact) => pre_sampling_compact,
+        Err(_) => {
+            error!("Failed to run pre-sampling compact");
+            return None;
+        }
+    };
     if pre_sampling_compact.reset_client_session {
         client_session.reset_websocket_session();
     }
-
-    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
@@ -510,6 +518,9 @@ pub(crate) async fn run_turn(
                         InitialContextInjection::BeforeLastUserMessage,
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
+                        skills_outcome,
+                        base_instructions.clone(),
+                        &cancellation_token,
                     )
                     .await
                     {
@@ -734,6 +745,9 @@ async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
+    skills_outcome: Option<&SkillLoadOutcome>,
+    base_instructions: BaseInstructions,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<PreSamplingCompactResult> {
     let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
     let mut pre_sampling_compacted = maybe_run_previous_model_inline_compact(
@@ -741,6 +755,9 @@ async fn run_pre_sampling_compact(
         turn_context,
         client_session,
         total_usage_tokens_before_compaction,
+        skills_outcome,
+        base_instructions.clone(),
+        cancellation_token,
     )
     .await?;
     let mut reset_client_session = pre_sampling_compacted;
@@ -758,6 +775,9 @@ async fn run_pre_sampling_compact(
             InitialContextInjection::DoNotInject,
             CompactionReason::ContextLimit,
             CompactionPhase::PreTurn,
+            skills_outcome,
+            base_instructions,
+            cancellation_token,
         )
         .await?;
         pre_sampling_compacted = true;
@@ -778,6 +798,9 @@ async fn maybe_run_previous_model_inline_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     total_usage_tokens: i64,
+    skills_outcome: Option<&SkillLoadOutcome>,
+    base_instructions: BaseInstructions,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<bool> {
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(false);
@@ -809,6 +832,9 @@ async fn maybe_run_previous_model_inline_compact(
             InitialContextInjection::DoNotInject,
             CompactionReason::ModelDownshift,
             CompactionPhase::PreTurn,
+            skills_outcome,
+            base_instructions,
+            cancellation_token,
         )
         .await?;
         return Ok(true);
@@ -823,11 +849,35 @@ async fn run_auto_compact(
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
+    skills_outcome: Option<&SkillLoadOutcome>,
+    base_instructions: BaseInstructions,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<bool> {
     if sess.spine_runtime_is_mutable().await {
+        let input = sess
+            .clone_history()
+            .await
+            .for_prompt(&turn_context.model_info.input_modalities);
+        let router = built_tools(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            &input,
+            &HashSet::new(),
+            skills_outcome,
+            cancellation_token,
+        )
+        .await?;
+        let prompt_envelope = build_prompt(
+            input,
+            router.as_ref(),
+            turn_context.as_ref(),
+            base_instructions,
+        );
         run_inline_spine_aware_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
+            client_session,
+            &prompt_envelope,
             reason,
             phase,
         )
