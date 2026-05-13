@@ -25,6 +25,7 @@ use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -50,8 +51,8 @@ const CLOSE_SUMMARY: &str = "finish sibling scope";
 const EXPECTED_SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
 Use Spine as your task plan and context manager. Completed scopes are folded into runtime-generated worklog IR, and later turns carry the visible Spine Tree, completed worklogs, and the current live suffix instead of every old raw message.
 Use Spine effectively and efficiently.
-At the start, use update_plan to allocate upcoming checkpoints into coherent scopes: one scope for simple tasks, or a small scope allocation for longer work. This is planning only; it does not create Spine nodes or move the cursor.
-Default to staying in the current live node while it remains focused. Use update_plan to revise the current checkpoint allocation when new evidence changes the task structure.
+At the start, use update_plan with spine_plantree to maintain one compact task tree draft for the current editable scope. This is planning only; it does not create Spine nodes or move the cursor.
+Default to staying in the current live node while it remains focused. Use update_plan to revise the current PlanTree when new evidence changes the task structure.
 Move Spine when a completed scope has accumulated substantial raw history and future work is likely to reuse its generated worklog IR:
 - spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context.
 - spine.next: finish the current leaf and move to its next sibling.
@@ -64,12 +65,12 @@ Do not create one node per shell command, checklist item, short reply, or conver
 After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `nodes/1/1/worklog.md`; later context shows the Spine Tree plus `1.1` worklog, not `1.1` raw trace.
 After spine.close from `1.1.2` to `1.2`, the runtime folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes that were already folded are carried through the Spine Tree/worklog IR, while raw child traces stay expandable out of band.
 Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../worklog.md` against that Base, not against the workspace cwd.
-After spine.next or spine.close, if unfinished work remains, use update_plan to refresh the upcoming checkpoint allocation from the handoff summary and current evidence.
+After spine.next or spine.close, if unfinished work remains, use update_plan to refresh the current PlanTree from the handoff summary and current evidence.
 Keep working in the current node while its raw details are still useful. When a coherent work scope is complete, fold it so later turns use its worklog instead of its raw trace.
 Avoid tiny splits for individual commands, small observations, or conversation turns.
 The runtime may hint when the current node grows large: around 30k raw tokens, then every additional 20k. Treat the hint as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the worklog.
 When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar trajs/worklog files only when you need historical details.
-Completed Spine nodes are read-only; rely on their worklogs instead of editing or restating their checkpoints.
+Completed Spine nodes are read-only; rely on their worklogs instead of restating their old PlanTree checkpoints.
 In Plan mode, do not call mutating spine operations.
 </spine_view>"#;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -351,6 +352,101 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-open"),
+                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY),
+                ev_completed("resp-open"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-open-follow-up"),
+                ev_assistant_message("msg-open-follow-up", "open follow-up complete"),
+                ev_completed("resp-open-follow-up"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-next"),
+                ev_spine_transition_call(NEXT_CALL_ID, "next", NEXT_SUMMARY),
+                ev_completed("resp-next"),
+            ]),
+            sse_failed(
+                "resp-spine-compact-fail-1",
+                "server_error",
+                "temporary spine compact failure one",
+            ),
+            sse_failed(
+                "resp-spine-compact-fail-2",
+                "server_error",
+                "temporary spine compact failure two",
+            ),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineTaskTree)
+            .expect("enable spine task tree");
+        config.model_provider.stream_max_retries = Some(1);
+    });
+    let test = builder.build(&server).await?;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("session should expose rollout path");
+
+    test.submit_turn("open spine before failing suffix compact")
+        .await?;
+
+    submit_turn_expect_spine_compact_error(&test, "trigger next with failing suffix compact")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "expected open, open follow-up, next, compact attempt, compact retry; failed compact must not replay the completed next sampling request"
+    );
+    assert!(
+        requests[2].body_contains_text("trigger next with failing suffix compact"),
+        "third request should be the original next sampling request"
+    );
+    assert!(
+        requests[3].body_contains_text(SUMMARIZATION_PROMPT)
+            && requests[4].body_contains_text(SUMMARIZATION_PROMPT),
+        "suffix compact should retry within the compact request boundary"
+    );
+    assert!(
+        requests
+            .iter()
+            .enumerate()
+            .filter(|(_, request)| {
+                request.body_contains_text("trigger next with failing suffix compact")
+                    && !request.body_contains_text(SUMMARIZATION_PROMPT)
+            })
+            .map(|(index, _)| index)
+            .eq([2]),
+        "failed compact must not replay the completed next sampling request"
+    );
+
+    let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
+    let compact_index_text = std::fs::read_to_string(sidecar_dir.join("compact.index.jsonl"))
+        .with_context(|| format!("read {}", sidecar_dir.join("compact.index.jsonl").display()))?;
+    let compact_index = parse_json_lines(&compact_index_text)?;
+    assert_compact_failed(&compact_index, "1.1", "next");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_feature_off_exposes_no_task_tree_tools_or_sidecar() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -485,6 +581,61 @@ async fn submit_turn_and_assert_plan_update(
     assert!(saw_plan_update, "expected normal PlanUpdate event");
 
     Ok(turn_id)
+}
+
+async fn submit_turn_expect_spine_compact_error(
+    test: &core_test_support::test_codex::TestCodex,
+    prompt: &str,
+) -> anyhow::Result<()> {
+    let cwd_path = test.cwd.path().to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
+    let session_model = test.session_configured.model.clone();
+
+    test.codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: prompt.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd_path,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy,
+            permission_profile,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let reconnect_message = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::StreamError(stream_error) => Some(stream_error.message.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        reconnect_message, "Reconnecting... 1/1",
+        "spine suffix compact should surface retry status like Codex auto compact"
+    );
+
+    let error_message = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Error(error) if error.message.contains("Error running Spine compact task") => {
+            Some(error.message.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert!(
+        error_message.contains("Error running Spine compact task"),
+        "expected Spine compact task error, got {error_message}"
+    );
+    Ok(())
 }
 
 fn shell_args(command: &str) -> String {
@@ -701,6 +852,29 @@ fn assert_compact_installed(index: &[Value], node_id: &str, op: &str) {
                     .is_some_and(|len| len > 0)
         }),
         "compact index should contain install for {node_id} {op}: {index:?}"
+    );
+}
+
+fn assert_compact_failed(index: &[Value], node_id: &str, op: &str) {
+    assert!(
+        index.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("compact_started")
+                && event.get("node_id").and_then(Value::as_str) == Some(node_id)
+                && event.get("op").and_then(Value::as_str) == Some(op)
+        }),
+        "compact index should contain start for failed {node_id} {op}: {index:?}"
+    );
+    assert!(
+        index.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("compact_failed")
+                && event.get("node_id").and_then(Value::as_str) == Some(node_id)
+                && event.get("op").and_then(Value::as_str) == Some(op)
+                && event
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .is_some_and(|error| error.contains("temporary spine compact failure two"))
+        }),
+        "compact index should contain terminal failure for {node_id} {op}: {index:?}"
     );
 }
 

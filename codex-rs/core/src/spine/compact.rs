@@ -92,6 +92,12 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
                 retries += 1;
                 let delay = backoff(retries);
                 warn!("spine compact stream failed; retrying ({retries}/{max_retries})");
+                sess.notify_stream_error(
+                    turn_context,
+                    format!("Reconnecting... {retries}/{max_retries}"),
+                    err,
+                )
+                .await;
                 tokio::time::sleep(delay).await;
             }
             Err(err) => return Err(err),

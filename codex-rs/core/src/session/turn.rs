@@ -2503,12 +2503,23 @@ async fn try_run_sampling_request(
     }
 
     if outcome.is_ok() {
-        sess.install_pending_spine_compactions_with_prompt(
-            turn_context.as_ref(),
-            client_session,
-            prompt,
-        )
-        .await?;
+        if let Err(err) = sess
+            .install_pending_spine_compactions_with_prompt(
+                turn_context.as_ref(),
+                client_session,
+                prompt,
+            )
+            .await
+        {
+            sess.send_event(
+                &turn_context,
+                EventMsg::Error(
+                    err.to_error_event(Some("Error running Spine compact task".to_string())),
+                ),
+            )
+            .await;
+            return Err(CodexErr::TurnAborted);
+        }
     }
 
     if should_emit_turn_diff {
