@@ -1633,15 +1633,9 @@ fn initial_spine_runtime_rejects_missing_sidecar_for_existing_spine_history() ->
         crate::session::session::load_initial_spine_runtime(&rollout_path, 3, true, false, None)
             .expect_err("existing Spine rollout history requires sidecar");
 
+    assert!(error.to_string().contains("rollout.spine.json"));
     assert!(
-        error
-            .to_string()
-            .contains("spine sidecar is missing for existing Spine rollout history")
-    );
-    assert!(
-        !crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?
-            .tree_path()
-            .exists()
+        !crate::spine::store::SpineSidecarStore::locator_path_for_rollout(&rollout_path)?.exists()
     );
     Ok(())
 }
@@ -1651,7 +1645,8 @@ async fn spine_raw_mirror_is_not_written_without_runtime() -> anyhow::Result<()>
     let (mut session, _turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;
     let sidecar =
-        crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?.raw_rollout_path();
+        crate::spine::store::SpineSidecarStore::default_sidecar_dir_for_rollout(&rollout_path)?
+            .join("raw/rollout.raw.jsonl");
 
     session
         .try_persist_rollout_response_items(&[user_message("raw item")])

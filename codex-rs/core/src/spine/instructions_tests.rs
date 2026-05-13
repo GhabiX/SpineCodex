@@ -47,16 +47,17 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("future work is likely to reuse"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("raw details are still useful"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("coherent work scope is complete"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 60k raw tokens"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 30k"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("allocate upcoming checkpoints"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("planning only"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("does not create Spine nodes"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 30k raw tokens"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 20k"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the hint as a cue"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.next"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.close"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("optional instruction argument"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("do not use instruction with spine.open"));
-    assert!(
-        SPINE_VIEW_INSTRUCTIONS.contains("the runtime does not carry old checklist items forward")
-    );
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("Completed Spine nodes are read-only"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("A node is a working scope, not a checklist item"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("The node summary is only a short tree label"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("investigate/localize"));

@@ -7,6 +7,8 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::SpineAllocationArg;
+use codex_protocol::plan_tool::SpineAllocationScopeArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use pretty_assertions::assert_eq;
@@ -22,7 +24,7 @@ fn id(segments: &[u32]) -> NodeId {
 fn temp_runtime() -> (TempDir, SpineRuntime) {
     let temp = tempfile::tempdir().expect("tempdir");
     let rollout_path = temp.path().join("rollout-2026-05-10T16-00-00-thread.jsonl");
-    let store = SpineSidecarStore::for_rollout(&rollout_path).expect("store path");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path).expect("store path");
     let runtime = SpineRuntime::create(store).expect("create runtime");
     (temp, runtime)
 }
@@ -54,6 +56,31 @@ fn plan_args_many(items: &[(&str, StepStatus)]) -> UpdatePlanArgs {
                 status: status.clone(),
             })
             .collect(),
+        spine_allocation: None,
+    }
+}
+
+fn plan_args_with_allocation(
+    anchor: Option<&str>,
+    scopes: Vec<(Option<&str>, &str, Vec<&str>)>,
+) -> UpdatePlanArgs {
+    UpdatePlanArgs {
+        explanation: Some("PlanBridge allocation test".to_string()),
+        plan: vec![PlanItemArg {
+            step: "Plan scope allocation".to_string(),
+            status: StepStatus::InProgress,
+        }],
+        spine_allocation: Some(SpineAllocationArg {
+            anchor: anchor.map(str::to_string),
+            scopes: scopes
+                .into_iter()
+                .map(|(node, summary, checkpoints)| SpineAllocationScopeArg {
+                    node: node.map(str::to_string),
+                    summary: summary.to_string(),
+                    checkpoints: checkpoints.into_iter().map(str::to_string).collect(),
+                })
+                .collect(),
+        }),
     }
 }
 
@@ -146,19 +173,21 @@ fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
 }
 
 #[test]
-fn size_hint_thresholds_start_at_60k_then_step_by_30k() {
-    assert_eq!(size_hint_threshold(59_999), None);
-    assert_eq!(size_hint_threshold(60_000), Some(60_000));
-    assert_eq!(size_hint_threshold(89_999), Some(60_000));
+fn size_hint_thresholds_start_at_30k_then_step_by_20k() {
+    assert_eq!(size_hint_threshold(29_999), None);
+    assert_eq!(size_hint_threshold(30_000), Some(30_000));
+    assert_eq!(size_hint_threshold(49_999), Some(30_000));
+    assert_eq!(size_hint_threshold(50_000), Some(50_000));
+    assert_eq!(size_hint_threshold(69_999), Some(50_000));
+    assert_eq!(size_hint_threshold(70_000), Some(70_000));
+    assert_eq!(size_hint_threshold(89_999), Some(70_000));
     assert_eq!(size_hint_threshold(90_000), Some(90_000));
-    assert_eq!(size_hint_threshold(119_999), Some(90_000));
-    assert_eq!(size_hint_threshold(120_000), Some(120_000));
 }
 
 #[test]
 fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
     let (_temp, mut runtime) = temp_runtime();
-    let payload = "x".repeat(240_000);
+    let payload = "x".repeat(120_000);
     runtime
         .store()
         .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
@@ -170,21 +199,21 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
         .expect("record raw item");
 
     let first = runtime
-        .maybe_emit_size_hint("tree_output")
+        .maybe_emit_size_hint("runtime_observation")
         .expect("emit first hint")
         .expect("hint should appear");
     assert_eq!(first.node_id, id(&[1]));
-    assert!(first.estimated_tokens >= 60_000);
-    assert_eq!(first.threshold_tokens, 60_000);
+    assert!(first.estimated_tokens >= 30_000);
+    assert_eq!(first.threshold_tokens, 30_000);
 
     assert_eq!(
         runtime
-            .maybe_emit_size_hint("tree_output")
+            .maybe_emit_size_hint("runtime_observation")
             .expect("second call should not fail"),
         None
     );
 
-    let larger_payload = "y".repeat(120_000);
+    let larger_payload = "y".repeat(80_000);
     runtime
         .store()
         .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
@@ -196,11 +225,11 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
         .expect("record larger raw item");
 
     let second = runtime
-        .maybe_emit_size_hint("tree_output")
+        .maybe_emit_size_hint("runtime_observation")
         .expect("emit second threshold")
         .expect("second threshold should appear");
     assert_eq!(second.node_id, id(&[1]));
-    assert_eq!(second.threshold_tokens, 90_000);
+    assert_eq!(second.threshold_tokens, 50_000);
 }
 
 #[test]
@@ -260,6 +289,194 @@ fn build_tree_snapshot_includes_node_local_plans() {
     assert_eq!(plan.items[0].stable_task_id, "step-1");
     assert_eq!(plan.items[0].step, "Inspect root");
     assert_eq!(plan.items[0].status, SpineTreePlanItemStatus::InProgress);
+}
+
+#[test]
+fn record_plan_update_writes_scope_allocation_without_moving_cursor() {
+    let (_temp, mut runtime) = temp_runtime();
+    let initial_state = runtime.state().clone();
+
+    let snapshot = runtime
+        .record_plan_update(
+            "turn-alloc",
+            plan_args_with_allocation(
+                None,
+                vec![
+                    (
+                        None,
+                        "Reproduce failure",
+                        vec!["run focused repro", "capture failing assertion"],
+                    ),
+                    (
+                        None,
+                        "Patch and verify",
+                        vec!["apply minimal fix", "run regression test"],
+                    ),
+                ],
+            ),
+        )
+        .expect("record allocation");
+
+    assert_eq!(runtime.state(), &initial_state);
+    assert_eq!(runtime.cursor(), &id(&[1]));
+    assert_eq!(snapshot.node_id, "1");
+    assert_eq!(snapshot.event_seq, 2);
+
+    let allocation = read_json(runtime.store().allocation_path(&id(&[1])));
+    assert_eq!(allocation["anchor_node_id"], "1");
+    assert_eq!(allocation["revision"], 1);
+    assert_eq!(allocation["event_seq"], 3);
+    assert_eq!(allocation["source_turn_id"], "turn-alloc");
+    assert_eq!(allocation["scopes"][0]["existing_node_id"], Value::Null);
+    assert_eq!(allocation["scopes"][0]["summary"], "Reproduce failure");
+    assert_eq!(
+        allocation["scopes"][0]["checkpoints"],
+        json!(["run focused repro", "capture failing assertion"])
+    );
+
+    let tree = read_json_lines(runtime.store().tree_path());
+    assert_eq!(tree[1]["type"], "task_plan_updated");
+    assert_eq!(tree[1]["seq"], 2);
+    assert_eq!(tree[2]["type"], "task_allocation_updated");
+    assert_eq!(tree[2]["seq"], 3);
+    assert_eq!(tree[2]["anchor_node_id"], "1");
+
+    let tree_snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
+    let root = tree_snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1")
+        .expect("root node");
+    let allocation = root.allocation.as_ref().expect("root allocation");
+    assert_eq!(allocation.anchor_node_id, "1");
+    assert_eq!(allocation.revision, 1);
+    assert_eq!(allocation.scopes.len(), 2);
+    assert_eq!(allocation.scopes[0].existing_node_id, None);
+    assert_eq!(allocation.scopes[0].summary, "Reproduce failure");
+    assert_eq!(
+        allocation.scopes[0].checkpoints,
+        vec!["run focused repro", "capture failing assertion"]
+    );
+}
+
+#[test]
+fn allocation_defaults_to_open_parent_scope_when_cursor_is_child() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-open",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    runtime
+        .after_response_items_recorded(
+            "turn-open",
+            &[spine_call("open-1"), function_call_output("open-1")],
+            0,
+            2,
+        )
+        .expect("commit open");
+    runtime.take_last_committed_transition();
+
+    runtime
+        .record_plan_update(
+            "turn-child-plan",
+            plan_args_with_allocation(None, vec![(None, "Child next scope", vec!["finish child"])]),
+        )
+        .expect("record allocation at open parent");
+
+    assert!(
+        runtime.store().allocation_path(&id(&[1])).exists(),
+        "default allocation anchor should be the opened parent"
+    );
+    assert!(
+        !runtime.store().allocation_path(&id(&[1, 1])).exists(),
+        "child plan update should not anchor allocation on the child by default"
+    );
+
+    let snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
+    let root = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1")
+        .expect("root node");
+    let child = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1")
+        .expect("child node");
+    assert!(root.allocation.is_some());
+    assert!(child.allocation.is_none());
+    assert!(child.plan.is_some());
+}
+
+#[test]
+fn allocation_rejects_finished_scope_nodes() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-open",
+            SpineOperation::Open,
+            "root scope",
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    runtime
+        .after_response_items_recorded(
+            "turn-open",
+            &[spine_call("open-1"), function_call_output("open-1")],
+            0,
+            2,
+        )
+        .expect("commit open");
+    runtime.take_last_committed_transition();
+    runtime
+        .stage_transition(
+            "next-1",
+            "turn-next",
+            SpineOperation::Next,
+            "child finished",
+            /*compact_instruction*/ None,
+        )
+        .expect("stage next");
+    runtime
+        .after_response_items_recorded(
+            "turn-next",
+            &[spine_call("next-1"), function_call_output("next-1")],
+            2,
+            4,
+        )
+        .expect("commit next");
+    runtime.take_last_committed_transition();
+
+    let initial_state = runtime.state().clone();
+    let initial_tree = read_json_lines(runtime.store().tree_path());
+    let error = runtime
+        .record_plan_update(
+            "turn-invalid",
+            plan_args_with_allocation(
+                Some("1"),
+                vec![(
+                    Some("1.1"),
+                    "Rewrite finished child",
+                    vec!["should be rejected"],
+                )],
+            ),
+        )
+        .expect_err("finished nodes must be read-only for allocation");
+
+    assert!(matches!(
+        error,
+        SpineRuntimeError::InvalidPlanAllocation { message }
+            if message.contains("allocation scope [1.1] is read-only")
+    ));
+    assert_eq!(runtime.state(), &initial_state);
+    assert_eq!(read_json_lines(runtime.store().tree_path()), initial_tree);
+    assert!(!runtime.store().plan_path(&id(&[1, 2])).exists());
 }
 
 #[test]
@@ -356,7 +573,7 @@ fn build_tree_snapshot_includes_only_current_node_plan() {
 fn load_or_create_initializes_then_replays_existing_sidecar() {
     let temp = tempfile::tempdir().expect("tempdir");
     let rollout_path = temp.path().join("rollout-2026-05-10T16-00-00-thread.jsonl");
-    let store = SpineSidecarStore::for_rollout(&rollout_path).expect("store path");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path).expect("store path");
     let mut runtime =
         SpineRuntime::load_or_create(store.clone(), 0).expect("create missing sidecar");
     runtime

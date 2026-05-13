@@ -483,7 +483,8 @@ pub(crate) fn load_initial_spine_runtime(
         }
         SpineRuntime::load(store, next_raw_ordinal)?
     } else {
-        SpineRuntime::load_or_init(rollout_path, next_raw_ordinal)?
+        let store = SpineSidecarStore::create_for_rollout(rollout_path)?;
+        SpineRuntime::load_or_create(store, next_raw_ordinal)?
     };
     if let Some(projection) = projection
         && runtime.state() != &projection.state
@@ -513,7 +514,11 @@ async fn seed_forked_spine_sidecar(
         return Ok(());
     }
 
-    let child_store = SpineSidecarStore::for_rollout(child_rollout_path)?;
+    let child_store = if SpineSidecarStore::locator_path_for_rollout(child_rollout_path)?.exists() {
+        SpineSidecarStore::for_rollout(child_rollout_path)?
+    } else {
+        SpineSidecarStore::create_for_rollout(child_rollout_path)?
+    };
     if child_store.tree_path().exists() {
         return Ok(());
     }

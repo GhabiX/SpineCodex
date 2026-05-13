@@ -1,4 +1,5 @@
 use super::ids::NodeId;
+use codex_protocol::plan_tool::SpineAllocationArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use serde::Deserialize;
@@ -48,6 +49,51 @@ pub(crate) struct PlanSnapshotItem {
     pub(crate) stable_task_id: String,
     pub(crate) step: String,
     pub(crate) status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(crate) struct PlanAllocationSnapshot {
+    pub(crate) anchor_node_id: String,
+    pub(crate) revision: u64,
+    pub(crate) explanation: Option<String>,
+    pub(crate) scopes: Vec<PlanAllocationScope>,
+    pub(crate) source_turn_id: String,
+    pub(crate) event_seq: u64,
+}
+
+impl PlanAllocationSnapshot {
+    pub(crate) fn from_update(
+        anchor_node_id: &NodeId,
+        revision: u64,
+        event_seq: u64,
+        source_turn_id: impl Into<String>,
+        explanation: Option<String>,
+        allocation: SpineAllocationArg,
+    ) -> Self {
+        Self {
+            anchor_node_id: anchor_node_id.to_string(),
+            revision,
+            explanation,
+            scopes: allocation
+                .scopes
+                .into_iter()
+                .map(|scope| PlanAllocationScope {
+                    existing_node_id: scope.node,
+                    summary: scope.summary,
+                    checkpoints: scope.checkpoints,
+                })
+                .collect(),
+            source_turn_id: source_turn_id.into(),
+            event_seq,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(crate) struct PlanAllocationScope {
+    pub(crate) existing_node_id: Option<String>,
+    pub(crate) summary: String,
+    pub(crate) checkpoints: Vec<String>,
 }
 
 fn step_status_label(status: &StepStatus) -> &'static str {

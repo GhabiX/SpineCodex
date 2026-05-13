@@ -12,7 +12,7 @@ fn id(segments: &[u32]) -> NodeId {
 fn temp_store() -> (TempDir, SpineSidecarStore) {
     let temp = tempfile::tempdir().expect("tempdir");
     let rollout_path = temp.path().join("rollout-2026-05-10T15-38-00-thread.jsonl");
-    let store = SpineSidecarStore::for_rollout(&rollout_path).expect("store path");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path).expect("store path");
     (temp, store)
 }
 
@@ -49,19 +49,23 @@ fn event_rollout_item() -> RolloutItem {
 }
 
 #[test]
-fn derives_sidecar_path_from_rollout_path() {
+fn creates_and_reads_base_locator_for_rollout_path() {
     let rollout_path = Path::new("/tmp/sessions/2026/05/10/rollout-2026-thread.jsonl");
 
     let sidecar_path =
-        SpineSidecarStore::sidecar_dir_for_rollout(rollout_path).expect("sidecar path");
+        SpineSidecarStore::default_sidecar_dir_for_rollout(rollout_path).expect("sidecar path");
 
     assert_eq!(
         sidecar_path,
         Path::new("/tmp/sessions/2026/05/10/spine-rollout-2026-thread")
     );
+    assert_eq!(
+        SpineSidecarStore::locator_path_for_rollout(rollout_path).expect("locator path"),
+        Path::new("/tmp/sessions/2026/05/10/rollout-2026-thread.spine.json")
+    );
 
     let no_parent =
-        SpineSidecarStore::sidecar_dir_for_rollout(Path::new("rollout-2026-thread.jsonl"))
+        SpineSidecarStore::default_sidecar_dir_for_rollout(Path::new("rollout-2026-thread.jsonl"))
             .expect_err("relative rollout without a parent should fail");
     assert!(matches!(
         no_parent,
@@ -69,14 +73,52 @@ fn derives_sidecar_path_from_rollout_path() {
             if reason == "rollout path must include a parent directory"
     ));
 
-    let wrong_extension =
-        SpineSidecarStore::sidecar_dir_for_rollout(Path::new("/tmp/rollout-2026-thread.log"))
-            .expect_err("non-jsonl rollout should fail");
+    let wrong_extension = SpineSidecarStore::default_sidecar_dir_for_rollout(Path::new(
+        "/tmp/rollout-2026-thread.log",
+    ))
+    .expect_err("non-jsonl rollout should fail");
     assert!(matches!(
         wrong_extension,
         SpineStoreError::InvalidRolloutPath { reason, .. }
             if reason == "rollout path must use the .jsonl extension"
     ));
+}
+
+#[test]
+fn for_rollout_requires_base_locator() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let rollout_path = temp.path().join("rollout-test.jsonl");
+
+    let error = SpineSidecarStore::for_rollout(&rollout_path)
+        .expect_err("locator is required when loading a spine store");
+
+    assert!(
+        matches!(error, SpineStoreError::Io { path, .. } if path.ends_with("rollout-test.spine.json"))
+    );
+}
+
+#[test]
+fn create_for_rollout_writes_base_locator() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let rollout_path = temp
+        .path()
+        .join("sessions")
+        .join("2026")
+        .join("05")
+        .join("12")
+        .join("rollout-test.jsonl");
+
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path).expect("create store");
+    let loaded = SpineSidecarStore::for_rollout(&rollout_path).expect("load store");
+
+    assert_eq!(loaded, store);
+    assert_eq!(
+        read_json(SpineSidecarStore::locator_path_for_rollout(&rollout_path).expect("locator")),
+        json!({
+            "version": 1,
+            "base": "spine-rollout-test",
+        })
+    );
 }
 
 #[test]
@@ -327,6 +369,80 @@ fn writes_plan_snapshot_without_planbridge_integration() {
 }
 
 #[test]
+fn writes_allocation_snapshot_and_replays_without_mutating_state() {
+    let (_temp, store) = temp_store();
+    let state = store.create().expect("create sidecar");
+    let snapshot = PlanAllocationSnapshot {
+        anchor_node_id: "1".to_string(),
+        revision: 1,
+        explanation: Some("group upcoming checkpoints".to_string()),
+        scopes: vec![
+            PlanAllocationScope {
+                existing_node_id: None,
+                summary: "Reproduce".to_string(),
+                checkpoints: vec!["run repro".to_string()],
+            },
+            PlanAllocationScope {
+                existing_node_id: Some("1".to_string()),
+                summary: "Continue root".to_string(),
+                checkpoints: vec!["keep root task focused".to_string()],
+            },
+        ],
+        source_turn_id: "turn-alloc".to_string(),
+        event_seq: 2,
+    };
+
+    let path = store
+        .write_allocation_snapshot(&id(&[1]), &snapshot)
+        .expect("write allocation snapshot");
+
+    assert_eq!(path, store.root().join("nodes/1/allocation.json"));
+    assert_eq!(
+        store.read_allocation_revision(&id(&[1])).expect("revision"),
+        Some(1)
+    );
+    assert_eq!(
+        store
+            .read_allocation_snapshot(&id(&[1]))
+            .expect("read allocation"),
+        Some(snapshot)
+    );
+    assert_eq!(
+        read_json_lines(store.tree_path()),
+        vec![
+            json!({
+                "type": "node_created",
+                "seq": 1,
+                "node_id": "1",
+                "parent_id": null,
+                "raw_start_ordinal": 0,
+            }),
+            json!({
+                "type": "task_allocation_updated",
+                "seq": 2,
+                "anchor_node_id": "1",
+                "revision": 1,
+                "explanation": "group upcoming checkpoints",
+                "scopes": [
+                    {
+                        "existing_node_id": null,
+                        "summary": "Reproduce",
+                        "checkpoints": ["run repro"],
+                    },
+                    {
+                        "existing_node_id": "1",
+                        "summary": "Continue root",
+                        "checkpoints": ["keep root task focused"],
+                    },
+                ],
+                "source_turn_id": "turn-alloc",
+            }),
+        ]
+    );
+    assert_eq!(store.load().expect("reload sidecar"), state);
+}
+
+#[test]
 fn appends_trajs_index_without_raw_rollout_payload() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
@@ -408,21 +524,21 @@ fn records_size_hint_emission_without_changing_replayed_state() {
 
     assert!(
         !store
-            .has_size_hint_emitted(&id(&[1]), 60_000)
+            .has_size_hint_emitted(&id(&[1]), 30_000)
             .expect("query missing hint")
     );
     store
-        .append_size_hint_emitted(&id(&[1]), 60_000, 63_200, "tree_output")
+        .append_size_hint_emitted(&id(&[1]), 30_000, 31_200, "runtime_observation")
         .expect("append hint event");
 
     assert!(
         store
-            .has_size_hint_emitted(&id(&[1]), 60_000)
+            .has_size_hint_emitted(&id(&[1]), 30_000)
             .expect("query emitted hint")
     );
     assert!(
         !store
-            .has_size_hint_emitted(&id(&[1]), 90_000)
+            .has_size_hint_emitted(&id(&[1]), 50_000)
             .expect("query other threshold")
     );
     assert_eq!(store.load().expect("load sidecar"), state);
@@ -432,9 +548,9 @@ fn records_size_hint_emission_without_changing_replayed_state() {
             "type": "spine_hint_emitted",
             "seq": 2,
             "node_id": "1",
-            "threshold_tokens": 60000,
-            "estimated_tokens": 63200,
-            "source": "tree_output",
+            "threshold_tokens": 30000,
+            "estimated_tokens": 31200,
+            "source": "runtime_observation",
         })
     );
 }
@@ -590,7 +706,7 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
         .expect("write source worklog");
 
     let child_rollout = temp.path().join("rollout-child.jsonl");
-    let child_store = SpineSidecarStore::for_rollout(child_rollout).expect("child store");
+    let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
     child_store.create().expect("create child");
     child_store
         .record_projection_reset(source_state.clone(), "fork_seed", None)

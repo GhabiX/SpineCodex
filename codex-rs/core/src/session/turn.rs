@@ -44,6 +44,7 @@ use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::spine::view::render_size_hint;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -1013,6 +1014,42 @@ pub(crate) fn build_prompt(
     }
 }
 
+async fn append_spine_size_hint_for_request(
+    sess: &Arc<Session>,
+    turn_context: &TurnContext,
+    mut input: Vec<ResponseItem>,
+) -> CodexResult<Vec<ResponseItem>> {
+    let Some(spine) = sess.spine.as_ref() else {
+        return Ok(input);
+    };
+    let hint = spine
+        .lock()
+        .await
+        .maybe_emit_size_hint("runtime_observation")
+        .map_err(|err| {
+            CodexErr::Fatal(format!("failed to compute Spine runtime size hint: {err}"))
+        })?;
+    let Some(hint) = hint else {
+        return Ok(input);
+    };
+    let text = render_size_hint(&hint).trim().to_string();
+    input.push(ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText { text }],
+        phase: None,
+    });
+    sess.try_record_conversation_items(
+        turn_context,
+        input
+            .last()
+            .map(std::slice::from_ref)
+            .expect("hint was just pushed"),
+    )
+    .await?;
+    Ok(input)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -1073,6 +1110,8 @@ async fn run_sampling_request(
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
+        let prompt_input =
+            append_spine_size_hint_for_request(&sess, turn_context.as_ref(), prompt_input).await?;
         let prompt = build_prompt(
             prompt_input,
             router.as_ref(),
@@ -2448,6 +2487,12 @@ pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 #[cfg(test)]
 mod spine_tool_order_tests {
     use super::*;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadMemoryMode;
+    use codex_thread_store::CreateThreadParams;
+    use codex_thread_store::LiveThread;
+    use codex_thread_store::ThreadEventPersistenceMode;
+    use codex_thread_store::ThreadPersistenceMetadata;
 
     fn function_call(name: &str, call_id: &str) -> ResponseItem {
         function_call_with_namespace(name, None, call_id)
@@ -2573,6 +2618,188 @@ mod spine_tool_order_tests {
                 call_id: "call-spine".to_string(),
                 message: "spine must be the first tool call in a model response".to_string(),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn request_boundary_appends_spine_size_hint_once() {
+        let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let config = session.get_config().await;
+        let live_thread = LiveThread::create(
+            Arc::clone(&session.services.thread_store),
+            CreateThreadParams {
+                thread_id: session.conversation_id,
+                forked_from_id: None,
+                source: SessionSource::Exec,
+                thread_source: None,
+                base_instructions: BaseInstructions::default(),
+                dynamic_tools: Vec::new(),
+                metadata: ThreadPersistenceMetadata {
+                    cwd: Some(config.cwd.to_path_buf()),
+                    model_provider: config.model_provider_id.clone(),
+                    memory_mode: ThreadMemoryMode::Disabled,
+                },
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            },
+        )
+        .await
+        .expect("create thread persistence");
+        session.services.live_thread = Some(live_thread);
+        session.ensure_rollout_materialized().await;
+        session.flush_rollout().await.expect("flush rollout");
+        let rollout_path = session
+            .current_rollout_path()
+            .await
+            .expect("load rollout path")
+            .expect("thread should have rollout path");
+        let mut runtime = crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0)
+            .expect("create spine runtime");
+        let below_threshold_payload = "z".repeat(80_000);
+        let below_threshold_item = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: below_threshold_payload.clone(),
+            }],
+            phase: None,
+        };
+        runtime
+            .store()
+            .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
+                below_threshold_item.clone(),
+            )])
+            .expect("append below-threshold raw mirror");
+        runtime
+            .after_response_items_recorded("turn-0", &[below_threshold_item], 0, 1)
+            .expect("record below-threshold raw item");
+        session.spine = Some(Arc::new(tokio::sync::Mutex::new(runtime)));
+        let session = Arc::new(session);
+
+        let below_threshold =
+            append_spine_size_hint_for_request(&session, &turn_context, Vec::new())
+                .await
+                .expect("below threshold should not fail");
+        assert!(
+            below_threshold.is_empty(),
+            "request boundary must not emit a Spine hint below 30k"
+        );
+        assert!(
+            !session.clone_history().await.raw_items().iter().any(|item| {
+                matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "developer"
+                            && matches!(
+                                content.as_slice(),
+                                [ContentItem::InputText { text }]
+                                    if text.contains("Spine hint: current node raw trace is about")
+                            )
+                )
+            }),
+            "below-threshold checks must not persist a Spine hint into history"
+        );
+
+        let spine = session.spine.as_ref().expect("spine runtime");
+        let mut runtime = spine.lock().await;
+        let payload = "x".repeat(40_000);
+        let item = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: payload.clone(),
+            }],
+            phase: None,
+        };
+        runtime
+            .store()
+            .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
+                item.clone(),
+            )])
+            .expect("append raw mirror");
+        runtime
+            .after_response_items_recorded("turn-1", &[item], 1, 2)
+            .expect("record raw item");
+        drop(runtime);
+
+        let first = append_spine_size_hint_for_request(
+            &session,
+            &turn_context,
+            vec![spine_function_call("tree", "call-tree")],
+        )
+        .await
+        .expect("append hint");
+        assert_eq!(first.len(), 2);
+        let ResponseItem::Message { role, content, .. } = &first[1] else {
+            panic!("expected hint message");
+        };
+        assert_eq!(role, "developer");
+        assert!(matches!(
+            content.as_slice(),
+            [ContentItem::InputText { text }] if text.contains("Spine hint: current node raw trace is about")
+        ));
+        let history_after_first = session.clone_history().await.raw_items().to_vec();
+        assert!(
+            history_after_first.iter().any(|item| matches!(
+                item,
+                ResponseItem::Message { role, content, .. }
+                    if role == "developer"
+                        && matches!(
+                            content.as_slice(),
+                            [ContentItem::InputText { text }]
+                                if text.contains("Spine hint: current node raw trace is about")
+                        )
+            )),
+            "hint must be persisted into history so the next request preserves the previous request prefix"
+        );
+
+        let second = append_spine_size_hint_for_request(&session, &turn_context, Vec::new())
+            .await
+            .expect("second request should not duplicate");
+        assert!(second.is_empty());
+
+        let larger_payload = "y".repeat(80_000);
+        let larger_item = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: larger_payload.clone(),
+            }],
+            phase: None,
+        };
+        {
+            let spine = session.spine.as_ref().expect("spine runtime");
+            let mut runtime = spine.lock().await;
+            runtime
+                .store()
+                .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
+                    larger_item.clone(),
+                )])
+                .expect("append larger raw mirror");
+            runtime
+                .after_response_items_recorded("turn-2", &[larger_item], 3, 4)
+                .expect("record larger raw item");
+        }
+
+        let third = append_spine_size_hint_for_request(&session, &turn_context, Vec::new())
+            .await
+            .expect("third request should append next threshold");
+        assert_eq!(third.len(), 1);
+        let ResponseItem::Message { role, content, .. } = &third[0] else {
+            panic!("expected second hint message");
+        };
+        assert_eq!(role, "developer");
+        assert!(matches!(
+            content.as_slice(),
+            [ContentItem::InputText { text }] if text.contains("Spine hint: current node raw trace is about")
+        ));
+        let spine = session.spine.as_ref().expect("spine runtime");
+        let runtime = spine.lock().await;
+        assert!(
+            runtime
+                .store()
+                .has_size_hint_emitted(&crate::spine::ids::NodeId::root(), 50_000)
+                .expect("query 50k hint event"),
+            "request boundary must record the 50k threshold exactly once"
         );
     }
 }

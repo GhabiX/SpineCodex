@@ -6354,6 +6354,7 @@ impl ChatWidget {
                             },
                         })
                         .collect(),
+                    spine_allocation: None,
                 })
             }
             ServerNotification::SpineTreeUpdated(notification) => {

@@ -3,6 +3,7 @@ use codex_rollout::read_thread_item_from_rollout;
 use codex_rollout::rollout_date_parts;
 
 use super::LocalThreadStore;
+use super::helpers::SpineArtifactsMove;
 use super::helpers::matching_rollout_file_name;
 use super::helpers::scoped_rollout_path;
 use super::helpers::stored_thread_from_rollout_item;
@@ -64,11 +65,15 @@ pub(super) async fn unarchive_thread(
         message: format!("failed to unarchive thread: {err}"),
     })?;
     let restored_path = dest_dir.join(&file_name);
+    let spine_move = SpineArtifactsMove::prepare(&canonical_archived_path, &restored_path)?;
     std::fs::rename(&canonical_archived_path, &restored_path).map_err(|err| {
         ThreadStoreError::Internal {
             message: format!("failed to unarchive thread: {err}"),
         }
     })?;
+    if let Some(spine_move) = spine_move {
+        spine_move.apply()?;
+    }
     touch_modified_time(restored_path.as_path()).map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to update unarchived thread timestamp: {err}"),
     })?;
@@ -106,6 +111,8 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
+    use std::path::PathBuf;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -114,6 +121,30 @@ mod tests {
     use crate::local::LocalThreadStore;
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
+
+    fn write_spine_artifacts(rollout_path: &Path) -> (PathBuf, PathBuf) {
+        let stem = rollout_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("rollout stem");
+        let parent = rollout_path.parent().expect("rollout parent");
+        let locator_path = parent.join(format!("{stem}.spine.json"));
+        let sidecar_path = parent.join(format!("spine-{stem}"));
+        std::fs::write(
+            &locator_path,
+            format!(
+                "{{\n  \"version\": 1,\n  \"base\": \"{}\"\n}}\n",
+                sidecar_path
+                    .file_name()
+                    .expect("sidecar name")
+                    .to_string_lossy()
+            ),
+        )
+        .expect("write spine locator");
+        std::fs::create_dir_all(&sidecar_path).expect("create spine sidecar");
+        std::fs::write(sidecar_path.join("tree.jsonl"), "").expect("write spine tree");
+        (locator_path, sidecar_path)
+    }
 
     #[tokio::test]
     async fn unarchive_thread_restores_rollout_and_returns_updated_thread() {
@@ -143,6 +174,44 @@ mod tests {
             thread.first_user_message.as_deref(),
             Some("Archived user message")
         );
+    }
+
+    #[tokio::test]
+    async fn unarchive_thread_moves_spine_locator_and_sidecar() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let uuid = Uuid::from_u128(206);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let archived_path = write_archived_session_file(home.path(), "2025-01-03T13-30-00", uuid)
+            .expect("archived session file");
+        let (archived_locator, archived_sidecar) = write_spine_artifacts(&archived_path);
+
+        store
+            .unarchive_thread(ArchiveThreadParams { thread_id })
+            .await
+            .expect("unarchive thread");
+
+        let restored_path = home
+            .path()
+            .join("sessions/2025/01/03")
+            .join(archived_path.file_name().expect("file name"));
+        let restored_stem = restored_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("restored stem");
+        let restored_locator = restored_path
+            .parent()
+            .expect("restored parent")
+            .join(format!("{restored_stem}.spine.json"));
+        let restored_sidecar = restored_path
+            .parent()
+            .expect("restored parent")
+            .join(format!("spine-{restored_stem}"));
+
+        assert!(!archived_locator.exists());
+        assert!(!archived_sidecar.exists());
+        assert!(restored_locator.exists());
+        assert!(restored_sidecar.join("tree.jsonl").exists());
     }
 
     #[tokio::test]

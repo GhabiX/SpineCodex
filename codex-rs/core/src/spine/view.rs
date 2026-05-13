@@ -21,17 +21,7 @@ pub(crate) fn render_tool_output_with_base(
     cursor: &NodeId,
     base: &Path,
 ) -> String {
-    render_spine_tree_view_with_base_and_hint(state, cursor, Some(base), None)
-}
-
-pub(crate) fn render_tool_output_with_base_and_hint(
-    _op: SpineOperation,
-    state: &SpineState,
-    cursor: &NodeId,
-    base: &Path,
-    hint: Option<&SpineRuntimeHint>,
-) -> String {
-    render_spine_tree_view_with_base_and_hint(state, cursor, Some(base), hint)
+    render_spine_tree_view_with_base(state, cursor, Some(base))
 }
 
 pub(crate) fn render_tree_tool_output(state: &SpineState, cursor: &NodeId) -> String {
@@ -43,44 +33,32 @@ pub(crate) fn render_tree_tool_output_with_base(
     cursor: &NodeId,
     base: &Path,
 ) -> String {
-    render_spine_tree_view_with_base_and_hint(state, cursor, Some(base), None)
-}
-
-pub(crate) fn render_tree_tool_output_with_base_and_hint(
-    state: &SpineState,
-    cursor: &NodeId,
-    base: &Path,
-    hint: Option<&SpineRuntimeHint>,
-) -> String {
-    render_spine_tree_view_with_base_and_hint(state, cursor, Some(base), hint)
+    render_spine_tree_view_with_base(state, cursor, Some(base))
 }
 
 fn render_spine_tree_view(state: &SpineState, cursor: &NodeId) -> String {
-    render_spine_tree_view_with_base_and_hint(state, cursor, None, None)
+    render_spine_tree_view_with_base(state, cursor, None)
 }
 
-fn render_spine_tree_view_with_base_and_hint(
+fn render_spine_tree_view_with_base(
     state: &SpineState,
     cursor: &NodeId,
     base: Option<&Path>,
-    hint: Option<&SpineRuntimeHint>,
 ) -> String {
     let base_line = base
         .map(|base| format!("\nBase: {}", base.display()))
         .unwrap_or_default();
-    let hint_text = hint.map(render_size_hint).unwrap_or_default();
     format!(
-        "Current:  {}{}\n\n{}{}",
+        "Current:  {}{}\n\n{}",
         display_node_id(cursor),
         base_line,
         render_tree(state, cursor),
-        hint_text,
     )
 }
 
 pub(crate) fn render_size_hint(hint: &SpineRuntimeHint) -> String {
     format!(
-        "\n\nSpine hint: current node raw trace is about {}k tokens. If this scope is complete, finish it cleanly and use spine.next or spine.close before starting work that can rely on the worklog.",
+        "\n\nSpine hint: current node raw trace is about {}k tokens and is carried into every request. At the next natural boundary, use spine.next or spine.close if finished work can be carried by the worklog.",
         rounded_k_tokens(hint.estimated_tokens)
     )
 }

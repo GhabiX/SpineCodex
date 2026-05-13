@@ -2,6 +2,7 @@ use chrono::Utc;
 use codex_rollout::find_thread_path_by_id_str;
 
 use super::LocalThreadStore;
+use super::helpers::SpineArtifactsMove;
 use super::helpers::matching_rollout_file_name;
 use super::helpers::scoped_rollout_path;
 use crate::ArchiveThreadParams;
@@ -46,11 +47,15 @@ pub(super) async fn archive_thread(
         message: format!("failed to archive thread: {err}"),
     })?;
     let archived_path = archive_folder.join(&file_name);
+    let spine_move = SpineArtifactsMove::prepare(&canonical_rollout_path, &archived_path)?;
     std::fs::rename(&canonical_rollout_path, &archived_path).map_err(|err| {
         ThreadStoreError::Internal {
             message: format!("failed to archive thread: {err}"),
         }
     })?;
+    if let Some(spine_move) = spine_move {
+        spine_move.apply()?;
+    }
 
     if let Some(ctx) = state_db_ctx {
         let _ = ctx
@@ -67,6 +72,8 @@ mod tests {
     use codex_protocol::protocol::SessionSource;
     use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
+    use std::path::PathBuf;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -77,6 +84,30 @@ mod tests {
     use crate::local::LocalThreadStore;
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_session_file;
+
+    fn write_spine_artifacts(rollout_path: &Path) -> (PathBuf, PathBuf) {
+        let stem = rollout_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("rollout stem");
+        let parent = rollout_path.parent().expect("rollout parent");
+        let locator_path = parent.join(format!("{stem}.spine.json"));
+        let sidecar_path = parent.join(format!("spine-{stem}"));
+        std::fs::write(
+            &locator_path,
+            format!(
+                "{{\n  \"version\": 1,\n  \"base\": \"{}\"\n}}\n",
+                sidecar_path
+                    .file_name()
+                    .expect("sidecar name")
+                    .to_string_lossy()
+            ),
+        )
+        .expect("write spine locator");
+        std::fs::create_dir_all(&sidecar_path).expect("create spine sidecar");
+        std::fs::write(sidecar_path.join("tree.jsonl"), "").expect("write spine tree");
+        (locator_path, sidecar_path)
+    }
 
     #[tokio::test]
     async fn archive_thread_moves_rollout_to_archived_collection() {
@@ -121,6 +152,44 @@ mod tests {
             archived.items[0].archived_at,
             Some(archived.items[0].updated_at)
         );
+    }
+
+    #[tokio::test]
+    async fn archive_thread_moves_spine_locator_and_sidecar() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let uuid = Uuid::from_u128(205);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let active_path =
+            write_session_file(home.path(), "2025-01-03T12-30-00", uuid).expect("session file");
+        let (active_locator, active_sidecar) = write_spine_artifacts(&active_path);
+
+        store
+            .archive_thread(ArchiveThreadParams { thread_id })
+            .await
+            .expect("archive thread");
+
+        let archived_path = home
+            .path()
+            .join(ARCHIVED_SESSIONS_SUBDIR)
+            .join(active_path.file_name().expect("file name"));
+        let archived_stem = archived_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("archived stem");
+        let archived_locator = archived_path
+            .parent()
+            .expect("archived parent")
+            .join(format!("{archived_stem}.spine.json"));
+        let archived_sidecar = archived_path
+            .parent()
+            .expect("archived parent")
+            .join(format!("spine-{archived_stem}"));
+
+        assert!(!active_locator.exists());
+        assert!(!active_sidecar.exists());
+        assert!(archived_locator.exists());
+        assert!(archived_sidecar.join("tree.jsonl").exists());
     }
 
     #[tokio::test]

@@ -1,8 +1,8 @@
 pub(crate) const SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
 Use Spine as your task plan and context manager. Completed scopes are folded into runtime-generated worklog IR, and later turns carry the visible Spine Tree, completed worklogs, and the current live suffix instead of every old raw message.
 Use Spine effectively and efficiently.
-At the start, form a compact Spine plan: one node for simple tasks, or a small tree of focused scopes for longer work. Revise the tree when new evidence changes the task structure.
-Default to staying in the current live node while it remains focused. Use update_plan as the checklist inside the current active scope for local steps, verification items, and short-lived task tracking.
+At the start, use update_plan to allocate upcoming checkpoints into coherent scopes: one scope for simple tasks, or a small scope allocation for longer work. This is planning only; it does not create Spine nodes or move the cursor.
+Default to staying in the current live node while it remains focused. Use update_plan to revise the current checkpoint allocation when new evidence changes the task structure.
 Move Spine when a completed scope has accumulated substantial raw history and future work is likely to reuse its generated worklog IR:
 - spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context.
 - spine.next: finish the current leaf and move to its next sibling.
@@ -15,11 +15,12 @@ Do not create one node per shell command, checklist item, short reply, or conver
 After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `nodes/1/1/worklog.md`; later context shows the Spine Tree plus `1.1` worklog, not `1.1` raw trace.
 After spine.close from `1.1.2` to `1.2`, the runtime folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes that were already folded are carried through the Spine Tree/worklog IR, while raw child traces stay expandable out of band.
 Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../worklog.md` against that Base, not against the workspace cwd.
-After spine.next or spine.close, if unfinished work remains, immediately call update_plan in the new current node to rebuild the checklist from the handoff summary and current evidence; the runtime does not carry old checklist items forward.
+After spine.next or spine.close, if unfinished work remains, use update_plan to refresh the upcoming checkpoint allocation from the handoff summary and current evidence.
 Keep working in the current node while its raw details are still useful. When a coherent work scope is complete, fold it so later turns use its worklog instead of its raw trace.
 Avoid tiny splits for individual commands, small observations, or conversation turns.
-The runtime may hint when the current node grows large: around 60k raw tokens, then every additional 30k. Treat the hint as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the worklog.
+The runtime may hint when the current node grows large: around 30k raw tokens, then every additional 20k. Treat the hint as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the worklog.
 When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar trajs/worklog files only when you need historical details.
+Completed Spine nodes are read-only; rely on their worklogs instead of editing or restating their checkpoints.
 In Plan mode, do not call mutating spine operations.
 </spine_view>"#;
 

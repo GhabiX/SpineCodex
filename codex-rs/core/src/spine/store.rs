@@ -1,5 +1,7 @@
 use super::ids::NodeId;
 use super::ids::NodeIdParseError;
+use super::plan_bridge::PlanAllocationScope;
+use super::plan_bridge::PlanAllocationSnapshot;
 use super::plan_bridge::PlanSnapshot;
 use super::plan_bridge::PlanSnapshotItem;
 use super::state::NodeStatus;
@@ -11,12 +13,14 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::ErrorKind;
 use std::io::Write;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -27,11 +31,13 @@ const NODES_DIR: &str = "nodes";
 const WORKLOG_FILE: &str = "worklog.md";
 const NODE_TRAJS_FILE: &str = "trajs.jsonl";
 const PLAN_FILE: &str = "plan.json";
+const ALLOCATION_FILE: &str = "allocation.json";
 const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
 const GENERATED_WORKLOG_SECTION_MARKER: &str = "\n\n<!-- spine:auto-compact-generated -->\n";
+const SPINE_BASE_LOCATOR_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SpineSidecarStore {
@@ -40,12 +46,77 @@ pub(crate) struct SpineSidecarStore {
 
 impl SpineSidecarStore {
     pub(crate) fn for_rollout(rollout_path: impl AsRef<Path>) -> Result<Self, SpineStoreError> {
+        let rollout_path = rollout_path.as_ref();
+        let locator_path = Self::locator_path_for_rollout(rollout_path)?;
+        let locator = read_base_locator(&locator_path)?;
+        let parent = rollout_parent(rollout_path)?;
+        let base = PathBuf::from(locator.base);
+        validate_relative_base(&base, rollout_path)?;
         Ok(Self {
-            root: Self::sidecar_dir_for_rollout(rollout_path.as_ref())?,
+            root: parent.join(base),
         })
     }
 
+    pub(crate) fn create_for_rollout(
+        rollout_path: impl AsRef<Path>,
+    ) -> Result<Self, SpineStoreError> {
+        let rollout_path = rollout_path.as_ref();
+        let locator_path = Self::locator_path_for_rollout(rollout_path)?;
+        if locator_path.exists() {
+            return Err(SpineStoreError::AlreadyInitialized { path: locator_path });
+        }
+        let root = Self::default_sidecar_dir_for_rollout(rollout_path)?;
+        let base = root
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| SpineStoreError::InvalidRolloutPath {
+                path: rollout_path.to_path_buf(),
+                reason: "rollout path must produce a valid UTF-8 spine base",
+            })?
+            .to_string();
+        let locator = SpineBaseLocator {
+            version: SPINE_BASE_LOCATOR_VERSION,
+            base,
+        };
+        let contents =
+            serde_json::to_string_pretty(&locator).map_err(|source| SpineStoreError::Json {
+                path: locator_path.clone(),
+                source,
+            })? + "\n";
+        if let Some(parent) = locator_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| SpineStoreError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        std::fs::write(&locator_path, contents).map_err(|source| SpineStoreError::Io {
+            path: locator_path,
+            source,
+        })?;
+        Ok(Self { root })
+    }
+
+    pub(crate) fn locator_path_for_rollout(
+        rollout_path: &Path,
+    ) -> Result<PathBuf, SpineStoreError> {
+        let parent = rollout_parent(rollout_path)?;
+        let stem = rollout_stem(rollout_path)?;
+        Ok(parent.join(format!("{stem}.spine.json")))
+    }
+
+    pub(crate) fn default_sidecar_dir_for_rollout(
+        rollout_path: &Path,
+    ) -> Result<PathBuf, SpineStoreError> {
+        let parent = rollout_parent(rollout_path)?;
+        let stem = rollout_stem(rollout_path)?;
+        Ok(parent.join(format!("spine-{stem}")))
+    }
+
     pub(crate) fn sidecar_dir_for_rollout(rollout_path: &Path) -> Result<PathBuf, SpineStoreError> {
+        Self::default_sidecar_dir_for_rollout(rollout_path)
+    }
+
+    fn validate_rollout_path(rollout_path: &Path) -> Result<(), SpineStoreError> {
         if rollout_path
             .extension()
             .and_then(|extension| extension.to_str())
@@ -56,24 +127,7 @@ impl SpineSidecarStore {
                 reason: "rollout path must use the .jsonl extension",
             });
         }
-
-        let parent = rollout_path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .ok_or_else(|| SpineStoreError::InvalidRolloutPath {
-                path: rollout_path.to_path_buf(),
-                reason: "rollout path must include a parent directory",
-            })?;
-        let stem = rollout_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .filter(|stem| !stem.is_empty())
-            .ok_or_else(|| SpineStoreError::InvalidRolloutPath {
-                path: rollout_path.to_path_buf(),
-                reason: "rollout path must include a valid UTF-8 file stem",
-            })?;
-
-        Ok(parent.join(format!("spine-{stem}")))
+        Ok(())
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -118,6 +172,10 @@ impl SpineSidecarStore {
 
     pub(crate) fn plan_path(&self, node_id: &NodeId) -> PathBuf {
         self.node_dir(node_id).join(PLAN_FILE)
+    }
+
+    pub(crate) fn allocation_path(&self, node_id: &NodeId) -> PathBuf {
+        self.node_dir(node_id).join(ALLOCATION_FILE)
     }
 
     pub(crate) fn create(&self) -> Result<SpineState, SpineStoreError> {
@@ -267,6 +325,7 @@ impl SpineSidecarStore {
             self.ensure_node_dir(node_id)?;
             self.copy_node_file_if_present(source, node_id, WORKLOG_FILE)?;
             self.copy_node_file_if_present(source, node_id, PLAN_FILE)?;
+            self.copy_node_file_if_present(source, node_id, ALLOCATION_FILE)?;
         }
         Ok(())
     }
@@ -305,6 +364,42 @@ impl SpineSidecarStore {
         };
         self.append_json_line(&self.tree_path(), &event)?;
         self.write_plan(node_id, snapshot)
+    }
+
+    fn write_allocation(
+        &self,
+        node_id: &NodeId,
+        allocation: &impl Serialize,
+    ) -> Result<PathBuf, SpineStoreError> {
+        self.ensure_node_dir(node_id)?;
+        let path = self.allocation_path(node_id);
+        let contents =
+            serde_json::to_string_pretty(allocation).map_err(|source| SpineStoreError::Json {
+                path: path.clone(),
+                source,
+            })? + "\n";
+        std::fs::write(&path, contents).map_err(|source| SpineStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(path)
+    }
+
+    pub(crate) fn write_allocation_snapshot(
+        &self,
+        anchor_node_id: &NodeId,
+        snapshot: &PlanAllocationSnapshot,
+    ) -> Result<PathBuf, SpineStoreError> {
+        let event = TreeEvent::TaskAllocationUpdated {
+            seq: snapshot.event_seq,
+            anchor_node_id: anchor_node_id.to_string(),
+            revision: snapshot.revision,
+            explanation: snapshot.explanation.clone(),
+            scopes: snapshot.scopes.clone(),
+            source_turn_id: snapshot.source_turn_id.clone(),
+        };
+        self.append_json_line(&self.tree_path(), &event)?;
+        self.write_allocation(anchor_node_id, snapshot)
     }
 
     pub(crate) fn read_plan_snapshot(
@@ -347,6 +442,53 @@ impl SpineSidecarStore {
                 continue;
             };
             if event_node_id == node_id {
+                latest_revision = Some(revision);
+            }
+        }
+        Ok(latest_revision)
+    }
+
+    pub(crate) fn read_allocation_snapshot(
+        &self,
+        anchor_node_id: &NodeId,
+    ) -> Result<Option<PlanAllocationSnapshot>, SpineStoreError> {
+        let path = self.allocation_path(anchor_node_id);
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(SpineStoreError::Io {
+                    path: path.clone(),
+                    source,
+                });
+            }
+        };
+        let snapshot =
+            serde_json::from_str::<PlanAllocationSnapshot>(&contents).map_err(|source| {
+                SpineStoreError::Json {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+        Ok(Some(snapshot))
+    }
+
+    pub(crate) fn read_allocation_revision(
+        &self,
+        anchor_node_id: &NodeId,
+    ) -> Result<Option<u64>, SpineStoreError> {
+        let anchor_node_id = anchor_node_id.to_string();
+        let mut latest_revision = None;
+        for event in self.read_tree_events()? {
+            let TreeEvent::TaskAllocationUpdated {
+                anchor_node_id: event_anchor_node_id,
+                revision,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if event_anchor_node_id == anchor_node_id {
                 latest_revision = Some(revision);
             }
         }
@@ -808,6 +950,43 @@ impl SpineSidecarStore {
                             "task_plan_updated references unknown node {}",
                             node_id.bracketed()
                         )));
+                    }
+                }
+                TreeEvent::TaskAllocationUpdated {
+                    anchor_node_id,
+                    revision,
+                    scopes,
+                    ..
+                } => {
+                    if revision == 0 {
+                        return Err(SpineStoreError::InvalidLedger(
+                            "task_allocation_updated revision must be non-zero".to_string(),
+                        ));
+                    }
+                    let state = state.as_ref().ok_or_else(|| {
+                        SpineStoreError::InvalidLedger(
+                            "task_allocation_updated appeared before root node creation"
+                                .to_string(),
+                        )
+                    })?;
+                    let anchor_node_id = NodeId::parse(&anchor_node_id)?;
+                    if state.node(&anchor_node_id).is_none() {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "task_allocation_updated references unknown anchor node {}",
+                            anchor_node_id.bracketed()
+                        )));
+                    }
+                    for scope in scopes {
+                        let Some(existing_node_id) = scope.existing_node_id else {
+                            continue;
+                        };
+                        let existing_node_id = NodeId::parse(&existing_node_id)?;
+                        if state.node(&existing_node_id).is_none() {
+                            return Err(SpineStoreError::InvalidLedger(format!(
+                                "task_allocation_updated references unknown scope node {}",
+                                existing_node_id.bracketed()
+                            )));
+                        }
                     }
                 }
                 TreeEvent::RootEpochArchived {
@@ -1325,6 +1504,14 @@ enum TreeEvent {
         items: Vec<PlanSnapshotItem>,
         source_turn_id: String,
     },
+    TaskAllocationUpdated {
+        seq: u64,
+        anchor_node_id: String,
+        revision: u64,
+        explanation: Option<String>,
+        scopes: Vec<PlanAllocationScope>,
+        source_turn_id: String,
+    },
     RootEpochArchived {
         seq: u64,
         archived_root_id: String,
@@ -1356,6 +1543,7 @@ impl TreeEvent {
             TreeEvent::NodeCreated { seq, .. }
             | TreeEvent::TransitionApplied { seq, .. }
             | TreeEvent::TaskPlanUpdated { seq, .. }
+            | TreeEvent::TaskAllocationUpdated { seq, .. }
             | TreeEvent::RootEpochArchived { seq, .. }
             | TreeEvent::ProjectionReset { seq, .. }
             | TreeEvent::SpineHintEmitted { seq, .. } => *seq,
@@ -1575,6 +1763,12 @@ struct NodeSnapshot {
     plan_path: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+struct SpineBaseLocator {
+    version: u32,
+    base: String,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum SpineStoreError {
     #[error("invalid spine rollout path {path}: {reason}")]
@@ -1612,6 +1806,70 @@ fn status_label(status: &NodeStatus) -> &'static str {
         NodeStatus::Finished => "finished",
         NodeStatus::Closed => "closed",
     }
+}
+
+fn rollout_parent(rollout_path: &Path) -> Result<&Path, SpineStoreError> {
+    SpineSidecarStore::validate_rollout_path(rollout_path)?;
+    rollout_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| SpineStoreError::InvalidRolloutPath {
+            path: rollout_path.to_path_buf(),
+            reason: "rollout path must include a parent directory",
+        })
+}
+
+fn rollout_stem(rollout_path: &Path) -> Result<&str, SpineStoreError> {
+    SpineSidecarStore::validate_rollout_path(rollout_path)?;
+    rollout_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| SpineStoreError::InvalidRolloutPath {
+            path: rollout_path.to_path_buf(),
+            reason: "rollout path must include a valid UTF-8 file stem",
+        })
+}
+
+fn read_base_locator(path: &Path) -> Result<SpineBaseLocator, SpineStoreError> {
+    let contents = std::fs::read_to_string(path).map_err(|source| SpineStoreError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let locator: SpineBaseLocator =
+        serde_json::from_str(&contents).map_err(|source| SpineStoreError::Json {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if locator.version != SPINE_BASE_LOCATOR_VERSION {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "unsupported spine base locator version {} at {}",
+            locator.version,
+            path.display()
+        )));
+    }
+    Ok(locator)
+}
+
+fn validate_relative_base(base: &Path, rollout_path: &Path) -> Result<(), SpineStoreError> {
+    if base.as_os_str().is_empty() || base.is_absolute() {
+        return Err(SpineStoreError::InvalidRolloutPath {
+            path: rollout_path.to_path_buf(),
+            reason: "spine base locator must contain a non-empty relative base",
+        });
+    }
+    if base.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(SpineStoreError::InvalidRolloutPath {
+            path: rollout_path.to_path_buf(),
+            reason: "spine base locator must stay within the rollout directory",
+        });
+    }
+    Ok(())
 }
 
 fn relative_worklog_path(node_id: &NodeId) -> String {

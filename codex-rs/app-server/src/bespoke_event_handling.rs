@@ -2123,6 +2123,8 @@ mod tests {
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_protocol::protocol::UserMessageEvent;
+    use codex_protocol::spine_tree::SpineTreeAllocationScopeSnapshot;
+    use codex_protocol::spine_tree::SpineTreeAllocationSnapshot;
     use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
     use codex_protocol::spine_tree::SpineTreeNodeStatus;
     use codex_protocol::spine_tree::SpineTreePlanItemSnapshot;
@@ -3482,6 +3484,7 @@ mod tests {
                     status: StepStatus::Completed,
                 },
             ],
+            spine_allocation: None,
         };
 
         let conversation_id = ThreadId::new();
@@ -3528,6 +3531,16 @@ mod tests {
                     summary: Some("root scope".to_string()),
                     status: SpineTreeNodeStatus::Opened,
                     plan: None,
+                    allocation: Some(SpineTreeAllocationSnapshot {
+                        anchor_node_id: "1".to_string(),
+                        revision: 1,
+                        explanation: Some("group upcoming work".to_string()),
+                        scopes: vec![SpineTreeAllocationScopeSnapshot {
+                            existing_node_id: None,
+                            summary: "Verify scope".to_string(),
+                            checkpoints: vec!["run focused validation".to_string()],
+                        }],
+                    }),
                 },
                 SpineTreeNodeSnapshot {
                     node_id: "1.1".to_string(),
@@ -3550,6 +3563,7 @@ mod tests {
                             },
                         ],
                     }),
+                    allocation: None,
                 },
             ],
         };
@@ -3570,6 +3584,14 @@ mod tests {
                 assert_eq!(
                     n.nodes[0].status,
                     codex_app_server_protocol::SpineTreeNodeStatus::Opened
+                );
+                let allocation = n.nodes[0].allocation.as_ref().expect("root allocation");
+                assert_eq!(allocation.anchor_node_id, "1");
+                assert_eq!(allocation.revision, 1);
+                assert_eq!(allocation.scopes[0].summary, "Verify scope");
+                assert_eq!(
+                    allocation.scopes[0].checkpoints,
+                    vec!["run focused validation"]
                 );
                 assert_eq!(n.nodes[1].parent_id.as_deref(), Some("1"));
                 let plan = n.nodes[1].plan.as_ref().expect("leaf plan");

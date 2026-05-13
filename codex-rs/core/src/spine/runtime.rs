@@ -3,6 +3,7 @@ use super::compact::render_context_compacted_outline;
 use super::ids::NodeId;
 use super::is_legacy_spine_transition_tool;
 use super::is_spine_transition_tool;
+use super::plan_bridge::PlanAllocationSnapshot;
 use super::plan_bridge::PlanSnapshot;
 use super::state::SpineState;
 use super::state::SpineStateError;
@@ -12,7 +13,10 @@ use super::store::SpineStoreError;
 use super::trajs::RawOrdinalRange;
 use super::view::render_tree;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::plan_tool::SpineAllocationArg;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::spine_tree::SpineTreeAllocationScopeSnapshot;
+use codex_protocol::spine_tree::SpineTreeAllocationSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use codex_protocol::spine_tree::SpineTreePlanItemSnapshot;
@@ -23,8 +27,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
-const SPINE_HINT_FIRST_THRESHOLD_TOKENS: u64 = 60_000;
-const SPINE_HINT_STEP_TOKENS: u64 = 30_000;
+const SPINE_HINT_FIRST_THRESHOLD_TOKENS: u64 = 30_000;
+const SPINE_HINT_STEP_TOKENS: u64 = 20_000;
 
 #[derive(Debug)]
 pub(crate) struct SpineRuntime {
@@ -48,7 +52,12 @@ impl SpineRuntime {
         rollout_path: impl AsRef<Path>,
         next_raw_ordinal: u64,
     ) -> Result<Self, SpineRuntimeError> {
-        let store = SpineSidecarStore::for_rollout(rollout_path)?;
+        let rollout_path = rollout_path.as_ref();
+        let store = if SpineSidecarStore::locator_path_for_rollout(rollout_path)?.exists() {
+            SpineSidecarStore::for_rollout(rollout_path)?
+        } else {
+            SpineSidecarStore::create_for_rollout(rollout_path)?
+        };
         Self::load_or_create(store, next_raw_ordinal)
     }
 
@@ -389,6 +398,8 @@ impl SpineRuntime {
         turn_id: impl Into<String>,
         args: UpdatePlanArgs,
     ) -> Result<PlanSnapshot, SpineRuntimeError> {
+        let turn_id = turn_id.into();
+        let allocation = args.spine_allocation.clone();
         let previous = self.store.read_plan_snapshot(self.cursor())?;
         let revision = self
             .store
@@ -397,6 +408,32 @@ impl SpineRuntime {
             .checked_add(1)
             .ok_or(SpineRuntimeError::PlanRevisionOverflow)?;
         let event_seq = self.store.next_tree_event_seq()?;
+        let allocation_snapshot = if let Some(allocation) = allocation {
+            let anchor_node_id = self.resolve_allocation_anchor(&allocation)?;
+            self.validate_allocation(&anchor_node_id, &allocation)?;
+            let allocation_revision = self
+                .store
+                .read_allocation_revision(&anchor_node_id)?
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or(SpineRuntimeError::PlanRevisionOverflow)?;
+            let allocation_event_seq = event_seq
+                .checked_add(1)
+                .ok_or(SpineRuntimeError::PlanRevisionOverflow)?;
+            Some((
+                anchor_node_id.clone(),
+                PlanAllocationSnapshot::from_update(
+                    &anchor_node_id,
+                    allocation_revision,
+                    allocation_event_seq,
+                    turn_id.clone(),
+                    args.explanation.clone(),
+                    allocation,
+                ),
+            ))
+        } else {
+            None
+        };
         let snapshot = PlanSnapshot::from_update(
             self.cursor(),
             revision,
@@ -406,17 +443,30 @@ impl SpineRuntime {
             previous.as_ref(),
         );
         self.store.write_plan_snapshot(self.cursor(), &snapshot)?;
+        if let Some((anchor_node_id, allocation_snapshot)) = allocation_snapshot {
+            self.store
+                .write_allocation_snapshot(&anchor_node_id, &allocation_snapshot)?;
+        }
         Ok(snapshot)
     }
 
     pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineRuntimeError> {
         let snapshot_seq = self.store.next_tree_event_seq()?.saturating_sub(1);
+        let allocation_anchor = self.default_allocation_anchor()?;
         let mut nodes = Vec::with_capacity(self.state.nodes().len());
         for (node_id, node) in self.state.nodes() {
             let plan = if node_id == self.cursor() {
                 self.store
                     .read_plan_snapshot(node_id)?
                     .map(spine_tree_plan_snapshot)
+                    .transpose()?
+            } else {
+                None
+            };
+            let allocation = if node_id == &allocation_anchor {
+                self.store
+                    .read_allocation_snapshot(node_id)?
+                    .map(spine_tree_allocation_snapshot)
                     .transpose()?
             } else {
                 None
@@ -432,6 +482,7 @@ impl SpineRuntime {
                     super::state::NodeStatus::Closed => SpineTreeNodeStatus::Closed,
                 },
                 plan,
+                allocation,
             });
         }
 
@@ -440,6 +491,119 @@ impl SpineRuntime {
             active_node_id: self.cursor().to_string(),
             nodes,
         })
+    }
+
+    fn resolve_allocation_anchor(
+        &self,
+        allocation: &SpineAllocationArg,
+    ) -> Result<NodeId, SpineRuntimeError> {
+        let anchor = if let Some(anchor) = &allocation.anchor {
+            NodeId::parse(anchor).map_err(|_| SpineRuntimeError::InvalidPlanAllocation {
+                message: format!("invalid allocation anchor node id {anchor}"),
+            })?
+        } else {
+            self.default_allocation_anchor()?
+        };
+        self.ensure_editable_allocation_node(&anchor, "anchor")?;
+        Ok(anchor)
+    }
+
+    fn default_allocation_anchor(&self) -> Result<NodeId, SpineRuntimeError> {
+        let cursor = self.cursor();
+        let cursor_node = self
+            .state
+            .node(cursor)
+            .ok_or_else(|| SpineRuntimeError::UnknownNode(cursor.clone()))?;
+        if let Some(parent_id) = &cursor_node.parent_id
+            && matches!(
+                self.state.node(parent_id).map(|node| &node.status),
+                Some(super::state::NodeStatus::Opened)
+            )
+        {
+            return Ok(parent_id.clone());
+        }
+        Ok(cursor.clone())
+    }
+
+    fn validate_allocation(
+        &self,
+        anchor: &NodeId,
+        allocation: &SpineAllocationArg,
+    ) -> Result<(), SpineRuntimeError> {
+        if allocation.scopes.is_empty() {
+            return Err(SpineRuntimeError::InvalidPlanAllocation {
+                message: "spine_allocation.scopes must not be empty".to_string(),
+            });
+        }
+        for scope in &allocation.scopes {
+            if scope.summary.trim().is_empty() {
+                return Err(SpineRuntimeError::InvalidPlanAllocation {
+                    message: "spine_allocation scope summary must not be empty".to_string(),
+                });
+            }
+            if scope.checkpoints.is_empty() {
+                return Err(SpineRuntimeError::InvalidPlanAllocation {
+                    message: "spine_allocation scope checkpoints must not be empty".to_string(),
+                });
+            }
+            if let Some(empty_checkpoint) = scope
+                .checkpoints
+                .iter()
+                .find(|checkpoint| checkpoint.trim().is_empty())
+            {
+                return Err(SpineRuntimeError::InvalidPlanAllocation {
+                    message: format!(
+                        "spine_allocation checkpoint must not be empty: {empty_checkpoint:?}"
+                    ),
+                });
+            }
+            let Some(existing_node_id) = &scope.node else {
+                continue;
+            };
+            let existing_node_id = NodeId::parse(existing_node_id).map_err(|_| {
+                SpineRuntimeError::InvalidPlanAllocation {
+                    message: format!("invalid allocation scope node id {existing_node_id}"),
+                }
+            })?;
+            self.ensure_editable_allocation_node(&existing_node_id, "scope")?;
+            if !is_node_within_anchor(&existing_node_id, anchor) {
+                return Err(SpineRuntimeError::InvalidPlanAllocation {
+                    message: format!(
+                        "allocation scope {} is outside anchor {}",
+                        existing_node_id.bracketed(),
+                        anchor.bracketed()
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_editable_allocation_node(
+        &self,
+        node_id: &NodeId,
+        role: &str,
+    ) -> Result<(), SpineRuntimeError> {
+        let node = self
+            .state
+            .node(node_id)
+            .ok_or_else(|| SpineRuntimeError::UnknownNode(node_id.clone()))?;
+        match node.status {
+            super::state::NodeStatus::Live | super::state::NodeStatus::Opened => Ok(()),
+            super::state::NodeStatus::Finished | super::state::NodeStatus::Closed => {
+                Err(SpineRuntimeError::InvalidPlanAllocation {
+                    message: format!(
+                        "allocation {role} {} is read-only because it is {}",
+                        node_id.bracketed(),
+                        match node.status {
+                            super::state::NodeStatus::Finished => "finished",
+                            super::state::NodeStatus::Closed => "closed",
+                            _ => unreachable!("handled editable states above"),
+                        }
+                    ),
+                })
+            }
+        }
     }
 
     pub(crate) fn after_response_items_recorded(
@@ -744,6 +908,8 @@ pub(crate) enum SpineRuntimeError {
     PlanRevisionOverflow,
     #[error("unknown spine plan item status {0}")]
     UnknownPlanItemStatus(String),
+    #[error("invalid spine allocation: {message}")]
+    InvalidPlanAllocation { message: String },
     #[error(
         "staged spine transition mismatch: expected {expected_from} -> {expected_to}, got {actual_from} -> {actual_to}"
     )]
@@ -807,6 +973,29 @@ fn spine_tree_plan_snapshot(
             })
             .collect::<Result<Vec<_>, _>>()?,
     })
+}
+
+fn spine_tree_allocation_snapshot(
+    snapshot: PlanAllocationSnapshot,
+) -> Result<SpineTreeAllocationSnapshot, SpineRuntimeError> {
+    Ok(SpineTreeAllocationSnapshot {
+        anchor_node_id: snapshot.anchor_node_id,
+        revision: snapshot.revision,
+        explanation: snapshot.explanation,
+        scopes: snapshot
+            .scopes
+            .into_iter()
+            .map(|scope| SpineTreeAllocationScopeSnapshot {
+                existing_node_id: scope.existing_node_id,
+                summary: scope.summary,
+                checkpoints: scope.checkpoints,
+            })
+            .collect(),
+    })
+}
+
+fn is_node_within_anchor(node_id: &NodeId, anchor: &NodeId) -> bool {
+    node_id.segments().starts_with(anchor.segments())
 }
 
 #[cfg(test)]

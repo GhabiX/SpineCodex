@@ -939,6 +939,7 @@ async fn plan_implementation_popup_skips_without_proposed_plan() {
             step: "First".to_string(),
             status: StepStatus::Pending,
         }],
+        spine_allocation: None,
     });
     chat.on_task_complete(
         /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
@@ -1079,6 +1080,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
             step: "First".to_string(),
             status: StepStatus::Pending,
         }],
+        spine_allocation: None,
     });
     chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
     chat.on_task_complete(
@@ -1698,6 +1700,7 @@ async fn plan_update_renders_history_cell() {
                 status: StepStatus::Pending,
             },
         ],
+        spine_allocation: None,
     };
     chat.on_plan_update(update);
     let cells = drain_insert_history(&mut rx);

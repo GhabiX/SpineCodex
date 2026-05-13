@@ -188,6 +188,41 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
 }
 
 #[test]
+fn update_plan_schema_exposes_spine_allocation_planning_ir() {
+    let ToolSpec::Function(tool) = create_update_plan_tool() else {
+        panic!("expected function tool");
+    };
+    assert!(tool.description.contains("spine_allocation"));
+    assert!(tool.description.contains("planning only"));
+    assert!(
+        tool.description
+            .contains("does not create or move Spine nodes")
+    );
+
+    let properties = tool
+        .parameters
+        .properties
+        .as_ref()
+        .expect("update_plan object properties");
+    let allocation = properties
+        .get("spine_allocation")
+        .expect("spine_allocation schema");
+    assert_eq!(allocation.required, Some(vec!["scopes".to_string()]));
+    let allocation_properties = allocation
+        .properties
+        .as_ref()
+        .expect("allocation object properties");
+    let scopes = allocation_properties
+        .get("scopes")
+        .expect("allocation scopes schema");
+    let scope = scopes.items.as_ref().expect("scope item schema");
+    assert_eq!(
+        scope.required,
+        Some(vec!["summary".to_string(), "checkpoints".to_string()])
+    );
+}
+
+#[test]
 fn spine_tool_is_feature_gated() {
     let model_info = model_info();
     let mut features = Features::with_defaults();

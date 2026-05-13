@@ -10,6 +10,8 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use codex_protocol::spine_tree::SpineTreeAllocationScopeSnapshot as CoreSpineTreeAllocationScopeSnapshot;
+use codex_protocol::spine_tree::SpineTreeAllocationSnapshot as CoreSpineTreeAllocationSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot as CoreSpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus as CoreSpineTreeNodeStatus;
 use codex_protocol::spine_tree::SpineTreePlanItemSnapshot as CoreSpineTreePlanItemSnapshot;
@@ -377,6 +379,7 @@ pub struct SpineTreeNode {
     pub summary: Option<String>,
     pub status: SpineTreeNodeStatus,
     pub plan: Option<SpineTreePlan>,
+    pub allocation: Option<SpineTreeAllocation>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -419,6 +422,25 @@ pub enum SpineTreePlanItemStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct SpineTreeAllocation {
+    pub anchor_node_id: String,
+    pub revision: u64,
+    pub explanation: Option<String>,
+    pub scopes: Vec<SpineTreeAllocationScope>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineTreeAllocationScope {
+    pub existing_node_id: Option<String>,
+    pub summary: String,
+    pub checkpoints: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnPlanStep {
     pub step: String,
     pub status: TurnPlanStepStatus,
@@ -450,6 +472,7 @@ impl From<CoreSpineTreeNodeSnapshot> for SpineTreeNode {
             summary: value.summary,
             status: value.status.into(),
             plan: value.plan.map(SpineTreePlan::from),
+            allocation: value.allocation.map(SpineTreeAllocation::from),
         }
     }
 }
@@ -495,6 +518,31 @@ impl From<CoreSpineTreePlanItemStatus> for SpineTreePlanItemStatus {
             CoreSpineTreePlanItemStatus::Pending => Self::Pending,
             CoreSpineTreePlanItemStatus::InProgress => Self::InProgress,
             CoreSpineTreePlanItemStatus::Completed => Self::Completed,
+        }
+    }
+}
+
+impl From<CoreSpineTreeAllocationSnapshot> for SpineTreeAllocation {
+    fn from(value: CoreSpineTreeAllocationSnapshot) -> Self {
+        Self {
+            anchor_node_id: value.anchor_node_id,
+            revision: value.revision,
+            explanation: value.explanation,
+            scopes: value
+                .scopes
+                .into_iter()
+                .map(SpineTreeAllocationScope::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<CoreSpineTreeAllocationScopeSnapshot> for SpineTreeAllocationScope {
+    fn from(value: CoreSpineTreeAllocationScopeSnapshot) -> Self {
+        Self {
+            existing_node_id: value.existing_node_id,
+            summary: value.summary,
+            checkpoints: value.checkpoints,
         }
     }
 }

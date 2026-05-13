@@ -5,9 +5,9 @@ use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::spine::store::SpineOperation;
-use crate::spine::view::render_tool_output_with_base_and_hint;
+use crate::spine::view::render_tool_output_with_base;
 use crate::spine::view::render_tree;
-use crate::spine::view::render_tree_tool_output_with_base_and_hint;
+use crate::spine::view::render_tree_tool_output_with_base;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -180,21 +180,13 @@ impl ToolHandler for SpineHandler {
         if self.tool == SpineTool::Tree {
             let _args: SpineTreeArgs = parse_arguments(&arguments)?;
             let (cursor, tree, text) = {
-                let mut runtime = spine.lock().await;
+                let runtime = spine.lock().await;
                 let cursor = runtime.cursor().clone();
                 let base = runtime.store().root().to_path_buf();
-                let hint = runtime
-                    .maybe_emit_size_hint("tree_output")
-                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 (
                     cursor.bracketed(),
                     render_tree(runtime.state(), &cursor),
-                    render_tree_tool_output_with_base_and_hint(
-                        runtime.state(),
-                        &cursor,
-                        &base,
-                        hint.as_ref(),
-                    ),
+                    render_tree_tool_output_with_base(runtime.state(), &cursor, &base),
                 )
             };
             return Ok(SpineToolOutput {
@@ -252,13 +244,7 @@ impl ToolHandler for SpineHandler {
                 staged.op,
                 staged.to_node.bracketed(),
                 render_tree(&preview_state, &staged.to_node),
-                render_tool_output_with_base_and_hint(
-                    staged.op,
-                    &preview_state,
-                    &staged.to_node,
-                    &base,
-                    None,
-                ),
+                render_tool_output_with_base(staged.op, &preview_state, &staged.to_node, &base),
             )
         };
 

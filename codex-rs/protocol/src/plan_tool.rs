@@ -26,4 +26,24 @@ pub struct UpdatePlanArgs {
     #[serde(default)]
     pub explanation: Option<String>,
     pub plan: Vec<PlanItemArg>,
+    #[serde(default)]
+    pub spine_allocation: Option<SpineAllocationArg>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SpineAllocationArg {
+    #[serde(default)]
+    pub anchor: Option<String>,
+    pub scopes: Vec<SpineAllocationScopeArg>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SpineAllocationScopeArg {
+    #[serde(default)]
+    pub node: Option<String>,
+    pub summary: String,
+    #[serde(default)]
+    pub checkpoints: Vec<String>,
 }

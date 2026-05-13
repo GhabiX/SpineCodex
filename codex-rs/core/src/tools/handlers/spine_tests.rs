@@ -14,9 +14,6 @@ use crate::tools::handlers::spine_spec::create_spine_namespace_tool;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::RolloutItem;
 use codex_tools::JsonSchemaPrimitiveType;
 use codex_tools::JsonSchemaType;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -31,7 +28,7 @@ async fn session_and_turn_with_spine() -> (TempDir, Session, TurnContext) {
     let (mut session, turn) = make_session_and_context().await;
     let temp = tempfile::tempdir().expect("create tempdir");
     let rollout_path = temp.path().join("rollout-test.jsonl");
-    let store = SpineSidecarStore::for_rollout(&rollout_path).expect("create store");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path).expect("create store");
     let runtime = SpineRuntime::create(store).expect("create spine runtime");
     session.spine = Some(Arc::new(Mutex::new(runtime)));
     (temp, session, turn)
@@ -70,17 +67,6 @@ fn transition_args() -> serde_json::Value {
 
 fn handler(tool: SpineTool) -> SpineHandler {
     SpineHandler { tool }
-}
-
-fn assistant_response_item(text: &str) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::OutputText {
-            text: text.to_string(),
-        }],
-        phase: None,
-    }
 }
 
 #[test]
@@ -498,61 +484,6 @@ async fn tree_prints_current_tree_without_staging() {
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     assert!(runtime.staged_transition().is_none());
-}
-
-#[tokio::test]
-async fn tree_output_includes_size_hint_once_after_threshold_crossed() {
-    let (temp, session, turn) = session_and_turn_with_spine().await;
-    {
-        let spine = session.spine.as_ref().expect("spine runtime");
-        let mut runtime = spine.lock().await;
-        let payload = "x".repeat(240_000);
-        let item = assistant_response_item(&payload);
-        runtime
-            .store()
-            .append_raw_mirror_items(&[RolloutItem::ResponseItem(item.clone())])
-            .expect("append raw mirror");
-        runtime
-            .after_response_items_recorded("turn-1", &[item], 0, 1)
-            .expect("record spine items");
-    }
-    let session = Arc::new(session);
-    let turn = Arc::new(turn);
-
-    let first = handler(SpineTool::Tree)
-        .handle(invocation(
-            Arc::clone(&session),
-            Arc::clone(&turn),
-            "call-tree-1",
-            SpineTool::Tree,
-            json!({}),
-        ))
-        .await
-        .expect("first spine tree should render");
-
-    assert_eq!(
-        first.log_preview(),
-        format!(
-            "Current:  root\nBase: {}\n\n(empty)\n\nSpine hint: current node raw trace is about 60k tokens. If this scope is complete, finish it cleanly and use spine.next or spine.close before starting work that can rely on the worklog.",
-            spine_base(&temp)
-        )
-    );
-
-    let second = handler(SpineTool::Tree)
-        .handle(invocation(
-            Arc::clone(&session),
-            Arc::clone(&turn),
-            "call-tree-2",
-            SpineTool::Tree,
-            json!({}),
-        ))
-        .await
-        .expect("second spine tree should render");
-
-    assert_eq!(
-        second.log_preview(),
-        format!("Current:  root\nBase: {}\n\n(empty)", spine_base(&temp))
-    );
 }
 
 #[tokio::test]

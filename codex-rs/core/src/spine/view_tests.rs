@@ -28,8 +28,7 @@ fn tree_tool_view_can_include_base_path() {
 }
 
 #[test]
-fn tree_tool_view_can_include_runtime_size_hint() {
-    let state = SpineState::new();
+fn renders_runtime_size_hint_as_standalone_observation_text() {
     let hint = SpineRuntimeHint {
         node_id: NodeId::from_segments(vec![1]),
         estimated_tokens: 63_200,
@@ -37,13 +36,8 @@ fn tree_tool_view_can_include_runtime_size_hint() {
     };
 
     assert_eq!(
-        render_tree_tool_output_with_base_and_hint(
-            &state,
-            state.cursor(),
-            Path::new("/tmp/spine"),
-            Some(&hint),
-        ),
-        "Current:  root\nBase: /tmp/spine\n\n(empty)\n\nSpine hint: current node raw trace is about 63k tokens. If this scope is complete, finish it cleanly and use spine.next or spine.close before starting work that can rely on the worklog."
+        render_size_hint(&hint),
+        "\n\nSpine hint: current node raw trace is about 63k tokens and is carried into every request. At the next natural boundary, use spine.next or spine.close if finished work can be carried by the worklog."
     );
 }
 

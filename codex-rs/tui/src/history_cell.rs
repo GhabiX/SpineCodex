@@ -53,6 +53,7 @@ use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
 use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_app_server_protocol::SpineTreeAllocationScope;
 use codex_app_server_protocol::SpineTreeNode;
 use codex_app_server_protocol::SpineTreePlanItem;
 use codex_app_server_protocol::SpineTreePlanItemStatus;
@@ -2957,7 +2958,9 @@ fn split_request_user_input_answer(
 
 /// Render a user‑friendly plan update styled like a checkbox todo list.
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
-    let UpdatePlanArgs { explanation, plan } = update;
+    let UpdatePlanArgs {
+        explanation, plan, ..
+    } = update;
     PlanUpdateCell { explanation, plan }
 }
 
@@ -3198,6 +3201,18 @@ impl HistoryCell for SpineTreeUpdateCell {
                     )));
                 }
             }
+            if let Some(allocation) = &node.node.allocation {
+                for scope in &allocation.scopes {
+                    let scope_id = scope.existing_node_id.as_deref().unwrap_or("future");
+                    lines.push(Line::from(format!(
+                        "{prefix}  allocation {scope_id}: {}",
+                        scope.summary
+                    )));
+                    for checkpoint in &scope.checkpoints {
+                        lines.push(Line::from(format!("{prefix}    checkpoint: {checkpoint}")));
+                    }
+                }
+            }
         }
         lines
     }
@@ -3287,6 +3302,49 @@ fn render_spine_tree_node(
                 width,
             ));
         }
+    }
+    if let Some(allocation) = &node.allocation {
+        let indent = format!("  {}  ", "  ".repeat(display_node.depth + 1));
+        out.push(Line::from(vec![
+            Span::from(indent).dim(),
+            Span::from("allocation").dim().italic(),
+        ]));
+        for scope in &allocation.scopes {
+            out.extend(render_spine_tree_allocation_scope(
+                scope,
+                display_node.depth + 1,
+                width,
+            ));
+        }
+    }
+    out
+}
+
+fn render_spine_tree_allocation_scope(
+    scope: &SpineTreeAllocationScope,
+    depth: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let scope_id = scope.existing_node_id.as_deref().unwrap_or("future");
+    let indent = format!("  {}  ", "  ".repeat(depth));
+    let opts = RtOptions::new(width.saturating_sub(2).max(1) as usize)
+        .initial_indent(format!("{indent}↳ ").into())
+        .subsequent_indent(format!("{indent}  ").into());
+    let line = Line::from(vec![
+        Span::from(format!("[{scope_id}] ")).dim(),
+        Span::from(scope.summary.clone()),
+    ]);
+    let wrapped = adaptive_wrap_line(&line, opts);
+    push_owned_lines(&wrapped, &mut out);
+
+    for checkpoint in &scope.checkpoints {
+        let opts = RtOptions::new(width.saturating_sub(2).max(1) as usize)
+            .initial_indent(format!("{indent}  • ").into())
+            .subsequent_indent(format!("{indent}    ").into());
+        let line = Line::from(checkpoint.clone().dim());
+        let wrapped = adaptive_wrap_line(&line, opts);
+        push_owned_lines(&wrapped, &mut out);
     }
     out
 }
@@ -5642,6 +5700,7 @@ mod tests {
                     status: StepStatus::Pending,
                 },
             ],
+            spine_allocation: None,
         };
 
         let cell = new_plan_update(update);
@@ -5665,6 +5724,7 @@ mod tests {
                     status: StepStatus::Pending,
                 },
             ],
+            spine_allocation: None,
         };
 
         let cell = new_plan_update(update);
@@ -5686,6 +5746,7 @@ mod tests {
                 step: format!("Validate callbacks under {step_url} before rollout."),
                 status: StepStatus::InProgress,
             }],
+            spine_allocation: None,
         };
 
         let cell = new_plan_update(update);

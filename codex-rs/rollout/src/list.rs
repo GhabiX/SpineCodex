@@ -1314,10 +1314,22 @@ async fn find_thread_path_by_id_str_in_subdir(
         ..Default::default()
     };
 
-    let results = file_search::run(id_str, vec![root], options, /*cancel_flag*/ None)
-        .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+    let results = file_search::run(
+        &format!("{id_str}.jsonl"),
+        vec![root],
+        options,
+        /*cancel_flag*/ None,
+    )
+    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
-    let found = results.matches.into_iter().next().map(|m| m.full_path());
+    let found = results.matches.into_iter().find_map(|m| {
+        if m.match_type != file_search::MatchType::File {
+            return None;
+        }
+        let path = m.full_path();
+        let name = path.file_name()?.to_str()?;
+        (name.starts_with("rollout-") && name.ends_with(&format!("{id_str}.jsonl"))).then_some(path)
+    });
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");
         tracing::warn!(

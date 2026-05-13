@@ -16,6 +16,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
 use codex_state::ThreadMetadata;
+use serde::Deserialize;
 
 use crate::StoredThread;
 use crate::ThreadStoreError;
@@ -86,6 +87,174 @@ pub(super) fn matching_rollout_file_name(
             ),
         })
     }
+}
+
+pub(super) struct SpineArtifactsMove {
+    source_locator: PathBuf,
+    destination_locator: PathBuf,
+    source_sidecar: PathBuf,
+    destination_sidecar: PathBuf,
+}
+
+impl SpineArtifactsMove {
+    pub(super) fn prepare(
+        source_rollout_path: &Path,
+        destination_rollout_path: &Path,
+    ) -> ThreadStoreResult<Option<Self>> {
+        let source_locator = spine_locator_path_for_rollout(source_rollout_path)?;
+        if !source_locator.exists() {
+            return Ok(None);
+        }
+        let destination_locator = spine_locator_path_for_rollout(destination_rollout_path)?;
+        if destination_locator.exists() {
+            return Err(ThreadStoreError::Internal {
+                message: format!(
+                    "spine base locator target already exists: {}",
+                    destination_locator.display()
+                ),
+            });
+        }
+
+        let base = read_spine_base_locator(&source_locator)?;
+        let source_sidecar = source_locator
+            .parent()
+            .expect("locator has parent")
+            .join(&base);
+        if !source_sidecar.exists() {
+            return Err(ThreadStoreError::Internal {
+                message: format!(
+                    "spine sidecar referenced by {} is missing: {}",
+                    source_locator.display(),
+                    source_sidecar.display()
+                ),
+            });
+        }
+        let destination_sidecar = destination_locator
+            .parent()
+            .expect("locator has parent")
+            .join(&base);
+        if destination_sidecar.exists() {
+            return Err(ThreadStoreError::Internal {
+                message: format!(
+                    "spine sidecar target already exists: {}",
+                    destination_sidecar.display()
+                ),
+            });
+        }
+
+        Ok(Some(Self {
+            source_locator,
+            destination_locator,
+            source_sidecar,
+            destination_sidecar,
+        }))
+    }
+
+    pub(super) fn apply(self) -> ThreadStoreResult<()> {
+        if let Some(parent) = self.destination_locator.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| ThreadStoreError::Internal {
+                message: format!("failed to create spine locator target directory: {err}"),
+            })?;
+        }
+        if let Some(parent) = self.destination_sidecar.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| ThreadStoreError::Internal {
+                message: format!("failed to create spine sidecar target directory: {err}"),
+            })?;
+        }
+        std::fs::rename(&self.source_sidecar, &self.destination_sidecar).map_err(|err| {
+            ThreadStoreError::Internal {
+                message: format!("failed to move spine sidecar: {err}"),
+            }
+        })?;
+        std::fs::rename(&self.source_locator, &self.destination_locator).map_err(|err| {
+            ThreadStoreError::Internal {
+                message: format!("failed to move spine base locator: {err}"),
+            }
+        })
+    }
+}
+
+fn spine_locator_path_for_rollout(rollout_path: &Path) -> ThreadStoreResult<PathBuf> {
+    let parent = rollout_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| ThreadStoreError::InvalidRequest {
+            message: format!(
+                "rollout path `{}` missing parent directory",
+                rollout_path.display()
+            ),
+        })?;
+    let stem = rollout_path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| ThreadStoreError::InvalidRequest {
+            message: format!(
+                "rollout path `{}` missing valid UTF-8 file stem",
+                rollout_path.display()
+            ),
+        })?;
+    Ok(parent.join(format!("{stem}.spine.json")))
+}
+
+#[derive(Deserialize)]
+struct SpineBaseLocator {
+    version: u32,
+    base: PathBuf,
+}
+
+fn read_spine_base_locator(path: &Path) -> ThreadStoreResult<PathBuf> {
+    let contents = std::fs::read_to_string(path).map_err(|err| ThreadStoreError::Internal {
+        message: format!(
+            "failed to read spine base locator {}: {err}",
+            path.display()
+        ),
+    })?;
+    let locator: SpineBaseLocator =
+        serde_json::from_str(&contents).map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "failed to parse spine base locator {}: {err}",
+                path.display()
+            ),
+        })?;
+    if locator.version != 1 {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "unsupported spine base locator version {} at {}",
+                locator.version,
+                path.display()
+            ),
+        });
+    }
+    validate_spine_base(&locator.base, path)?;
+    Ok(locator.base)
+}
+
+fn validate_spine_base(base: &Path, locator_path: &Path) -> ThreadStoreResult<()> {
+    if base.as_os_str().is_empty() || base.is_absolute() {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "spine base locator {} must contain a non-empty relative base",
+                locator_path.display()
+            ),
+        });
+    }
+    if base.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "spine base locator {} must stay within the rollout directory",
+                locator_path.display()
+            ),
+        });
+    }
+    Ok(())
 }
 
 pub(super) fn touch_modified_time(path: &Path) -> std::io::Result<()> {
