@@ -967,7 +967,7 @@ impl SpineSidecarStore {
                     from_node,
                     to_node,
                     to_parent_id,
-                    summary: _,
+                    summary,
                     raw_start_ordinal,
                     ..
                 } => {
@@ -1047,7 +1047,7 @@ impl SpineSidecarStore {
                     root_id,
                     next_leaf_id,
                     next_parent_id,
-                    summary,
+                    summary: _,
                     raw_start_ordinal,
                     ..
                 } => {
