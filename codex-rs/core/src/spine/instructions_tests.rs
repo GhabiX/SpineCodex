@@ -56,6 +56,9 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("task structure or next work scope changes"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("promptly refresh the current spine_plantree"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("displayed PlanTree stays current"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("non-trivial or multi-phase work"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree.children"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("rather than flattening them into root checkpoints"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 50k raw tokens"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 30k"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the warning as a cue"));

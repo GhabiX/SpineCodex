@@ -55,6 +55,7 @@ At the start, use update_plan with spine_plantree to maintain one compact task t
 Future PlanTree scopes may display as `~<predicted-id>` to distinguish planned nodes from real Spine nodes.
 Default to staying in the current live node while it remains focused. Use update_plan to revise the current PlanTree when new evidence changes the task structure.
 When your task structure or next work scope changes, promptly refresh the current spine_plantree with update_plan so the displayed PlanTree stays current.
+For non-trivial or multi-phase work, keep future planned scopes in `spine_plantree.children` rather than flattening them into root checkpoints, and update them with `update_plan`; this manages planning only and does not create real Spine nodes.
 Move Spine when a completed scope has accumulated substantial raw history and future work is likely to reuse its generated worklog IR:
 - spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context; it takes no arguments.
 - spine.next: finish the current leaf and move to its next sibling.
