@@ -3,6 +3,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -59,6 +60,13 @@ fn turn_complete(turn_id: &str) -> RolloutItem {
         duration_ms: None,
         time_to_first_token_ms: None,
     }))
+}
+
+fn compacted(message: &str) -> RolloutItem {
+    RolloutItem::Compacted(CompactedItem {
+        message: message.to_string(),
+        replacement_history: Some(Vec::new()),
+    })
 }
 
 #[test]
@@ -131,4 +139,35 @@ fn projection_keeps_only_surviving_turn_ids_after_rollback() {
 
     assert!(projection.surviving_turn_ids.contains("turn-1"));
     assert!(!projection.surviving_turn_ids.contains("rolled-back-turn"));
+}
+
+#[test]
+fn projection_keeps_only_surviving_compact_hashes_after_rollback() {
+    let surviving_message = "Spine compacted 1.1 [1, 4)";
+    let rolled_back_message = "Spine compacted 1.1 [1, 6)";
+    let projection = project_spine_state_from_rollout(&[
+        turn_started("turn-1"),
+        user_message("start"),
+        compacted(surviving_message),
+        turn_complete("turn-1"),
+        turn_started("rolled-back-turn"),
+        user_message("redo this turn"),
+        compacted(rolled_back_message),
+        turn_complete("rolled-back-turn"),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    ])
+    .expect("project");
+
+    assert!(
+        projection
+            .surviving_compact_hashes
+            .contains(&compact_message_hash(surviving_message))
+    );
+    assert!(
+        !projection
+            .surviving_compact_hashes
+            .contains(&compact_message_hash(rolled_back_message))
+    );
 }

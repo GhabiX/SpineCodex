@@ -6,6 +6,7 @@ use super::ids::NodeId;
 use super::state::SpineState;
 use super::state::SpineStateError;
 use super::store::SpineOperation;
+use super::store::compact_message_hash;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -14,12 +15,14 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 const ROOT_EPOCH_COMPACT_MESSAGE_PREFIX: &str = "Spine compacted root epoch ";
+const SPINE_COMPACT_MESSAGE_PREFIX: &str = "Spine compacted ";
 
 #[derive(Debug)]
 pub(crate) struct SpineProjection {
     pub(crate) state: SpineState,
     pub(crate) response_item_count: u64,
     pub(crate) surviving_turn_ids: HashSet<String>,
+    pub(crate) surviving_compact_hashes: HashSet<String>,
 }
 
 impl SpineProjection {
@@ -54,6 +57,7 @@ pub(crate) fn project_spine_state_from_rollout(
     let mut raw_ordinal = 0_u64;
     let mut pending_transition: Option<PendingTransition> = None;
     let surviving_turn_ids = surviving_turn_ids(&effective_items);
+    let surviving_compact_hashes = surviving_compact_hashes(&effective_items);
 
     for item in effective_items {
         match item {
@@ -97,6 +101,7 @@ pub(crate) fn project_spine_state_from_rollout(
         state,
         response_item_count: raw_ordinal,
         surviving_turn_ids,
+        surviving_compact_hashes,
     })
 }
 
@@ -156,6 +161,20 @@ fn surviving_turn_ids(items: &[&RolloutItem]) -> HashSet<String> {
         }
     }
     turn_ids
+}
+
+fn surviving_compact_hashes(items: &[&RolloutItem]) -> HashSet<String> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::Compacted(compacted)
+                if compacted.message.starts_with(SPINE_COMPACT_MESSAGE_PREFIX) =>
+            {
+                Some(compact_message_hash(&compacted.message))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {

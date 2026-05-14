@@ -357,6 +357,33 @@ fn runtime_span_mapping_counts_unmatched_legacy_ir_as_raw_text() {
 }
 
 #[test]
+fn runtime_span_mapping_uses_filtered_slim_worklog_span_after_redo() {
+    let worklog_item = render_spine_worklog_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "redo leaf",
+        "current compact facts",
+    );
+    let stale_span = installed_span("compact-old", id(&[1, 1]), SpineOperation::Next, 1, 4);
+    let current_span = installed_span("compact-new", id(&[1, 1]), SpineOperation::Next, 1, 6);
+    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(
+            &history,
+            6,
+            &[stale_span.clone(), current_span.clone()]
+        ),
+        None,
+        "unfiltered duplicate spans are ambiguous"
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 6, &[current_span]),
+        Some(2)
+    );
+}
+
+#[test]
 fn suffix_fold_maps_after_visible_stale_legacy_ir_text() {
     let mut history = vec![text_item("raw 0"), text_item("raw 1")];
     history.push(rollout_serialized(render_spine_ir_item(

@@ -13,6 +13,7 @@ use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use sha1::Digest;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -39,6 +40,12 @@ const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
 const GENERATED_WORKLOG_SECTION_MARKER: &str = "\n\n<!-- spine:auto-compact-generated -->\n";
 const SPINE_BASE_LOCATOR_VERSION: u32 = 1;
+
+pub(crate) fn compact_message_hash(message: &str) -> String {
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(message.as_bytes());
+    format!("sha1:{:x}", hasher.finalize())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SpineSidecarStore {
@@ -404,6 +411,42 @@ impl SpineSidecarStore {
             source,
         })?;
         Ok(())
+    }
+
+    pub(crate) fn copy_projected_compact_index_from(
+        &self,
+        source: &SpineSidecarStore,
+        surviving_message_hashes: &HashSet<String>,
+    ) -> Result<(), SpineStoreError> {
+        let source_path = source.compact_index_path();
+        if !source_path.exists() {
+            return Ok(());
+        }
+
+        let events = source.read_compact_index_events()?;
+        let surviving_compact_ids = events
+            .iter()
+            .filter_map(|event| match event {
+                CompactIndexEvent::CompactInstalled {
+                    compact_id,
+                    message_hash,
+                    ..
+                } if surviving_message_hashes.contains(message_hash) => Some(compact_id.clone()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let filtered_events = events
+            .into_iter()
+            .filter(|event| match event {
+                CompactIndexEvent::CompactStarted { compact_id, .. }
+                | CompactIndexEvent::CompactInstalled { compact_id, .. } => {
+                    surviving_compact_ids.contains(compact_id)
+                }
+                CompactIndexEvent::CompactFailed { .. }
+                | CompactIndexEvent::CompactInterrupted { .. } => false,
+            })
+            .collect::<Vec<_>>();
+        self.write_compact_index_events(filtered_events)
     }
 
     pub(crate) fn write_plan<T: Serialize>(
@@ -1310,6 +1353,13 @@ impl SpineSidecarStore {
     pub(crate) fn installed_compact_spans(
         &self,
     ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
+        self.installed_compact_spans_matching_hashes(None)
+    }
+
+    pub(crate) fn installed_compact_spans_matching_hashes(
+        &self,
+        surviving_message_hashes: Option<&HashSet<String>>,
+    ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
         let mut spans = Vec::new();
 
         for event in self.read_compact_index_events()? {
@@ -1324,6 +1374,9 @@ impl SpineSidecarStore {
                 ..
             } = event
             {
+                if surviving_message_hashes.is_some_and(|hashes| !hashes.contains(&message_hash)) {
+                    continue;
+                }
                 if cut_ordinal >= fold_end_ordinal {
                     return Err(SpineStoreError::InvalidLedger(format!(
                         "compact.index.jsonl installed span for {compact_id} is empty or inverted: [{cut_ordinal}, {fold_end_ordinal})"
@@ -1347,6 +1400,32 @@ impl SpineSidecarStore {
         }
 
         Ok(spans)
+    }
+
+    fn write_compact_index_events(
+        &self,
+        events: Vec<CompactIndexEvent>,
+    ) -> Result<(), SpineStoreError> {
+        let path = self.compact_index_path();
+        let mut file = File::create(&path).map_err(|source| SpineStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        for (index, mut event) in events.into_iter().enumerate() {
+            let seq = u64::try_from(index + 1).map_err(|_| {
+                SpineStoreError::InvalidLedger("compact.index.jsonl has too many events".into())
+            })?;
+            event.set_seq(seq);
+            let line = serde_json::to_string(&event).map_err(|source| SpineStoreError::Json {
+                path: path.clone(),
+                source,
+            })?;
+            writeln!(file, "{line}").map_err(|source| SpineStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        }
+        Ok(())
     }
 
     fn next_tree_seq(&self) -> Result<u64, SpineStoreError> {
@@ -1813,6 +1892,15 @@ impl CompactIndexEvent {
             | CompactIndexEvent::CompactInstalled { seq, .. }
             | CompactIndexEvent::CompactFailed { seq, .. }
             | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq,
+        }
+    }
+
+    fn set_seq(&mut self, next_seq: u64) {
+        match self {
+            CompactIndexEvent::CompactStarted { seq, .. }
+            | CompactIndexEvent::CompactInstalled { seq, .. }
+            | CompactIndexEvent::CompactFailed { seq, .. }
+            | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq = next_seq,
         }
     }
 }

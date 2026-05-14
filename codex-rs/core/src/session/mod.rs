@@ -187,6 +187,7 @@ use crate::spine::compact::plan_suffix_fold_with_spans;
 use crate::spine::compact::render_auto_compact_worklog;
 use crate::spine::compact::render_spine_worklog_item;
 use crate::spine::store::SpineOperation;
+use crate::spine::store::compact_message_hash;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -1336,6 +1337,7 @@ impl Session {
                     projection.state,
                     projection.response_item_count,
                     projection.surviving_turn_ids,
+                    projection.surviving_compact_hashes,
                     reason,
                     source_turn_id,
                 )
@@ -2950,7 +2952,13 @@ impl Session {
             .spine
             .as_ref()
             .ok_or_else(|| CodexErr::Fatal("spine runtime is not initialized".to_string()))?;
-        let store = { spine.lock().await.store().clone() };
+        let (store, surviving_compact_hashes) = {
+            let runtime = spine.lock().await;
+            (
+                runtime.store().clone(),
+                runtime.surviving_compact_hashes().cloned(),
+            )
+        };
         let boundary = spine
             .lock()
             .await
@@ -2987,9 +2995,11 @@ impl Session {
             raw_mirror_path: store.raw_rollout_path(),
             sidecar_root: store.root().to_path_buf(),
         };
-        let runtime_spans = store.installed_compact_spans().map_err(|err| {
-            CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
-        })?;
+        let runtime_spans = store
+            .installed_compact_spans_matching_hashes(surviving_compact_hashes.as_ref())
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
+            })?;
         let plan = plan_suffix_fold_with_spans(
             &history,
             boundary.cut_ordinal,
@@ -3053,7 +3063,7 @@ impl Session {
             message: compact_message.clone(),
             replacement_history: Some(replacement_history.clone()),
         };
-        let message_hash = sha1_digest(&compact_message);
+        let message_hash = compact_message_hash(&compact_message);
         if let Err(err) = self
             .try_replace_compacted_history(replacement_history.clone(), None, compacted_item)
             .await
@@ -3133,7 +3143,7 @@ impl Session {
             effective_boundary.fold_end_ordinal,
             replacement_history.len(),
             worklog_rel_path.to_string_lossy().into_owned(),
-            message_hash,
+            message_hash.clone(),
         ) {
             return Err(self
                 .poison_spine_compact(format!(
@@ -3141,6 +3151,10 @@ impl Session {
                 ))
                 .await);
         }
+        spine
+            .lock()
+            .await
+            .record_surviving_compact_hash(message_hash);
         self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
             .await;
         Ok(())
@@ -3158,7 +3172,13 @@ impl Session {
             .spine
             .as_ref()
             .ok_or_else(|| CodexErr::Fatal("spine runtime is not initialized".to_string()))?;
-        let store = { spine.lock().await.store().clone() };
+        let (store, surviving_compact_hashes) = {
+            let runtime = spine.lock().await;
+            (
+                runtime.store().clone(),
+                runtime.surviving_compact_hashes().cloned(),
+            )
+        };
         let close_outlines = if boundary.op == SpineOperation::Close {
             let runtime = spine.lock().await;
             let audit_outline = runtime
@@ -3211,9 +3231,11 @@ impl Session {
             raw_mirror_path: store.raw_rollout_path(),
             sidecar_root: store.root().to_path_buf(),
         };
-        let runtime_spans = store.installed_compact_spans().map_err(|err| {
-            CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
-        })?;
+        let runtime_spans = store
+            .installed_compact_spans_matching_hashes(surviving_compact_hashes.as_ref())
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
+            })?;
         let plan = plan_suffix_fold_with_spans(
             &history,
             boundary.cut_ordinal,
@@ -3316,7 +3338,7 @@ impl Session {
             message: compact_output.compact_message.clone(),
             replacement_history: Some(replacement_history.clone()),
         };
-        let message_hash = sha1_digest(&compact_output.compact_message);
+        let message_hash = compact_message_hash(&compact_output.compact_message);
         if let Err(err) = self
             .try_replace_compacted_history(replacement_history.clone(), None, compacted_item)
             .await
@@ -3378,7 +3400,7 @@ impl Session {
             effective_boundary.fold_end_ordinal,
             replacement_history.len(),
             worklog_rel_path.to_string_lossy().into_owned(),
-            message_hash,
+            message_hash.clone(),
         ) {
             return Err(self
                 .poison_spine_compact(format!(
@@ -3386,6 +3408,10 @@ impl Session {
                 ))
                 .await);
         }
+        spine
+            .lock()
+            .await
+            .record_surviving_compact_hash(message_hash);
         Ok(())
     }
 

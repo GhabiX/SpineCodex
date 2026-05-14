@@ -47,6 +47,7 @@ pub(crate) struct SpineRuntime {
     pending_spine_call_starts: HashMap<String, u64>,
     mode: SpineRuntimeMode,
     surviving_turn_ids: Option<HashSet<String>>,
+    surviving_compact_hashes: Option<HashSet<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +109,7 @@ impl SpineRuntime {
             pending_spine_call_starts: HashMap::new(),
             mode: SpineRuntimeMode::Mutable,
             surviving_turn_ids: None,
+            surviving_compact_hashes: None,
         }
     }
 
@@ -121,6 +123,16 @@ impl SpineRuntime {
 
     pub(crate) fn cursor(&self) -> &NodeId {
         self.state.cursor()
+    }
+
+    pub(crate) fn surviving_compact_hashes(&self) -> Option<&HashSet<String>> {
+        self.surviving_compact_hashes.as_ref()
+    }
+
+    pub(crate) fn record_surviving_compact_hash(&mut self, message_hash: String) {
+        if let Some(surviving_compact_hashes) = self.surviving_compact_hashes.as_mut() {
+            surviving_compact_hashes.insert(message_hash);
+        }
     }
 
     pub(crate) fn current_ordinal(&self) -> u64 {
@@ -461,6 +473,7 @@ impl SpineRuntime {
         state: SpineState,
         next_raw_ordinal: u64,
         surviving_turn_ids: HashSet<String>,
+        surviving_compact_hashes: HashSet<String>,
         reason: impl Into<String>,
         source_turn_id: Option<String>,
     ) -> Result<(), SpineRuntimeError> {
@@ -469,10 +482,20 @@ impl SpineRuntime {
         self.state = state;
         self.next_raw_ordinal = next_raw_ordinal;
         self.surviving_turn_ids = Some(surviving_turn_ids);
+        self.surviving_compact_hashes = Some(surviving_compact_hashes);
         self.staged_transition = None;
         self.last_committed_transition = None;
         self.pending_spine_call_starts.clear();
         Ok(())
+    }
+
+    pub(crate) fn record_projection_survivors(
+        &mut self,
+        surviving_turn_ids: HashSet<String>,
+        surviving_compact_hashes: HashSet<String>,
+    ) {
+        self.surviving_turn_ids = Some(surviving_turn_ids);
+        self.surviving_compact_hashes = Some(surviving_compact_hashes);
     }
 
     fn ensure_spine_mutation_allowed(&self) -> Result<(), SpineRuntimeError> {

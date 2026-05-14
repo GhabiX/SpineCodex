@@ -1221,6 +1221,86 @@ fn installed_compact_spans_return_full_runtime_ledger() {
 }
 
 #[test]
+fn projected_compact_spans_filter_stale_duplicate_boundaries() {
+    let (temp, source_store) = temp_store();
+    source_store.create().expect("create source sidecar");
+    source_store
+        .append_compact_started(
+            "compact-old",
+            &id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append old compact started");
+    source_store
+        .append_compact_installed(
+            "compact-old",
+            &id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+            3,
+            "nodes/1/1/worklog.md",
+            "sha1:old",
+        )
+        .expect("append old compact installed");
+    source_store
+        .append_compact_started(
+            "compact-new",
+            &id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            6,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append new compact started");
+    source_store
+        .append_compact_installed(
+            "compact-new",
+            &id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            6,
+            3,
+            "nodes/1/1/worklog.md",
+            "sha1:new",
+        )
+        .expect("append new compact installed");
+
+    let surviving_hashes = HashSet::from(["sha1:new".to_string()]);
+    let filtered_spans = source_store
+        .installed_compact_spans_matching_hashes(Some(&surviving_hashes))
+        .expect("read filtered spans");
+    assert_eq!(filtered_spans.len(), 1);
+    assert_eq!(filtered_spans[0].compact_id, "compact-new");
+    assert_eq!(filtered_spans[0].fold_end_ordinal, 6);
+
+    let child_rollout = temp.path().join("rollout-child.jsonl");
+    let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
+    child_store.create().expect("create child sidecar");
+    child_store
+        .copy_projected_compact_index_from(&source_store, &surviving_hashes)
+        .expect("copy filtered compact index");
+    let copied_spans = child_store
+        .installed_compact_spans()
+        .expect("read copied spans");
+    assert_eq!(copied_spans.len(), 1);
+    assert_eq!(copied_spans[0].compact_id, "compact-new");
+    assert_eq!(copied_spans[0].fold_end_ordinal, 6);
+
+    let copied_events = read_json_lines(child_store.compact_index_path());
+    assert_eq!(copied_events.len(), 2);
+    assert_eq!(copied_events[0]["seq"], 1);
+    assert_eq!(copied_events[1]["seq"], 2);
+    assert_eq!(copied_events[0]["compact_id"], "compact-new");
+    assert_eq!(copied_events[1]["compact_id"], "compact-new");
+}
+
+#[test]
 fn compact_index_started_then_failed_loads() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");

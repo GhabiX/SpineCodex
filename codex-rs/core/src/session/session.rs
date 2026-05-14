@@ -499,9 +499,18 @@ pub(crate) fn load_initial_spine_runtime(
             projection.state.clone(),
             projection.response_item_count,
             projection.surviving_turn_ids.clone(),
+            projection.surviving_compact_hashes.clone(),
             "resume_projection",
             None,
         )?;
+    }
+    if let Some(projection) = projection
+        && runtime.state() == &projection.state
+    {
+        runtime.record_projection_survivors(
+            projection.surviving_turn_ids.clone(),
+            projection.surviving_compact_hashes.clone(),
+        );
     }
     if has_non_spine_compaction {
         runtime.mark_non_spine_compacted_history();
@@ -561,7 +570,8 @@ async fn seed_forked_spine_sidecar(
 
     child_store.create()?;
     child_store.record_projection_reset(projection.state.clone(), "fork_seed", None)?;
-    child_store.copy_compact_index_from(&parent_store)?;
+    child_store
+        .copy_projected_compact_index_from(&parent_store, &projection.surviving_compact_hashes)?;
     child_store.copy_projected_node_artifacts_from(
         &parent_store,
         projection.node_ids(),

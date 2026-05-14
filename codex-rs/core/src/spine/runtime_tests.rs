@@ -367,6 +367,7 @@ fn projection_reset_filters_plan_from_non_surviving_turn() {
             projected_state,
             0,
             HashSet::from(["surviving-turn".to_string()]),
+            HashSet::new(),
             "test_projection",
             None,
         )
