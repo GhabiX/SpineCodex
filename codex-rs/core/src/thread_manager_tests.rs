@@ -1039,7 +1039,7 @@ async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
             .await
             .cursor()
             .to_string(),
-        "1.1"
+        "1.1.1"
     );
 
     let child_session = &forked.thread.codex.session;
@@ -1195,7 +1195,7 @@ async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> an
         .lock()
         .await;
 
-    assert_eq!(child_runtime.cursor().to_string(), "1.1");
+    assert_eq!(child_runtime.cursor().to_string(), "1.1.1");
     // Interrupted fork snapshots append the same model-visible interrupt marker
     // used by the live interrupt path. That marker is a response item and must
     // be counted so the next Spine raw ordinal aligns with the forked history.

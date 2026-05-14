@@ -31,17 +31,28 @@ impl SpineState {
     }
 
     pub(crate) fn new_with_initial_leaf_raw_start(initial_leaf_raw_start_ordinal: u64) -> Self {
-        let initial_node = NodeId::root_epoch(1);
-        let initial_record = NodeRecord {
-            node_id: initial_node.clone(),
+        let initial_epoch = NodeId::root_epoch(1);
+        let initial_leaf = initial_epoch.child(1);
+        let initial_epoch_record = NodeRecord {
+            node_id: initial_epoch.clone(),
             parent_id: None,
+            raw_start_ordinal: Some(initial_leaf_raw_start_ordinal),
+            status: NodeStatus::Opened,
+            summary: None,
+        };
+        let initial_leaf_record = NodeRecord {
+            node_id: initial_leaf.clone(),
+            parent_id: Some(initial_epoch.clone()),
             raw_start_ordinal: Some(initial_leaf_raw_start_ordinal),
             status: NodeStatus::Live,
             summary: None,
         };
         Self {
-            cursor: initial_node.clone(),
-            nodes: BTreeMap::from([(initial_node, initial_record)]),
+            cursor: initial_leaf.clone(),
+            nodes: BTreeMap::from([
+                (initial_epoch, initial_epoch_record),
+                (initial_leaf, initial_leaf_record),
+            ]),
         }
     }
 
@@ -128,7 +139,7 @@ impl SpineState {
     ) -> Result<Transition, SpineStateError> {
         let from = self.cursor.clone();
         let parent = self.parent_id(&from)?;
-        if from == NodeId::root() {
+        if parent.is_none() {
             return Err(SpineStateError::CannotAdvanceRoot);
         }
         let next_sibling = self.next_sibling_id(parent.as_ref())?;
@@ -152,13 +163,18 @@ impl SpineState {
         let parent = self
             .parent_id(&from)?
             .ok_or(SpineStateError::CannotCloseRoot)?;
-        let grandparent = self.parent_id(&parent)?;
-        let parent_sibling = self.next_sibling_id(grandparent.as_ref())?;
+        let grandparent = self
+            .parent_id(&parent)?
+            .ok_or(SpineStateError::CannotCloseRoot)?;
+        if grandparent == NodeId::root() {
+            return Err(SpineStateError::CannotCloseRoot);
+        }
+        let parent_sibling = self.next_sibling_id(Some(&grandparent))?;
 
         self.write_summary(&parent, summary)?;
         self.set_status(&from, NodeStatus::Finished)?;
         self.set_status(&parent, NodeStatus::Closed)?;
-        self.insert_node(parent_sibling.clone(), grandparent)?;
+        self.insert_node(parent_sibling.clone(), Some(grandparent))?;
         self.cursor = parent_sibling.clone();
 
         Ok(Transition {
@@ -168,26 +184,6 @@ impl SpineState {
     }
 
     pub(crate) fn reset_root_epoch(
-        &mut self,
-        summary: impl Into<String>,
-        initial_leaf_raw_start_ordinal: u64,
-    ) -> Result<Transition, SpineStateError> {
-        let from = self.current_root_epoch()?;
-        let next_epoch = NodeId::root_epoch(self.next_child_index(None)?);
-
-        self.write_summary_if_absent(&from, summary)?;
-        self.set_status(&from, NodeStatus::Closed)?;
-        self.insert_node(next_epoch.clone(), None)?;
-        self.set_raw_start_ordinal(&next_epoch, initial_leaf_raw_start_ordinal)?;
-        self.cursor = next_epoch.clone();
-
-        Ok(Transition {
-            from,
-            to: next_epoch,
-        })
-    }
-
-    pub(crate) fn reset_root_epoch_with_legacy_initial_leaf(
         &mut self,
         summary: impl Into<String>,
         initial_leaf_raw_start_ordinal: u64,

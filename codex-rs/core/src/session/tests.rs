@@ -1357,7 +1357,7 @@ async fn spine_runtime_initializes_root_when_feature_is_on() -> anyhow::Result<(
 
     assert_eq!(
         spine.cursor(),
-        &crate::spine::ids::NodeId::from_segments(vec![1])
+        &crate::spine::ids::NodeId::from_segments(vec![1, 1])
     );
     assert_eq!(spine.current_ordinal(), 0);
     Ok(())
@@ -1494,8 +1494,8 @@ async fn spine_resume_emits_initial_tree_update_after_session_configured() -> an
     let EventMsg::SpineTreeUpdate(snapshot) = second.msg else {
         panic!("expected spine tree update after session configured");
     };
-    assert_eq!(snapshot.active_node_id, "1.1");
-    assert_eq!(snapshot.nodes.len(), 2);
+    assert_eq!(snapshot.active_node_id, "1.1.1");
+    assert_eq!(snapshot.nodes.len(), 3);
     Ok(())
 }
 
@@ -1629,7 +1629,7 @@ fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()>
 
     assert_eq!(
         runtime.cursor(),
-        &crate::spine::ids::NodeId::from_segments(vec![1])
+        &crate::spine::ids::NodeId::from_segments(vec![1, 1])
     );
     assert!(
         crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?
@@ -1650,7 +1650,7 @@ fn initial_spine_runtime_loads_existing_sidecar_without_transition_history() -> 
 
     assert_eq!(
         runtime.cursor(),
-        &crate::spine::ids::NodeId::from_segments(vec![1])
+        &crate::spine::ids::NodeId::from_segments(vec![1, 1])
     );
     assert!(
         crate::spine::store::SpineSidecarStore::for_rollout(&rollout_path)?
@@ -1921,7 +1921,7 @@ async fn spine_transition_compaction_boundary_waits_for_sampling_completion() ->
     assert_eq!(pending.len(), 1);
     assert_eq!(
         pending[0].node_id,
-        crate::spine::ids::NodeId::from_segments(vec![1, 1])
+        crate::spine::ids::NodeId::from_segments(vec![1, 1, 1])
     );
     Ok(())
 }
@@ -1984,7 +1984,7 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     assert_eq!(
         runtime.cursor(),
-        &crate::spine::ids::NodeId::from_segments(vec![2])
+        &crate::spine::ids::NodeId::from_segments(vec![2, 1])
     );
     let root_epoch = crate::spine::ids::NodeId::from_segments(vec![1]);
     let root_epoch_worklog = std::fs::read_to_string(runtime.store().worklog_path(&root_epoch))?;
@@ -2027,7 +2027,7 @@ async fn repeated_spine_root_compaction_does_not_leave_orphan_tree_output() -> a
                 user_message("当前的 spine tree 是？"),
                 spine_tree_function_call("tree-after-first-compact"),
                 function_call_output("tree-after-first-compact"),
-                assistant_message("当前 Spine 在节点 2。"),
+                assistant_message("当前 Spine 在节点 2.1。"),
             ],
         )
         .await?;
@@ -2067,7 +2067,7 @@ async fn repeated_spine_root_compaction_does_not_leave_orphan_tree_output() -> a
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     assert_eq!(
         runtime.cursor(),
-        &crate::spine::ids::NodeId::from_segments(vec![3])
+        &crate::spine::ids::NodeId::from_segments(vec![3, 1])
     );
     assert!(
         runtime
@@ -2165,7 +2165,7 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     assert!(followup_request.body_contains_text("FINAL_AFTER_SPINE_COMPACT"));
     assert!(!followup_request.body_contains_text("Continue the active user turn"));
     assert!(followup_request.body_contains_text("<spine_handoff>"));
-    assert!(followup_request.body_contains_text("Spine transition completed: 1.1 -> 1.2"));
+    assert!(followup_request.body_contains_text("Spine transition completed: 1.1.1 -> 1.1.2"));
     assert!(followup_request.body_contains_text(
         "Preserved prefix instructions are background rules, not the current request."
     ));
@@ -2730,7 +2730,7 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
         3,
         6,
     )?;
-    assert_eq!(runtime.cursor().to_string(), "1.2");
+    assert_eq!(runtime.cursor().to_string(), "1.1.2");
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: ThreadId::default(),
@@ -2741,7 +2741,7 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
         .await?
         .expect("rollback spine history should project");
     assert_eq!(projection.response_item_count, 3);
-    assert_eq!(projection.state.cursor().to_string(), "1.1");
+    assert_eq!(projection.state.cursor().to_string(), "1.1.1");
 
     let projected_runtime = crate::session::session::load_initial_spine_runtime(
         &rollout_path,
@@ -2750,7 +2750,7 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
         /*has_non_spine_compaction*/ false,
         Some(&projection),
     )?;
-    assert_eq!(projected_runtime.cursor().to_string(), "1.1");
+    assert_eq!(projected_runtime.cursor().to_string(), "1.1.1");
     assert!(
         std::fs::read_to_string(projected_runtime.store().tree_path())?
             .contains("\"projection_reset\"")
@@ -3405,8 +3405,8 @@ async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
         match event.msg {
             EventMsg::SpineTreeUpdate(snapshot) => {
                 saw_spine_projection = true;
-                assert_eq!(snapshot.active_node_id, "1.1");
-                assert!(snapshot.nodes.iter().all(|node| node.node_id != "1.2"));
+                assert_eq!(snapshot.active_node_id, "1.1.1");
+                assert!(snapshot.nodes.iter().all(|node| node.node_id != "1.1.2"));
             }
             EventMsg::ThreadRolledBack(rollback) => {
                 saw_rollback = true;
@@ -3416,11 +3416,11 @@ async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
         }
     }
     let runtime = sess.spine.as_ref().expect("spine").lock().await;
-    assert_eq!(runtime.cursor().to_string(), "1.1");
+    assert_eq!(runtime.cursor().to_string(), "1.1.1");
     assert!(
         runtime
             .state()
-            .node(&NodeId::from_segments(vec![1, 2]))
+            .node(&NodeId::from_segments(vec![1, 1, 2]))
             .is_none()
     );
     assert!(std::fs::read_to_string(runtime.store().tree_path())?.contains("\"projection_reset\""));
