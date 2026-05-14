@@ -54,11 +54,11 @@ Use Spine effectively and efficiently.
 At the start, use update_plan with spine_plantree to maintain one compact task tree draft for the current editable scope. This is planning only; it does not create Spine nodes or move the cursor.
 Default to staying in the current live node while it remains focused. Use update_plan to revise the current PlanTree when new evidence changes the task structure.
 Move Spine when a completed scope has accumulated substantial raw history and future work is likely to reuse its generated worklog IR:
-- spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context.
+- spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context; it takes no arguments.
 - spine.next: finish the current leaf and move to its next sibling.
 - spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling. Root cannot be closed.
-At root depth, use spine.next to finish a phase and continue with the next root sibling; use spine.close only from a nested scope when closing its parent and returning to the parent's next sibling.
-For spine.next or spine.close, use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope; keep summary as the short Spine Tree label, and do not use instruction with spine.open.
+At root depth, use spine.next to finish the current root child and continue with its next sibling; use spine.close only from a nested scope when closing its parent and returning to the parent's next sibling.
+For spine.next or spine.close, use summary as the short completion-time Spine Tree label. Use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope. Do not use summary or instruction with spine.open.
 Use spine.tree to inspect the current node and Spine Tree without moving the cursor.
 Do not move spine only because a new user message arrived, because you answered a short question, or because you updated progress within the same scope.
 Do not create one node per shell command, checklist item, short reply, or conversation turn.
@@ -194,40 +194,40 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     let index = parse_json_lines(&index_text)?;
     let compact_index = parse_json_lines(&compact_index_text)?;
 
-    assert_root_created(&tree);
-    assert_transition(&tree, "open", "1", "1.1", OPEN_SUMMARY);
-    assert_transition(&tree, "open", "1.1", "1.1.1", NESTED_OPEN_SUMMARY);
-    assert_plan_updated(&tree, "1.1.1", 1, &plan_turn_id);
-    assert_transition(&tree, "next", "1.1.1", "1.1.2", NEXT_SUMMARY);
-    assert_transition(&tree, "close", "1.1.2", "1.2", CLOSE_SUMMARY);
-    assert_transition_committed(&index, OPEN_CALL_ID, "1", "1.1");
-    assert_transition_committed(&index, NESTED_OPEN_CALL_ID, "1.1", "1.1.1");
-    assert_transition_committed(&index, NEXT_CALL_ID, "1.1.1", "1.1.2");
-    assert_transition_committed(&index, CLOSE_CALL_ID, "1.1.2", "1.2");
-    assert_raw_range_for_node_after_transition(&index, NESTED_OPEN_CALL_ID, "1.1.1");
-    assert_raw_range_for_node_after_transition(&index, NEXT_CALL_ID, "1.1.2");
-    assert_raw_range_for_node_after_transition(&index, CLOSE_CALL_ID, "1.2");
+    assert_spine_initialized(&tree);
+    assert_transition(&tree, "open", "1.1", "1.1.1", None);
+    assert_transition(&tree, "open", "1.1.1", "1.1.1.1", None);
+    let plan_event_seq = assert_plan_updated(&tree, "1.1.1.1", 1, &plan_turn_id);
+    assert_transition(&tree, "next", "1.1.1.1", "1.1.1.2", Some(NEXT_SUMMARY));
+    assert_transition(&tree, "close", "1.1.1.2", "1.1.2", Some(CLOSE_SUMMARY));
+    assert_transition_committed(&index, OPEN_CALL_ID, "1.1", "1.1.1");
+    assert_transition_committed(&index, NESTED_OPEN_CALL_ID, "1.1.1", "1.1.1.1");
+    assert_transition_committed(&index, NEXT_CALL_ID, "1.1.1.1", "1.1.1.2");
+    assert_transition_committed(&index, CLOSE_CALL_ID, "1.1.1.2", "1.1.2");
+    assert_raw_range_for_node_after_transition(&index, NESTED_OPEN_CALL_ID, "1.1.1.1");
+    assert_raw_range_for_node_after_transition(&index, NEXT_CALL_ID, "1.1.1.2");
+    assert_raw_range_for_node_after_transition(&index, CLOSE_CALL_ID, "1.1.2");
 
-    let scope_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/worklog.md"))?;
+    let scope_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/worklog.md"))?;
     let base_line = format!("Base: {}", sidecar_dir.display());
     assert!(scope_worklog.contains("spine:auto-compact-generated"));
     assert!(scope_worklog.contains(&base_line));
     assert!(scope_worklog.contains("Compacted root findings."));
     assert!(scope_worklog.contains("## Context Compacted"));
-    assert!(scope_worklog.contains("[1.1] open focused child scope (nodes/1/1/worklog.md)"));
-    assert!(scope_worklog.contains("|-- [1.1.1] finish child scope (nodes/1/1/1/worklog.md)"));
-    assert!(scope_worklog.contains("|-- [1.1.2] finish sibling scope (nodes/1/1/2/worklog.md)"));
-    let leaf_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/worklog.md"))?;
+    assert!(scope_worklog.contains("[1.1.1] finish sibling scope (nodes/1/1/1/worklog.md)"));
+    assert!(scope_worklog.contains("|-- [1.1.1.1] finish child scope (nodes/1/1/1/1/worklog.md)"));
+    assert!(scope_worklog.contains("|-- [1.1.1.2] finished (nodes/1/1/1/2/worklog.md)"));
+    let leaf_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/1/worklog.md"))?;
     assert!(leaf_worklog.contains("spine:auto-compact-generated"));
     assert!(leaf_worklog.contains(&base_line));
     assert!(leaf_worklog.contains("Compacted child findings."));
-    assert_compact_installed(&compact_index, "1.1.1", "next");
-    assert_compact_installed(&compact_index, "1.1", "close");
-    let plan_snapshot = read_json(sidecar_dir.join("nodes/1/1/1/plan.json"))?;
-    assert_eq!(plan_snapshot["node_id"], "1.1.1");
+    assert_compact_installed(&compact_index, "1.1.1.1", "next");
+    assert_compact_installed(&compact_index, "1.1.1", "close");
+    let plan_snapshot = read_json(sidecar_dir.join("nodes/1/1/1/1/plan.json"))?;
+    assert_eq!(plan_snapshot["node_id"], "1.1.1.1");
     assert_eq!(plan_snapshot["revision"], 1);
     assert_eq!(plan_snapshot["source_turn_id"], plan_turn_id);
-    assert_eq!(plan_snapshot["event_seq"], 4);
+    assert_eq!(plan_snapshot["event_seq"], plan_event_seq);
     assert_eq!(plan_snapshot["explanation"], "plan still works");
     assert_eq!(plan_snapshot["items"][0]["stable_task_id"], "step-1");
     assert_eq!(plan_snapshot["items"][0]["step"], "Exercise child node");
@@ -326,10 +326,8 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
         "spine auto compact should keep the same parallel tool-call envelope as the follow-up request"
     );
     assert!(
-        requests[3]
-            .message_input_texts("user")
-            .iter()
-            .any(|text| text.contains("<spine_ir") && text.contains("auto root archive summary")),
+        requests[3].body_contains_text("<spine_ir")
+            && requests[3].body_contains_text("auto root archive summary"),
         "follow-up should use a readable spine root-epoch IR checkpoint"
     );
 
@@ -337,11 +335,13 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
     let tree_text = std::fs::read_to_string(sidecar_dir.join("tree.jsonl"))
         .with_context(|| format!("read {}", sidecar_dir.join("tree.jsonl").display()))?;
     assert!(
-        tree_text.contains("\"root_epoch_archived\""),
-        "auto compact should persist root_epoch_archived: {tree_text}"
+        tree_text.contains("\"root_epoch_reset\""),
+        "auto compact should persist root_epoch_reset: {tree_text}"
     );
     assert!(
-        tree_text.contains("post archive scope"),
+        tree_text.contains("\"op\":\"open\"")
+            && tree_text.contains("\"from_node\":\"2.1\"")
+            && tree_text.contains("\"to_node\":\"2.1.1\""),
         "spine should remain mutable after auto root archive: {tree_text}"
     );
     let rollout_text = std::fs::read_to_string(&rollout_path)
@@ -441,7 +441,7 @@ async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request(
     let compact_index_text = std::fs::read_to_string(sidecar_dir.join("compact.index.jsonl"))
         .with_context(|| format!("read {}", sidecar_dir.join("compact.index.jsonl").display()))?;
     let compact_index = parse_json_lines(&compact_index_text)?;
-    assert_compact_failed(&compact_index, "1.1", "next");
+    assert_compact_failed(&compact_index, "1.1.1", "next");
 
     Ok(())
 }
@@ -551,7 +551,7 @@ async fn submit_turn_and_assert_plan_update(
             let Some(plan) = update
                 .nodes
                 .iter()
-                .find(|node| node.node_id == "1.1.1")
+                .find(|node| node.node_id == "1.1.1.1")
                 .and_then(|node| node.plan.as_ref())
             else {
                 return false;
@@ -647,7 +647,12 @@ fn shell_args(command: &str) -> String {
 }
 
 fn ev_spine_transition_call(call_id: &str, name: &str, summary: &str) -> Value {
-    ev_function_call_with_namespace(call_id, "spine", name, &spine_args(summary))
+    let arguments = if name == "open" {
+        "{}".to_string()
+    } else {
+        spine_args(summary)
+    };
+    ev_function_call_with_namespace(call_id, "spine", name, &arguments)
 }
 
 fn spine_args(summary: &str) -> String {
@@ -737,19 +742,48 @@ fn assert_function_output_contains(requests: &[ResponsesRequest], call_id: &str,
     );
 }
 
-fn assert_root_created(tree: &[Value]) {
+fn assert_spine_initialized(tree: &[Value]) {
+    let event = tree
+        .iter()
+        .find(|event| event.get("type").and_then(Value::as_str) == Some("spine_initialized"))
+        .unwrap_or_else(|| panic!("tree should contain spine_initialized event: {tree:?}"));
+    let state = event
+        .get("state")
+        .unwrap_or_else(|| panic!("spine_initialized should contain state: {event:?}"));
+    assert_eq!(state.get("cursor").and_then(Value::as_str), Some("1.1"));
+    let nodes = state
+        .get("nodes")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("spine_initialized state should contain nodes: {state:?}"));
     assert!(
-        tree.iter().any(|event| {
-            event.get("type").and_then(Value::as_str) == Some("node_created")
-                && event.get("node_id").and_then(Value::as_str) == Some("1")
-                && event.get("parent_id").is_some_and(Value::is_null)
-                && event.get("raw_start_ordinal").and_then(Value::as_u64) == Some(0)
+        nodes.iter().any(|node| {
+            node.get("node_id").and_then(Value::as_str) == Some("1")
+                && node.get("parent_id").is_some_and(Value::is_null)
+                && node.get("raw_start_ordinal").and_then(Value::as_u64) == Some(0)
+                && node.get("status").and_then(Value::as_str) == Some("opened")
+                && node.get("summary").is_some_and(Value::is_null)
         }),
-        "tree should contain deterministic root creation event: {tree:?}"
+        "state should contain root epoch 1: {state:?}"
+    );
+    assert!(
+        nodes.iter().any(|node| {
+            node.get("node_id").and_then(Value::as_str) == Some("1.1")
+                && node.get("parent_id").and_then(Value::as_str) == Some("1")
+                && node.get("raw_start_ordinal").and_then(Value::as_u64) == Some(0)
+                && node.get("status").and_then(Value::as_str) == Some("live")
+                && node.get("summary").is_some_and(Value::is_null)
+        }),
+        "state should contain initial live leaf 1.1: {state:?}"
     );
 }
 
-fn assert_transition(tree: &[Value], op: &str, from_node: &str, to_node: &str, summary: &str) {
+fn assert_transition(
+    tree: &[Value],
+    op: &str,
+    from_node: &str,
+    to_node: &str,
+    summary: Option<&str>,
+) {
     let event = tree
         .iter()
         .find(|event| {
@@ -760,10 +794,10 @@ fn assert_transition(tree: &[Value], op: &str, from_node: &str, to_node: &str, s
         })
         .unwrap_or_else(|| panic!("missing {op} transition {from_node} -> {to_node}: {tree:?}"));
 
-    assert_eq!(event.get("summary").and_then(Value::as_str), Some(summary));
+    assert_eq!(event.get("summary").and_then(Value::as_str), summary);
 }
 
-fn assert_plan_updated(tree: &[Value], node_id: &str, revision: u64, source_turn_id: &str) {
+fn assert_plan_updated(tree: &[Value], node_id: &str, revision: u64, source_turn_id: &str) -> u64 {
     let event = tree
         .iter()
         .find(|event| {
@@ -785,6 +819,10 @@ fn assert_plan_updated(tree: &[Value], node_id: &str, revision: u64, source_turn
         event.get("items").and_then(Value::as_array).map(Vec::len),
         Some(2)
     );
+    event
+        .get("seq")
+        .and_then(Value::as_u64)
+        .expect("task_plan_updated should have seq")
 }
 
 fn assert_transition_committed(index: &[Value], call_id: &str, from_node: &str, to_node: &str) {

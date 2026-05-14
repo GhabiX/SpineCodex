@@ -59,6 +59,27 @@ fn function_call(call_id: &str) -> ResponseItem {
     }
 }
 
+fn custom_tool_call(call_id: &str) -> ResponseItem {
+    ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: call_id.to_string(),
+        name: "apply_patch".to_string(),
+        input: "*** Begin Patch".to_string(),
+    }
+}
+
+fn custom_tool_call_output(call_id: &str) -> ResponseItem {
+    ResponseItem::CustomToolCallOutput {
+        call_id: call_id.to_string(),
+        name: None,
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("Patch applied.".to_string()),
+            success: Some(true),
+        },
+    }
+}
+
 #[test]
 fn raw_ordinals_map_to_synthetic_spine_ir_boundaries_only() {
     let ir_item = render_spine_ir_item(
@@ -187,13 +208,15 @@ fn replacement_history_splices_prefix_ir_and_tail() {
 }
 
 #[test]
-fn suffix_fold_preserves_prefix_tool_closure_before_ir() {
+fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
     let history = vec![
         user_item("previous turn asked to open"),
+        function_call("call-open"),
         function_call_output("call-open"),
         text_item("previous turn final answer"),
         user_item("current turn asks next"),
         text_item("assistant reasoning for next"),
+        function_call("call-next"),
         function_call_output("call-next"),
         text_item("tail after folded suffix"),
     ];
@@ -201,8 +224,8 @@ fn suffix_fold_preserves_prefix_tool_closure_before_ir() {
         op: SpineOperation::Next,
         node_id: id(&[1, 1]),
         scope_node_id: None,
-        cut_ordinal: 2,
-        fold_end_ordinal: 6,
+        cut_ordinal: 3,
+        fold_end_ordinal: 8,
         spine_tree: "1: finished leaf [worklog already in context]\n2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
@@ -213,16 +236,16 @@ fn suffix_fold_preserves_prefix_tool_closure_before_ir() {
         sidecar_root: Path::new("/tmp/spine").to_path_buf(),
     };
 
-    let plan = plan_suffix_fold(&history, 2, 6, input).expect("plan suffix fold");
+    let plan = plan_suffix_fold(&history, 3, 8, input).expect("plan suffix fold");
     assert_eq!(plan.cut_index, 3);
     assert_eq!(plan.input.cut_ordinal, 3);
     assert_eq!(
         plan.input.prefix_items[2],
-        text_item("previous turn final answer")
+        function_call_output("call-open")
     );
     assert_eq!(
         plan.input.suffix_items[0],
-        user_item("current turn asks next")
+        text_item("previous turn final answer")
     );
 
     let replacement = build_suffix_replacement_history(
@@ -240,7 +263,7 @@ fn suffix_fold_preserves_prefix_tool_closure_before_ir() {
             plan.input.fold_end_ordinal,
         )],
     );
-    assert_eq!(replacement[2], text_item("previous turn final answer"));
+    assert_eq!(replacement[2], function_call_output("call-open"));
     assert!(matches!(replacement[3], ResponseItem::Message { .. }));
     assert_eq!(replacement[4], text_item("tail after folded suffix"));
 }
@@ -352,6 +375,43 @@ fn suffix_fold_pulls_call_back_when_output_is_inside_range() {
     assert_eq!(plan.input.fold_end_ordinal, 3);
     assert_eq!(plan.input.suffix_items[0], function_call("shell-1"));
     assert_eq!(plan.input.suffix_items[1], function_call_output("shell-1"));
+}
+
+#[test]
+fn suffix_fold_pulls_custom_tool_call_back_when_output_is_inside_range() {
+    let history = vec![
+        user_item("previous turn"),
+        custom_tool_call("patch-1"),
+        custom_tool_call_output("patch-1"),
+        text_item("assistant final"),
+    ];
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[1, 1]),
+        scope_node_id: None,
+        cut_ordinal: 2,
+        fold_end_ordinal: 3,
+        spine_tree: "1: finished leaf [worklog already in context]\n2: Current".to_string(),
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: "leaf done".to_string(),
+        compact_instruction: None,
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let plan = plan_suffix_fold(&history, 2, 3, input).expect("plan suffix fold");
+
+    assert_eq!(plan.cut_index, 1);
+    assert_eq!(plan.fold_end_index, 3);
+    assert_eq!(plan.input.cut_ordinal, 1);
+    assert_eq!(plan.input.fold_end_ordinal, 3);
+    assert_eq!(plan.input.suffix_items[0], custom_tool_call("patch-1"));
+    assert_eq!(
+        plan.input.suffix_items[1],
+        custom_tool_call_output("patch-1")
+    );
 }
 
 #[test]

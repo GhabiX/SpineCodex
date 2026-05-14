@@ -327,7 +327,6 @@ pub(crate) fn plan_suffix_fold(
             "spine compact fold range is empty after mapping".to_string(),
         ));
     }
-    let cut_index = adjusted_cut_index_after_prefix_closure(history, cut_index, fold_end_index);
     let (cut_index, fold_end_index) =
         adjusted_range_for_tool_call_closure(history, cut_index, fold_end_index);
     let cut_ordinal = raw_ordinal_for_effective_index(history, cut_index).ok_or_else(|| {
@@ -355,38 +354,6 @@ pub(crate) fn plan_suffix_fold(
         cut_index,
         fold_end_index,
     })
-}
-
-fn adjusted_cut_index_after_prefix_closure(
-    history: &[ResponseItem],
-    cut_index: usize,
-    fold_end_index: usize,
-) -> usize {
-    if cut_index == 0
-        || cut_index >= fold_end_index
-        || !matches!(
-            history.get(cut_index - 1),
-            Some(ResponseItem::FunctionCallOutput { .. })
-        )
-    {
-        return cut_index;
-    }
-
-    let mut first_user_index = None;
-    for index in cut_index..fold_end_index {
-        if matches!(
-            history.get(index),
-            Some(ResponseItem::Message { role, .. }) if role == "user"
-        ) {
-            first_user_index = Some(index);
-            break;
-        }
-    }
-
-    match first_user_index {
-        Some(index) if index > cut_index => index,
-        _ => cut_index,
-    }
 }
 
 fn adjusted_range_for_tool_call_closure(
