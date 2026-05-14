@@ -471,7 +471,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
         sidecar_root: Path::new("/tmp/spine").to_path_buf(),
     };
 
-    let prompt = build_codex_builtin_prompt_input(&input, crate::compact::SUMMARIZATION_PROMPT);
+    let prompt = build_codex_builtin_prompt_input(&input);
     let rendered = format!("{prompt:?}");
 
     assert_eq!(prompt.len(), 3);
@@ -492,15 +492,18 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     let ContentItem::InputText { text } = &content[0] else {
         panic!("expected compact instruction text");
     };
-    assert!(text.starts_with(crate::compact::SUMMARIZATION_PROMPT));
-    assert!(text.contains("Compact only the target suffix represented by node `1.1`"));
+    assert!(!text.contains(crate::compact::SUMMARIZATION_PROMPT));
+    assert!(text.starts_with("Compact only target Spine node `1.1` into factual worklog IR."));
+    assert!(text.contains("Keep durable facts needed by later nodes"));
+    assert!(text.contains("validation status, blockers, unresolved questions"));
     assert!(text.contains("Target tree node: 1.1"));
     assert!(text.contains("Internal node id: 1.1"));
     assert!(text.contains("Target operation: next"));
     assert!(text.contains("Spine Tree summary label: leaf done"));
-    assert!(
-        text.contains("Drop chatter, duplicate instructions, and imperative continuation text")
-    );
+    assert!(!text.contains("What remains to be done"));
+    assert!(!text.contains("clear next steps"));
+    assert!(!text.contains("next concrete step"));
+    assert!(!text.contains("imperative continuation text"));
     assert!(!text.contains("Pending continuation"));
     assert!(!text.contains("<spine_compact_instruction>"));
 
@@ -529,7 +532,7 @@ fn codex_builtin_prompt_includes_compact_instruction_when_present() {
         sidecar_root: Path::new("/tmp/spine").to_path_buf(),
     };
 
-    let prompt = build_codex_builtin_prompt_input(&input, crate::compact::SUMMARIZATION_PROMPT);
+    let prompt = build_codex_builtin_prompt_input(&input);
     let ResponseItem::Message { content, .. } = &prompt[2] else {
         panic!("expected final compact instruction message");
     };
@@ -587,11 +590,7 @@ fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
         output_schema_strict: false,
     };
 
-    let compact_prompt = build_codex_builtin_prompt(
-        &input,
-        crate::compact::SUMMARIZATION_PROMPT,
-        &prompt_envelope,
-    );
+    let compact_prompt = build_codex_builtin_prompt(&input, &prompt_envelope);
 
     assert_eq!(compact_prompt.tools, vec![tool]);
     assert!(compact_prompt.parallel_tool_calls);

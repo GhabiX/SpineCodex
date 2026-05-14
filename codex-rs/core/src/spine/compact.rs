@@ -86,7 +86,7 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
     input: SpineCompactInput,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<SpineCompactOutput> {
-    let prompt = build_codex_builtin_prompt(&input, turn_context.compact_prompt(), prompt_envelope);
+    let prompt = build_codex_builtin_prompt(&input, prompt_envelope);
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let compacted_suffix = loop {
@@ -128,13 +128,9 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
     })
 }
 
-fn build_codex_builtin_prompt(
-    input: &SpineCompactInput,
-    compact_prompt: &str,
-    prompt_envelope: &Prompt,
-) -> Prompt {
+fn build_codex_builtin_prompt(input: &SpineCompactInput, prompt_envelope: &Prompt) -> Prompt {
     Prompt {
-        input: build_codex_builtin_prompt_input(input, compact_prompt),
+        input: build_codex_builtin_prompt_input(input),
         tools: prompt_envelope.tools.clone(),
         parallel_tool_calls: prompt_envelope.parallel_tool_calls,
         base_instructions: prompt_envelope.base_instructions.clone(),
@@ -146,10 +142,7 @@ fn build_codex_builtin_prompt(
     }
 }
 
-fn build_codex_builtin_prompt_input(
-    input: &SpineCompactInput,
-    compact_prompt: &str,
-) -> Vec<ResponseItem> {
+fn build_codex_builtin_prompt_input(input: &SpineCompactInput) -> Vec<ResponseItem> {
     let mut prompt_input =
         Vec::with_capacity(input.prefix_items.len() + input.suffix_items.len() + 1);
     prompt_input.extend(input.prefix_items.clone());
@@ -165,7 +158,7 @@ fn build_codex_builtin_prompt_input(
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "{compact_prompt}\n\nCompact only the target suffix represented by node `{}` in this Spine Tree. Write a concise assistant worklog that records what the agent did, where it stopped, and the smallest facts needed to continue.\nUse temporal locality to keep the latest decisions, blockers, validation status, and next concrete step.\nUse spatial locality to keep only the relevant files, functions, tests, commands, errors, node ids, and paths. Drop chatter, duplicate instructions, and imperative continuation text.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\n<spine_tree>\n{}\n</spine_tree>{}\n\nReturn exactly one XML-like block and no text outside it:\n{}\n<dense Markdown compact for the target suffix only>\n{}",
+                "Compact only target Spine node `{}` into factual worklog IR.\nKeep durable facts needed by later nodes: outcome, decisions, constraints, files/functions/tests/commands, validation status, blockers, unresolved questions.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\n<spine_tree>\n{}\n</spine_tree>{}\n\nReturn exactly one XML-like block and no text outside it:\n{}\n<dense Markdown compact for the target suffix only>\n{}",
                 target_tree_node_id,
                 target_tree_node_id,
                 input.node_id,

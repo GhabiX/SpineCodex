@@ -420,9 +420,14 @@ async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request(
         "third request should be the original next sampling request"
     );
     assert!(
-        requests[3].body_contains_text(SUMMARIZATION_PROMPT)
-            && requests[4].body_contains_text(SUMMARIZATION_PROMPT),
+        requests[3].body_contains_text("Compact only target Spine node")
+            && requests[4].body_contains_text("Compact only target Spine node"),
         "suffix compact should retry within the compact request boundary"
+    );
+    assert!(
+        !requests[3].body_contains_text(SUMMARIZATION_PROMPT)
+            && !requests[4].body_contains_text(SUMMARIZATION_PROMPT),
+        "suffix compact should use the Spine factual worklog prompt, not the normal compact prompt"
     );
     assert!(
         requests
@@ -430,7 +435,7 @@ async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request(
             .enumerate()
             .filter(|(_, request)| {
                 request.body_contains_text("trigger next with failing suffix compact")
-                    && !request.body_contains_text(SUMMARIZATION_PROMPT)
+                    && !request.body_contains_text("Compact only target Spine node")
             })
             .map(|(index, _)| index)
             .eq([2]),
