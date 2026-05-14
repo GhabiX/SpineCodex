@@ -1301,6 +1301,16 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
         outline.find("|-- [1.1.1.1]").expect("first child row")
             < outline.find("|-- [1.1.1.2]").expect("second child row")
     );
+
+    let model_outline = runtime
+        .render_model_context_compacted_outline(&id(&[1, 1, 1]))
+        .expect("render model outline");
+    assert!(model_outline.contains("## Context Compacted"));
+    assert!(model_outline.contains("[1.1.1] second child done"));
+    assert!(model_outline.contains("|-- [1.1.1.1] first child done"));
+    assert!(model_outline.contains("|-- [1.1.1.2] finished"));
+    assert!(!model_outline.contains("Base:"));
+    assert!(!model_outline.contains("worklog.md"));
 }
 
 #[test]

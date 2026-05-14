@@ -194,6 +194,25 @@ fn last_assistant_message_from_item_returns_none_for_generated_spine_ir() {
 }
 
 #[test]
+fn last_assistant_message_from_item_returns_none_for_generated_spine_worklog() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text:
+                "<spine_worklog node=\"1\" op=\"next\">\nSummary: leaf\n\nfacts\n</spine_worklog>"
+                    .to_string(),
+        }],
+        phase: None,
+    };
+
+    assert_eq!(
+        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        None
+    );
+}
+
+#[test]
 fn completed_item_defers_mailbox_delivery_for_unknown_phase_messages() {
     let item = assistant_output_text("final answer");
 

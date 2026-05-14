@@ -1126,6 +1126,101 @@ fn compact_index_started_then_installed_loads() {
 }
 
 #[test]
+fn installed_compact_spans_return_full_runtime_ledger() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(
+            "compact-child",
+            &id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append child compact started");
+    store
+        .append_compact_installed(
+            "compact-child",
+            &id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+            3,
+            "nodes/1/1/worklog.md",
+            "sha1:child",
+        )
+        .expect("append child compact installed");
+    store
+        .append_compact_started(
+            "compact-scope",
+            &id(&[1]),
+            SpineOperation::Close,
+            1,
+            6,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append scope compact started");
+    store
+        .append_compact_installed(
+            "compact-scope",
+            &id(&[1]),
+            SpineOperation::Close,
+            1,
+            6,
+            2,
+            "nodes/1/worklog.md",
+            "sha1:scope",
+        )
+        .expect("append scope compact installed");
+    store
+        .append_compact_started(
+            "compact-sibling",
+            &id(&[2]),
+            SpineOperation::Next,
+            7,
+            9,
+            "codex_builtin_text",
+            "../rollout.jsonl",
+        )
+        .expect("append sibling compact started");
+    store
+        .append_compact_installed(
+            "compact-sibling",
+            &id(&[2]),
+            SpineOperation::Next,
+            7,
+            9,
+            4,
+            "nodes/2/worklog.md",
+            "sha1:sibling",
+        )
+        .expect("append sibling compact installed");
+
+    let spans = store
+        .installed_compact_spans()
+        .expect("read installed spans");
+
+    assert_eq!(spans.len(), 3);
+    assert_eq!(spans[0].compact_id, "compact-child");
+    assert_eq!(spans[0].node_id, id(&[1, 1]));
+    assert_eq!(spans[0].op, SpineOperation::Next);
+    assert_eq!(spans[0].cut_ordinal, 1);
+    assert_eq!(spans[0].fold_end_ordinal, 4);
+    assert_eq!(spans[1].compact_id, "compact-scope");
+    assert_eq!(spans[1].node_id, id(&[1]));
+    assert_eq!(spans[1].op, SpineOperation::Close);
+    assert_eq!(spans[1].cut_ordinal, 1);
+    assert_eq!(spans[1].fold_end_ordinal, 6);
+    assert_eq!(spans[2].compact_id, "compact-sibling");
+    assert_eq!(spans[2].node_id, id(&[2]));
+    assert_eq!(spans[2].cut_ordinal, 7);
+    assert_eq!(spans[2].fold_end_ordinal, 9);
+}
+
+#[test]
 fn compact_index_started_then_failed_loads() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");

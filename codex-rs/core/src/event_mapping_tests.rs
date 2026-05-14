@@ -341,6 +341,22 @@ fn skips_generated_spine_ir_assistant_message() {
 }
 
 #[test]
+fn skips_generated_spine_worklog_assistant_message() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text:
+                "<spine_worklog node=\"1\" op=\"next\">\nSummary: leaf\n\nfacts\n</spine_worklog>"
+                    .to_string(),
+        }],
+        phase: None,
+    };
+
+    assert!(parse_turn_item(&item).is_none());
+}
+
+#[test]
 fn parses_reasoning_summary_and_raw_content() {
     let item = ResponseItem::Reasoning {
         id: "reasoning_1".to_string(),

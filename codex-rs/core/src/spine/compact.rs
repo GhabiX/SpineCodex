@@ -1,4 +1,5 @@
 use super::ids::NodeId;
+use super::store::InstalledCompactSpan;
 use super::store::SpineOperation;
 use super::view::display_node_id;
 use super::view::op_label;
@@ -65,6 +66,7 @@ pub(crate) struct SpineCompactPlan {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpineCompactOutput {
     pub(crate) worklog_markdown: String,
+    pub(crate) compacted_body: String,
     pub(crate) compact_message: String,
     pub(crate) strategy_name: &'static str,
 }
@@ -124,6 +126,7 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
             input.node_id, input.cut_ordinal, input.fold_end_ordinal
         ),
         worklog_markdown,
+        compacted_body: compacted_suffix,
         strategy_name: CODEX_BUILTIN_TEXT_STRATEGY,
     })
 }
@@ -300,12 +303,28 @@ pub(crate) fn plan_suffix_fold(
     fold_end_ordinal: u64,
     input: SpineCompactInput,
 ) -> CodexResult<SpineCompactPlan> {
-    let cut_index = effective_index_for_raw_ordinal(history, cut_ordinal).ok_or_else(|| {
-        CodexErr::Fatal(format!(
-            "spine compact cut ordinal {cut_ordinal} does not map to an effective history index"
-        ))
-    })?;
-    let fold_end_index = effective_index_for_raw_ordinal(history, fold_end_ordinal).ok_or_else(|| {
+    plan_suffix_fold_with_spans(history, cut_ordinal, fold_end_ordinal, &[], input)
+}
+
+pub(crate) fn plan_suffix_fold_with_spans(
+    history: &[ResponseItem],
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    runtime_spans: &[InstalledCompactSpan],
+    input: SpineCompactInput,
+) -> CodexResult<SpineCompactPlan> {
+    let cut_index = effective_index_for_raw_ordinal_with_spans(history, cut_ordinal, runtime_spans)
+        .ok_or_else(|| {
+            CodexErr::Fatal(format!(
+                "spine compact cut ordinal {cut_ordinal} does not map to an effective history index"
+            ))
+        })?;
+    let fold_end_index = effective_index_for_raw_ordinal_with_spans(
+        history,
+        fold_end_ordinal,
+        runtime_spans,
+    )
+    .ok_or_else(|| {
         CodexErr::Fatal(format!(
             "spine compact fold_end ordinal {fold_end_ordinal} does not map to an effective history index"
         ))
@@ -322,12 +341,18 @@ pub(crate) fn plan_suffix_fold(
     }
     let (cut_index, fold_end_index) =
         adjusted_range_for_tool_call_closure(history, cut_index, fold_end_index);
-    let cut_ordinal = raw_ordinal_for_effective_index(history, cut_index).ok_or_else(|| {
-        CodexErr::Fatal(format!(
-            "spine compact adjusted cut index {cut_index} does not map to a raw ordinal"
-        ))
-    })?;
-    let fold_end_ordinal = raw_ordinal_for_effective_index(history, fold_end_index).ok_or_else(|| {
+    let cut_ordinal = raw_ordinal_for_effective_index_with_spans(history, cut_index, runtime_spans)
+        .ok_or_else(|| {
+            CodexErr::Fatal(format!(
+                "spine compact adjusted cut index {cut_index} does not map to a raw ordinal"
+            ))
+        })?;
+    let fold_end_ordinal = raw_ordinal_for_effective_index_with_spans(
+        history,
+        fold_end_index,
+        runtime_spans,
+    )
+    .ok_or_else(|| {
         CodexErr::Fatal(format!(
             "spine compact adjusted fold end index {fold_end_index} does not map to a raw ordinal"
         ))
@@ -457,13 +482,34 @@ fn tool_output_call_id(item: &ResponseItem) -> Option<String> {
 }
 
 fn raw_ordinal_for_effective_index(history: &[ResponseItem], target_index: usize) -> Option<u64> {
+    raw_ordinal_for_effective_index_with_spans(history, target_index, &[])
+}
+
+pub(crate) fn raw_ordinal_for_effective_index_with_spans(
+    history: &[ResponseItem],
+    target_index: usize,
+    runtime_spans: &[InstalledCompactSpan],
+) -> Option<u64> {
     let mut raw_cursor = 0_u64;
+    let mut span_cursor = 0_usize;
     for (index, item) in history.iter().enumerate() {
         if index == target_index {
             return Some(raw_cursor);
         }
-        if let Some(meta) = parse_spine_ir_metadata(item) {
+        if let Some(meta) = parse_spine_ir_metadata(item)
+            && consume_runtime_span_for_legacy(runtime_spans, &mut span_cursor, &meta, raw_cursor)
+        {
             raw_cursor = meta.fold_end;
+            continue;
+        }
+        if let Some(meta) = parse_spine_worklog_metadata(item) {
+            let span = consume_runtime_span_for_worklog(
+                runtime_spans,
+                &mut span_cursor,
+                &meta,
+                raw_cursor,
+            )?;
+            raw_cursor = span.fold_end_ordinal;
             continue;
         }
         if is_non_spine_compact_item(item) {
@@ -472,6 +518,28 @@ fn raw_ordinal_for_effective_index(history: &[ResponseItem], target_index: usize
         raw_cursor = raw_cursor.checked_add(1)?;
     }
     (target_index == history.len()).then_some(raw_cursor)
+}
+
+pub(crate) fn render_spine_worklog_item(
+    node_id: &NodeId,
+    op: SpineOperation,
+    summary: &str,
+    worklog_body: &str,
+) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: format!(
+                "<spine_worklog node=\"{}\" op=\"{}\">\nSummary: {}\n\n{}\n</spine_worklog>",
+                node_id,
+                op_label(op),
+                summary,
+                worklog_body.trim()
+            ),
+        }],
+        phase: None,
+    }
 }
 
 pub(crate) fn render_spine_ir_item(
@@ -543,13 +611,38 @@ pub(crate) fn render_context_compacted_outline(
     rendered
 }
 
+pub(crate) fn render_slim_context_compacted_outline(
+    scope_node_id: &NodeId,
+    scope_summary: &str,
+    child_rows: &[String],
+) -> String {
+    let mut rendered = String::new();
+    rendered.push_str("## Context Compacted\n\n");
+    rendered.push_str(&format!("[{}] {}\n", scope_node_id, scope_summary));
+    for row in child_rows {
+        rendered.push_str(&format!("|-- {}\n", row));
+    }
+    rendered
+}
+
 pub(crate) fn effective_index_for_raw_ordinal(
     history: &[ResponseItem],
     target_raw_ordinal: u64,
 ) -> Option<usize> {
+    effective_index_for_raw_ordinal_with_spans(history, target_raw_ordinal, &[])
+}
+
+pub(crate) fn effective_index_for_raw_ordinal_with_spans(
+    history: &[ResponseItem],
+    target_raw_ordinal: u64,
+    runtime_spans: &[InstalledCompactSpan],
+) -> Option<usize> {
     let mut raw_cursor = 0_u64;
+    let mut span_cursor = 0_usize;
     for (index, item) in history.iter().enumerate() {
-        if let Some(meta) = parse_spine_ir_metadata(item) {
+        if let Some(meta) = parse_spine_ir_metadata(item)
+            && consume_runtime_span_for_legacy(runtime_spans, &mut span_cursor, &meta, raw_cursor)
+        {
             if target_raw_ordinal == meta.fold_start {
                 return Some(index);
             }
@@ -557,6 +650,23 @@ pub(crate) fn effective_index_for_raw_ordinal(
                 return None;
             }
             raw_cursor = meta.fold_end;
+            continue;
+        }
+
+        if let Some(meta) = parse_spine_worklog_metadata(item) {
+            let span = consume_runtime_span_for_worklog(
+                runtime_spans,
+                &mut span_cursor,
+                &meta,
+                raw_cursor,
+            )?;
+            if target_raw_ordinal == span.cut_ordinal {
+                return Some(index);
+            }
+            if target_raw_ordinal > span.cut_ordinal && target_raw_ordinal < span.fold_end_ordinal {
+                return None;
+            }
+            raw_cursor = span.fold_end_ordinal;
             continue;
         }
 
@@ -573,13 +683,71 @@ pub(crate) fn effective_index_for_raw_ordinal(
 }
 
 pub(crate) fn is_spine_ir_item(item: &ResponseItem) -> bool {
-    parse_spine_ir_metadata(item).is_some()
+    parse_spine_ir_metadata(item).is_some() || parse_spine_worklog_metadata(item).is_some()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SpineIrMetadata {
     fold_start: u64,
     fold_end: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SpineWorklogMetadata {
+    node_id: NodeId,
+    op: SpineOperation,
+}
+
+fn consume_runtime_span_for_legacy(
+    runtime_spans: &[InstalledCompactSpan],
+    span_cursor: &mut usize,
+    meta: &SpineIrMetadata,
+    raw_cursor: u64,
+) -> bool {
+    if runtime_spans.is_empty() {
+        return true;
+    }
+    if meta.fold_start != raw_cursor {
+        return false;
+    }
+    if let Some((index, _)) =
+        runtime_spans
+            .iter()
+            .enumerate()
+            .skip(*span_cursor)
+            .find(|(_, span)| {
+                span.cut_ordinal == meta.fold_start && span.fold_end_ordinal == meta.fold_end
+            })
+    {
+        *span_cursor = index + 1;
+        return true;
+    }
+    false
+}
+
+fn runtime_span_matches_worklog(span: &InstalledCompactSpan, meta: &SpineWorklogMetadata) -> bool {
+    span.node_id == meta.node_id && span.op == meta.op
+}
+
+fn consume_runtime_span_for_worklog<'a>(
+    runtime_spans: &'a [InstalledCompactSpan],
+    span_cursor: &mut usize,
+    meta: &SpineWorklogMetadata,
+    cut_ordinal: u64,
+) -> Option<&'a InstalledCompactSpan> {
+    let mut matches = runtime_spans
+        .iter()
+        .enumerate()
+        .skip(*span_cursor)
+        .filter(|(_, span)| {
+            span.cut_ordinal == cut_ordinal && runtime_span_matches_worklog(span, meta)
+        });
+    let (index, span) = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    *span_cursor = index + 1;
+    Some(span)
 }
 
 fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
@@ -615,6 +783,34 @@ fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
         fold_start,
         fold_end,
     })
+}
+
+fn parse_spine_worklog_metadata(item: &ResponseItem) -> Option<SpineWorklogMetadata> {
+    let text = match item {
+        ResponseItem::Message { role, content, .. } if role == "assistant" => {
+            content.iter().find_map(|content_item| match content_item {
+                ContentItem::OutputText { text } => Some(text.as_str()),
+                _ => None,
+            })?
+        }
+        _ => return None,
+    };
+
+    let header = text.strip_prefix("<spine_worklog ")?;
+    let header = header.split_once('>')?.0;
+    let node_id = NodeId::parse(parse_tag_string(header, "node")?).ok()?;
+    let op = parse_spine_operation_label(parse_tag_string(header, "op")?)?;
+    Some(SpineWorklogMetadata { node_id, op })
+}
+
+fn parse_spine_operation_label(value: &str) -> Option<SpineOperation> {
+    match value {
+        "open" => Some(SpineOperation::Open),
+        "next" => Some(SpineOperation::Next),
+        "close" => Some(SpineOperation::Close),
+        "archive" => Some(SpineOperation::Archive),
+        _ => None,
+    }
 }
 
 fn is_non_spine_compact_item(item: &ResponseItem) -> bool {

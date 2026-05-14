@@ -1970,9 +1970,14 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
         .await?;
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
-    assert!(rendered_history.contains("<spine_ir"));
+    assert!(rendered_history.contains("<spine_worklog"));
     assert!(rendered_history.contains("op=\\\"archive\\\""));
     assert!(rendered_history.contains("root compact fact"));
+    assert!(!rendered_history.contains("fold_start"));
+    assert!(!rendered_history.contains("fold_end"));
+    assert!(!rendered_history.contains("spine-ir:"));
+    assert!(!rendered_history.contains("Base:"));
+    assert!(!rendered_history.contains("Worklog path:"));
     assert!(!rendered_history.contains("ROOT_EPOCH_DETAIL should be archived"));
 
     let runtime = session.spine.as_ref().expect("spine").lock().await;
@@ -2147,8 +2152,12 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     assert!(compact_request.tool_by_name("spine", "next").is_some());
 
     let followup_request = &requests[3];
-    assert!(followup_request.body_contains_text("<spine_ir"));
+    assert!(followup_request.body_contains_text("<spine_worklog"));
     assert!(followup_request.body_contains_text("compact leaf fact"));
+    assert!(!followup_request.body_contains_text("fold_start"));
+    assert!(!followup_request.body_contains_text("fold_end"));
+    assert!(!followup_request.body_contains_text("spine-ir:"));
+    assert!(!followup_request.body_contains_text("Worklog path:"));
     assert!(!followup_request.body_contains_text("Pending continuation"));
     assert!(followup_request.body_contains_text("FINAL_AFTER_SPINE_COMPACT"));
     assert!(!followup_request.body_contains_text("Continue the active user turn"));

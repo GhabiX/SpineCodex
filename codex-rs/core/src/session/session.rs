@@ -561,6 +561,7 @@ async fn seed_forked_spine_sidecar(
 
     child_store.create()?;
     child_store.record_projection_reset(projection.state.clone(), "fork_seed", None)?;
+    child_store.copy_compact_index_from(&parent_store)?;
     child_store.copy_projected_node_artifacts_from(
         &parent_store,
         projection.node_ids(),

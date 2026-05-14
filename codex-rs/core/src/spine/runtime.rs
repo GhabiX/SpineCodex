@@ -1,5 +1,6 @@
 use super::compact::SpineCompactBoundary;
 use super::compact::render_context_compacted_outline;
+use super::compact::render_slim_context_compacted_outline;
 use super::ids::NodeId;
 use super::is_legacy_spine_transition_tool;
 use super::is_spine_transition_tool;
@@ -209,6 +210,49 @@ impl SpineRuntime {
             scope_summary,
             self.store.root(),
             &scope_worklog_path,
+            &child_rows,
+        ))
+    }
+
+    pub(crate) fn render_model_context_compacted_outline(
+        &self,
+        scope_node_id: &NodeId,
+    ) -> Result<String, SpineRuntimeError> {
+        let scope = self
+            .state
+            .node(scope_node_id)
+            .ok_or_else(|| SpineRuntimeError::UnknownNode(scope_node_id.clone()))?;
+        let scope_summary =
+            scope
+                .summary
+                .as_deref()
+                .ok_or_else(|| SpineRuntimeError::MissingSummary {
+                    node_id: scope_node_id.clone(),
+                })?;
+        let mut child_rows = Vec::new();
+        for child in self
+            .state
+            .nodes()
+            .values()
+            .filter(|node| node.parent_id.as_ref() == Some(scope_node_id))
+        {
+            let summary = child
+                .summary
+                .clone()
+                .unwrap_or_else(|| compact_outline_status_label(&child.status).to_string());
+            child_rows.push((
+                child.node_id.clone(),
+                format!("[{}] {}", child.node_id, summary),
+            ));
+        }
+        child_rows.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let child_rows = child_rows
+            .into_iter()
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>();
+        Ok(render_slim_context_compacted_outline(
+            scope_node_id,
+            scope_summary,
             &child_rows,
         ))
     }

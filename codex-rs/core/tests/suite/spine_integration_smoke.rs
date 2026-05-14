@@ -327,10 +327,13 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
         "spine auto compact should keep the same parallel tool-call envelope as the follow-up request"
     );
     assert!(
-        requests[3].body_contains_text("<spine_ir")
+        requests[3].body_contains_text("<spine_worklog")
             && requests[3].body_contains_text("auto root archive summary"),
         "follow-up should use a readable spine root-epoch IR checkpoint"
     );
+    assert!(!requests[3].body_contains_text("fold_start"));
+    assert!(!requests[3].body_contains_text("fold_end"));
+    assert!(!requests[3].body_contains_text("spine-ir:"));
 
     let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
     let tree_text = std::fs::read_to_string(sidecar_dir.join("tree.jsonl"))

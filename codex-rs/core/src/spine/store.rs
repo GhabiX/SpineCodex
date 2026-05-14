@@ -390,6 +390,22 @@ impl SpineSidecarStore {
         Ok(())
     }
 
+    pub(crate) fn copy_compact_index_from(
+        &self,
+        source: &SpineSidecarStore,
+    ) -> Result<(), SpineStoreError> {
+        let source_path = source.compact_index_path();
+        if !source_path.exists() {
+            return Ok(());
+        }
+        let destination_path = self.compact_index_path();
+        std::fs::copy(&source_path, &destination_path).map_err(|source| SpineStoreError::Io {
+            path: destination_path,
+            source,
+        })?;
+        Ok(())
+    }
+
     pub(crate) fn write_plan<T: Serialize>(
         &self,
         node_id: &NodeId,
@@ -1291,6 +1307,48 @@ impl SpineSidecarStore {
         Ok(())
     }
 
+    pub(crate) fn installed_compact_spans(
+        &self,
+    ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
+        let mut spans = Vec::new();
+
+        for event in self.read_compact_index_events()? {
+            if let CompactIndexEvent::CompactInstalled {
+                compact_id,
+                node_id,
+                op,
+                cut_ordinal,
+                fold_end_ordinal,
+                replacement_history_len,
+                message_hash,
+                ..
+            } = event
+            {
+                if cut_ordinal >= fold_end_ordinal {
+                    return Err(SpineStoreError::InvalidLedger(format!(
+                        "compact.index.jsonl installed span for {compact_id} is empty or inverted: [{cut_ordinal}, {fold_end_ordinal})"
+                    )));
+                }
+                let parsed_node_id = NodeId::parse(&node_id).map_err(|err| {
+                    SpineStoreError::InvalidLedger(format!(
+                        "compact.index.jsonl installed span for {compact_id} has invalid node_id {node_id:?}: {err}"
+                    ))
+                })?;
+                spans.push(InstalledCompactSpan {
+                    compact_id,
+                    node_id: parsed_node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    replacement_history_len,
+                    message_hash,
+                });
+            }
+        }
+
+        Ok(spans)
+    }
+
     fn next_tree_seq(&self) -> Result<u64, SpineStoreError> {
         let len = self.read_tree_events()?.len();
         u64::try_from(len + 1)
@@ -1688,6 +1746,17 @@ struct CompactAttemptState {
     cut_ordinal: u64,
     fold_end_ordinal: u64,
     terminal: Option<&'static str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InstalledCompactSpan {
+    pub(crate) compact_id: String,
+    pub(crate) node_id: NodeId,
+    pub(crate) op: SpineOperation,
+    pub(crate) cut_ordinal: u64,
+    pub(crate) fold_end_ordinal: u64,
+    pub(crate) replacement_history_len: usize,
+    pub(crate) message_hash: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]

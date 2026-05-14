@@ -28,6 +28,39 @@ fn text_item(text: &str) -> ResponseItem {
     }
 }
 
+fn installed_span(
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+) -> InstalledCompactSpan {
+    InstalledCompactSpan {
+        compact_id: compact_id.to_string(),
+        node_id,
+        op,
+        cut_ordinal,
+        fold_end_ordinal,
+        replacement_history_len: 0,
+        message_hash: format!("sha1:{compact_id}"),
+    }
+}
+
+fn rollout_serialized(item: ResponseItem) -> ResponseItem {
+    let serialized = serde_json::to_string(&item).expect("serialize response item");
+    serde_json::from_str(&serialized).expect("deserialize response item")
+}
+
+fn message_text(item: &ResponseItem) -> String {
+    let ResponseItem::Message { content, .. } = item else {
+        panic!("expected message item");
+    };
+    match &content[0] {
+        ContentItem::InputText { text } | ContentItem::OutputText { text } => text.clone(),
+        _ => panic!("expected text content item"),
+    }
+}
+
 fn user_item(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -78,6 +111,93 @@ fn custom_tool_call_output(call_id: &str) -> ResponseItem {
             success: Some(true),
         },
     }
+}
+
+#[test]
+fn raw_ordinals_map_slim_spine_worklog_with_runtime_span() {
+    let worklog_item = render_spine_worklog_item(
+        &id(&[1, 2]),
+        SpineOperation::Next,
+        "leaf summary",
+        "leaf body",
+    );
+    let spans = vec![installed_span(
+        "compact-1",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        1,
+        4,
+    )];
+    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 0, &spans),
+        Some(0)
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 1, &spans),
+        Some(1)
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 2, &spans),
+        None
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 3, &spans),
+        None
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
+        Some(2)
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 2, &spans),
+        Some(4)
+    );
+}
+
+#[test]
+fn raw_ordinals_fail_fast_for_slim_spine_worklog_without_runtime_span() {
+    let worklog_item = render_spine_worklog_item(
+        &id(&[1, 2]),
+        SpineOperation::Next,
+        "leaf summary",
+        "leaf body",
+    );
+    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 4, &[]),
+        None
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 2, &[]),
+        None
+    );
+}
+
+#[test]
+fn raw_ordinals_ignore_unmatched_later_runtime_spans() {
+    let worklog_item = render_spine_worklog_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "leaf summary",
+        "leaf body",
+    );
+    let spans = vec![
+        installed_span("compact-child", id(&[1, 1]), SpineOperation::Next, 1, 4),
+        installed_span("rolled-back-scope", id(&[1]), SpineOperation::Close, 1, 6),
+    ];
+    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
+        Some(2)
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 2, &spans),
+        Some(4)
+    );
 }
 
 #[test]
@@ -150,6 +270,185 @@ fn raw_ordinals_map_serialized_spine_ir_marker() {
     assert_eq!(effective_index_for_raw_ordinal(&history, 2), None);
     assert_eq!(effective_index_for_raw_ordinal(&history, 3), None);
     assert_eq!(effective_index_for_raw_ordinal(&history, 4), Some(2));
+}
+
+#[test]
+fn runtime_span_mapping_consumes_legacy_spans_before_slim_items() {
+    let legacy_ir = render_spine_ir_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "legacy leaf",
+        Path::new("/tmp/spine"),
+        Path::new("nodes/1/1/worklog.md"),
+        "legacy body",
+        1,
+        4,
+    );
+    let slim =
+        render_spine_worklog_item(&id(&[1, 2]), SpineOperation::Next, "slim leaf", "slim body");
+    let spans = vec![
+        installed_span("compact-legacy", id(&[1, 1]), SpineOperation::Next, 1, 4),
+        installed_span("compact-slim", id(&[1, 2]), SpineOperation::Next, 5, 7),
+    ];
+    let history = vec![text_item("prefix"), legacy_ir, text_item("middle"), slim];
+
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 5, &spans),
+        Some(3)
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 3, &spans),
+        Some(5)
+    );
+}
+
+#[test]
+fn runtime_span_mapping_counts_unmatched_legacy_ir_as_raw_text() {
+    let trusted_legacy = rollout_serialized(render_spine_ir_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "trusted legacy",
+        Path::new("/tmp/spine"),
+        Path::new("nodes/1/1/worklog.md"),
+        "trusted body",
+        1,
+        4,
+    ));
+    let stale_legacy = rollout_serialized(render_spine_ir_item(
+        &id(&[1]),
+        SpineOperation::Next,
+        "stale root",
+        Path::new("/tmp/spine"),
+        Path::new("nodes/1/worklog.md"),
+        "stale body",
+        1,
+        5,
+    ));
+    let spans = vec![installed_span(
+        "compact-trusted",
+        id(&[1, 1]),
+        SpineOperation::Next,
+        1,
+        4,
+    )];
+    let history = vec![
+        text_item("prefix"),
+        trusted_legacy,
+        stale_legacy,
+        text_item("tail"),
+    ];
+
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 2, &spans),
+        None
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
+        Some(2)
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 5, &spans),
+        Some(3)
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 3, &spans),
+        Some(5)
+    );
+}
+
+#[test]
+fn suffix_fold_maps_after_visible_stale_legacy_ir_text() {
+    let mut history = vec![text_item("raw 0"), text_item("raw 1")];
+    history.push(rollout_serialized(render_spine_ir_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "node 1.1 done",
+        Path::new("/tmp/spine"),
+        Path::new("nodes/1/1/worklog.md"),
+        "node 1.1 body",
+        2,
+        293,
+    )));
+    history.push(rollout_serialized(render_spine_ir_item(
+        &id(&[1, 2]),
+        SpineOperation::Next,
+        "node 1.2 done",
+        Path::new("/tmp/spine"),
+        Path::new("nodes/1/2/worklog.md"),
+        "node 1.2 body",
+        293,
+        495,
+    )));
+    for raw in 495..498 {
+        history.push(text_item(&format!("raw {raw}")));
+    }
+    history.push(rollout_serialized(render_spine_ir_item(
+        &id(&[1, 3]),
+        SpineOperation::Close,
+        "node 1.3 done",
+        Path::new("/tmp/spine"),
+        Path::new("nodes/1/3/worklog.md"),
+        "node 1.3 body",
+        498,
+        1108,
+    )));
+
+    let stale_ir_text = message_text(&rollout_serialized(render_spine_ir_item(
+        &id(&[1]),
+        SpineOperation::Next,
+        "stale generated ir",
+        Path::new("/tmp/spine"),
+        Path::new("nodes/1/worklog.md"),
+        "stale leaked body",
+        2,
+        1110,
+    )));
+    history.push(text_item(&stale_ir_text));
+    history.push(user_item(&stale_ir_text));
+    for raw in 1110..1424 {
+        history.push(text_item(&format!("raw {raw}")));
+    }
+
+    let spans = vec![
+        installed_span("compact-1-1", id(&[1, 1]), SpineOperation::Next, 2, 293),
+        installed_span("compact-1-2", id(&[1, 2]), SpineOperation::Next, 293, 495),
+        installed_span("compact-1-3", id(&[1, 3]), SpineOperation::Close, 498, 1108),
+    ];
+
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 1110, &spans),
+        Some(10)
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 1424, &spans),
+        Some(history.len())
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, history.len(), &spans),
+        Some(1424)
+    );
+
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[1, 4]),
+        scope_node_id: None,
+        cut_ordinal: 1111,
+        fold_end_ordinal: 1424,
+        spine_tree: "1.4: finished\n1.5: Current".to_string(),
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: "node 1.4 done".to_string(),
+        compact_instruction: None,
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+    let plan = plan_suffix_fold_with_spans(&history, 1111, 1424, &spans, input)
+        .expect("stale visible legacy IR must not break fold_end mapping");
+
+    assert_eq!(plan.input.cut_ordinal, 1111);
+    assert_eq!(plan.input.fold_end_ordinal, 1424);
+    assert_eq!(plan.fold_end_index, history.len());
 }
 
 #[test]
@@ -344,6 +643,64 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
 }
 
 #[test]
+fn suffix_fold_uses_runtime_span_for_slim_worklog_item() {
+    let slim = render_spine_worklog_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "previous leaf",
+        "previous compact facts",
+    );
+    let spans = vec![installed_span(
+        "compact-1",
+        id(&[1, 1]),
+        SpineOperation::Next,
+        1,
+        5,
+    )];
+    let history = vec![
+        text_item("prefix"),
+        slim,
+        user_item("current turn asks next"),
+        text_item("assistant work"),
+        function_call("call-next"),
+        function_call_output("call-next"),
+        text_item("tail after folded suffix"),
+    ];
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[1, 2]),
+        scope_node_id: None,
+        cut_ordinal: 5,
+        fold_end_ordinal: 9,
+        spine_tree: "1: finished previous [worklog already in context]\n2: Current".to_string(),
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: "current done".to_string(),
+        compact_instruction: None,
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let plan =
+        plan_suffix_fold_with_spans(&history, 5, 9, &spans, input).expect("plan suffix fold");
+
+    assert_eq!(plan.cut_index, 2);
+    assert_eq!(plan.fold_end_index, 6);
+    assert_eq!(plan.input.cut_ordinal, 5);
+    assert_eq!(plan.input.fold_end_ordinal, 9);
+    assert_eq!(plan.input.prefix_items[1], history[1]);
+    assert_eq!(
+        plan.input.suffix_items[0],
+        user_item("current turn asks next")
+    );
+    assert_eq!(
+        plan.replacement_tail,
+        vec![text_item("tail after folded suffix")]
+    );
+}
+
+#[test]
 fn suffix_fold_pulls_call_back_when_output_is_inside_range() {
     let history = vec![
         user_item("previous turn"),
@@ -448,6 +805,41 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
         panic!("unexpected item type");
     };
     assert_eq!(id.as_deref(), Some("spine-ir:1.2:8-17:close"));
+}
+
+#[test]
+fn render_worklog_item_omits_runtime_metadata() {
+    let item = render_spine_worklog_item(
+        &id(&[1, 2]),
+        SpineOperation::Close,
+        "scope summary",
+        "## Compact\n\nscope facts",
+    );
+    let text = match &item {
+        ResponseItem::Message { content, .. } => match &content[0] {
+            ContentItem::OutputText { text } => text.clone(),
+            _ => panic!("unexpected content item"),
+        },
+        _ => panic!("unexpected item type"),
+    };
+
+    assert!(text.starts_with("<spine_worklog node=\"1.2\" op=\"close\">"));
+    assert!(text.contains("Summary: scope summary"));
+    assert!(text.contains("scope facts"));
+    assert!(text.ends_with("</spine_worklog>"));
+    assert!(!text.contains("fold_start"));
+    assert!(!text.contains("fold_end"));
+    assert!(!text.contains("spine-ir:"));
+    assert!(!text.contains("Base:"));
+    assert!(!text.contains("Worklog path:"));
+    assert!(!text.contains("Node trajs:"));
+    assert!(!text.contains("Raw mirror:"));
+    assert!(!text.contains("Rollout:"));
+    assert!(!text.contains("## Auto Compact"));
+    let ResponseItem::Message { id, .. } = item else {
+        panic!("unexpected item type");
+    };
+    assert_eq!(id, None);
 }
 
 #[test]

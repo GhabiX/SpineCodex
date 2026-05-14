@@ -183,9 +183,9 @@ use crate::spine::compact::SpineCompactBoundary;
 use crate::spine::compact::SpineCompactInput;
 use crate::spine::compact::build_suffix_replacement_history;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
-use crate::spine::compact::plan_suffix_fold;
+use crate::spine::compact::plan_suffix_fold_with_spans;
 use crate::spine::compact::render_auto_compact_worklog;
-use crate::spine::compact::render_spine_ir_item;
+use crate::spine::compact::render_spine_worklog_item;
 use crate::spine::store::SpineOperation;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
@@ -2987,10 +2987,14 @@ impl Session {
             raw_mirror_path: store.raw_rollout_path(),
             sidecar_root: store.root().to_path_buf(),
         };
-        let plan = plan_suffix_fold(
+        let runtime_spans = store.installed_compact_spans().map_err(|err| {
+            CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
+        })?;
+        let plan = plan_suffix_fold_with_spans(
             &history,
             boundary.cut_ordinal,
             boundary.fold_end_ordinal,
+            &runtime_spans,
             input,
         )?;
         let effective_boundary = SpineCompactBoundary {
@@ -3019,7 +3023,7 @@ impl Session {
             .filter(|body| !body.is_empty())
             .unwrap_or(compact_summary.as_str());
         let worklog_markdown = render_auto_compact_worklog(&plan.input, compacted_body);
-        let worklog_body = store
+        store
             .worklog_with_appended_section(&boundary.node_id, &worklog_markdown)
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to stage spine root archive worklog: {err}"))
@@ -3029,21 +3033,17 @@ impl Session {
             .strip_prefix(store.root())
             .unwrap_or(plan.worklog_path.as_path())
             .to_path_buf();
-        let rendered_ir_items = vec![render_spine_ir_item(
+        let rendered_worklog_items = vec![render_spine_worklog_item(
             &boundary.node_id,
             boundary.op,
             &boundary.transition_summary,
-            store.root(),
-            &worklog_rel_path,
-            &worklog_body,
-            effective_boundary.cut_ordinal,
-            effective_boundary.fold_end_ordinal,
+            compacted_body,
         )];
         let replacement_history = build_suffix_replacement_history(
             &history,
             plan.cut_index,
             plan.fold_end_index,
-            rendered_ir_items,
+            rendered_worklog_items,
         );
         let compact_message = format!(
             "Spine compacted root epoch {} [{}, {})",
@@ -3159,18 +3159,23 @@ impl Session {
             .as_ref()
             .ok_or_else(|| CodexErr::Fatal("spine runtime is not initialized".to_string()))?;
         let store = { spine.lock().await.store().clone() };
-        let close_outline = if boundary.op == SpineOperation::Close {
-            Some(
-                spine
-                    .lock()
-                    .await
-                    .render_context_compacted_outline(&boundary.node_id)
-                    .map_err(|err| {
-                        CodexErr::Fatal(format!(
-                            "failed to render spine compact scope outline: {err}"
-                        ))
-                    })?,
-            )
+        let close_outlines = if boundary.op == SpineOperation::Close {
+            let runtime = spine.lock().await;
+            let audit_outline = runtime
+                .render_context_compacted_outline(&boundary.node_id)
+                .map_err(|err| {
+                    CodexErr::Fatal(format!(
+                        "failed to render spine compact scope outline: {err}"
+                    ))
+                })?;
+            let model_outline = runtime
+                .render_model_context_compacted_outline(&boundary.node_id)
+                .map_err(|err| {
+                    CodexErr::Fatal(format!(
+                        "failed to render spine compact model scope outline: {err}"
+                    ))
+                })?;
+            Some((audit_outline, model_outline))
         } else {
             None
         };
@@ -3206,10 +3211,14 @@ impl Session {
             raw_mirror_path: store.raw_rollout_path(),
             sidecar_root: store.root().to_path_buf(),
         };
-        let plan = plan_suffix_fold(
+        let runtime_spans = store.installed_compact_spans().map_err(|err| {
+            CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
+        })?;
+        let plan = plan_suffix_fold_with_spans(
             &history,
             boundary.cut_ordinal,
             boundary.fold_end_ordinal,
+            &runtime_spans,
             input,
         )?;
         let effective_boundary = SpineCompactBoundary {
@@ -3274,11 +3283,14 @@ impl Session {
             }
         };
         let mut worklog_markdown = compact_output.worklog_markdown.clone();
-        if let Some(outline) = close_outline {
+        let mut model_worklog_body = compact_output.compacted_body.clone();
+        if let Some((audit_outline, model_outline)) = close_outlines {
             worklog_markdown.push_str("\n\n");
-            worklog_markdown.push_str(&outline);
+            worklog_markdown.push_str(&audit_outline);
+            model_worklog_body.push_str("\n\n");
+            model_worklog_body.push_str(&model_outline);
         }
-        let worklog_body = store
+        store
             .worklog_with_appended_section(&boundary.node_id, &worklog_markdown)
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to stage spine compact worklog: {err}"))
@@ -3288,21 +3300,17 @@ impl Session {
             .strip_prefix(store.root())
             .unwrap_or(plan.worklog_path.as_path())
             .to_path_buf();
-        let rendered_ir_items = vec![render_spine_ir_item(
+        let rendered_worklog_items = vec![render_spine_worklog_item(
             &boundary.node_id,
             boundary.op,
             &boundary.transition_summary,
-            store.root(),
-            &worklog_rel_path,
-            &worklog_body,
-            effective_boundary.cut_ordinal,
-            effective_boundary.fold_end_ordinal,
+            &model_worklog_body,
         )];
         let replacement_history = build_suffix_replacement_history(
             &history,
             plan.cut_index,
             plan.fold_end_index,
-            rendered_ir_items,
+            rendered_worklog_items,
         );
         let compacted_item = CompactedItem {
             message: compact_output.compact_message.clone(),
