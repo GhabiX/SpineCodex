@@ -404,6 +404,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_spine_task_tree_enabled(&mut self, enabled: bool) {
+        self.composer.set_spine_task_tree_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
         self.composer.set_realtime_conversation_enabled(enabled);
         self.request_redraw();

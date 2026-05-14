@@ -53,6 +53,9 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("planning only"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("does not create Spine nodes"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("~<predicted-id>"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("task structure or next work scope changes"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("promptly refresh the current spine_plantree"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("displayed PlanTree stays current"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 30k raw tokens"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 20k"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the hint as a cue"));

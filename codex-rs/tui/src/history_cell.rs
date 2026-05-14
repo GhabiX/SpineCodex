@@ -2974,6 +2974,12 @@ pub(crate) fn new_spine_tree_update(
     SpineTreeUpdateCell { turn_id, snapshot }
 }
 
+pub(crate) fn new_spine_plantree_update(
+    snapshot: SpineTreeUpdatedNotification,
+) -> SpinePlanTreeCell {
+    SpinePlanTreeCell { snapshot }
+}
+
 /// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
 ///
 /// The plan body is stored as raw markdown so terminal resize reflow can render it again at the
@@ -3222,6 +3228,55 @@ impl HistoryCell for SpineTreeUpdateCell {
                     );
                 }
             }
+        }
+        lines
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SpinePlanTreeCell {
+    snapshot: SpineTreeUpdatedNotification,
+}
+
+impl HistoryCell for SpinePlanTreeCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = vec![vec!["• ".dim(), "Spine PlanTree".bold()].into()];
+        let Some(plantree) = spine_tree_active_plantree(&self.snapshot) else {
+            lines.push(vec!["  └ ".dim(), "(empty)".dim().italic()].into());
+            return lines;
+        };
+
+        let root_id = plantree
+            .root
+            .existing_node_id
+            .as_deref()
+            .unwrap_or(plantree.anchor_node_id.as_str())
+            .to_string();
+        render_spine_plantree_scope(
+            &self.snapshot,
+            &plantree.root,
+            root_id,
+            0,
+            true,
+            width,
+            &mut lines,
+        );
+        lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from(format!(
+            "Spine PlanTree turn={} snapshot_seq={} active_node={}",
+            self.snapshot.turn_id, self.snapshot.snapshot_seq, self.snapshot.active_node_id
+        ))];
+        if let Some(plantree) = spine_tree_active_plantree(&self.snapshot) {
+            lines.push(Line::from(format!(
+                "plantree anchor={}",
+                plantree.anchor_node_id
+            )));
+            append_spine_tree_plantree_raw_lines(&mut lines, &plantree.root, 0);
+        } else {
+            lines.push(Line::from("(empty)"));
         }
         lines
     }
@@ -3493,6 +3548,75 @@ fn render_spine_tree_planned_scope(
             width,
             out,
         );
+    }
+}
+
+fn render_spine_plantree_scope(
+    snapshot: &SpineTreeUpdatedNotification,
+    scope: &SpineTreePlanTreeScope,
+    display_id: String,
+    depth: usize,
+    is_last: bool,
+    width: u16,
+    out: &mut Vec<Line<'static>>,
+) {
+    let branch = spine_tree_branch(depth, is_last);
+    let prefix = format!("  {}{}", "  ".repeat(depth), branch);
+    let opts = RtOptions::new(width.saturating_sub(2).max(1) as usize)
+        .subsequent_indent(format!("{}  ", "  ".repeat(depth + 1)).into());
+    let id_style = if display_id.starts_with('~') {
+        Style::default().yellow().bold()
+    } else {
+        Style::default().cyan().bold()
+    };
+    let line = Line::from(vec![
+        Span::from(prefix).dim(),
+        Span::from(display_id.clone()).style(id_style),
+        Span::from(" "),
+        Span::from(scope.summary.clone()),
+    ]);
+    let wrapped = adaptive_wrap_line(&line, opts);
+    push_owned_lines(&wrapped, out);
+
+    for checkpoint in &scope.checkpoints {
+        out.extend(render_spine_tree_planned_checkpoint(
+            checkpoint,
+            depth + 1,
+            width,
+        ));
+    }
+
+    let child_count = scope.children.len();
+    let mut next_future_index = scope
+        .existing_node_id
+        .as_deref()
+        .map(|node_id| next_planned_child_index(snapshot, node_id))
+        .unwrap_or(1);
+    for (index, child) in scope.children.iter().enumerate() {
+        let child_id = if let Some(existing_node_id) = &child.existing_node_id {
+            existing_node_id.clone()
+        } else {
+            let predicted_id = predicted_plantree_child_id(&display_id, next_future_index);
+            next_future_index = next_future_index.saturating_add(1);
+            predicted_id
+        };
+        render_spine_plantree_scope(
+            snapshot,
+            child,
+            child_id,
+            depth + 1,
+            index + 1 == child_count,
+            width,
+            out,
+        );
+    }
+}
+
+fn predicted_plantree_child_id(parent_display_id: &str, child_index: u32) -> String {
+    if parent_display_id.starts_with('~') {
+        format!("{parent_display_id}.{child_index}")
+    } else {
+        format!("~{parent_display_id}.{child_index}")
     }
 }
 

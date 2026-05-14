@@ -803,6 +803,94 @@ async fn live_app_server_model_verification_renders_warning() {
     assert!(rendered.contains("https://chatgpt.com/cyber"));
 }
 
+fn sample_spine_tree_with_active_plantree()
+-> codex_app_server_protocol::SpineTreeUpdatedNotification {
+    codex_app_server_protocol::SpineTreeUpdatedNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        snapshot_seq: 4,
+        active_node_id: "1.1".to_string(),
+        nodes: vec![
+            codex_app_server_protocol::SpineTreeNode {
+                node_id: "1".to_string(),
+                parent_id: None,
+                summary: Some("root scope".to_string()),
+                status: codex_app_server_protocol::SpineTreeNodeStatus::Opened,
+                plan: None,
+            },
+            codex_app_server_protocol::SpineTreeNode {
+                node_id: "1.1".to_string(),
+                parent_id: Some("1".to_string()),
+                summary: Some("focused leaf".to_string()),
+                status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
+                plan: Some(codex_app_server_protocol::SpineTreePlan {
+                    revision: 2,
+                    explanation: Some("track focused work".to_string()),
+                    spine_plantree: Some(codex_app_server_protocol::SpineTreePlanTree {
+                        anchor_node_id: "1.1".to_string(),
+                        root: codex_app_server_protocol::SpineTreePlanTreeScope {
+                            existing_node_id: Some("1.1".to_string()),
+                            summary: "focused leaf planning scope".to_string(),
+                            status: Some(
+                                codex_app_server_protocol::SpineTreePlanItemStatus::InProgress,
+                            ),
+                            checkpoints: Vec::new(),
+                            children: vec![codex_app_server_protocol::SpineTreePlanTreeScope {
+                                existing_node_id: None,
+                                summary: "Verify scope".to_string(),
+                                status: Some(
+                                    codex_app_server_protocol::SpineTreePlanItemStatus::Pending,
+                                ),
+                                checkpoints:
+                                    vec![codex_app_server_protocol::SpineTreePlanCheckpoint {
+                                        task: "run focused validation".to_string(),
+                                        status:
+                                            codex_app_server_protocol::SpineTreePlanItemStatus::Pending,
+                                    }],
+                                children: Vec::new(),
+                            }],
+                        },
+                    }),
+                    items: vec![
+                        codex_app_server_protocol::SpineTreePlanItem {
+                            stable_task_id: "1.1:0".to_string(),
+                            step: "inspect inputs".to_string(),
+                            status: codex_app_server_protocol::SpineTreePlanItemStatus::Completed,
+                        },
+                        codex_app_server_protocol::SpineTreePlanItem {
+                            stable_task_id: "1.1:1".to_string(),
+                            step: "run validation".to_string(),
+                            status: codex_app_server_protocol::SpineTreePlanItemStatus::InProgress,
+                        },
+                    ],
+                }),
+            },
+        ],
+    }
+}
+
+fn sample_thread_session(thread_id: ThreadId) -> crate::session_state::ThreadSessionState {
+    crate::session_state::ThreadSessionState {
+        thread_id,
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/tmp/project").abs(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    }
+}
+
 #[tokio::test]
 async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -912,6 +1000,67 @@ async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
         rx.try_recv().is_err(),
         "flat plan update should be suppressed after spine tree update"
     );
+}
+
+#[tokio::test]
+async fn slash_spinetree_renders_only_active_plantree() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::SpineTreeUpdated(sample_spine_tree_with_active_plantree()),
+        /*replay_kind*/ None,
+    );
+    chat.dispatch_command(SlashCommand::Spinetree);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one local PlanTree history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Spine PlanTree"));
+    assert!(rendered.contains("1.1 focused leaf planning scope"));
+    assert!(rendered.contains("~1.1.1 Verify scope"));
+    assert!(rendered.contains("run focused validation"));
+    assert!(!rendered.contains("Spine Tree"));
+    assert!(!rendered.contains("1 root scope"));
+    assert!(!rendered.contains("inspect inputs"));
+    assert!(!rendered.contains("run validation"));
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn slash_spinetree_reports_missing_snapshot() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Spinetree);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Spine PlanTree is not available yet."));
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn slash_spinetree_does_not_reuse_snapshot_after_thread_change() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::SpineTreeUpdated(sample_spine_tree_with_active_plantree()),
+        /*replay_kind*/ None,
+    );
+    drain_insert_history(&mut rx);
+
+    chat.handle_thread_session(sample_thread_session(ThreadId::new()));
+    drain_insert_history(&mut rx);
+
+    chat.dispatch_command(SlashCommand::Spinetree);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Spine PlanTree is not available yet."));
+    assert!(!rendered.contains("focused leaf planning scope"));
+    assert!(!rendered.contains("Verify scope"));
+    assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]
