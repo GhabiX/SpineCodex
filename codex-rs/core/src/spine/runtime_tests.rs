@@ -221,21 +221,21 @@ fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
 }
 
 #[test]
-fn size_hint_thresholds_start_at_30k_then_step_by_20k() {
-    assert_eq!(size_hint_threshold(29_999), None);
-    assert_eq!(size_hint_threshold(30_000), Some(30_000));
-    assert_eq!(size_hint_threshold(49_999), Some(30_000));
+fn size_hint_thresholds_start_at_50k_then_step_by_30k() {
+    assert_eq!(size_hint_threshold(49_999), None);
     assert_eq!(size_hint_threshold(50_000), Some(50_000));
-    assert_eq!(size_hint_threshold(69_999), Some(50_000));
-    assert_eq!(size_hint_threshold(70_000), Some(70_000));
-    assert_eq!(size_hint_threshold(89_999), Some(70_000));
-    assert_eq!(size_hint_threshold(90_000), Some(90_000));
+    assert_eq!(size_hint_threshold(79_999), Some(50_000));
+    assert_eq!(size_hint_threshold(80_000), Some(80_000));
+    assert_eq!(size_hint_threshold(109_999), Some(80_000));
+    assert_eq!(size_hint_threshold(110_000), Some(110_000));
+    assert_eq!(size_hint_threshold(139_999), Some(110_000));
+    assert_eq!(size_hint_threshold(140_000), Some(140_000));
 }
 
 #[test]
 fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
     let (_temp, mut runtime) = temp_runtime();
-    let payload = "x".repeat(120_000);
+    let payload = "x".repeat(220_000);
     runtime
         .store()
         .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
@@ -251,8 +251,8 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
         .expect("emit first hint")
         .expect("hint should appear");
     assert_eq!(first.node_id, id(&[1, 1]));
-    assert!(first.estimated_tokens >= 30_000);
-    assert_eq!(first.threshold_tokens, 30_000);
+    assert!(first.estimated_tokens >= 50_000);
+    assert_eq!(first.threshold_tokens, 50_000);
 
     assert_eq!(
         runtime
@@ -261,7 +261,7 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
         None
     );
 
-    let larger_payload = "y".repeat(80_000);
+    let larger_payload = "y".repeat(180_000);
     runtime
         .store()
         .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
@@ -277,7 +277,7 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
         .expect("emit second threshold")
         .expect("second threshold should appear");
     assert_eq!(second.node_id, id(&[1, 1]));
-    assert_eq!(second.threshold_tokens, 50_000);
+    assert_eq!(second.threshold_tokens, 80_000);
 }
 
 #[test]

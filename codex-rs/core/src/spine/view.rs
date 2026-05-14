@@ -13,6 +13,11 @@ pub(crate) struct SpineContextBudgetHint {
     pub(crate) limit_tokens: u64,
 }
 
+pub(crate) fn context_budget_is_under_pressure(budget: &SpineContextBudgetHint) -> bool {
+    let remaining_tokens = budget.limit_tokens.saturating_sub(budget.used_tokens);
+    u128::from(remaining_tokens) * 4 < u128::from(budget.limit_tokens)
+}
+
 pub(crate) fn render_tool_output(
     _op: SpineOperation,
     state: &SpineState,
@@ -69,7 +74,7 @@ pub(crate) fn render_size_hint(
     if let Some(budget) = budget {
         let remaining_tokens = budget.limit_tokens.saturating_sub(budget.used_tokens);
         return format!(
-            "\n\nSpine hint: context is about {}k/{}k tokens ({}k left); current live node is about {}k. At a natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch.",
+            "\n\nSpine warning: context pressure is high at {}k/{}k tokens ({}k left); current live node is about {}k. At the next natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch.",
             rounded_k_tokens(budget.used_tokens),
             rounded_k_tokens(budget.limit_tokens),
             rounded_k_tokens(remaining_tokens),
@@ -77,7 +82,7 @@ pub(crate) fn render_size_hint(
         );
     }
     format!(
-        "\n\nSpine hint: current live node is about {}k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a worklog.",
+        "\n\nSpine warning: current live node is about {}k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a worklog.",
         rounded_k_tokens(hint.estimated_tokens)
     )
 }

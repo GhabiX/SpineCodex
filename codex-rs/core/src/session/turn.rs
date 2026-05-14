@@ -45,6 +45,7 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::spine::view::SpineContextBudgetHint;
+use crate::spine::view::context_budget_is_under_pressure;
 use crate::spine::view::render_size_hint;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
@@ -1071,10 +1072,11 @@ async fn append_spine_size_hint_for_request(
         let limit_tokens = u64::try_from(limit_tokens).map_err(|_| {
             CodexErr::Fatal("Spine context budget limit token count is negative".to_string())
         })?;
-        Some(SpineContextBudgetHint {
+        let budget = SpineContextBudgetHint {
             used_tokens,
             limit_tokens,
-        })
+        };
+        context_budget_is_under_pressure(&budget).then_some(budget)
     } else {
         None
     };
@@ -2685,7 +2687,7 @@ mod spine_tool_order_tests {
     }
 
     #[tokio::test]
-    async fn request_boundary_appends_spine_size_hint_once() {
+    async fn request_boundary_appends_spine_warning_once() {
         let (mut session, mut turn_context) =
             crate::session::tests::make_session_and_context().await;
         turn_context.model_info.context_window = Some(1_000_000);
@@ -2696,11 +2698,11 @@ mod spine_tool_order_tests {
             .await
             .set_token_info(Some(TokenUsageInfo {
                 total_token_usage: TokenUsage {
-                    total_tokens: 812_300,
+                    total_tokens: 600_000,
                     ..TokenUsage::default()
                 },
                 last_token_usage: TokenUsage {
-                    total_tokens: 812_300,
+                    total_tokens: 600_000,
                     ..TokenUsage::default()
                 },
                 model_context_window: Some(1_000_000),
@@ -2762,7 +2764,7 @@ mod spine_tool_order_tests {
                 .expect("below threshold should not fail");
         assert!(
             below_threshold.is_empty(),
-            "request boundary must not emit a Spine hint below 30k"
+            "request boundary must not emit a Spine warning below 50k"
         );
         assert!(
             !session
@@ -2778,16 +2780,16 @@ mod spine_tool_order_tests {
                                 && matches!(
                                     content.as_slice(),
                                     [ContentItem::InputText { text }]
-                                        if text.contains("Spine hint:")
+                                        if text.contains("Spine warning:")
                                 )
                     )
                 }),
-            "below-threshold checks must not persist a Spine hint into history"
+            "below-threshold checks must not persist a Spine warning into history"
         );
 
         let spine = session.spine.as_ref().expect("spine runtime");
         let mut runtime = spine.lock().await;
-        let payload = "x".repeat(40_000);
+        let payload = "x".repeat(140_000);
         let item = ResponseItem::Message {
             id: None,
             role: "assistant".to_string(),
@@ -2813,17 +2815,18 @@ mod spine_tool_order_tests {
             vec![spine_function_call("tree", "call-tree")],
         )
         .await
-        .expect("append hint");
+        .expect("append warning");
         assert_eq!(first.len(), 2);
         let ResponseItem::Message { role, content, .. } = &first[1] else {
-            panic!("expected hint message");
+            panic!("expected warning message");
         };
         assert_eq!(role, "developer");
         assert!(matches!(
             content.as_slice(),
             [ContentItem::InputText { text }]
-                if text.contains("Spine hint: context is about 812k/900k tokens (88k left); current live node is about")
-                    && text.contains("At a natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch.")
+                if text.contains("Spine warning: current live node is about")
+                    && text.contains("At a natural boundary, use spine.next/close to move finished work into a worklog.")
+                    && !text.contains("/900k tokens")
         ));
         let history_after_first = session.clone_history().await.raw_items().to_vec();
         assert!(
@@ -2834,11 +2837,12 @@ mod spine_tool_order_tests {
                             && matches!(
                                 content.as_slice(),
                                 [ContentItem::InputText { text }]
-                                    if text.contains("Spine hint: context is about 812k/900k tokens (88k left); current live node is about")
-                                        && text.contains("At a natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch.")
+	                                    if text.contains("Spine warning: current live node is about")
+	                                        && text.contains("At a natural boundary, use spine.next/close to move finished work into a worklog.")
+	                                        && !text.contains("/900k tokens")
                             )
             )),
-            "hint must be persisted into history so the next request preserves the previous request prefix"
+            "warning must be persisted into history so the next request preserves the previous request prefix"
         );
 
         let second = append_spine_size_hint_for_request(&session, &turn_context, Vec::new())
@@ -2846,7 +2850,23 @@ mod spine_tool_order_tests {
             .expect("second request should not duplicate");
         assert!(second.is_empty());
 
-        let larger_payload = "y".repeat(80_000);
+        session
+            .state
+            .lock()
+            .await
+            .set_token_info(Some(TokenUsageInfo {
+                total_token_usage: TokenUsage {
+                    total_tokens: 812_300,
+                    ..TokenUsage::default()
+                },
+                last_token_usage: TokenUsage {
+                    total_tokens: 812_300,
+                    ..TokenUsage::default()
+                },
+                model_context_window: Some(1_000_000),
+            }));
+
+        let larger_payload = "y".repeat(140_000);
         let larger_item = ResponseItem::Message {
             id: None,
             role: "assistant".to_string(),
@@ -2874,15 +2894,16 @@ mod spine_tool_order_tests {
             .expect("third request should append next threshold");
         assert_eq!(third.len(), 1);
         let ResponseItem::Message { role, content, .. } = &third[0] else {
-            panic!("expected second hint message");
+            panic!("expected second warning message");
         };
         assert_eq!(role, "developer");
         assert!(matches!(
             content.as_slice(),
             [ContentItem::InputText { text }]
-                if text.contains("Spine hint: context is about")
+                if text.contains("Spine warning: context pressure is high at 812k/900k tokens")
                     && text.contains("/900k tokens")
                     && text.contains("left); current live node is about")
+                    && text.contains("before Codex auto-compacts the root epoch.")
         ));
         let spine = session.spine.as_ref().expect("spine runtime");
         let runtime = spine.lock().await;
@@ -2891,10 +2912,10 @@ mod spine_tool_order_tests {
                 .store()
                 .has_size_hint_emitted(
                     &crate::spine::ids::NodeId::from_segments(vec![1, 1]),
-                    50_000,
+                    80_000,
                 )
-                .expect("query 50k hint event"),
-            "request boundary must record the 50k threshold exactly once"
+                .expect("query 80k hint event"),
+            "request boundary must record the 80k threshold exactly once"
         );
     }
 }

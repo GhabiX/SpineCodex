@@ -20,7 +20,7 @@ Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative p
 After spine.next or spine.close, if unfinished work remains, use update_plan to refresh the current PlanTree from the handoff summary and current evidence.
 Keep working in the current node while its raw details are still useful. When a coherent work scope is complete, fold it so later turns use its worklog instead of its raw trace.
 Avoid tiny splits for individual commands, small observations, or conversation turns.
-The runtime may hint when the current node grows large: around 30k raw tokens, then every additional 20k. Treat the hint as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the worklog.
+The runtime may warn when the current node grows large: around 50k raw tokens, then every additional 30k. Treat the warning as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the worklog.
 When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar trajs/worklog files only when you need historical details.
 Completed Spine nodes are read-only; rely on their worklogs instead of restating their old PlanTree checkpoints.
 In Plan mode, do not call mutating spine operations.

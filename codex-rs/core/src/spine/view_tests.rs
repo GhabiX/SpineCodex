@@ -41,7 +41,7 @@ fn renders_runtime_size_hint_as_standalone_observation_text() {
                 limit_tokens: 900_000,
             }),
         ),
-        "\n\nSpine hint: context is about 812k/900k tokens (88k left); current live node is about 63k. At a natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch."
+        "\n\nSpine warning: context pressure is high at 812k/900k tokens (88k left); current live node is about 63k. At the next natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch."
     );
 }
 
@@ -55,8 +55,20 @@ fn renders_runtime_size_hint_without_budget_as_node_only_text() {
 
     assert_eq!(
         render_size_hint(&hint, None),
-        "\n\nSpine hint: current live node is about 63k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a worklog."
+        "\n\nSpine warning: current live node is about 63k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a worklog."
     );
+}
+
+#[test]
+fn context_budget_pressure_requires_less_than_25_percent_remaining() {
+    assert!(!context_budget_is_under_pressure(&SpineContextBudgetHint {
+        used_tokens: 750_000,
+        limit_tokens: 1_000_000,
+    }));
+    assert!(context_budget_is_under_pressure(&SpineContextBudgetHint {
+        used_tokens: 750_001,
+        limit_tokens: 1_000_000,
+    }));
 }
 
 #[test]

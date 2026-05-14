@@ -34,8 +34,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use thiserror::Error;
 
-const SPINE_HINT_FIRST_THRESHOLD_TOKENS: u64 = 30_000;
-const SPINE_HINT_STEP_TOKENS: u64 = 20_000;
+const SPINE_HINT_FIRST_THRESHOLD_TOKENS: u64 = 50_000;
+const SPINE_HINT_STEP_TOKENS: u64 = 30_000;
 
 #[derive(Debug)]
 pub(crate) struct SpineRuntime {

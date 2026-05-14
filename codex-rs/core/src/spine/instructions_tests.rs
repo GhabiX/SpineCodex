@@ -56,9 +56,9 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("task structure or next work scope changes"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("promptly refresh the current spine_plantree"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("displayed PlanTree stays current"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 30k raw tokens"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 20k"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the hint as a cue"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 50k raw tokens"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 30k"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the warning as a cue"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.next"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.close"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("optional instruction argument"));
@@ -67,5 +67,4 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("A node is a working scope, not a checklist item"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("The node summary is only a short tree label"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("investigate/localize"));
-    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("warn"));
 }
