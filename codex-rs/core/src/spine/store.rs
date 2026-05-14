@@ -211,7 +211,6 @@ impl SpineSidecarStore {
 
         self.ensure_sidecar_dir()?;
         self.ensure_node_dir(&NodeId::root_epoch(1))?;
-        self.ensure_node_dir(&NodeId::root_epoch(1).child(1))?;
         self.create_trajs_index_file()?;
         self.create_compact_index_file()?;
         self.create_raw_rollout_file()?;
@@ -1062,7 +1061,14 @@ impl SpineSidecarStore {
                     let next_leaf_id = NodeId::parse(&next_leaf_id)?;
                     let next_parent_id =
                         next_parent_id.as_deref().map(NodeId::parse).transpose()?;
-                    let transition = state.reset_root_epoch(summary, raw_start_ordinal)?;
+                    let transition = if next_leaf_id.segments().len() > 1 {
+                        state.reset_root_epoch_with_legacy_initial_leaf(
+                            summary,
+                            raw_start_ordinal,
+                        )?
+                    } else {
+                        state.reset_root_epoch(summary, raw_start_ordinal)?
+                    };
                     if transition.from != root_id || transition.to != next_leaf_id {
                         return Err(SpineStoreError::InvalidLedger(format!(
                             "root epoch reset replay mismatch: expected {} -> {}, got {} -> {}",

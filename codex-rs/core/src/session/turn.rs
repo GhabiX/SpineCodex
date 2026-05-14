@@ -2890,7 +2890,7 @@ mod spine_tool_order_tests {
             runtime
                 .store()
                 .has_size_hint_emitted(
-                    &crate::spine::ids::NodeId::from_segments(vec![1, 1]),
+                    &crate::spine::ids::NodeId::from_segments(vec![1]),
                     50_000,
                 )
                 .expect("query 50k hint event"),

@@ -290,7 +290,7 @@ async fn spine_native_text_outcome_installs_root_epoch_worklog() {
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     assert_eq!(
         runtime.cursor(),
-        &crate::spine::ids::NodeId::from_segments(vec![2, 1])
+        &crate::spine::ids::NodeId::from_segments(vec![2])
     );
 }
 

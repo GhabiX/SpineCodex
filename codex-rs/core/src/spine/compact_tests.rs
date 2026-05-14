@@ -548,7 +548,7 @@ fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
     ];
     let input = SpineCompactInput {
         op: SpineOperation::Next,
-        node_id: id(&[1, 1]),
+        node_id: id(&[1]),
         scope_node_id: None,
         cut_ordinal: 3,
         fold_end_ordinal: 8,
@@ -616,7 +616,7 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
     ];
     let input = SpineCompactInput {
         op: SpineOperation::Archive,
-        node_id: id(&[1, 1]),
+        node_id: id(&[1]),
         scope_node_id: None,
         cut_ordinal: 7,
         fold_end_ordinal: 9,
@@ -737,7 +737,7 @@ fn suffix_fold_pulls_call_back_when_output_is_inside_range() {
     ];
     let input = SpineCompactInput {
         op: SpineOperation::Next,
-        node_id: id(&[1, 1]),
+        node_id: id(&[1]),
         scope_node_id: None,
         cut_ordinal: 2,
         fold_end_ordinal: 3,
@@ -895,7 +895,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     let spine_tree = render_tree(&state, state.cursor());
     let input = SpineCompactInput {
         op: SpineOperation::Next,
-        node_id: id(&[1, 1]),
+        node_id: id(&[1]),
         scope_node_id: None,
         cut_ordinal: 1,
         fold_end_ordinal: 3,
@@ -918,8 +918,8 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(!rendered.contains("quoted_suffix_response_items_json"));
     assert!(!rendered.contains("Target suffix item count"));
     assert!(rendered.contains("<spine_tree>"));
-    assert!(rendered.contains("1.1: finished leaf done [worklog already in context]"));
-    assert!(rendered.contains("1.2: Current"));
+    assert!(rendered.contains("1: finished leaf done [worklog already in context]"));
+    assert!(rendered.contains("2: Current"));
     assert!(rendered.contains("<spine_compact_worklog>"));
     assert!(rendered.contains("</spine_compact_worklog>"));
     assert_eq!(prompt[0], input.prefix_items[0]);
@@ -931,11 +931,11 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
         panic!("expected compact instruction text");
     };
     assert!(!text.contains(crate::compact::SUMMARIZATION_PROMPT));
-    assert!(text.starts_with("Compact only target Spine node `1.1` into factual worklog IR."));
+    assert!(text.starts_with("Compact only target Spine node `1` into factual worklog IR."));
     assert!(text.contains("Keep durable facts needed by later nodes"));
     assert!(text.contains("validation status, blockers, unresolved questions"));
-    assert!(text.contains("Target tree node: 1.1"));
-    assert!(text.contains("Internal node id: 1.1"));
+    assert!(text.contains("Target tree node: 1"));
+    assert!(text.contains("Internal node id: 1"));
     assert!(text.contains("Target operation: next"));
     assert!(text.contains("Spine Tree summary label: leaf done"));
     assert!(!text.contains("What remains to be done"));
@@ -947,7 +947,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
 
     let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
     assert!(output.contains("Base: /tmp/spine"));
-    assert!(output.contains("Node trajs: nodes/1/1/trajs.jsonl"));
+    assert!(output.contains("Node trajs: nodes/1/trajs.jsonl"));
     assert!(output.contains("Raw mirror: /tmp/raw.jsonl"));
     assert!(!output.contains("Compact instruction:"));
 }

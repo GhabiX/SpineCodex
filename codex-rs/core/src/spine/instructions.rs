@@ -8,14 +8,14 @@ When your task structure or next work scope changes, promptly refresh the curren
 Move Spine when a completed scope has accumulated substantial raw history and future work is likely to reuse its generated worklog IR:
 - spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context; it takes no arguments.
 - spine.next: finish the current leaf and move to its next sibling.
-- spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling. Root cannot be closed.
-At root depth, use spine.next to finish the current root child and continue with its next sibling; use spine.close only from a nested scope when closing its parent and returning to the parent's next sibling.
+- spine.close: finish the current leaf, close its parent scope, and continue at the parent's next sibling. The current top-level node itself cannot be closed directly.
+At root depth, use spine.next to finish the current top-level scope and continue with its next sibling; use spine.close after entering a child scope when the parent scope is complete.
 For spine.next or spine.close, use summary as the short completion-time Spine Tree label. Use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope. Do not use summary or instruction with spine.open.
 Use spine.tree to inspect the current node and Spine Tree without moving the cursor.
 Do not move spine only because a new user message arrived, because you answered a short question, or because you updated progress within the same scope.
 Do not create one node per shell command, checklist item, short reply, or conversation turn.
-After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `nodes/1/1/worklog.md`; later context shows the Spine Tree plus `1.1` worklog, not `1.1` raw trace.
-After spine.close from `1.1.2` to `1.2`, the runtime folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes that were already folded are carried through the Spine Tree/worklog IR, while raw child traces stay expandable out of band.
+After spine.next from `1` to `2`, the runtime folds `1`'s raw trace into `nodes/1/worklog.md`; later context shows the Spine Tree plus `1` worklog, not `1` raw trace.
+After spine.close from `1.2` to `2`, the runtime folds the completed `1` scope into `nodes/1/worklog.md`; child scopes that were already folded are carried through the Spine Tree/worklog IR, while raw child traces stay expandable out of band.
 Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../worklog.md` against that Base, not against the workspace cwd.
 After spine.next or spine.close, if unfinished work remains, use update_plan to refresh the current PlanTree from the handoff summary and current evidence.
 Keep working in the current node while its raw details are still useful. When a coherent work scope is complete, fold it so later turns use its worklog instead of its raw trace.

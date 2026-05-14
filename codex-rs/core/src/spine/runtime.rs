@@ -616,7 +616,6 @@ impl SpineRuntime {
             .node(cursor)
             .ok_or_else(|| SpineRuntimeError::UnknownNode(cursor.clone()))?;
         if let Some(parent_id) = &cursor_node.parent_id
-            && !self.is_root_epoch(parent_id)
             && matches!(
                 self.state.node(parent_id).map(|node| &node.status),
                 Some(super::state::NodeStatus::Opened)
@@ -625,12 +624,6 @@ impl SpineRuntime {
             return Ok(parent_id.clone());
         }
         Ok(cursor.clone())
-    }
-
-    fn is_root_epoch(&self, node_id: &NodeId) -> bool {
-        self.state
-            .node(node_id)
-            .is_some_and(|node| node.parent_id.is_none())
     }
 
     fn validate_plantree(

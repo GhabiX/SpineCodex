@@ -81,11 +81,11 @@ fn projects_committed_spine_transitions_from_rollout_prefix() {
     .expect("project");
 
     assert_eq!(projection.response_item_count, 5);
-    assert_eq!(projection.state.cursor().to_string(), "1.1.2");
+    assert_eq!(projection.state.cursor().to_string(), "1.2");
     assert_eq!(
         projection
             .state
-            .node(&NodeId::from_segments(vec![1, 1, 1]))
+            .node(&NodeId::from_segments(vec![1, 1]))
             .expect("node")
             .summary
             .as_deref(),
@@ -109,7 +109,7 @@ fn projection_applies_thread_rollback_markers() {
     .expect("project");
 
     assert_eq!(projection.response_item_count, 3);
-    assert_eq!(projection.state.cursor().to_string(), "1.1.1");
+    assert_eq!(projection.state.cursor().to_string(), "1.1");
     assert!(
         projection
             .state

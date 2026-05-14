@@ -139,30 +139,26 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
     assert_eq!(
         output.log_preview(),
         format!(
-            "Current:  1.1.1\nBase: {}\n\n1: live\n    1.1: live\n        1.1.1: Current",
+            "Current:  1.1\nBase: {}\n\n1: live\n    1.1: Current",
             spine_base(&temp)
         )
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
-    assert_eq!(runtime.cursor().bracketed(), "[1.1]");
+    assert_eq!(runtime.cursor().bracketed(), "[1]");
     let staged = runtime
         .staged_transition()
         .expect("transition should be staged");
     assert_eq!(staged.call_id.as_str(), "call-spine");
     assert_eq!(staged.turn_id.as_str(), turn.sub_id.as_str());
-    assert_eq!(staged.from_node.bracketed(), "[1.1]");
-    assert_eq!(staged.to_node.bracketed(), "[1.1.1]");
+    assert_eq!(staged.from_node.bracketed(), "[1]");
+    assert_eq!(staged.to_node.bracketed(), "[1.1]");
     assert_eq!(
         staged
             .visible_spine
             .iter()
             .map(|node| node.bracketed())
             .collect::<Vec<_>>(),
-        vec![
-            "[1]".to_string(),
-            "[1.1]".to_string(),
-            "[1.1.1]".to_string()
-        ]
+        vec!["[1]".to_string(), "[1.1]".to_string()]
     );
 }
 
@@ -188,7 +184,7 @@ async fn valid_next_returns_compact_tree_view() {
     assert_eq!(
         output.log_preview(),
         format!(
-            "Current:  1.2\nBase: {}\n\n1: live\n    1.1: finished Completed reproduction and patch verification [worklog already in context]\n    1.2: Current",
+            "Current:  2\nBase: {}\n\n1: finished Completed reproduction and patch verification [worklog already in context]\n2: Current",
             spine_base(&temp)
         )
     );
@@ -451,7 +447,7 @@ async fn tree_prints_current_tree_without_staging() {
     assert_eq!(
         output.log_preview(),
         format!(
-            "Current:  1.1\nBase: {}\n\n1: live\n    1.1: Current",
+            "Current:  1\nBase: {}\n\n1: Current",
             spine_base(&temp)
         )
     );
@@ -461,8 +457,8 @@ async fn tree_prints_current_tree_without_staging() {
         }),
         json!({
             "op": null,
-            "cursor": "[1.1]",
-            "tree": "1: live\n    1.1: Current",
+            "cursor": "[1]",
+            "tree": "1: Current",
         })
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;

@@ -23,15 +23,12 @@ fn summaries(state: &SpineState) -> Vec<(NodeId, Option<String>, NodeStatus)> {
 fn initializes_root_with_initial_leaf() {
     let state = SpineState::new();
 
-    assert_eq!(state.cursor(), &id(&[1, 1]));
+    assert_eq!(state.cursor(), &id(&[1]));
     assert_eq!(
         summaries(&state),
-        vec![
-            (id(&[1]), None, NodeStatus::Opened),
-            (id(&[1, 1]), None, NodeStatus::Live),
-        ]
+        vec![(id(&[1]), None, NodeStatus::Live)]
     );
-    assert_eq!(state.visible_spine(), vec![id(&[1]), id(&[1, 1])]);
+    assert_eq!(state.visible_spine(), vec![id(&[1])]);
 }
 
 #[test]
@@ -43,17 +40,16 @@ fn open_enters_first_child_without_summary() {
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1, 1]),
-            to: id(&[1, 1, 1]),
+            from: id(&[1]),
+            to: id(&[1, 1]),
         }
     );
-    assert_eq!(state.cursor(), &id(&[1, 1, 1]));
+    assert_eq!(state.cursor(), &id(&[1, 1]));
     assert_eq!(
         summaries(&state),
         vec![
             (id(&[1]), None, NodeStatus::Opened),
-            (id(&[1, 1]), None, NodeStatus::Opened),
-            (id(&[1, 1, 1]), None, NodeStatus::Live),
+            (id(&[1, 1]), None, NodeStatus::Live),
         ]
     );
 }
@@ -67,35 +63,31 @@ fn next_finishes_leaf_and_enters_next_sibling() {
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1, 1]),
-            to: id(&[1, 2]),
+            from: id(&[1]),
+            to: id(&[2]),
         }
     );
-    assert_eq!(state.cursor(), &id(&[1, 2]));
+    assert_eq!(state.cursor(), &id(&[2]));
     assert_eq!(
         summaries(&state),
         vec![
-            (id(&[1]), None, NodeStatus::Opened),
             (
-                id(&[1, 1]),
+                id(&[1]),
                 Some("first child done".to_string()),
                 NodeStatus::Finished,
             ),
-            (id(&[1, 2]), None, NodeStatus::Live),
+            (id(&[2]), None, NodeStatus::Live),
         ]
     );
-    assert_eq!(
-        state.visible_spine(),
-        vec![id(&[1]), id(&[1, 1]), id(&[1, 2])]
-    );
+    assert_eq!(state.visible_spine(), vec![id(&[1]), id(&[2])]);
 }
 
 #[test]
-fn next_on_root_fails_without_mutating_state() {
+fn next_on_internal_root_fails_without_mutating_state() {
     let mut state = SpineState::from_records(
-        id(&[1]),
+        id(&[]),
         vec![NodeRecord {
-            node_id: id(&[1]),
+            node_id: id(&[]),
             parent_id: None,
             raw_start_ordinal: Some(0),
             status: NodeStatus::Live,
@@ -125,14 +117,11 @@ fn repeated_next_allocates_consecutive_siblings() {
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1, 2]),
-            to: id(&[1, 3]),
+            from: id(&[2]),
+            to: id(&[3]),
         }
     );
-    assert_eq!(
-        state.visible_spine(),
-        vec![id(&[1]), id(&[1, 1]), id(&[1, 2]), id(&[1, 3])]
-    );
+    assert_eq!(state.visible_spine(), vec![id(&[1]), id(&[2]), id(&[3])]);
 }
 
 #[test]
@@ -160,29 +149,26 @@ fn deep_close_returns_to_parent_sibling() {
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1, 1, 1]),
-            to: id(&[1, 2]),
+            from: id(&[1, 1]),
+            to: id(&[2]),
         }
     );
-    assert_eq!(state.cursor(), &id(&[1, 2]));
+    assert_eq!(state.cursor(), &id(&[2]));
     assert_eq!(
-        state.node(&id(&[1, 1])).map(|node| node.status.clone()),
+        state.node(&id(&[1])).map(|node| node.status.clone()),
         Some(NodeStatus::Closed)
     );
     assert_eq!(
         state
-            .node(&id(&[1, 1]))
+            .node(&id(&[1]))
             .and_then(|node| node.summary.clone()),
         Some("nested scope done".to_string())
     );
     assert_eq!(
-        state.node(&id(&[1, 1, 1])).map(|node| node.status.clone()),
+        state.node(&id(&[1, 1])).map(|node| node.status.clone()),
         Some(NodeStatus::Finished)
     );
-    assert_eq!(
-        state.visible_spine(),
-        vec![id(&[1]), id(&[1, 1]), id(&[1, 2])]
-    );
+    assert_eq!(state.visible_spine(), vec![id(&[1]), id(&[2])]);
 }
 
 #[test]
@@ -221,10 +207,10 @@ fn reset_root_epoch_replaces_live_tree_under_stable_root() {
         transition,
         Transition {
             from: id(&[1]),
-            to: id(&[2, 1]),
+            to: id(&[2]),
         }
     );
-    assert_eq!(state.cursor(), &id(&[2, 1]));
+    assert_eq!(state.cursor(), &id(&[2]));
     assert_eq!(
         summaries(&state),
         vec![
@@ -233,15 +219,13 @@ fn reset_root_epoch_replaces_live_tree_under_stable_root() {
                 Some("context compacted".to_string()),
                 NodeStatus::Closed,
             ),
-            (id(&[1, 1]), None, NodeStatus::Opened),
-            (id(&[1, 1, 1]), None, NodeStatus::Live),
-            (id(&[2]), None, NodeStatus::Opened),
-            (id(&[2, 1]), None, NodeStatus::Live),
+            (id(&[1, 1]), None, NodeStatus::Live),
+            (id(&[2]), None, NodeStatus::Live),
         ]
     );
     assert_eq!(
         state
-            .node(&id(&[2, 1]))
+            .node(&id(&[2]))
             .and_then(|node| node.raw_start_ordinal),
         Some(21)
     );
@@ -253,10 +237,10 @@ fn reset_root_epoch_replaces_live_tree_under_stable_root() {
         transition,
         Transition {
             from: id(&[2]),
-            to: id(&[3, 1]),
+            to: id(&[3]),
         }
     );
-    assert_eq!(state.cursor(), &id(&[3, 1]));
+    assert_eq!(state.cursor(), &id(&[3]));
     assert_eq!(
         state.node(&id(&[2])).and_then(|node| node.summary.clone()),
         Some("context compacted again".to_string())
@@ -284,10 +268,7 @@ fn visible_spine_excludes_left_sibling_descendants() {
         .next("second child done")
         .expect("next should succeed");
 
-    assert_eq!(state.cursor(), &id(&[1, 3]));
-    assert_eq!(
-        state.visible_spine(),
-        vec![id(&[1]), id(&[1, 1]), id(&[1, 2]), id(&[1, 3])]
-    );
-    assert!(state.node(&id(&[1, 1, 1])).is_some());
+    assert_eq!(state.cursor(), &id(&[3]));
+    assert_eq!(state.visible_spine(), vec![id(&[1]), id(&[2]), id(&[3])]);
+    assert!(state.node(&id(&[1, 1])).is_some());
 }

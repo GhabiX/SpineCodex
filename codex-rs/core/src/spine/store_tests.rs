@@ -182,32 +182,23 @@ fn create_writes_root_ledger_and_state_cache() {
 
     let state = store.create().expect("create sidecar");
 
-    assert_eq!(state.cursor(), &id(&[1, 1]));
+    assert_eq!(state.cursor(), &id(&[1]));
     assert_eq!(
         read_json_lines(store.tree_path()),
         vec![json!({
             "type": "spine_initialized",
             "seq": 1,
             "state": {
-                "cursor": "1.1",
+                "cursor": "1",
                 "nodes": [
                     {
                         "node_id": "1",
                         "parent_id": null,
                         "raw_start_ordinal": 0,
-                        "status": "opened",
+                        "status": "live",
                         "summary": null,
                         "worklog_path": "nodes/1/worklog.md",
                         "plan_path": "nodes/1/plan.json",
-                    },
-                    {
-                        "node_id": "1.1",
-                        "parent_id": "1",
-                        "raw_start_ordinal": 0,
-                        "status": "live",
-                        "summary": null,
-                        "worklog_path": "nodes/1/1/worklog.md",
-                        "plan_path": "nodes/1/1/plan.json",
                     },
                 ],
             },
@@ -216,31 +207,22 @@ fn create_writes_root_ledger_and_state_cache() {
     assert_eq!(
         read_json(store.state_path()),
         json!({
-            "cursor": "1.1",
+            "cursor": "1",
             "nodes": [
                 {
                     "node_id": "1",
                     "parent_id": null,
                     "raw_start_ordinal": 0,
-                    "status": "opened",
+                    "status": "live",
                     "summary": null,
                     "worklog_path": "nodes/1/worklog.md",
                     "plan_path": "nodes/1/plan.json",
-                },
-                {
-                    "node_id": "1.1",
-                    "parent_id": "1",
-                    "raw_start_ordinal": 0,
-                    "status": "live",
-                    "summary": null,
-                    "worklog_path": "nodes/1/1/worklog.md",
-                    "plan_path": "nodes/1/1/plan.json",
                 },
             ],
         })
     );
     assert!(store.root().join("nodes").join("1").is_dir());
-    assert!(store.root().join("nodes").join("1").join("1").is_dir());
+    assert!(!store.root().join("nodes").join("1").join("1").exists());
     assert!(store.trajs_index_path().exists());
     assert!(store.compact_index_path().exists());
     assert!(store.raw_rollout_path().exists());
@@ -258,20 +240,12 @@ fn records_transition_summary_and_replays_from_tree() {
     assert_eq!(
         transition,
         Transition {
-            from: id(&[1, 1]),
-            to: id(&[1, 1, 1]),
+            from: id(&[1]),
+            to: id(&[1, 1]),
         }
     );
-    assert!(!store.worklog_path(&id(&[1, 1])).exists());
-    assert!(
-        store
-            .root()
-            .join("nodes")
-            .join("1")
-            .join("1")
-            .join("1")
-            .is_dir()
-    );
+    assert!(!store.worklog_path(&id(&[1])).exists());
+    assert!(store.root().join("nodes").join("1").join("1").is_dir());
     assert!(!store.root().join("nodes").join("1.1").exists());
     let tree = read_json_lines(store.tree_path());
     assert_eq!(tree.len(), 2);
@@ -282,9 +256,9 @@ fn records_transition_summary_and_replays_from_tree() {
             "type": "transition_applied",
             "seq": 2,
             "op": "open",
-            "from_node": "1.1",
-            "to_node": "1.1.1",
-            "to_parent_id": "1.1",
+            "from_node": "1",
+            "to_node": "1.1",
+            "to_parent_id": "1",
             "summary": null,
             "raw_start_ordinal": 8,
             "source_turn_id": "turn-1",
@@ -296,7 +270,7 @@ fn records_transition_summary_and_replays_from_tree() {
     assert_eq!(loaded, state);
     assert_eq!(
         loaded
-            .node(&id(&[1, 1, 1]))
+            .node(&id(&[1, 1]))
             .and_then(|node| node.raw_start_ordinal),
         Some(8)
     );
@@ -327,18 +301,18 @@ fn records_root_epoch_archive_and_replays_from_tree() {
         transition,
         Transition {
             from: id(&[1]),
-            to: id(&[2, 1]),
+            to: id(&[2]),
         }
     );
-    assert!(store.root().join("nodes").join("2").join("1").is_dir());
+    assert!(store.root().join("nodes").join("2").is_dir());
     assert_eq!(
         read_json_lines(store.tree_path())[3],
         json!({
             "type": "root_epoch_reset",
             "seq": 4,
             "root_id": "1",
-            "next_leaf_id": "2.1",
-            "next_parent_id": "2",
+            "next_leaf_id": "2",
+            "next_parent_id": null,
             "summary": "context compacted",
             "raw_start_ordinal": 21,
             "compact_id": "compact-1",
@@ -349,10 +323,10 @@ fn records_root_epoch_archive_and_replays_from_tree() {
     let loaded = store.load().expect("load archived sidecar");
 
     assert_eq!(loaded, state);
-    assert_eq!(loaded.cursor(), &id(&[2, 1]));
+    assert_eq!(loaded.cursor(), &id(&[2]));
     assert_eq!(
         loaded
-            .node(&id(&[2, 1]))
+            .node(&id(&[2]))
             .and_then(|node| node.raw_start_ordinal),
         Some(21)
     );
@@ -377,7 +351,7 @@ fn root_cursor_archive_parent_links_survive_reload() {
         transition,
         Transition {
             from: id(&[1]),
-            to: id(&[2, 1]),
+            to: id(&[2]),
         }
     );
     assert_eq!(
@@ -386,8 +360,8 @@ fn root_cursor_archive_parent_links_survive_reload() {
             "type": "root_epoch_reset",
             "seq": 2,
             "root_id": "1",
-            "next_leaf_id": "2.1",
-            "next_parent_id": "2",
+            "next_leaf_id": "2",
+            "next_parent_id": null,
             "summary": "context compacted",
             "raw_start_ordinal": 7,
             "compact_id": "compact-root",
@@ -396,7 +370,7 @@ fn root_cursor_archive_parent_links_survive_reload() {
     );
 
     let loaded = store.load().expect("load archived sidecar");
-    assert_eq!(loaded.cursor(), &id(&[2, 1]));
+    assert_eq!(loaded.cursor(), &id(&[2]));
     assert_eq!(
         loaded
             .node(&id(&[1]))
@@ -409,19 +383,9 @@ fn root_cursor_archive_parent_links_survive_reload() {
             .and_then(|node| node.parent_id.clone()),
         None
     );
-    assert_eq!(
-        loaded
-            .node(&id(&[2, 1]))
-            .and_then(|node| node.parent_id.clone()),
-        Some(id(&[2]))
-    );
-    assert_eq!(
-        loaded
-            .node(&id(&[1, 1]))
-            .and_then(|node| node.parent_id.clone()),
-        Some(id(&[1]))
-    );
-    assert_eq!(loaded.nodes().len(), 4);
+    assert!(loaded.node(&id(&[2, 1])).is_none());
+    assert!(loaded.node(&id(&[1, 1])).is_none());
+    assert_eq!(loaded.nodes().len(), 2);
 }
 
 #[test]
@@ -947,7 +911,7 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
         .expect("copy artifacts");
 
     let replayed = child_store.load().expect("load child projection");
-    assert_eq!(replayed.cursor(), &id(&[1, 1, 1]));
+    assert_eq!(replayed.cursor(), &id(&[1, 1]));
     assert_eq!(replayed.node(&id(&[1])).expect("root").summary, None);
     assert!(
         child_store
@@ -977,7 +941,7 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
         transition,
         Transition {
             from: id(&[1]),
-            to: id(&[2, 1]),
+            to: id(&[2]),
         }
     );
     assert_eq!(
@@ -986,8 +950,8 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
             "type": "root_epoch_reset",
             "seq": 2,
             "root_id": "1",
-            "next_leaf_id": "2.1",
-            "next_parent_id": "2",
+            "next_leaf_id": "2",
+            "next_parent_id": null,
             "summary": "context compacted",
             "raw_start_ordinal": 7,
             "compact_id": "compact-root",
@@ -996,7 +960,7 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
     );
 
     let loaded = store.load().expect("load archived sidecar");
-    assert_eq!(loaded.cursor(), &id(&[2, 1]));
+    assert_eq!(loaded.cursor(), &id(&[2]));
     assert_eq!(
         loaded
             .node(&id(&[1]))
@@ -1009,19 +973,9 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
             .and_then(|node| node.parent_id.clone()),
         None
     );
-    assert_eq!(
-        loaded
-            .node(&id(&[2, 1]))
-            .and_then(|node| node.parent_id.clone()),
-        Some(id(&[2]))
-    );
-    assert_eq!(
-        loaded
-            .node(&id(&[1, 1]))
-            .and_then(|node| node.parent_id.clone()),
-        Some(id(&[1]))
-    );
-    assert_eq!(loaded.nodes().len(), 4);
+    assert!(loaded.node(&id(&[2, 1])).is_none());
+    assert!(loaded.node(&id(&[1, 1])).is_none());
+    assert_eq!(loaded.nodes().len(), 2);
 }
 
 #[test]
@@ -1038,11 +992,11 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
         )
         .expect("record source transition");
     source_store
-        .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsurviving worklog\n")
+        .append_worklog_section(&id(&[1]), "\n\n## Auto Compact\n\nsurviving worklog\n")
         .expect("write surviving worklog");
     source_store
         .append_worklog_section(
-            &id(&[1, 1, 1]),
+            &id(&[1, 1]),
             "\n\n## Auto Compact\n\nrolled back worklog\n",
         )
         .expect("write rolled back worklog");
@@ -1083,12 +1037,12 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
 
     assert!(
         child_store
-            .read_worklog(&id(&[1, 1]))
+            .read_worklog(&id(&[1]))
             .expect("read copied surviving worklog")
             .contains("surviving worklog")
     );
     assert!(matches!(
-        child_store.read_worklog(&id(&[1, 1, 1])),
+        child_store.read_worklog(&id(&[1, 1])),
         Err(SpineStoreError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound
     ));
     assert!(!child_store.plan_path(&id(&[1, 1])).exists());
