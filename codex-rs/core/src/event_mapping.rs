@@ -133,6 +133,10 @@ fn parse_agent_message(
 }
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
+    if crate::spine::compact::is_spine_ir_item(item) {
+        return None;
+    }
+
     match item {
         ResponseItem::Message {
             role,

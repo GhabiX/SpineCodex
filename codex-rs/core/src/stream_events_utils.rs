@@ -438,6 +438,10 @@ pub(crate) fn last_assistant_message_from_item(
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<String> {
+    if crate::spine::compact::is_spine_ir_item(item) {
+        return None;
+    }
+
     if let Some(combined) = raw_assistant_output_text_from_item(item) {
         if combined.is_empty() {
             return None;

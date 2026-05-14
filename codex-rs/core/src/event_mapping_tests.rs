@@ -327,6 +327,20 @@ fn parses_agent_message() {
 }
 
 #[test]
+fn skips_generated_spine_ir_assistant_message() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "<spine_ir id=\"spine-ir:1:2-3:next\" node=\"1\" op=\"next\" runtime_generated=\"true\" fold_start=\"2\" fold_end=\"3\">\n<worklog>\ninternal\n</worklog>\n</spine_ir>".to_string(),
+        }],
+        phase: None,
+    };
+
+    assert!(parse_turn_item(&item).is_none());
+}
+
+#[test]
 fn parses_reasoning_summary_and_raw_content() {
     let item = ResponseItem::Reasoning {
         id: "reasoning_1".to_string(),

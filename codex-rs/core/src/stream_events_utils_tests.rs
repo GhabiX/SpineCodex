@@ -177,6 +177,23 @@ fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() 
 }
 
 #[test]
+fn last_assistant_message_from_item_returns_none_for_generated_spine_ir() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "<spine_ir id=\"spine-ir:1:2-3:next\" node=\"1\" op=\"next\" runtime_generated=\"true\" fold_start=\"2\" fold_end=\"3\">\n<worklog>\ninternal\n</worklog>\n</spine_ir>".to_string(),
+        }],
+        phase: None,
+    };
+
+    assert_eq!(
+        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        None
+    );
+}
+
+#[test]
 fn completed_item_defers_mailbox_delivery_for_unknown_phase_messages() {
     let item = assistant_output_text("final answer");
 
