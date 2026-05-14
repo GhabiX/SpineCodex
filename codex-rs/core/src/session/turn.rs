@@ -14,7 +14,7 @@ use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
-use crate::compact::run_inline_spine_aware_auto_compact_task;
+use crate::compact::run_inline_spine_native_text_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
@@ -850,35 +850,15 @@ async fn run_auto_compact(
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
-    skills_outcome: Option<&SkillLoadOutcome>,
-    base_instructions: BaseInstructions,
-    cancellation_token: &CancellationToken,
+    _skills_outcome: Option<&SkillLoadOutcome>,
+    _base_instructions: BaseInstructions,
+    _cancellation_token: &CancellationToken,
 ) -> CodexResult<bool> {
     if sess.spine_runtime_is_mutable().await {
-        let input = sess
-            .clone_history()
-            .await
-            .for_prompt(&turn_context.model_info.input_modalities);
-        let router = built_tools(
-            sess.as_ref(),
-            turn_context.as_ref(),
-            &input,
-            &HashSet::new(),
-            skills_outcome,
-            cancellation_token,
-        )
-        .await?;
-        let prompt_envelope = build_prompt(
-            input,
-            router.as_ref(),
-            turn_context.as_ref(),
-            base_instructions,
-        );
-        run_inline_spine_aware_auto_compact_task(
+        run_inline_spine_native_text_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
-            client_session,
-            &prompt_envelope,
+            initial_context_injection,
             reason,
             phase,
         )

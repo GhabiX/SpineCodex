@@ -31,6 +31,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -93,11 +94,10 @@ pub(crate) async fn run_inline_auto_compact_task(
     Ok(())
 }
 
-pub(crate) async fn run_inline_spine_aware_auto_compact_task(
+pub(crate) async fn run_inline_spine_native_text_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
-    prompt_envelope: &Prompt,
+    initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
@@ -129,13 +129,16 @@ pub(crate) async fn run_inline_spine_aware_auto_compact_task(
         }
     }
 
-    let result = run_spine_aware_compact_task_inner_impl(
-        Arc::clone(&sess),
-        Arc::clone(&turn_context),
-        input,
-        client_session,
-        Some(prompt_envelope),
-    )
+    let result = async {
+        let outcome = produce_native_text_compaction_outcome(
+            Arc::clone(&sess),
+            Arc::clone(&turn_context),
+            input,
+            initial_context_injection,
+        )
+        .await?;
+        install_spine_native_text_compaction_outcome(&sess, &turn_context, outcome).await
+    }
     .await;
     let status = compaction_status_from_result(&result);
     let error = result.as_ref().err().map(ToString::to_string);
@@ -176,7 +179,7 @@ pub(crate) async fn run_compact_task(
     Ok(())
 }
 
-pub(crate) async fn run_spine_aware_compact_task(
+pub(crate) async fn run_spine_native_text_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
@@ -210,14 +213,16 @@ pub(crate) async fn run_spine_aware_compact_task(
         }
     }
 
-    let mut client_session = sess.services.model_client.new_session();
-    let result = run_spine_aware_compact_task_inner_impl(
-        Arc::clone(&sess),
-        Arc::clone(&turn_context),
-        input,
-        &mut client_session,
-        None,
-    )
+    let result = async {
+        let outcome = produce_native_text_compaction_outcome(
+            Arc::clone(&sess),
+            Arc::clone(&turn_context),
+            input,
+            InitialContextInjection::DoNotInject,
+        )
+        .await?;
+        install_spine_native_text_compaction_outcome(&sess, &turn_context, outcome).await
+    }
     .await;
     let status = compaction_status_from_result(&result);
     let error = result.as_ref().err().map(ToString::to_string);
@@ -262,12 +267,16 @@ async fn run_compact_task_inner(
             return Err(CodexErr::TurnAborted);
         }
     }
-    let result = run_compact_task_inner_impl(
-        Arc::clone(&sess),
-        Arc::clone(&turn_context),
-        input,
-        initial_context_injection,
-    )
+    let result = async {
+        let outcome = produce_native_text_compaction_outcome(
+            Arc::clone(&sess),
+            Arc::clone(&turn_context),
+            input,
+            initial_context_injection,
+        )
+        .await?;
+        install_native_text_compaction_outcome(&sess, &turn_context, outcome).await
+    }
     .await;
     let status = compaction_status_from_result(&result);
     let error = result.as_ref().err().map(ToString::to_string);
@@ -282,129 +291,81 @@ async fn run_compact_task_inner(
     result.map(|_| ())
 }
 
-async fn run_spine_aware_compact_task_inner_impl(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
-    client_session: &mut ModelClientSession,
-    prompt_envelope: Option<&Prompt>,
-) -> CodexResult<String> {
-    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
-    sess.emit_turn_item_started(&turn_context, &compaction_item)
+struct NativeTextCompactionOutcome {
+    compaction_item: TurnItem,
+    pre_compact_history: Vec<ResponseItem>,
+    replacement_history: Vec<ResponseItem>,
+    reference_context_item: Option<TurnContextItem>,
+    compacted_item: CompactedItem,
+    summary_text: String,
+}
+
+async fn install_native_text_compaction_outcome(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    outcome: NativeTextCompactionOutcome,
+) -> CodexResult<()> {
+    let NativeTextCompactionOutcome {
+        compaction_item,
+        replacement_history,
+        reference_context_item,
+        compacted_item,
+        ..
+    } = outcome;
+    sess.replace_compacted_history(replacement_history, reference_context_item, compacted_item)
         .await;
-    let pre_compact_history = sess.clone_history().await.raw_items().to_vec();
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    sess.recompute_token_usage(turn_context).await;
+    complete_native_text_compaction(sess, turn_context, compaction_item).await;
+    Ok(())
+}
 
-    let mut history = sess.clone_history().await;
-    history.record_items(
-        &[initial_input_for_turn.into()],
-        turn_context.truncation_policy,
-    );
-
-    let max_retries = turn_context.provider.info().stream_max_retries();
-    let mut retries = 0;
-
-    loop {
-        let turn_input = history
-            .clone()
-            .for_prompt(&turn_context.model_info.input_modalities);
-        let turn_input_len = turn_input.len();
-        let prompt = if let Some(envelope) = prompt_envelope {
-            Prompt {
-                input: turn_input,
-                tools: envelope.tools.clone(),
-                parallel_tool_calls: envelope.parallel_tool_calls,
-                base_instructions: envelope.base_instructions.clone(),
-                personality: envelope.personality,
-                output_schema: None,
-                output_schema_strict: true,
-            }
-        } else {
-            Prompt {
-                input: turn_input,
-                base_instructions: sess.get_base_instructions().await,
-                personality: turn_context.personality,
-                ..Default::default()
-            }
-        };
-        let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
-        let attempt_result = drain_to_completed(
-            &sess,
-            turn_context.as_ref(),
-            client_session,
-            turn_metadata_header.as_deref(),
-            &prompt,
-        )
-        .await;
-
-        match attempt_result {
-            Ok(()) => break,
-            Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
-            Err(e @ CodexErr::ContextWindowExceeded) => {
-                if turn_input_len > 1 {
-                    error!(
-                        "Context window exceeded while spine compacting; removing oldest history item. Error: {e}"
-                    );
-                    history.remove_first_item();
-                    retries = 0;
-                    continue;
-                }
-                sess.set_total_tokens_full(turn_context.as_ref()).await;
-                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
-                sess.send_event(&turn_context, event).await;
-                return Err(e);
-            }
-            Err(e) => {
-                if retries < max_retries {
-                    retries += 1;
-                    let delay = backoff(retries);
-                    sess.notify_stream_error(
-                        turn_context.as_ref(),
-                        format!("Reconnecting... {retries}/{max_retries}"),
-                        e,
-                    )
-                    .await;
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
-                sess.send_event(&turn_context, event).await;
-                return Err(e);
-            }
-        }
-    }
-
-    let history_snapshot = sess.clone_history().await;
-    let summary_suffix =
-        get_last_assistant_message_from_turn(history_snapshot.raw_items()).unwrap_or_default();
-    let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
+async fn install_spine_native_text_compaction_outcome(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    outcome: NativeTextCompactionOutcome,
+) -> CodexResult<()> {
+    let NativeTextCompactionOutcome {
+        compaction_item,
+        pre_compact_history,
+        reference_context_item,
+        summary_text,
+        ..
+    } = outcome;
     sess.install_spine_root_epoch_compaction(
         turn_context.as_ref(),
         pre_compact_history,
         summary_text,
+        reference_context_item,
     )
     .await?;
-    client_session.reset_websocket_session();
-    sess.recompute_token_usage(&turn_context).await;
+    sess.recompute_token_usage(turn_context).await;
+    complete_native_text_compaction(sess, turn_context, compaction_item).await;
+    Ok(())
+}
 
-    sess.emit_turn_item_completed(&turn_context, compaction_item)
+async fn complete_native_text_compaction(
+    sess: &Session,
+    turn_context: &TurnContext,
+    compaction_item: TurnItem,
+) {
+    sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });
-    sess.send_event(&turn_context, warning).await;
-    Ok(summary_suffix)
+    sess.send_event(turn_context, warning).await;
 }
 
-async fn run_compact_task_inner_impl(
+async fn produce_native_text_compaction_outcome(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
-) -> CodexResult<String> {
+) -> CodexResult<NativeTextCompactionOutcome> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
+    let pre_compact_history = sess.clone_history().await.raw_items().to_vec();
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
@@ -509,18 +470,16 @@ async fn run_compact_task_inner_impl(
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
     };
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
     client_session.reset_websocket_session();
-    sess.recompute_token_usage(&turn_context).await;
 
-    sess.emit_turn_item_completed(&turn_context, compaction_item)
-        .await;
-    let warning = EventMsg::Warning(WarningEvent {
-        message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
-    });
-    sess.send_event(&turn_context, warning).await;
-    Ok(summary_suffix)
+    Ok(NativeTextCompactionOutcome {
+        compaction_item,
+        pre_compact_history,
+        replacement_history: new_history,
+        reference_context_item,
+        compacted_item,
+        summary_text,
+    })
 }
 
 pub(crate) struct CompactionAnalyticsAttempt {

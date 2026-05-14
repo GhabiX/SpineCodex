@@ -31,9 +31,9 @@ impl SessionTask for CompactTask {
             session.services.session_telemetry.counter(
                 "codex.task.compact",
                 /*inc*/ 1,
-                &[("type", "spine-root-archive")],
+                &[("type", "spine-native-text-root-archive")],
             );
-            crate::compact::run_spine_aware_compact_task(session.clone(), ctx, input).await
+            crate::compact::run_spine_native_text_compact_task(session.clone(), ctx, input).await
         } else if crate::compact::should_use_remote_compact_task(ctx.provider.info()) {
             session.services.session_telemetry.counter(
                 "codex.task.compact",

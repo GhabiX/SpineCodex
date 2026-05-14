@@ -319,13 +319,12 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
         "spine auto compact should use the normal compact prompt"
     );
     assert!(
-        tool_names(&requests[2]).iter().any(|name| name == "spine"),
-        "spine auto compact should keep the normal spine tool schema for cache-friendly request shape"
+        !tool_names(&requests[2]).iter().any(|name| name == "spine"),
+        "spine root auto compact should reuse native textual compact, not the Spine suffix compact tool envelope"
     );
-    assert_eq!(
-        requests[2].body_json().get("parallel_tool_calls"),
-        requests[3].body_json().get("parallel_tool_calls"),
-        "spine auto compact should keep the same parallel tool-call envelope as the follow-up request"
+    assert!(
+        !requests[2].body_contains_text("Compact only target Spine node"),
+        "root auto compact should not use the Spine suffix compact prompt"
     );
     assert!(
         requests[3].body_contains_text("<spine_worklog")
@@ -348,6 +347,123 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
             && tree_text.contains("\"from_node\":\"2.1\"")
             && tree_text.contains("\"to_node\":\"2.1.1\""),
         "spine should remain mutable after auto root archive: {tree_text}"
+    );
+    let rollout_text = std::fs::read_to_string(&rollout_path)
+        .with_context(|| format!("read {}", rollout_path.display()))?;
+    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 1)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_manual_compact_uses_native_text_and_archives_root_epoch() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-open"),
+                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY),
+                ev_completed("resp-open"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-open-follow-up"),
+                ev_assistant_message("msg-open-follow-up", "ready before manual compact"),
+                ev_completed("resp-open-follow-up"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-manual-compact"),
+                ev_assistant_message("msg-manual-compact", "manual native root summary"),
+                ev_completed("resp-manual-compact"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-after-manual"),
+                ev_spine_transition_call(
+                    "post-manual-archive-open-call",
+                    "open",
+                    "post manual archive scope",
+                ),
+                ev_completed("resp-after-manual"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-after-manual-follow-up"),
+                ev_assistant_message("msg-after-manual-follow-up", "done after manual compact"),
+                ev_completed("resp-after-manual-follow-up"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineTaskTree)
+            .expect("enable spine task tree");
+    });
+    let test = builder.build(&server).await?;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("session should expose rollout path");
+
+    test.submit_turn("open spine before manual compact").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    test.submit_turn("continue after manual compact").await?;
+
+    let requests = responses.requests();
+    assert!(
+        requests.len() >= 3,
+        "expected at least open, manual compact, post-compact turn"
+    );
+    let compact_index = requests
+        .iter()
+        .position(|request| request.body_contains_text(SUMMARIZATION_PROMPT))
+        .unwrap_or_else(|| {
+            panic!("expected one request to contain the native compact prompt: {requests:?}")
+        });
+    let compact_request = &requests[compact_index];
+    assert!(
+        compact_request.body_contains_text(SUMMARIZATION_PROMPT),
+        "manual spine compact should reuse the normal native compact prompt"
+    );
+    assert!(
+        !compact_request.body_contains_text("Compact only target Spine node"),
+        "manual root compact should not use the Spine suffix compact prompt"
+    );
+    assert!(
+        !tool_names(compact_request)
+            .iter()
+            .any(|name| name == "spine"),
+        "manual root compact should use native textual compact without Spine tool schema"
+    );
+    let post_compact_request = requests[compact_index + 1..]
+        .iter()
+        .find(|request| request.body_contains_text("manual native root summary"))
+        .unwrap_or_else(|| {
+            panic!("expected a post-compact request to contain the manual root summary")
+        });
+    assert!(
+        post_compact_request.body_contains_text("<spine_worklog")
+            && post_compact_request.body_contains_text("manual native root summary"),
+        "post-compact turn should see the native summary as root-epoch worklog"
+    );
+
+    let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
+    let tree_text = std::fs::read_to_string(sidecar_dir.join("tree.jsonl"))
+        .with_context(|| format!("read {}", sidecar_dir.join("tree.jsonl").display()))?;
+    assert!(
+        tree_text.contains("\"root_epoch_reset\""),
+        "manual compact should persist root_epoch_reset: {tree_text}"
+    );
+    assert!(
+        tree_text.contains("\"op\":\"open\"")
+            && tree_text.contains("\"from_node\":\"2.1\"")
+            && tree_text.contains("\"to_node\":\"2.1.1\""),
+        "spine should remain mutable after manual root archive: {tree_text}"
     );
     let rollout_text = std::fs::read_to_string(&rollout_path)
         .with_context(|| format!("read {}", rollout_path.display()))?;

@@ -2,7 +2,10 @@ use super::*;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+use codex_protocol::models::FunctionCallOutputPayload;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 async fn process_compacted_history_with_test_session(
     compacted_history: Vec<ResponseItem>,
@@ -208,6 +211,89 @@ fn should_use_remote_compact_task_for_azure_provider() {
 
     assert!(should_use_remote_compact_task(&provider));
 }
+
+#[tokio::test]
+async fn spine_native_text_outcome_installs_root_epoch_worklog() {
+    let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
+    let rollout_path = crate::session::tests::attach_thread_persistence(&mut session).await;
+    let mut runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            crate::spine::store::SpineOperation::Open,
+            None,
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    session.spine = Some(Arc::new(Mutex::new(runtime)));
+    let session = Arc::new(session);
+
+    let raw_items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "spine".to_string(),
+            namespace: None,
+            arguments: r#"{"op":"open"}"#.to_string(),
+            call_id: "open-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "open-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("opened".to_string()),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "raw root epoch detail".to_string(),
+            }],
+            phase: None,
+        },
+    ];
+    session
+        .try_record_conversation_items(&turn_context, &raw_items)
+        .await
+        .expect("record raw items");
+    session
+        .spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .take_last_committed_transition();
+
+    let native_summary = format!("{SUMMARY_PREFIX}\nnative compact summary");
+    let replacement_history = build_compacted_history(Vec::new(), &[], &native_summary);
+    let outcome = NativeTextCompactionOutcome {
+        compaction_item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+        pre_compact_history: session.clone_history().await.raw_items().to_vec(),
+        replacement_history: replacement_history.clone(),
+        reference_context_item: None,
+        compacted_item: CompactedItem {
+            message: native_summary.clone(),
+            replacement_history: Some(replacement_history),
+        },
+        summary_text: native_summary,
+    };
+
+    install_spine_native_text_compaction_outcome(&session, &turn_context, outcome)
+        .await
+        .expect("install spine native compact outcome");
+
+    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())
+        .expect("serialize history");
+    assert!(rendered_history.contains("<spine_worklog"));
+    assert!(rendered_history.contains("native compact summary"));
+    assert!(!rendered_history.contains("raw root epoch detail"));
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(
+        runtime.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![2, 1])
+    );
+}
+
 #[tokio::test]
 async fn process_compacted_history_replaces_developer_messages() {
     let compacted_history = vec![

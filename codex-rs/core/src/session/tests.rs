@@ -1966,6 +1966,7 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
             &turn_context,
             history,
             format!("{}\nroot compact fact", crate::compact::SUMMARY_PREFIX),
+            None,
         )
         .await?;
 
@@ -2015,6 +2016,7 @@ async fn repeated_spine_root_compaction_does_not_leave_orphan_tree_output() -> a
                 "{}\nfirst root compact fact",
                 crate::compact::SUMMARY_PREFIX
             ),
+            None,
         )
         .await?;
 
@@ -2038,6 +2040,7 @@ async fn repeated_spine_root_compaction_does_not_leave_orphan_tree_output() -> a
                 "{}\nsecond root compact fact",
                 crate::compact::SUMMARY_PREFIX
             ),
+            None,
         )
         .await?;
 
@@ -4190,7 +4193,7 @@ async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) ->
     }
 }
 
-async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
+pub(crate) async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
     let config = session.get_config().await;
     let live_thread = LiveThread::create(
         Arc::clone(&session.services.thread_store),

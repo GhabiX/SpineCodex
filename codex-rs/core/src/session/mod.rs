@@ -2947,6 +2947,7 @@ impl Session {
         turn_context: &TurnContext,
         history: Vec<ResponseItem>,
         compact_summary: String,
+        reference_context_item: Option<TurnContextItem>,
     ) -> CodexResult<()> {
         let spine = self
             .spine
@@ -3049,12 +3050,20 @@ impl Session {
             &boundary.transition_summary,
             compacted_body,
         )];
-        let replacement_history = build_suffix_replacement_history(
+        let mut replacement_history = build_suffix_replacement_history(
             &history,
             plan.cut_index,
             plan.fold_end_index,
             rendered_worklog_items,
         );
+        if reference_context_item.is_some() {
+            let initial_context = self.build_initial_context(turn_context).await;
+            replacement_history =
+                crate::compact::insert_initial_context_before_last_real_user_or_summary(
+                    replacement_history,
+                    initial_context,
+                );
+        }
         let compact_message = format!(
             "Spine compacted root epoch {} [{}, {})",
             boundary.node_id, effective_boundary.cut_ordinal, effective_boundary.fold_end_ordinal
@@ -3065,7 +3074,11 @@ impl Session {
         };
         let message_hash = compact_message_hash(&compact_message);
         if let Err(err) = self
-            .try_replace_compacted_history(replacement_history.clone(), None, compacted_item)
+            .try_replace_compacted_history(
+                replacement_history.clone(),
+                reference_context_item,
+                compacted_item,
+            )
             .await
         {
             store
