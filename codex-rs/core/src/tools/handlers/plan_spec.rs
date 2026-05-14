@@ -88,7 +88,7 @@ pub fn create_update_plan_tool() -> ToolSpec {
         (
             "node".to_string(),
             JsonSchema::string(Some(
-                "Existing editable Spine node id, such as 1.2. Omit for a future scope proposal."
+                "Existing editable Spine node id, such as 1.2. Omit to use the resolved anchor."
                     .to_string(),
             )),
         ),
@@ -173,6 +173,7 @@ pub fn create_update_plan_tool() -> ToolSpec {
 Provide an optional explanation and a list of plan items, each with a step and status.
 At most one step can be in_progress at a time.
 When Spine is enabled, use spine_plantree to maintain the current editable task tree draft. This is planning only; it does not create or move Spine nodes. Omitting spine_plantree preserves the previous draft; use clear_spine_plantree only to clear it.
+Future planned scopes may display as ~<predicted-id> to distinguish them from real Spine nodes.
 "#
         .to_string(),
         strict: false,

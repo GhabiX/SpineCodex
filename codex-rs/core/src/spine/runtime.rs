@@ -467,6 +467,9 @@ impl SpineRuntime {
         } else if let Some(plantree) = plantree {
             let mut plantree = plantree;
             let anchor_node_id = self.resolve_plantree_anchor(&plantree)?;
+            if plantree.root.node.is_none() {
+                plantree.root.node = Some(anchor_node_id.to_string());
+            }
             self.validate_plantree(&anchor_node_id, &plantree)?;
             normalize_plantree_node_ids(&mut plantree)?;
             Some(PlanTreeSnapshot::from_update(&anchor_node_id, plantree))
@@ -568,13 +571,15 @@ impl SpineRuntime {
         anchor: &NodeId,
         plantree: &SpinePlanTreeArg,
     ) -> Result<(), SpineRuntimeError> {
-        self.validate_plantree_scope(anchor, &plantree.root)
+        let mut existing_scope_nodes = HashSet::new();
+        self.validate_plantree_scope(anchor, &plantree.root, &mut existing_scope_nodes)
     }
 
     fn validate_plantree_scope(
         &self,
         anchor: &NodeId,
         scope: &SpinePlanTreeScopeArg,
+        existing_scope_nodes: &mut HashSet<NodeId>,
     ) -> Result<(), SpineRuntimeError> {
         if scope.summary.trim().is_empty() {
             return Err(SpineRuntimeError::InvalidPlanTree {
@@ -595,6 +600,14 @@ impl SpineRuntime {
                 }
             })?;
             self.ensure_editable_plantree_node(&existing_node_id, "scope")?;
+            if !existing_scope_nodes.insert(existing_node_id.clone()) {
+                return Err(SpineRuntimeError::InvalidPlanTree {
+                    message: format!(
+                        "plantree scope {} is duplicated",
+                        existing_node_id.bracketed()
+                    ),
+                });
+            }
             if !is_node_within_anchor(&existing_node_id, anchor) {
                 return Err(SpineRuntimeError::InvalidPlanTree {
                     message: format!(
@@ -606,7 +619,7 @@ impl SpineRuntime {
             }
         }
         for child in &scope.children {
-            self.validate_plantree_scope(anchor, child)?;
+            self.validate_plantree_scope(anchor, child, existing_scope_nodes)?;
         }
         Ok(())
     }

@@ -416,6 +416,7 @@ fn record_plan_update_writes_plantree_without_moving_cursor() {
     let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
     let spine_plantree = &plan["spine_plantree"];
     assert_eq!(spine_plantree["anchor_node_id"], "1.1");
+    assert_eq!(spine_plantree["root"]["existing_node_id"], "1.1");
     assert_eq!(spine_plantree["root"]["summary"], "Editable task scope");
     assert_eq!(
         spine_plantree["root"]["children"][0]["existing_node_id"],
@@ -454,6 +455,7 @@ fn record_plan_update_writes_plantree_without_moving_cursor() {
     let plan = leaf.plan.as_ref().expect("leaf plan");
     let spine_plantree = plan.spine_plantree.as_ref().expect("root PlanTree");
     assert_eq!(spine_plantree.anchor_node_id, "1.1");
+    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
     assert_eq!(spine_plantree.root.children.len(), 2);
     assert_eq!(spine_plantree.root.children[0].existing_node_id, None);
     assert_eq!(spine_plantree.root.children[0].summary, "Reproduce failure");
@@ -492,9 +494,11 @@ fn record_plan_update_preserves_plantree_when_omitted() {
         .as_ref()
         .expect("omitted PlanTree should inherit previous snapshot");
     assert_eq!(spine_plantree.anchor_node_id, "1.1");
+    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
     assert_eq!(spine_plantree.root.children[0].summary, "Verify scope");
 
     let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
+    assert_eq!(plan["spine_plantree"]["root"]["existing_node_id"], "1.1");
     assert_eq!(
         plan["spine_plantree"]["root"]["children"][0]["summary"],
         "Verify scope"
@@ -565,6 +569,7 @@ fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
 
     let plan = read_json(runtime.store().plan_path(&id(&[1, 1, 1])));
     assert_eq!(plan["spine_plantree"]["anchor_node_id"], "1.1");
+    assert_eq!(plan["spine_plantree"]["root"]["existing_node_id"], "1.1");
 
     let snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
     let root = snapshot
@@ -585,6 +590,7 @@ fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
         .and_then(|plan| plan.spine_plantree.as_ref())
         .expect("child PlanTree");
     assert_eq!(spine_plantree.anchor_node_id, "1.1");
+    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
 }
 
 #[test]
@@ -651,6 +657,36 @@ fn plantree_rejects_finished_scope_nodes() {
     assert_eq!(runtime.state(), &initial_state);
     assert_eq!(read_json_lines(runtime.store().tree_path()), initial_tree);
     assert!(!runtime.store().plan_path(&id(&[1, 1, 2])).exists());
+}
+
+#[test]
+fn plantree_rejects_duplicate_existing_scope_nodes() {
+    let (_temp, mut runtime) = temp_runtime();
+    let initial_state = runtime.state().clone();
+    let initial_tree = read_json_lines(runtime.store().tree_path());
+
+    let error = runtime
+        .record_plan_update(
+            "turn-invalid",
+            plan_args_with_plantree(
+                None,
+                vec![(
+                    Some("1.1"),
+                    "Duplicate editable scope",
+                    vec!["ambiguous child"],
+                )],
+            ),
+        )
+        .expect_err("duplicate existing scope nodes must be rejected");
+
+    assert!(matches!(
+        error,
+        SpineRuntimeError::InvalidPlanTree { message }
+            if message.contains("plantree scope [1.1] is duplicated")
+    ));
+    assert_eq!(runtime.state(), &initial_state);
+    assert_eq!(read_json_lines(runtime.store().tree_path()), initial_tree);
+    assert!(!runtime.store().plan_path(&id(&[1, 1])).exists());
 }
 
 #[test]

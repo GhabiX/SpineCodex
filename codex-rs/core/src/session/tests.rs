@@ -2143,7 +2143,7 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     let requests = responses.requests();
     assert_eq!(requests.len(), 4);
     let compact_request = &requests[2];
-    assert!(compact_request.body_contains_text("Compact only the target suffix represented"));
+    assert!(compact_request.body_contains_text("Compact only target Spine node"));
     assert!(compact_request.tool_by_name("spine", "next").is_some());
 
     let followup_request = &requests[3];

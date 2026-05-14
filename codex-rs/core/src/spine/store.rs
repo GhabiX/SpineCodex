@@ -969,7 +969,12 @@ impl SpineSidecarStore {
                                 anchor_node_id.bracketed()
                             )));
                         }
-                        validate_plantree_scope_references(state, &spine_plantree.root)?;
+                        let mut existing_scope_nodes = HashSet::new();
+                        validate_plantree_scope_references(
+                            state,
+                            &spine_plantree.root,
+                            &mut existing_scope_nodes,
+                        )?;
                     }
                 }
                 TreeEvent::RootEpochArchived {
@@ -1981,6 +1986,7 @@ fn validate_relative_base(base: &Path, rollout_path: &Path) -> Result<(), SpineS
 fn validate_plantree_scope_references(
     state: &SpineState,
     scope: &PlanTreeScope,
+    existing_scope_nodes: &mut HashSet<NodeId>,
 ) -> Result<(), SpineStoreError> {
     if let Some(existing_node_id) = &scope.existing_node_id {
         let existing_node_id = NodeId::parse(existing_node_id)?;
@@ -1990,9 +1996,15 @@ fn validate_plantree_scope_references(
                 existing_node_id.bracketed()
             )));
         }
+        if !existing_scope_nodes.insert(existing_node_id.clone()) {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "task_plan_updated spine_plantree duplicates scope node {}",
+                existing_node_id.bracketed()
+            )));
+        }
     }
     for child in &scope.children {
-        validate_plantree_scope_references(state, child)?;
+        validate_plantree_scope_references(state, child, existing_scope_nodes)?;
     }
     Ok(())
 }

@@ -54,9 +54,11 @@ use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
 use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::SpineTreeNode;
+use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreePlanCheckpoint;
 use codex_app_server_protocol::SpineTreePlanItem;
 use codex_app_server_protocol::SpineTreePlanItemStatus;
+use codex_app_server_protocol::SpineTreePlanTree;
 use codex_app_server_protocol::SpineTreePlanTreeScope;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ToolRequestUserInputAnswer;
@@ -3154,18 +3156,25 @@ pub(crate) struct SpineTreeUpdateCell {
 impl HistoryCell for SpineTreeUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = vec![vec!["• ".dim(), "Spine Tree".bold()].into()];
-        let nodes = spine_tree_display_nodes(&self.snapshot);
-        if nodes.is_empty() {
+        let root_nodes = spine_tree_child_nodes(&self.snapshot, None);
+        if root_nodes.is_empty() {
             lines.push(vec!["  └ ".dim(), "(empty)".dim().italic()].into());
             return lines;
         }
 
-        for node in nodes {
-            lines.extend(render_spine_tree_node(
-                &node,
+        let plantree = spine_tree_active_plantree(&self.snapshot);
+        let root_count = root_nodes.len();
+        for (index, node) in root_nodes.into_iter().enumerate() {
+            render_spine_tree_node(
+                &self.snapshot,
+                node,
+                0,
+                index + 1 == root_count,
                 &self.snapshot.active_node_id,
                 width,
-            ));
+                plantree,
+                &mut lines,
+            );
         }
         lines
     }
@@ -3221,7 +3230,6 @@ impl HistoryCell for SpineTreeUpdateCell {
 struct SpineTreeDisplayNode<'a> {
     node: &'a SpineTreeNode,
     depth: usize,
-    is_last: bool,
 }
 
 fn spine_tree_display_nodes(
@@ -3243,32 +3251,46 @@ fn append_spine_tree_children<'a>(
         .iter()
         .filter(|node| node.parent_id.as_deref() == parent_id)
         .collect::<Vec<_>>();
-    let child_count = children.len();
-    for (index, node) in children.into_iter().enumerate() {
-        out.push(SpineTreeDisplayNode {
-            node,
-            depth,
-            is_last: index + 1 == child_count,
-        });
+    for node in children {
+        out.push(SpineTreeDisplayNode { node, depth });
         append_spine_tree_children(snapshot, Some(node.node_id.as_str()), depth + 1, out);
     }
 }
 
+fn spine_tree_child_nodes<'a>(
+    snapshot: &'a SpineTreeUpdatedNotification,
+    parent_id: Option<&str>,
+) -> Vec<&'a SpineTreeNode> {
+    snapshot
+        .nodes
+        .iter()
+        .filter(|node| node.parent_id.as_deref() == parent_id)
+        .collect()
+}
+
+fn spine_tree_active_plantree(
+    snapshot: &SpineTreeUpdatedNotification,
+) -> Option<&SpineTreePlanTree> {
+    snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == snapshot.active_node_id)
+        .and_then(|node| node.plan.as_ref())
+        .and_then(|plan| plan.spine_plantree.as_ref())
+}
+
 fn render_spine_tree_node(
-    display_node: &SpineTreeDisplayNode<'_>,
+    snapshot: &SpineTreeUpdatedNotification,
+    node: &SpineTreeNode,
+    depth: usize,
+    is_last: bool,
     active_node_id: &str,
     width: u16,
-) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let branch = if display_node.depth == 0 {
-        "└ "
-    } else if display_node.is_last {
-        "└ "
-    } else {
-        "├ "
-    };
-    let prefix = format!("  {}{}", "  ".repeat(display_node.depth), branch);
-    let node = display_node.node;
+    plantree: Option<&SpineTreePlanTree>,
+    out: &mut Vec<Line<'static>>,
+) {
+    let branch = spine_tree_branch(depth, is_last);
+    let prefix = format!("  {}{}", "  ".repeat(depth), branch);
     let active = node.node_id == active_node_id;
     let summary = node
         .summary
@@ -3285,39 +3307,125 @@ fn render_spine_tree_node(
     }
     if active {
         spans.push(Span::from(" current").cyan().bold());
+    } else {
+        spans.push(Span::from(" "));
+        spans.push(Span::from(spine_tree_node_status_label(node.status)).dim());
     }
     let line = Line::from(spans);
     let wrapped = adaptive_wrap_line(
         &line,
         RtOptions::new(width.saturating_sub(2).max(1) as usize)
-            .subsequent_indent(format!("{}  ", "  ".repeat(display_node.depth + 1)).into()),
+            .subsequent_indent(format!("{}  ", "  ".repeat(depth + 1)).into()),
     );
-    push_owned_lines(&wrapped, &mut out);
+    push_owned_lines(&wrapped, out);
 
     if let Some(plan) = &node.plan {
         for item in &plan.items {
-            out.extend(render_spine_tree_plan_item(
-                item,
-                display_node.depth + 1,
-                width,
-            ));
-        }
-        if let Some(spine_plantree) = &plan.spine_plantree {
-            let indent = format!("  {}  ", "  ".repeat(display_node.depth + 1));
-            out.push(Line::from(vec![
-                Span::from(indent).dim(),
-                Span::from(format!("plantree anchor={}", spine_plantree.anchor_node_id))
-                    .dim()
-                    .italic(),
-            ]));
-            out.extend(render_spine_tree_plantree_scope(
-                &spine_plantree.root,
-                display_node.depth + 1,
-                width,
-            ));
+            out.extend(render_spine_tree_plan_item(item, depth + 1, width));
         }
     }
-    out
+
+    let real_children = spine_tree_child_nodes(snapshot, Some(node.node_id.as_str()));
+    let planned_children = planned_future_child_scopes(plantree, node.node_id.as_str());
+    let real_child_count = real_children.len();
+    let planned_child_count = planned_children.len();
+    for (index, child) in real_children.into_iter().enumerate() {
+        render_spine_tree_node(
+            snapshot,
+            child,
+            depth + 1,
+            index + 1 == real_child_count && planned_child_count == 0,
+            active_node_id,
+            width,
+            plantree,
+            out,
+        );
+    }
+
+    let mut planned_index = next_planned_child_index(snapshot, node.node_id.as_str());
+    for (index, scope) in planned_children.into_iter().enumerate() {
+        let predicted_id = format!("~{}.{}", node.node_id, planned_index);
+        planned_index = planned_index.saturating_add(1);
+        render_spine_tree_planned_scope(
+            scope,
+            predicted_id,
+            depth + 1,
+            index + 1 == planned_child_count,
+            width,
+            out,
+        );
+    }
+}
+
+fn spine_tree_branch(_depth: usize, is_last: bool) -> &'static str {
+    if is_last { "└ " } else { "├ " }
+}
+
+fn spine_tree_node_status_label(status: SpineTreeNodeStatus) -> &'static str {
+    match status {
+        SpineTreeNodeStatus::Live | SpineTreeNodeStatus::Opened => "live",
+        SpineTreeNodeStatus::Finished => "finished",
+        SpineTreeNodeStatus::Closed => "closed",
+    }
+}
+
+fn planned_future_child_scopes<'a>(
+    plantree: Option<&'a SpineTreePlanTree>,
+    node_id: &str,
+) -> Vec<&'a SpineTreePlanTreeScope> {
+    plantree
+        .and_then(|plantree| find_plantree_scope_for_node(plantree, node_id))
+        .map(|scope| {
+            scope
+                .children
+                .iter()
+                .filter(|child| child.existing_node_id.is_none())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn find_plantree_scope_for_node<'a>(
+    plantree: &'a SpineTreePlanTree,
+    node_id: &str,
+) -> Option<&'a SpineTreePlanTreeScope> {
+    if plantree
+        .root
+        .existing_node_id
+        .as_deref()
+        .unwrap_or(plantree.anchor_node_id.as_str())
+        == node_id
+    {
+        return Some(&plantree.root);
+    }
+    find_plantree_child_scope_for_node(&plantree.root, node_id)
+}
+
+fn find_plantree_child_scope_for_node<'a>(
+    scope: &'a SpineTreePlanTreeScope,
+    node_id: &str,
+) -> Option<&'a SpineTreePlanTreeScope> {
+    for child in &scope.children {
+        if child.existing_node_id.as_deref() == Some(node_id) {
+            return Some(child);
+        }
+        if let Some(found) = find_plantree_child_scope_for_node(child, node_id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn next_planned_child_index(snapshot: &SpineTreeUpdatedNotification, parent_id: &str) -> u32 {
+    snapshot
+        .nodes
+        .iter()
+        .filter(|node| node.parent_id.as_deref() == Some(parent_id))
+        .filter_map(|node| node.node_id.rsplit('.').next())
+        .filter_map(|segment| segment.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
 }
 
 fn append_spine_tree_plantree_raw_lines(
@@ -3342,46 +3450,61 @@ fn append_spine_tree_plantree_raw_lines(
     }
 }
 
-fn render_spine_tree_plantree_scope(
+fn render_spine_tree_planned_scope(
     scope: &SpineTreePlanTreeScope,
+    predicted_id: String,
     depth: usize,
+    is_last: bool,
     width: u16,
-) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let scope_id = scope.existing_node_id.as_deref().unwrap_or("future");
-    let indent = format!("  {}  ", "  ".repeat(depth));
+    out: &mut Vec<Line<'static>>,
+) {
+    let branch = spine_tree_branch(depth, is_last);
+    let prefix = format!("  {}{}", "  ".repeat(depth), branch);
     let opts = RtOptions::new(width.saturating_sub(2).max(1) as usize)
-        .initial_indent(format!("{indent}↳ ").into())
-        .subsequent_indent(format!("{indent}  ").into());
+        .subsequent_indent(format!("{}  ", "  ".repeat(depth + 1)).into());
     let line = Line::from(vec![
-        Span::from(format!("[{scope_id}] ")).dim(),
+        Span::from(prefix).dim(),
+        Span::from(predicted_id.clone()).yellow().bold(),
+        Span::from(" "),
         Span::from(scope.summary.clone()),
     ]);
     let wrapped = adaptive_wrap_line(&line, opts);
-    push_owned_lines(&wrapped, &mut out);
+    push_owned_lines(&wrapped, out);
 
     for checkpoint in &scope.checkpoints {
-        out.extend(render_spine_tree_plan_checkpoint(
+        out.extend(render_spine_tree_planned_checkpoint(
             checkpoint,
             depth + 1,
             width,
         ));
     }
-    for child in &scope.children {
-        out.extend(render_spine_tree_plantree_scope(child, depth + 1, width));
+    let future_children = scope
+        .children
+        .iter()
+        .filter(|child| child.existing_node_id.is_none())
+        .collect::<Vec<_>>();
+    let child_count = future_children.len();
+    for (index, child) in future_children.into_iter().enumerate() {
+        render_spine_tree_planned_scope(
+            child,
+            format!("{}.{}", predicted_id, index + 1),
+            depth + 1,
+            index + 1 == child_count,
+            width,
+            out,
+        );
     }
-    out
 }
 
-fn render_spine_tree_plan_checkpoint(
+fn render_spine_tree_planned_checkpoint(
     checkpoint: &SpineTreePlanCheckpoint,
     depth: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
     let (box_str, step_style) = match checkpoint.status {
-        SpineTreePlanItemStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
-        SpineTreePlanItemStatus::InProgress => ("□ ", Style::default().cyan().bold()),
-        SpineTreePlanItemStatus::Pending => ("□ ", Style::default().dim()),
+        SpineTreePlanItemStatus::Completed => ("· ", Style::default().crossed_out().dim()),
+        SpineTreePlanItemStatus::InProgress => ("· ", Style::default()),
+        SpineTreePlanItemStatus::Pending => ("· ", Style::default().dim()),
     };
     let indent = format!("  {}  ", "  ".repeat(depth));
     let opts = RtOptions::new(width.saturating_sub(2).max(1) as usize)
@@ -3866,6 +3989,15 @@ mod tests {
                 assert_eq!(span.style, Style::default());
             }
         }
+    }
+
+    fn span_style_containing(lines: &[Line<'static>], text: &str) -> Style {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains(text))
+            .map(|span| span.style)
+            .unwrap_or_else(|| panic!("missing span containing {text:?}"))
     }
 
     fn image_block(data: &str) -> serde_json::Value {
@@ -5816,6 +5948,197 @@ mod tests {
             1,
             "expected full step URL-like token in one rendered line, got: {rendered:?}"
         );
+    }
+
+    #[test]
+    fn spine_tree_planned_checkpoint_in_progress_does_not_use_active_style() {
+        let cell = new_spine_tree_update(
+            "turn-spine-tree".to_string(),
+            SpineTreeUpdatedNotification {
+                thread_id: "thread-spine-tree".to_string(),
+                turn_id: "turn-spine-tree".to_string(),
+                snapshot_seq: 1,
+                active_node_id: "1.1".to_string(),
+                nodes: vec![
+                    SpineTreeNode {
+                        node_id: "1".to_string(),
+                        parent_id: None,
+                        summary: Some("root scope".to_string()),
+                        status: codex_app_server_protocol::SpineTreeNodeStatus::Opened,
+                        plan: None,
+                    },
+                    SpineTreeNode {
+                        node_id: "1.1".to_string(),
+                        parent_id: Some("1".to_string()),
+                        summary: Some("focused work".to_string()),
+                        status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
+                        plan: Some(codex_app_server_protocol::SpineTreePlan {
+                            revision: 1,
+                            explanation: Some("check display semantics".to_string()),
+                            items: vec![SpineTreePlanItem {
+                                stable_task_id: "task-real-active".to_string(),
+                                step: "real active checklist item".to_string(),
+                                status: SpineTreePlanItemStatus::InProgress,
+                            }],
+                            spine_plantree: Some(SpineTreePlanTree {
+                                anchor_node_id: "1.1".to_string(),
+                                root: SpineTreePlanTreeScope {
+                                    existing_node_id: Some("1.1".to_string()),
+                                    summary: "focused work".to_string(),
+                                    status: Some(SpineTreePlanItemStatus::InProgress),
+                                    checkpoints: Vec::new(),
+                                    children: vec![SpineTreePlanTreeScope {
+                                        existing_node_id: None,
+                                        summary: "planned future scope".to_string(),
+                                        status: Some(SpineTreePlanItemStatus::Pending),
+                                        checkpoints: vec![SpineTreePlanCheckpoint {
+                                            task: "planned in-progress metadata".to_string(),
+                                            status: SpineTreePlanItemStatus::InProgress,
+                                        }],
+                                        children: Vec::new(),
+                                    }],
+                                },
+                            }),
+                        }),
+                    },
+                ],
+            },
+        );
+
+        let lines = cell.display_lines(/*width*/ 80);
+        let rendered = render_lines(&lines).join("\n");
+        assert!(rendered.contains("~1.1.1 planned future scope"));
+        assert!(!rendered.contains("footprint:"));
+
+        let real_style = span_style_containing(&lines, "real active checklist item");
+        assert_eq!(real_style.fg, Some(Color::Cyan));
+        assert!(real_style.add_modifier.contains(Modifier::BOLD));
+
+        let planned_style = span_style_containing(&lines, "planned in-progress metadata");
+        assert_eq!(planned_style.fg, None);
+        assert!(!planned_style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn spine_tree_rich_display_shows_node_status_and_root_branches() {
+        let cell = new_spine_tree_update(
+            "turn-spine-tree".to_string(),
+            SpineTreeUpdatedNotification {
+                thread_id: "thread-spine-tree".to_string(),
+                turn_id: "turn-spine-tree".to_string(),
+                snapshot_seq: 1,
+                active_node_id: "2.1".to_string(),
+                nodes: vec![
+                    SpineTreeNode {
+                        node_id: "1".to_string(),
+                        parent_id: None,
+                        summary: Some("archived epoch".to_string()),
+                        status: SpineTreeNodeStatus::Closed,
+                        plan: None,
+                    },
+                    SpineTreeNode {
+                        node_id: "2".to_string(),
+                        parent_id: None,
+                        summary: Some("current epoch".to_string()),
+                        status: SpineTreeNodeStatus::Opened,
+                        plan: None,
+                    },
+                    SpineTreeNode {
+                        node_id: "2.1".to_string(),
+                        parent_id: Some("2".to_string()),
+                        summary: Some("focused leaf".to_string()),
+                        status: SpineTreeNodeStatus::Live,
+                        plan: None,
+                    },
+                ],
+            },
+        );
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80));
+        assert!(
+            rendered[1].starts_with("  ├ 1 archived epoch closed"),
+            "expected first root epoch to use a non-last branch and show status, got: {rendered:?}"
+        );
+        assert!(
+            rendered[2].starts_with("  └ 2 current epoch live"),
+            "expected second root epoch to use a last branch and show status, got: {rendered:?}"
+        );
+        assert!(rendered[3].contains("2.1 focused leaf current"));
+    }
+
+    #[test]
+    fn spine_tree_rich_display_uses_active_node_plantree_only() {
+        let stale_plan = codex_app_server_protocol::SpineTreePlan {
+            revision: 1,
+            explanation: Some("stale non-active PlanTree".to_string()),
+            items: Vec::new(),
+            spine_plantree: Some(SpineTreePlanTree {
+                anchor_node_id: "1".to_string(),
+                root: SpineTreePlanTreeScope {
+                    existing_node_id: Some("1".to_string()),
+                    summary: "root scope".to_string(),
+                    status: None,
+                    checkpoints: Vec::new(),
+                    children: vec![SpineTreePlanTreeScope {
+                        existing_node_id: None,
+                        summary: "stale future scope".to_string(),
+                        status: None,
+                        checkpoints: Vec::new(),
+                        children: Vec::new(),
+                    }],
+                },
+            }),
+        };
+        let active_plan = codex_app_server_protocol::SpineTreePlan {
+            revision: 2,
+            explanation: Some("active PlanTree".to_string()),
+            items: Vec::new(),
+            spine_plantree: Some(SpineTreePlanTree {
+                anchor_node_id: "1.1".to_string(),
+                root: SpineTreePlanTreeScope {
+                    existing_node_id: Some("1.1".to_string()),
+                    summary: "active scope".to_string(),
+                    status: None,
+                    checkpoints: Vec::new(),
+                    children: vec![SpineTreePlanTreeScope {
+                        existing_node_id: None,
+                        summary: "active future scope".to_string(),
+                        status: None,
+                        checkpoints: Vec::new(),
+                        children: Vec::new(),
+                    }],
+                },
+            }),
+        };
+        let cell = new_spine_tree_update(
+            "turn-spine-tree".to_string(),
+            SpineTreeUpdatedNotification {
+                thread_id: "thread-spine-tree".to_string(),
+                turn_id: "turn-spine-tree".to_string(),
+                snapshot_seq: 1,
+                active_node_id: "1.1".to_string(),
+                nodes: vec![
+                    SpineTreeNode {
+                        node_id: "1".to_string(),
+                        parent_id: None,
+                        summary: Some("root".to_string()),
+                        status: SpineTreeNodeStatus::Opened,
+                        plan: Some(stale_plan),
+                    },
+                    SpineTreeNode {
+                        node_id: "1.1".to_string(),
+                        parent_id: Some("1".to_string()),
+                        summary: Some("focused leaf".to_string()),
+                        status: SpineTreeNodeStatus::Live,
+                        plan: Some(active_plan),
+                    },
+                ],
+            },
+        );
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+        assert!(rendered.contains("~1.1.1 active future scope"));
+        assert!(!rendered.contains("stale future scope"));
     }
 
     #[test]

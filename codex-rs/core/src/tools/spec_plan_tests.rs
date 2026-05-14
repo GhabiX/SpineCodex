@@ -202,6 +202,7 @@ fn update_plan_schema_exposes_spine_plantree_planning_ir() {
         tool.description
             .contains("Omitting spine_plantree preserves")
     );
+    assert!(tool.description.contains("~<predicted-id>"));
 
     let properties = tool
         .parameters
@@ -224,6 +225,12 @@ fn update_plan_schema_exposes_spine_plantree_planning_ir() {
     let root_properties = root.properties.as_ref().expect("root scope properties");
     assert!(root_properties.contains_key("checkpoints"));
     assert!(root_properties.contains_key("children"));
+    assert!(
+        root_properties
+            .get("node")
+            .and_then(|schema| schema.description.as_deref())
+            .is_some_and(|description| description.contains("resolved anchor"))
+    );
 }
 
 #[test]

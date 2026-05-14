@@ -52,6 +52,7 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("current editable scope"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("planning only"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("does not create Spine nodes"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("~<predicted-id>"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 30k raw tokens"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 20k"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the hint as a cue"));

@@ -828,10 +828,10 @@ async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
                     revision: 2,
                     explanation: Some("track focused work".to_string()),
                     spine_plantree: Some(codex_app_server_protocol::SpineTreePlanTree {
-                        anchor_node_id: "1".to_string(),
+                        anchor_node_id: "1.1".to_string(),
                         root: codex_app_server_protocol::SpineTreePlanTreeScope {
-                            existing_node_id: Some("1".to_string()),
-                            summary: "root planning scope".to_string(),
+                            existing_node_id: Some("1.1".to_string()),
+                            summary: "focused leaf planning scope".to_string(),
                             status: Some(
                                 codex_app_server_protocol::SpineTreePlanItemStatus::InProgress,
                             ),
@@ -884,9 +884,11 @@ async fn live_app_server_spine_tree_update_replaces_flat_plan_progress() {
     };
     assert!(rendered.contains("Spine Tree"));
     assert!(rendered.contains("1 root scope"));
-    assert!(rendered.contains("plantree anchor=1"));
-    assert!(rendered.contains("[future] Verify scope"));
+    assert!(!rendered.contains("plantree anchor="));
+    assert!(!rendered.contains("[future]"));
+    assert!(rendered.contains("~1.1.1 Verify scope"));
     assert!(rendered.contains("run focused validation"));
+    assert!(!rendered.contains("footprint:"));
     assert!(rendered.contains("1.1 focused leaf current"));
     assert!(rendered.contains("inspect inputs"));
     assert!(rendered.contains("run validation"));

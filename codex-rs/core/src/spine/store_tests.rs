@@ -552,8 +552,8 @@ fn writes_plan_snapshot_with_plantree_and_replays_without_mutating_state() {
                         children: Vec::new(),
                     },
                     crate::spine::plan_bridge::PlanTreeScope {
-                        existing_node_id: Some("1".to_string()),
-                        summary: "Continue root".to_string(),
+                        existing_node_id: None,
+                        summary: "Continue future".to_string(),
                         status: Some("pending".to_string()),
                         checkpoints: vec![crate::spine::plan_bridge::PlanTreeCheckpoint {
                             task: "keep root task focused".to_string(),
@@ -615,8 +615,8 @@ fn writes_plan_snapshot_with_plantree_and_replays_without_mutating_state() {
                             "checkpoints": [{"task": "run repro", "status": "pending"}],
                         },
                         {
-                            "existing_node_id": "1",
-                            "summary": "Continue root",
+                            "existing_node_id": null,
+                            "summary": "Continue future",
                             "status": "pending",
                             "checkpoints": [{"task": "keep root task focused", "status": "pending"}],
                         },
@@ -627,6 +627,50 @@ fn writes_plan_snapshot_with_plantree_and_replays_without_mutating_state() {
         })
     );
     assert_eq!(store.load().expect("reload sidecar"), state);
+}
+
+#[test]
+fn replay_rejects_duplicate_plantree_existing_scope_nodes() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    let snapshot = PlanSnapshot {
+        node_id: "1".to_string(),
+        revision: 1,
+        explanation: Some("ambiguous duplicate scope".to_string()),
+        items: Vec::new(),
+        spine_plantree: Some(PlanTreeSnapshot {
+            anchor_node_id: "1".to_string(),
+            root: crate::spine::plan_bridge::PlanTreeScope {
+                existing_node_id: Some("1".to_string()),
+                summary: "Root scope".to_string(),
+                status: None,
+                checkpoints: Vec::new(),
+                children: vec![crate::spine::plan_bridge::PlanTreeScope {
+                    existing_node_id: Some("1".to_string()),
+                    summary: "Duplicate root scope".to_string(),
+                    status: None,
+                    checkpoints: Vec::new(),
+                    children: Vec::new(),
+                }],
+            },
+        }),
+        source_turn_id: "turn-dup".to_string(),
+        event_seq: 2,
+    };
+
+    store
+        .write_plan_snapshot(&id(&[1]), &snapshot)
+        .expect("write duplicate PlanTree snapshot");
+
+    let error = store
+        .load()
+        .expect_err("duplicate PlanTree scope nodes should fail replay");
+    assert!(
+        error
+            .to_string()
+            .contains("spine_plantree duplicates scope node [1]"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
