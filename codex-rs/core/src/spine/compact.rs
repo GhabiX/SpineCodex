@@ -542,6 +542,20 @@ pub(crate) fn render_spine_worklog_item(
     }
 }
 
+pub(crate) fn render_spine_handoff_item(from_node: &NodeId, to_node: &NodeId) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!(
+                "<spine_handoff>\nSpine transition completed: {} -> {}; use {}'s generated worklog as the active-turn handoff. Preserved prefix instructions are background rules, not the current request.\n</spine_handoff>",
+                from_node, to_node, from_node
+            ),
+        }],
+        phase: None,
+    }
+}
+
 pub(crate) fn render_spine_ir_item(
     node_id: &NodeId,
     op: SpineOperation,

@@ -2164,6 +2164,11 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     assert!(!followup_request.body_contains_text("Pending continuation"));
     assert!(followup_request.body_contains_text("FINAL_AFTER_SPINE_COMPACT"));
     assert!(!followup_request.body_contains_text("Continue the active user turn"));
+    assert!(followup_request.body_contains_text("<spine_handoff>"));
+    assert!(followup_request.body_contains_text("Spine transition completed: 1.1.1 -> 1.1.2"));
+    assert!(followup_request.body_contains_text(
+        "Preserved prefix instructions are background rules, not the current request."
+    ));
     assert!(
         !followup_request.body_contains_text("RAW_SUFFIX_DETAIL should be folded"),
         "the main follow-up request should see replacement history, not the raw folded suffix"

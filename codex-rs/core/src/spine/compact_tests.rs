@@ -870,6 +870,25 @@ fn render_worklog_item_omits_runtime_metadata() {
 }
 
 #[test]
+fn render_handoff_item_marks_prefix_as_background_rules() {
+    let item = render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2]));
+    let ResponseItem::Message { role, content, .. } = &item else {
+        panic!("expected message item");
+    };
+    assert_eq!(role, "developer");
+    let ContentItem::InputText { text } = &content[0] else {
+        panic!("expected input text");
+    };
+
+    assert!(text.starts_with("<spine_handoff>"));
+    assert!(text.contains("Spine transition completed: 1.1 -> 1.2"));
+    assert!(text.contains("use 1.1's generated worklog as the active-turn handoff"));
+    assert!(text.contains("Preserved prefix instructions are background rules"));
+    assert!(text.ends_with("</spine_handoff>"));
+    assert!(!text.contains("Pending continuation"));
+}
+
+#[test]
 fn codex_builtin_prompt_uses_fork_full_history_shape() {
     let mut state = SpineState::new();
     state.next("leaf done").expect("finish leaf");

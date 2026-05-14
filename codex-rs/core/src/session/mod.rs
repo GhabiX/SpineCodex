@@ -185,6 +185,7 @@ use crate::spine::compact::build_suffix_replacement_history;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
 use crate::spine::compact::plan_suffix_fold_with_spans;
 use crate::spine::compact::render_auto_compact_worklog;
+use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_worklog_item;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::compact_message_hash;
@@ -3335,12 +3336,16 @@ impl Session {
             .strip_prefix(store.root())
             .unwrap_or(plan.worklog_path.as_path())
             .to_path_buf();
-        let rendered_worklog_items = vec![render_spine_worklog_item(
-            &boundary.node_id,
-            boundary.op,
-            &boundary.transition_summary,
-            &model_worklog_body,
-        )];
+        let to_node = spine.lock().await.cursor().clone();
+        let rendered_worklog_items = vec![
+            render_spine_worklog_item(
+                &boundary.node_id,
+                boundary.op,
+                &boundary.transition_summary,
+                &model_worklog_body,
+            ),
+            render_spine_handoff_item(&boundary.node_id, &to_node),
+        ];
         let replacement_history = build_suffix_replacement_history(
             &history,
             plan.cut_index,
