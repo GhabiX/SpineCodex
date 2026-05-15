@@ -4,6 +4,17 @@ use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
 pub fn create_update_plan_tool() -> ToolSpec {
+    create_update_plan_tool_with_options(UpdatePlanToolOptions {
+        include_spine_plantree: false,
+    })
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UpdatePlanToolOptions {
+    pub include_spine_plantree: bool,
+}
+
+pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> ToolSpec {
     let checkpoint_properties = BTreeMap::from([
         (
             "task".to_string(),
@@ -124,18 +135,7 @@ pub fn create_update_plan_tool() -> ToolSpec {
             JsonSchema::string(Some("One of: pending, in_progress, completed".to_string())),
         ),
     ]);
-    let plantree_properties = BTreeMap::from([
-        (
-            "anchor".to_string(),
-            JsonSchema::string(Some(
-                "Editable Spine anchor node id. Omit to use the current editable scope."
-                    .to_string(),
-            )),
-        ),
-        ("root".to_string(), root_scope_schema),
-    ]);
-
-    let properties = BTreeMap::from([
+    let mut properties = BTreeMap::from([
         (
             "explanation".to_string(),
             JsonSchema::string(/*description*/ None),
@@ -151,31 +151,51 @@ pub fn create_update_plan_tool() -> ToolSpec {
                 Some("The list of steps".to_string()),
             ),
         ),
-        (
+    ]);
+    if options.include_spine_plantree {
+        let plantree_properties = BTreeMap::from([
+            (
+                "anchor".to_string(),
+                JsonSchema::string(Some(
+                    "Editable Spine anchor node id. Omit to use the current editable scope."
+                        .to_string(),
+                )),
+            ),
+            ("root".to_string(), root_scope_schema),
+        ]);
+        properties.insert(
             "spine_plantree".to_string(),
             JsonSchema::object(
                 plantree_properties,
                 Some(vec!["root".to_string()]),
                 Some(false.into()),
             ),
-        ),
-        (
+        );
+        properties.insert(
             "clear_spine_plantree".to_string(),
             JsonSchema::boolean(Some(
                 "Set true only to explicitly clear the current Spine PlanTree.".to_string(),
             )),
-        ),
-    ]);
+        );
+    }
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: "update_plan".to_string(),
-        description: r#"Updates the task plan.
+    let description = if options.include_spine_plantree {
+        r#"Updates the task plan.
 Provide an optional explanation and a list of plan items, each with a step and status.
 At most one step can be in_progress at a time.
 When Spine is enabled, use spine_plantree to maintain the current editable task tree draft. This is planning only; it does not create or move Spine nodes. Omitting spine_plantree preserves the previous draft; use clear_spine_plantree only to clear it.
 Future planned scopes may display as ~<predicted-id> to distinguish them from real Spine nodes.
 "#
-        .to_string(),
+    } else {
+        r#"Updates the task plan.
+Provide an optional explanation and a list of plan items, each with a step and status.
+At most one step can be in_progress at a time.
+"#
+    };
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "update_plan".to_string(),
+        description: description.to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(

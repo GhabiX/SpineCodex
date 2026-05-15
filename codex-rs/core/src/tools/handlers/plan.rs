@@ -2,7 +2,8 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::plan_spec::create_update_plan_tool;
+use crate::tools::handlers::plan_spec::UpdatePlanToolOptions;
+use crate::tools::handlers::plan_spec::create_update_plan_tool_with_options;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
@@ -13,7 +14,18 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde_json::Value as JsonValue;
 
-pub struct PlanHandler;
+#[derive(Default)]
+pub struct PlanHandler {
+    include_spine_plantree: bool,
+}
+
+impl PlanHandler {
+    pub fn new(include_spine_plantree: bool) -> Self {
+        Self {
+            include_spine_plantree,
+        }
+    }
+}
 
 pub struct PlanToolOutput;
 
@@ -51,7 +63,15 @@ impl ToolHandler for PlanHandler {
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(create_update_plan_tool())
+        if self.include_spine_plantree {
+            Some(create_update_plan_tool_with_options(
+                UpdatePlanToolOptions {
+                    include_spine_plantree: true,
+                },
+            ))
+        } else {
+            Some(crate::tools::handlers::plan_spec::create_update_plan_tool())
+        }
     }
 
     fn kind(&self) -> ToolKind {
@@ -83,6 +103,14 @@ impl ToolHandler for PlanHandler {
         }
 
         let args = parse_update_plan_arguments(&arguments)?;
+        if !self.include_spine_plantree
+            && (args.spine_plantree.is_some() || args.clear_spine_plantree)
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "update_plan received Spine PlanTree fields, but Spine PlanTree is not enabled"
+                    .to_string(),
+            ));
+        }
         session
             .record_plan_update_and_emit_progress(turn.as_ref(), args)
             .await
@@ -96,4 +124,39 @@ fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, Functi
     serde_json::from_str::<UpdatePlanArgs>(arguments).map_err(|e| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flat_plan_handler_uses_upstream_compatible_schema() {
+        let ToolSpec::Function(tool) = PlanHandler::default().spec().expect("spec") else {
+            panic!("expected function spec");
+        };
+        let properties = tool
+            .parameters
+            .properties
+            .as_ref()
+            .expect("schema properties");
+
+        assert!(!properties.contains_key("spine_plantree"));
+        assert!(!properties.contains_key("clear_spine_plantree"));
+    }
+
+    #[test]
+    fn spine_plan_handler_schema_includes_plantree_fields() {
+        let ToolSpec::Function(tool) = PlanHandler::new(true).spec().expect("spec") else {
+            panic!("expected function spec");
+        };
+        let properties = tool
+            .parameters
+            .properties
+            .as_ref()
+            .expect("schema properties");
+
+        assert!(properties.contains_key("spine_plantree"));
+        assert!(properties.contains_key("clear_spine_plantree"));
+    }
 }

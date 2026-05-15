@@ -13,7 +13,9 @@ use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
+use crate::tools::handlers::plan_spec::UpdatePlanToolOptions;
 use crate::tools::handlers::plan_spec::create_update_plan_tool;
+use crate::tools::handlers::plan_spec::create_update_plan_tool_with_options;
 use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::tools::handlers::request_user_input_spec::create_request_user_input_tool;
 use crate::tools::handlers::request_user_input_spec::request_user_input_tool_description;
@@ -188,8 +190,45 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
 }
 
 #[test]
+fn update_plan_schema_includes_spine_plantree_when_spine_is_effectively_enabled() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::SpineTaskTree);
+    let available_models = Vec::new();
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    let ToolSpec::Function(tool) = &find_tool(&tools, "update_plan").spec else {
+        panic!("expected update_plan function tool");
+    };
+    let properties = tool
+        .parameters
+        .properties
+        .as_ref()
+        .expect("update_plan object properties");
+    assert!(properties.contains_key("spine_plantree"));
+    assert!(properties.contains_key("clear_spine_plantree"));
+}
+
+#[test]
 fn update_plan_schema_exposes_spine_plantree_planning_ir() {
-    let ToolSpec::Function(tool) = create_update_plan_tool() else {
+    let ToolSpec::Function(tool) = create_update_plan_tool_with_options(UpdatePlanToolOptions {
+        include_spine_plantree: true,
+    }) else {
         panic!("expected function tool");
     };
     assert!(tool.description.contains("spine_plantree"));
@@ -231,6 +270,22 @@ fn update_plan_schema_exposes_spine_plantree_planning_ir() {
             .and_then(|schema| schema.description.as_deref())
             .is_some_and(|description| description.contains("resolved anchor"))
     );
+}
+
+#[test]
+fn update_plan_schema_omits_spine_plantree_by_default() {
+    let ToolSpec::Function(tool) = create_update_plan_tool() else {
+        panic!("expected function tool");
+    };
+    assert!(!tool.description.contains("spine_plantree"));
+
+    let properties = tool
+        .parameters
+        .properties
+        .as_ref()
+        .expect("update_plan object properties");
+    assert!(!properties.contains_key("spine_plantree"));
+    assert!(!properties.contains_key("clear_spine_plantree"));
 }
 
 #[test]
@@ -1446,6 +1501,52 @@ fn namespace_specs_are_hidden_when_namespace_tools_are_disabled() {
 
     assert_lacks_tool_name(&tools, "mcp__sample__");
     assert!(registry.has_handler(&ToolName::namespaced("mcp__sample__", "echo")));
+}
+
+#[test]
+fn spine_is_disabled_when_namespace_tools_are_disabled() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::SpineTaskTree);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_namespace_tools_capability(false);
+
+    let (tools, registry) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert!(!tools_config.spine_task_tree);
+    assert_lacks_tool_name(&tools, crate::spine::SPINE_NAMESPACE);
+    for name in [
+        crate::spine::SPINE_TOOL_TREE,
+        crate::spine::SPINE_TOOL_OPEN,
+        crate::spine::SPINE_TOOL_NEXT,
+        crate::spine::SPINE_TOOL_CLOSE,
+    ] {
+        assert!(!registry.has_handler(&ToolName::namespaced(crate::spine::SPINE_NAMESPACE, name)));
+    }
+    let ToolSpec::Function(tool) = &find_tool(&tools, "update_plan").spec else {
+        panic!("expected update_plan function tool");
+    };
+    let properties = tool
+        .parameters
+        .properties
+        .as_ref()
+        .expect("update_plan object properties");
+    assert!(!properties.contains_key("spine_plantree"));
 }
 
 #[test]

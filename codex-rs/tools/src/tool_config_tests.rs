@@ -217,6 +217,11 @@ fn spine_task_tree_tracks_feature_flag() {
 
     let nested_tools_config = enabled_tools_config.for_code_mode_nested_tools();
     assert!(!nested_tools_config.spine_task_tree);
+
+    let namespace_disabled_config =
+        enabled_tools_config.with_namespace_tools_capability(/*namespace_tools*/ false);
+    assert!(!namespace_disabled_config.namespace_tools);
+    assert!(!namespace_disabled_config.spine_task_tree);
 }
 
 #[test]

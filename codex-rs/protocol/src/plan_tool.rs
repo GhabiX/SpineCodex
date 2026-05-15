@@ -26,9 +26,9 @@ pub struct UpdatePlanArgs {
     #[serde(default)]
     pub explanation: Option<String>,
     pub plan: Vec<PlanItemArg>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spine_plantree: Option<SpinePlanTreeArg>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear_spine_plantree: bool,
 }
 
@@ -59,4 +59,37 @@ pub struct SpinePlanTreeScopeArg {
 pub struct SpinePlanTreeCheckpointArg {
     pub task: String,
     pub status: StepStatus,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn update_plan_args_omit_default_spine_fields_when_serialized() {
+        let args = UpdatePlanArgs {
+            explanation: Some("flat".to_string()),
+            plan: vec![PlanItemArg {
+                step: "inspect".to_string(),
+                status: StepStatus::InProgress,
+            }],
+            spine_plantree: None,
+            clear_spine_plantree: false,
+        };
+
+        assert_eq!(
+            serde_json::to_value(args).expect("serialize"),
+            json!({
+                "explanation": "flat",
+                "plan": [
+                    {
+                        "step": "inspect",
+                        "status": "in_progress",
+                    },
+                ],
+            })
+        );
+    }
 }
