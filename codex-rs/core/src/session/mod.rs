@@ -188,6 +188,7 @@ use crate::spine::compact::plan_suffix_fold_with_spans;
 use crate::spine::compact::render_auto_compact_worklog;
 use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_worklog_item;
+use crate::spine::session_integration::record_plan_update_snapshot;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::compact_message_hash;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
@@ -1648,18 +1649,9 @@ impl Session {
 
         let snapshot = {
             let mut spine = spine.lock().await;
-            if !spine.is_mutable() {
-                None
-            } else {
-                Some(
-                    spine
-                        .record_plan_update(&turn_context.sub_id, args.clone())
-                        .and_then(|_| spine.build_tree_snapshot())
-                        .map_err(|err| {
-                            CodexErr::Fatal(format!("failed to record spine plan update: {err}"))
-                        })?,
-                )
-            }
+            record_plan_update_snapshot(&mut spine, &turn_context.sub_id, args.clone()).map_err(
+                |err| CodexErr::Fatal(format!("failed to record spine plan update: {err}")),
+            )?
         };
         if let Some(snapshot) = snapshot {
             self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))

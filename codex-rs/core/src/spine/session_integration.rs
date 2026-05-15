@@ -4,9 +4,11 @@ use super::runtime::SpineRuntime;
 use super::runtime::SpineRuntimeError;
 use super::store::SpineSidecarStore;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ThreadStore;
 use std::path::Path;
@@ -162,6 +164,18 @@ pub(crate) fn load_initial_spine_runtime(
         runtime.mark_non_spine_compacted_history();
     }
     Ok(runtime)
+}
+
+pub(crate) fn record_plan_update_snapshot(
+    runtime: &mut SpineRuntime,
+    turn_id: &str,
+    args: UpdatePlanArgs,
+) -> Result<Option<SpineTreeUpdateEvent>, SpineRuntimeError> {
+    if !runtime.is_mutable() {
+        return Ok(None);
+    }
+    runtime.record_plan_update(turn_id, args)?;
+    Ok(Some(runtime.build_tree_snapshot()?))
 }
 
 pub(crate) async fn seed_forked_spine_sidecar(
