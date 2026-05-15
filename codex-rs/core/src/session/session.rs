@@ -342,6 +342,41 @@ pub(crate) struct AppServerClientMetadata {
     pub(crate) client_version: Option<String>,
 }
 
+struct InitialSpineState {
+    scan: InitialSpineScan,
+    ordinal: u64,
+}
+
+async fn prepare_initial_spine_state(
+    initial_history: &InitialHistory,
+) -> anyhow::Result<Box<InitialSpineState>> {
+    let scan = initial_spine_scan(initial_history).await?;
+    let ordinal = scan
+        .projection
+        .as_ref()
+        .map(|projection| projection.response_item_count)
+        .unwrap_or(scan.response_item_count);
+    Ok(Box::new(InitialSpineState { scan, ordinal }))
+}
+
+fn load_spine_runtime_for_state(
+    rollout_path: Option<&std::path::Path>,
+    state: &InitialSpineState,
+) -> anyhow::Result<Option<Arc<Mutex<SpineRuntime>>>> {
+    Ok(rollout_path
+        .map(|path| {
+            load_initial_spine_runtime(
+                path,
+                state.ordinal,
+                state.scan.has_spine_history,
+                state.scan.has_non_spine_compaction,
+                state.scan.projection.as_ref(),
+            )
+        })
+        .transpose()
+        .map(|runtime| runtime.map(|runtime| Arc::new(Mutex::new(runtime))))?)
+}
+
 impl Session {
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -418,28 +453,21 @@ impl Session {
             config.features.enabled(Feature::SpineTaskTree),
             provider_capabilities.namespace_tools,
         );
-        let initial_spine_scan = if spine_task_tree_enabled {
-            initial_spine_scan(&initial_history).await?
+        let initial_spine_state = if spine_task_tree_enabled {
+            Some(Box::pin(prepare_initial_spine_state(&initial_history)).await?)
         } else {
-            InitialSpineScan::empty()
+            None
         };
         if spine_task_tree_enabled
-            && initial_spine_scan.has_spine_history
+            && initial_spine_state
+                .as_ref()
+                .is_some_and(|state| state.scan.has_spine_history)
             && matches!(initial_history, InitialHistory::Forked(_))
         {
             initial_history.forked_from_id().ok_or_else(|| {
                 anyhow::anyhow!("forked spine history is missing a source thread id")
             })?;
         }
-        let initial_spine_ordinal = if spine_task_tree_enabled {
-            initial_spine_scan
-                .projection
-                .as_ref()
-                .map(|projection| projection.response_item_count)
-                .unwrap_or(initial_spine_scan.response_item_count)
-        } else {
-            0
-        };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -560,27 +588,15 @@ impl Session {
             } else {
                 None
             };
-            if spine_task_tree_enabled
-                && initial_spine_scan.has_spine_history
+            if let Some(initial_spine_state) = initial_spine_state.as_ref()
+                && initial_spine_state.scan.has_spine_history
                 && matches!(initial_history, InitialHistory::Forked(_))
                 && let Some(path) = rollout_path.as_ref()
             {
                 seed_forked_spine_sidecar(&thread_store, &initial_history, path).await?;
             }
-            let spine = if spine_task_tree_enabled {
-                rollout_path
-                    .as_ref()
-                    .map(|path| {
-                        load_initial_spine_runtime(
-                            path,
-                            initial_spine_ordinal,
-                            initial_spine_scan.has_spine_history,
-                            initial_spine_scan.has_non_spine_compaction,
-                            initial_spine_scan.projection.as_ref(),
-                        )
-                    })
-                    .transpose()
-                    .map(|runtime| runtime.map(|runtime| Arc::new(Mutex::new(runtime))))?
+            let spine = if let Some(initial_spine_state) = initial_spine_state.as_ref() {
+                load_spine_runtime_for_state(rollout_path.as_deref(), initial_spine_state)?
             } else {
                 None
             };
@@ -994,7 +1010,9 @@ impl Session {
                     rollout_path,
                 }),
             }];
-            if initial_spine_scan.has_spine_history
+            if initial_spine_state
+                .as_ref()
+                .is_some_and(|state| state.scan.has_spine_history)
                 && matches!(initial_history, InitialHistory::Resumed(_))
                 && let Some(spine) = sess.spine.as_ref()
             {

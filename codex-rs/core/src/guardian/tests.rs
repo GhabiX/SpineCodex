@@ -2271,6 +2271,7 @@ async fn guardian_review_session_config_disables_mcp_apps_and_plugins() {
     assert!(guardian_config.mcp_servers.get().is_empty());
     assert!(!guardian_config.features.enabled(Feature::Apps));
     assert!(!guardian_config.features.enabled(Feature::Plugins));
+    assert!(!guardian_config.features.enabled(Feature::SpineTaskTree));
     assert!(!guardian_config.include_apps_instructions);
 }
 

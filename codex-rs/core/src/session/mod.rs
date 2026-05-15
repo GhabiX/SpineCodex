@@ -2611,12 +2611,22 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        let spine_start_ordinal = self.spine_current_ordinal().await;
+        let spine_start_ordinal = if self.spine.is_some() {
+            Box::pin(self.spine_current_ordinal()).await
+        } else {
+            None
+        };
         self.record_into_history(items, turn_context).await;
         self.try_persist_rollout_response_items(items).await?;
         self.send_raw_response_items(turn_context, items).await;
-        self.after_spine_response_items_recorded(turn_context, items, spine_start_ordinal)
+        if self.spine.is_some() {
+            Box::pin(self.after_spine_response_items_recorded(
+                turn_context,
+                items,
+                spine_start_ordinal,
+            ))
             .await?;
+        }
         Ok(())
     }
 
@@ -2637,11 +2647,11 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        let spine_start_ordinal = self.spine_current_ordinal().await;
+        let spine_start_ordinal = Box::pin(self.spine_current_ordinal()).await;
         self.record_into_history(items, turn_context).await;
         self.try_persist_rollout_response_items(items).await?;
         self.send_raw_response_items(turn_context, items).await;
-        self.after_spine_prelude_items_recorded(turn_context, items, spine_start_ordinal)
+        Box::pin(self.after_spine_prelude_items_recorded(turn_context, items, spine_start_ordinal))
             .await?;
         Ok(())
     }
@@ -3644,23 +3654,31 @@ impl Session {
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to record rollout items: {err:#}")))?;
 
-        if let Some(spine) = self.spine.as_ref() {
-            let raw_items = items
-                .iter()
-                .filter(|item| !matches!(item, RolloutItem::Compacted(_)))
-                .cloned()
-                .collect::<Vec<_>>();
-            if !raw_items.is_empty()
-                && let Err(err) = spine
-                    .lock()
-                    .await
-                    .store()
-                    .append_raw_mirror_items(&raw_items)
-            {
-                return Err(CodexErr::Fatal(format!(
-                    "failed to mirror spine rollout items: {err}"
-                )));
-            }
+        if self.spine.is_some() {
+            Box::pin(self.mirror_spine_rollout_items(items)).await?;
+        }
+        Ok(())
+    }
+
+    async fn mirror_spine_rollout_items(&self, items: &[RolloutItem]) -> CodexResult<()> {
+        let Some(spine) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let raw_items = items
+            .iter()
+            .filter(|item| !matches!(item, RolloutItem::Compacted(_)))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !raw_items.is_empty()
+            && let Err(err) = spine
+                .lock()
+                .await
+                .store()
+                .append_raw_mirror_items(&raw_items)
+        {
+            return Err(CodexErr::Fatal(format!(
+                "failed to mirror spine rollout items: {err}"
+            )));
         }
         Ok(())
     }
@@ -3707,8 +3725,7 @@ impl Session {
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
             if should_inject_full_context && self.spine.is_some() {
-                self.record_spine_prelude_items(turn_context, &context_items)
-                    .await;
+                Box::pin(self.record_spine_prelude_items(turn_context, &context_items)).await;
             } else {
                 self.record_conversation_items(turn_context, &context_items)
                     .await;

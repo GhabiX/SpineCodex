@@ -323,14 +323,14 @@ pub(crate) async fn run_turn(
     } else {
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
         let response_item: ResponseItem = initial_input_for_turn.clone().into();
-        if let Err(err) = sess
-            .emit_initial_spine_tree_if_needed(turn_context.as_ref())
-            .await
-        {
-            info!("Turn error: {err:#}");
-            let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
-            sess.send_event(&turn_context, event).await;
-            return None;
+        if sess.spine.is_some() {
+            if let Err(err) = Box::pin(emit_initial_spine_tree_for_turn(&sess, &turn_context)).await
+            {
+                info!("Turn error: {err:#}");
+                let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
+                sess.send_event(&turn_context, event).await;
+                return None;
+            }
         }
         let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
             &sess,
@@ -855,14 +855,14 @@ async fn run_auto_compact(
     _base_instructions: BaseInstructions,
     _cancellation_token: &CancellationToken,
 ) -> CodexResult<bool> {
-    if sess.spine_runtime_is_mutable().await {
-        run_inline_spine_native_text_auto_compact_task(
-            Arc::clone(sess),
-            Arc::clone(turn_context),
+    if sess.spine.is_some() && Box::pin(sess.spine_runtime_is_mutable()).await {
+        Box::pin(run_spine_native_text_auto_compact(
+            sess,
+            turn_context,
             initial_context_injection,
             reason,
             phase,
-        )
+        ))
         .await?;
         return Ok(true);
     }
@@ -898,6 +898,23 @@ async fn run_auto_compact(
         .await?;
     }
     Ok(true)
+}
+
+async fn run_spine_native_text_auto_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    initial_context_injection: InitialContextInjection,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+) -> CodexResult<()> {
+    run_inline_spine_native_text_auto_compact_task(
+        Arc::clone(sess),
+        Arc::clone(turn_context),
+        initial_context_injection,
+        reason,
+        phase,
+    )
+    .await
 }
 
 pub(super) fn collect_explicit_app_ids_from_skill_items(
@@ -1098,6 +1115,31 @@ async fn append_spine_size_hint_for_request(
     Ok(input)
 }
 
+async fn prepare_spine_sampling_prompt_input(
+    sess: &Arc<Session>,
+    turn_context: &TurnContext,
+    input: Vec<ResponseItem>,
+) -> CodexResult<Vec<ResponseItem>> {
+    sess.ensure_spine_compact_not_poisoned().await?;
+    append_spine_size_hint_for_request(sess, turn_context, input).await
+}
+
+async fn finish_spine_sampling_request(
+    sess: &Arc<Session>,
+    turn_context: &TurnContext,
+    client_session: &mut ModelClientSession,
+    prompt: &Prompt,
+    cancellation_token: &CancellationToken,
+) -> CodexResult<()> {
+    sess.install_pending_spine_compactions_with_prompt(
+        turn_context,
+        client_session,
+        prompt,
+        cancellation_token,
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -1118,7 +1160,9 @@ async fn run_sampling_request(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    sess.ensure_spine_compact_not_poisoned().await?;
+    if sess.spine.is_some() {
+        Box::pin(sess.ensure_spine_compact_not_poisoned()).await?;
+    }
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1150,7 +1194,6 @@ async fn run_sampling_request(
     let mut retries = 0;
     let mut initial_input = Some(input);
     loop {
-        sess.ensure_spine_compact_not_poisoned().await?;
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
@@ -1158,8 +1201,16 @@ async fn run_sampling_request(
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
-        let prompt_input =
-            append_spine_size_hint_for_request(&sess, turn_context.as_ref(), prompt_input).await?;
+        let prompt_input = if sess.spine.is_some() {
+            Box::pin(prepare_spine_sampling_prompt_input(
+                &sess,
+                turn_context.as_ref(),
+                prompt_input,
+            ))
+            .await?
+        } else {
+            prompt_input
+        };
         let prompt = build_prompt(
             prompt_input,
             router.as_ref(),
@@ -1560,6 +1611,14 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
         .collect()
 }
 
+async fn emit_initial_spine_tree_for_turn(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> CodexResult<()> {
+    sess.emit_initial_spine_tree_if_needed(turn_context.as_ref())
+        .await
+}
+
 pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
     match msg {
         EventMsg::AgentMessage(event) => Some(event.message.clone()),
@@ -1938,6 +1997,11 @@ enum SpineToolOrderOutcome {
     Reject { call_id: String, message: String },
 }
 
+enum SpineToolDispatch {
+    Continue { drain_after_dispatch: bool },
+    Rejected,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SpineToolKind {
     Spine { call_id: String },
@@ -2041,6 +2105,42 @@ async fn record_spine_order_rejection(
         .await
 }
 
+async fn apply_spine_tool_order(
+    guard: &mut SpineToolOrderGuard,
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    item: &ResponseItem,
+) -> CodexResult<SpineToolDispatch> {
+    match guard.observe(item) {
+        SpineToolOrderOutcome::Allow {
+            drain_after_dispatch,
+        } => Ok(SpineToolDispatch::Continue {
+            drain_after_dispatch,
+        }),
+        SpineToolOrderOutcome::Reject { call_id, message } => {
+            record_spine_order_rejection(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                item,
+                call_id,
+                message,
+            )
+            .await?;
+            Ok(SpineToolDispatch::Rejected)
+        }
+    }
+}
+
+async fn drain_and_compact_spine_transition(
+    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> CodexResult<()> {
+    drain_in_flight(in_flight, Arc::clone(sess), Arc::clone(turn_context)).await?;
+    sess.compact_pending_spine_transition(turn_context.as_ref())
+        .await
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -2100,8 +2200,10 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
-    let mut spine_tool_order_guard =
-        SpineToolOrderGuard::new(turn_context.tools_config.spine_task_tree);
+    let mut spine_tool_order_guard = turn_context
+        .tools_config
+        .spine_task_tree
+        .then(|| SpineToolOrderGuard::new(true));
     let receiving_span = trace_span!("receiving_stream");
     let mut completed_response_id: Option<String> = None;
     let outcome: CodexResult<SamplingRequestResult> = loop {
@@ -2208,24 +2310,27 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
-                let spine_order_outcome = spine_tool_order_guard.observe(&item);
-                let drain_after_dispatch = match spine_order_outcome {
-                    SpineToolOrderOutcome::Allow {
-                        drain_after_dispatch,
-                    } => drain_after_dispatch,
-                    SpineToolOrderOutcome::Reject { call_id, message } => {
-                        record_spine_order_rejection(
-                            sess.as_ref(),
-                            turn_context.as_ref(),
+                let drain_after_dispatch =
+                    if let Some(spine_tool_order_guard) = spine_tool_order_guard.as_mut() {
+                        match Box::pin(apply_spine_tool_order(
+                            spine_tool_order_guard,
+                            &sess,
+                            &turn_context,
                             &item,
-                            call_id,
-                            message,
-                        )
-                        .await?;
-                        needs_follow_up = true;
-                        continue;
-                    }
-                };
+                        ))
+                        .await?
+                        {
+                            SpineToolDispatch::Continue {
+                                drain_after_dispatch,
+                            } => drain_after_dispatch,
+                            SpineToolDispatch::Rejected => {
+                                needs_follow_up = true;
+                                continue;
+                            }
+                        }
+                    } else {
+                        false
+                    };
 
                 let output_result =
                     match handle_output_item_done(&mut ctx, item, previously_active_item)
@@ -2238,9 +2343,12 @@ async fn try_run_sampling_request(
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
                     if drain_after_dispatch {
-                        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
-                        sess.compact_pending_spine_transition(turn_context.as_ref())
-                            .await?;
+                        Box::pin(drain_and_compact_spine_transition(
+                            &mut in_flight,
+                            &sess,
+                            &turn_context,
+                        ))
+                        .await?;
                     }
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
@@ -2500,15 +2608,15 @@ async fn try_run_sampling_request(
         return Err(CodexErr::TurnAborted);
     }
 
-    if outcome.is_ok() {
-        if let Err(err) = sess
-            .install_pending_spine_compactions_with_prompt(
-                turn_context.as_ref(),
-                client_session,
-                prompt,
-                &cancellation_token,
-            )
-            .await
+    if outcome.is_ok() && sess.spine.is_some() {
+        if let Err(err) = Box::pin(finish_spine_sampling_request(
+            &sess,
+            turn_context.as_ref(),
+            client_session,
+            prompt,
+            &cancellation_token,
+        ))
+        .await
         {
             if matches!(err, CodexErr::TurnAborted | CodexErr::Interrupted) {
                 return Err(CodexErr::TurnAborted);

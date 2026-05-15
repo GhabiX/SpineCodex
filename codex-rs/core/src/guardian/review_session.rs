@@ -933,6 +933,7 @@ pub(crate) fn build_guardian_review_session_config(
         Feature::CodexHooks,
         Feature::Apps,
         Feature::Plugins,
+        Feature::SpineTaskTree,
         Feature::WebSearchRequest,
         Feature::WebSearchCached,
     ] {
