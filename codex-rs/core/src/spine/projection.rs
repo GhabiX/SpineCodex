@@ -218,6 +218,7 @@ struct NamespacedOpenArgs {}
 #[serde(deny_unknown_fields)]
 struct NamespacedSummaryArgs {
     summary: String,
+    instruction: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,7 +261,11 @@ fn spine_transition_from_response_item(
                             source,
                         },
                     )?;
-                    (SpineOperation::Next, Some(args.summary))
+                    let NamespacedSummaryArgs {
+                        summary,
+                        instruction: _,
+                    } = args;
+                    (SpineOperation::Next, Some(summary))
                 }
                 SPINE_TOOL_CLOSE => {
                     let args = serde_json::from_str::<NamespacedSummaryArgs>(arguments).map_err(
@@ -269,7 +274,11 @@ fn spine_transition_from_response_item(
                             source,
                         },
                     )?;
-                    (SpineOperation::Close, Some(args.summary))
+                    let NamespacedSummaryArgs {
+                        summary,
+                        instruction: _,
+                    } = args;
+                    (SpineOperation::Close, Some(summary))
                 }
                 _ => return Ok(None),
             };
@@ -311,3 +320,109 @@ fn spine_transition_from_response_item(
 #[cfg(test)]
 #[path = "projection_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod instruction_projection_tests {
+    use super::*;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputBody;
+    use codex_protocol::models::FunctionCallOutputPayload;
+
+    fn user_message(text: &str) -> RolloutItem {
+        RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            phase: None,
+        })
+    }
+
+    fn spine_call(call_id: &str, op: &str, arguments: &str) -> RolloutItem {
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: op.to_string(),
+            namespace: Some(SPINE_NAMESPACE.to_string()),
+            arguments: arguments.to_string(),
+            call_id: call_id.to_string(),
+        })
+    }
+
+    fn call_output(call_id: &str) -> RolloutItem {
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            call_id: call_id.to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("ok".to_string()),
+                success: Some(true),
+            },
+        })
+    }
+
+    #[test]
+    fn projection_accepts_runtime_valid_compact_instruction_on_next() {
+        let projection = project_spine_state_from_rollout(&[
+            user_message("start"),
+            spine_call(
+                "next-1",
+                SPINE_TOOL_NEXT,
+                r#"{"summary":"done","instruction":"keep failing test"}"#,
+            ),
+            call_output("next-1"),
+        ])
+        .expect("project");
+
+        assert_eq!(projection.state.cursor().to_string(), "1.2");
+        assert_eq!(
+            projection
+                .state
+                .node(&NodeId::from_segments(vec![1, 1]))
+                .expect("node")
+                .summary
+                .as_deref(),
+            Some("done")
+        );
+    }
+
+    #[test]
+    fn projection_accepts_runtime_valid_compact_instruction_on_close() {
+        let projection = project_spine_state_from_rollout(&[
+            user_message("start"),
+            spine_call("open-1", SPINE_TOOL_OPEN, "{}"),
+            call_output("open-1"),
+            spine_call(
+                "close-1",
+                SPINE_TOOL_CLOSE,
+                r#"{"summary":"done","instruction":"keep child context"}"#,
+            ),
+            call_output("close-1"),
+        ])
+        .expect("project");
+
+        assert_eq!(projection.state.cursor().to_string(), "1.2");
+        assert_eq!(
+            projection
+                .state
+                .node(&NodeId::from_segments(vec![1, 1]))
+                .expect("node")
+                .summary
+                .as_deref(),
+            Some("done")
+        );
+    }
+
+    #[test]
+    fn projection_rejects_namespaced_open_with_arguments() {
+        let error = project_spine_state_from_rollout(&[
+            user_message("start"),
+            spine_call(
+                "open-1",
+                SPINE_TOOL_OPEN,
+                r#"{"summary":"scope","instruction":"bad"}"#,
+            ),
+        ])
+        .expect_err("open arguments should remain strict");
+
+        assert!(matches!(error, SpineProjectionError::ArgsJson { .. }));
+    }
+}

@@ -390,7 +390,7 @@ impl SpineRuntime {
     ) -> Result<SpineCompactBoundary, SpineRuntimeError> {
         self.ensure_spine_mutation_allowed()?;
         let node_id = self.state.root_epoch_archive_target()?;
-        let cut_ordinal = 0;
+        let cut_ordinal = self.state.root_epoch_cut_ordinal()?;
         let transition_summary = "Context compacted".to_string();
         Ok(SpineCompactBoundary {
             op: SpineOperation::Archive,

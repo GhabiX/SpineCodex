@@ -1596,6 +1596,9 @@ fn stage_uses_state_validation_without_mutating_runtime() {
 fn root_epoch_archive_plans_internal_archive_boundary() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
+        .after_prelude_items_recorded("turn-prelude", &[assistant_message("prelude")], 0, 1)
+        .expect("record prelude");
+    runtime
         .stage_transition(
             "open-1",
             "turn-1",
@@ -1608,12 +1611,12 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
         .after_response_items_recorded(
             "turn-1",
             &[spine_call("open-1"), function_call_output("open-1")],
-            0,
-            2,
+            1,
+            3,
         )
         .expect("commit open");
     runtime
-        .after_response_items_recorded("turn-2", &[assistant_message("child work")], 2, 3)
+        .after_response_items_recorded("turn-2", &[assistant_message("child work")], 3, 4)
         .expect("record child work");
 
     let boundary = runtime
@@ -1622,8 +1625,8 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
 
     assert_eq!(boundary.op, SpineOperation::Archive);
     assert_eq!(boundary.node_id, id(&[1]));
-    assert_eq!(boundary.cut_ordinal, 0);
-    assert_eq!(boundary.fold_end_ordinal, 3);
+    assert_eq!(boundary.cut_ordinal, 1);
+    assert_eq!(boundary.fold_end_ordinal, 4);
     assert_eq!(boundary.transition_summary, "Context compacted");
 
     runtime
@@ -1642,7 +1645,10 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
 fn root_epoch_archive_plans_materialized_epoch_when_cursor_is_hidden_root() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
-        .after_response_items_recorded("turn-1", &[assistant_message("root work")], 0, 1)
+        .after_prelude_items_recorded("turn-prelude", &[assistant_message("prelude")], 0, 1)
+        .expect("record prelude");
+    runtime
+        .after_response_items_recorded("turn-1", &[assistant_message("root work")], 1, 2)
         .expect("record root work");
 
     let boundary = runtime
@@ -1651,8 +1657,8 @@ fn root_epoch_archive_plans_materialized_epoch_when_cursor_is_hidden_root() {
 
     assert_eq!(boundary.op, SpineOperation::Archive);
     assert_eq!(boundary.node_id, id(&[1]));
-    assert_eq!(boundary.cut_ordinal, 0);
-    assert_eq!(boundary.fold_end_ordinal, 1);
+    assert_eq!(boundary.cut_ordinal, 1);
+    assert_eq!(boundary.fold_end_ordinal, 2);
 
     runtime
         .record_root_epoch_archive(
