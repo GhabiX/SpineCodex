@@ -3147,26 +3147,23 @@ impl Session {
                 ))
                 .await);
         }
-        let snapshot = {
+        {
             let mut runtime = spine.lock().await;
-            runtime
-                .record_root_epoch_archive(
-                    boundary.transition_summary.clone(),
-                    effective_boundary.fold_end_ordinal,
-                    &compact_id,
-                    &turn_context.sub_id,
-                )
-                .map_err(|err| {
-                    CodexErr::Fatal(format!("failed to record spine root epoch archive: {err}"))
-                })?;
-            runtime.build_tree_snapshot().map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "failed to build spine tree snapshot after root archive: {err}"
-                ))
-            })?
-        };
+            if let Err(err) = runtime.record_root_epoch_archive(
+                boundary.transition_summary.clone(),
+                effective_boundary.fold_end_ordinal,
+                &compact_id,
+                &turn_context.sub_id,
+            ) {
+                return Err(self
+                    .poison_spine_compact(format!(
+                        "failed to record spine root epoch archive after rollout checkpoint: {err}"
+                    ))
+                    .await);
+            }
+        }
         if let Err(err) = store.append_compact_installed(
-            compact_id,
+            &compact_id,
             &boundary.node_id,
             boundary.op,
             effective_boundary.cut_ordinal,
@@ -3181,10 +3178,20 @@ impl Session {
                 ))
                 .await);
         }
-        spine
-            .lock()
-            .await
-            .record_surviving_compact_hash(message_hash);
+        let snapshot = {
+            let mut runtime = spine.lock().await;
+            runtime.record_surviving_compact_hash(message_hash);
+            match runtime.build_tree_snapshot() {
+                Ok(snapshot) => snapshot,
+                Err(err) => {
+                    return Err(self
+                        .poison_spine_compact(format!(
+                            "failed to build spine tree snapshot after installed root archive: {err}"
+                        ))
+                        .await);
+                }
+            }
+        };
         self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
             .await;
         Ok(())
