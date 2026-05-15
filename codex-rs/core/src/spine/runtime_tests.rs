@@ -1142,6 +1142,20 @@ fn transition_stage_fails_after_non_spine_compacted_history() {
 }
 
 #[test]
+fn record_plan_update_fails_after_non_spine_compacted_history_without_writing_sidecar() {
+    let (_temp, mut runtime) = temp_runtime();
+    let plan_path = runtime.store().plan_path(&id(&[1, 1]));
+    runtime.mark_non_spine_compacted_history();
+
+    let error = runtime
+        .record_plan_update("turn-1", plan_args("Inspect root", StepStatus::InProgress))
+        .expect_err("read-only spine sidecar should reject plan mutation");
+
+    assert!(matches!(error, SpineRuntimeError::ArchivedReadOnly { .. }));
+    assert!(!plan_path.exists());
+}
+
+#[test]
 fn next_compact_fails_after_non_spine_compacted_history() {
     let (_temp, mut runtime) = temp_runtime();
     runtime

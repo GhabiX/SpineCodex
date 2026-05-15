@@ -512,6 +512,7 @@ impl SpineRuntime {
         turn_id: impl Into<String>,
         args: UpdatePlanArgs,
     ) -> Result<PlanSnapshot, SpineRuntimeError> {
+        self.ensure_spine_mutation_allowed()?;
         let turn_id = turn_id.into();
         let plantree = args.spine_plantree.clone();
         let clear_plantree = args.clear_spine_plantree;

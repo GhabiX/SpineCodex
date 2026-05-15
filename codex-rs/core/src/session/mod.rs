@@ -1640,15 +1640,23 @@ impl Session {
 
         let snapshot = {
             let mut spine = spine.lock().await;
-            spine
-                .record_plan_update(&turn_context.sub_id, args.clone())
-                .and_then(|_| spine.build_tree_snapshot())
-                .map_err(|err| {
-                    CodexErr::Fatal(format!("failed to record spine plan update: {err}"))
-                })?
+            if !spine.is_mutable() {
+                None
+            } else {
+                Some(
+                    spine
+                        .record_plan_update(&turn_context.sub_id, args.clone())
+                        .and_then(|_| spine.build_tree_snapshot())
+                        .map_err(|err| {
+                            CodexErr::Fatal(format!("failed to record spine plan update: {err}"))
+                        })?,
+                )
+            }
         };
-        self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
-            .await;
+        if let Some(snapshot) = snapshot {
+            self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
+                .await;
+        }
         self.send_event(turn_context, EventMsg::PlanUpdate(args))
             .await;
         Ok(())
