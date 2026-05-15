@@ -182,10 +182,9 @@ use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
 use crate::spine::compact::SpineCompactBoundary;
-use crate::spine::compact::SpineCompactInput;
 use crate::spine::compact::build_suffix_replacement_history;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
-use crate::spine::compact::plan_suffix_fold_with_spans;
+use crate::spine::compact::prepare_spine_compact_plan;
 use crate::spine::compact::render_auto_compact_worklog;
 use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_worklog_item;
@@ -2985,49 +2984,23 @@ impl Session {
             .ok_or_else(|| {
                 CodexErr::Fatal("spine root archive requires a local rollout path".to_string())
             })?;
-        let compact_index_rollout_path = rollout_path
-            .file_name()
-            .map(|file_name| format!("../{}", file_name.to_string_lossy()))
-            .unwrap_or_else(|| rollout_path.to_string_lossy().into_owned());
         let spine_tree = spine
             .lock()
             .await
             .render_tree_for_prompt()
             .map_err(|err| CodexErr::Fatal(format!("failed to render spine tree: {err}")))?;
-        let input = SpineCompactInput {
-            op: boundary.op,
-            node_id: boundary.node_id.clone(),
-            scope_node_id: None,
-            cut_ordinal: boundary.cut_ordinal,
-            fold_end_ordinal: boundary.fold_end_ordinal,
-            spine_tree,
-            prefix_items: Vec::new(),
-            suffix_items: Vec::new(),
-            transition_summary: boundary.transition_summary.clone(),
-            compact_instruction: None,
-            rollout_path,
-            raw_mirror_path: store.raw_rollout_path(),
-            sidecar_root: store.root().to_path_buf(),
-        };
-        let runtime_spans = store
-            .installed_compact_spans_matching_hashes(surviving_compact_hashes.as_ref())
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
-            })?;
-        let plan = plan_suffix_fold_with_spans(
+        let prep = prepare_spine_compact_plan(
+            &store,
+            &boundary,
             &history,
-            boundary.cut_ordinal,
-            boundary.fold_end_ordinal,
-            &runtime_spans,
-            input,
+            rollout_path,
+            spine_tree,
+            surviving_compact_hashes.as_ref(),
         )?;
-        let effective_boundary = SpineCompactBoundary {
-            cut_ordinal: plan.input.cut_ordinal,
-            fold_end_ordinal: plan.input.fold_end_ordinal,
-            ..boundary.clone()
-        };
-        let (compact_id, compact_attempt, compact_started) =
-            spine_compact_attempt_records(&effective_boundary, compact_index_rollout_path);
+        let (compact_id, compact_attempt, compact_started) = spine_compact_attempt_records(
+            &prep.effective_boundary,
+            prep.compact_index_rollout_path,
+        );
         store
             .append_compact_started(compact_started)
             .map_err(|err| {
@@ -3039,16 +3012,17 @@ impl Session {
             .map(str::trim)
             .filter(|body| !body.is_empty())
             .unwrap_or(compact_summary.as_str());
-        let worklog_markdown = render_auto_compact_worklog(&plan.input, compacted_body);
+        let worklog_markdown = render_auto_compact_worklog(&prep.plan.input, compacted_body);
         store
             .worklog_with_appended_section(&boundary.node_id, &worklog_markdown)
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to stage spine root archive worklog: {err}"))
             })?;
-        let worklog_rel_path = plan
+        let worklog_rel_path = prep
+            .plan
             .worklog_path
             .strip_prefix(store.root())
-            .unwrap_or(plan.worklog_path.as_path())
+            .unwrap_or(prep.plan.worklog_path.as_path())
             .to_path_buf();
         let rendered_worklog_items = vec![render_spine_worklog_item(
             &boundary.node_id,
@@ -3058,8 +3032,8 @@ impl Session {
         )];
         let mut replacement_history = build_suffix_replacement_history(
             &history,
-            plan.cut_index,
-            plan.fold_end_index,
+            prep.plan.cut_index,
+            prep.plan.fold_end_index,
             rendered_worklog_items,
         );
         if reference_context_item.is_some() {
@@ -3072,7 +3046,9 @@ impl Session {
         }
         let compact_message = format!(
             "Spine compacted root epoch {} [{}, {})",
-            boundary.node_id, effective_boundary.cut_ordinal, effective_boundary.fold_end_ordinal
+            boundary.node_id,
+            prep.effective_boundary.cut_ordinal,
+            prep.effective_boundary.fold_end_ordinal
         );
         let compacted_item = CompactedItem {
             message: compact_message.clone(),
@@ -3117,7 +3093,8 @@ impl Session {
                 ))
                 .await);
         }
-        let node_trajs_items = plan
+        let node_trajs_items = prep
+            .plan
             .input
             .suffix_items
             .iter()
@@ -3146,7 +3123,7 @@ impl Session {
             let mut runtime = spine.lock().await;
             if let Err(err) = runtime.record_root_epoch_archive(
                 boundary.transition_summary.clone(),
-                effective_boundary.fold_end_ordinal,
+                prep.effective_boundary.fold_end_ordinal,
                 &compact_id,
                 &turn_context.sub_id,
             ) {
@@ -3236,50 +3213,24 @@ impl Session {
             .ok_or_else(|| {
                 CodexErr::Fatal("spine compact requires a local rollout path".to_string())
             })?;
-        let compact_index_rollout_path = rollout_path
-            .file_name()
-            .map(|file_name| format!("../{}", file_name.to_string_lossy()))
-            .unwrap_or_else(|| rollout_path.to_string_lossy().into_owned());
         let history = self.clone_history().await.raw_items().to_vec();
         let spine_tree = spine
             .lock()
             .await
             .render_tree_for_prompt()
             .map_err(|err| CodexErr::Fatal(format!("failed to render spine tree: {err}")))?;
-        let input = SpineCompactInput {
-            op: boundary.op,
-            node_id: boundary.node_id.clone(),
-            scope_node_id: boundary.scope_node_id.clone(),
-            cut_ordinal: boundary.cut_ordinal,
-            fold_end_ordinal: boundary.fold_end_ordinal,
-            spine_tree,
-            prefix_items: Vec::new(),
-            suffix_items: Vec::new(),
-            transition_summary: boundary.transition_summary.clone(),
-            compact_instruction: boundary.compact_instruction.clone(),
-            rollout_path,
-            raw_mirror_path: store.raw_rollout_path(),
-            sidecar_root: store.root().to_path_buf(),
-        };
-        let runtime_spans = store
-            .installed_compact_spans_matching_hashes(surviving_compact_hashes.as_ref())
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
-            })?;
-        let plan = plan_suffix_fold_with_spans(
+        let prep = prepare_spine_compact_plan(
+            &store,
+            &boundary,
             &history,
-            boundary.cut_ordinal,
-            boundary.fold_end_ordinal,
-            &runtime_spans,
-            input,
+            rollout_path,
+            spine_tree,
+            surviving_compact_hashes.as_ref(),
         )?;
-        let effective_boundary = SpineCompactBoundary {
-            cut_ordinal: plan.input.cut_ordinal,
-            fold_end_ordinal: plan.input.fold_end_ordinal,
-            ..boundary.clone()
-        };
-        let (compact_id, compact_attempt, compact_started) =
-            spine_compact_attempt_records(&effective_boundary, compact_index_rollout_path);
+        let (compact_id, compact_attempt, compact_started) = spine_compact_attempt_records(
+            &prep.effective_boundary,
+            prep.compact_index_rollout_path,
+        );
         store
             .append_compact_started(compact_started)
             .map_err(|err| {
@@ -3291,7 +3242,7 @@ impl Session {
             turn_context,
             client_session,
             prompt_envelope,
-            plan.input.clone(),
+            prep.plan.input.clone(),
             cancellation_token,
         ))
         .await
@@ -3332,10 +3283,11 @@ impl Session {
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to stage spine compact worklog: {err}"))
             })?;
-        let worklog_rel_path = plan
+        let worklog_rel_path = prep
+            .plan
             .worklog_path
             .strip_prefix(store.root())
-            .unwrap_or(plan.worklog_path.as_path())
+            .unwrap_or(prep.plan.worklog_path.as_path())
             .to_path_buf();
         let to_node = spine.lock().await.cursor().clone();
         let rendered_worklog_items = vec![
@@ -3349,8 +3301,8 @@ impl Session {
         ];
         let replacement_history = build_suffix_replacement_history(
             &history,
-            plan.cut_index,
-            plan.fold_end_index,
+            prep.plan.cut_index,
+            prep.plan.fold_end_index,
             rendered_worklog_items,
         );
         let compacted_item = CompactedItem {
@@ -3384,7 +3336,8 @@ impl Session {
                 ))
                 .await);
         }
-        let node_trajs_items = plan
+        let node_trajs_items = prep
+            .plan
             .input
             .suffix_items
             .iter()

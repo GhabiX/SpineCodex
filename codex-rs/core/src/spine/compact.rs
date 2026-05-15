@@ -1,6 +1,7 @@
 use super::ids::NodeId;
 use super::store::InstalledCompactSpan;
 use super::store::SpineOperation;
+use super::store::SpineSidecarStore;
 use super::view::display_node_id;
 use super::view::op_label;
 use super::view::relative_node_trajs_path;
@@ -60,6 +61,13 @@ pub(crate) struct SpineCompactPlan {
     pub(crate) fold_end_index: usize,
     pub(crate) replacement_tail: Vec<ResponseItem>,
     pub(crate) worklog_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct SpineCompactPreparation {
+    pub(crate) plan: SpineCompactPlan,
+    pub(crate) effective_boundary: SpineCompactBoundary,
+    pub(crate) compact_index_rollout_path: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -346,6 +354,57 @@ pub(crate) fn plan_suffix_fold_with_spans(
         input,
         cut_index,
         fold_end_index,
+    })
+}
+
+pub(crate) fn prepare_spine_compact_plan(
+    store: &SpineSidecarStore,
+    boundary: &SpineCompactBoundary,
+    history: &[ResponseItem],
+    rollout_path: PathBuf,
+    spine_tree: String,
+    surviving_compact_hashes: Option<&HashSet<String>>,
+) -> CodexResult<SpineCompactPreparation> {
+    let compact_index_rollout_path = rollout_path
+        .file_name()
+        .map(|file_name| format!("../{}", file_name.to_string_lossy()))
+        .unwrap_or_else(|| rollout_path.to_string_lossy().into_owned());
+    let input = SpineCompactInput {
+        op: boundary.op,
+        node_id: boundary.node_id.clone(),
+        scope_node_id: boundary.scope_node_id.clone(),
+        cut_ordinal: boundary.cut_ordinal,
+        fold_end_ordinal: boundary.fold_end_ordinal,
+        spine_tree,
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: boundary.transition_summary.clone(),
+        compact_instruction: boundary.compact_instruction.clone(),
+        rollout_path,
+        raw_mirror_path: store.raw_rollout_path(),
+        sidecar_root: store.root().to_path_buf(),
+    };
+    let runtime_spans = store
+        .installed_compact_spans_matching_hashes(surviving_compact_hashes)
+        .map_err(|err| {
+            CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
+        })?;
+    let plan = plan_suffix_fold_with_spans(
+        history,
+        boundary.cut_ordinal,
+        boundary.fold_end_ordinal,
+        &runtime_spans,
+        input,
+    )?;
+    let effective_boundary = SpineCompactBoundary {
+        cut_ordinal: plan.input.cut_ordinal,
+        fold_end_ordinal: plan.input.fold_end_ordinal,
+        ..boundary.clone()
+    };
+    Ok(SpineCompactPreparation {
+        plan,
+        effective_boundary,
+        compact_index_rollout_path,
     })
 }
 
