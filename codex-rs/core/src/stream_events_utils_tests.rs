@@ -196,6 +196,24 @@ fn last_assistant_message_from_item_returns_none_for_generated_spine_ir() {
 #[test]
 fn last_assistant_message_from_item_returns_none_for_generated_spine_worklog() {
     let item = ResponseItem::Message {
+        id: Some("spine-worklog:1:next".to_string()),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "## Spine Worklog\n\nNode: 1\nOperation: next\nSummary: leaf\n\nfacts"
+                .to_string(),
+        }],
+        phase: None,
+    };
+
+    assert_eq!(
+        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        None
+    );
+}
+
+#[test]
+fn last_assistant_message_from_item_returns_none_for_legacy_generated_spine_worklog() {
+    let item = ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {

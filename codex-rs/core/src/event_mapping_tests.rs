@@ -343,6 +343,21 @@ fn skips_generated_spine_ir_assistant_message() {
 #[test]
 fn skips_generated_spine_worklog_assistant_message() {
     let item = ResponseItem::Message {
+        id: Some("spine-worklog:1:next".to_string()),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "## Spine Worklog\n\nNode: 1\nOperation: next\nSummary: leaf\n\nfacts"
+                .to_string(),
+        }],
+        phase: None,
+    };
+
+    assert!(parse_turn_item(&item).is_none());
+}
+
+#[test]
+fn skips_legacy_generated_spine_worklog_assistant_message() {
+    let item = ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {

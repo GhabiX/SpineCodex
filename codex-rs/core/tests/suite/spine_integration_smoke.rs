@@ -349,7 +349,8 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
         "root auto compact should not use the Spine suffix compact prompt"
     );
     assert!(
-        requests[3].body_contains_text("<spine_worklog")
+        !requests[3].body_contains_text("<spine_worklog")
+            && requests[3].body_contains_text("## Spine Worklog")
             && requests[3].body_contains_text("auto root archive summary"),
         "follow-up should use a readable spine root-epoch IR checkpoint"
     );
@@ -469,7 +470,8 @@ async fn spine_manual_compact_uses_native_text_and_archives_root_epoch() -> anyh
             panic!("expected a post-compact request to contain the manual root summary")
         });
     assert!(
-        post_compact_request.body_contains_text("<spine_worklog")
+        !post_compact_request.body_contains_text("<spine_worklog")
+            && post_compact_request.body_contains_text("## Spine Worklog")
             && post_compact_request.body_contains_text("manual native root summary"),
         "post-compact turn should see the native summary as root-epoch worklog"
     );

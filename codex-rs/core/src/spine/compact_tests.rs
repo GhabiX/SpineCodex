@@ -850,10 +850,13 @@ fn render_worklog_item_omits_runtime_metadata() {
         _ => panic!("unexpected item type"),
     };
 
-    assert!(text.starts_with("<spine_worklog node=\"1.2\" op=\"close\">"));
+    assert!(text.starts_with("## Spine Worklog\n\n"));
+    assert!(text.contains("Node: 1.2"));
+    assert!(text.contains("Operation: close"));
     assert!(text.contains("Summary: scope summary"));
     assert!(text.contains("scope facts"));
-    assert!(text.ends_with("</spine_worklog>"));
+    assert!(!text.contains("<spine_worklog"));
+    assert!(!text.contains("</spine_worklog>"));
     assert!(!text.contains("fold_start"));
     assert!(!text.contains("fold_end"));
     assert!(!text.contains("spine-ir:"));
@@ -866,7 +869,7 @@ fn render_worklog_item_omits_runtime_metadata() {
     let ResponseItem::Message { id, .. } = item else {
         panic!("unexpected item type");
     };
-    assert_eq!(id, None);
+    assert_eq!(id.as_deref(), Some("spine-worklog:1.2:close"));
 }
 
 #[test]
@@ -930,14 +933,19 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
         panic!("expected compact instruction text");
     };
     assert!(!text.contains(crate::compact::SUMMARIZATION_PROMPT));
-    assert!(text.starts_with("Compact only target Spine node `1.1` into factual worklog IR."));
+    assert!(
+        text.starts_with("Compact only target Spine node `1.1` into a factual Markdown worklog.")
+    );
     assert!(text.contains("Keep durable facts needed by later nodes"));
     assert!(text.contains("validation status, blockers, unresolved questions"));
     assert!(text.contains("Target tree node: 1.1"));
     assert!(text.contains("Internal node id: 1.1"));
     assert!(text.contains("Target operation: next"));
     assert!(text.contains("Spine Tree summary label: leaf done"));
-    assert!(text.contains("Return only a dense Markdown worklog for the target suffix."));
+    assert!(text.contains("Return exactly the compacted suffix as Markdown."));
+    assert!(text.contains("Do not wrap it in XML/HTML tags or code fences."));
+    assert!(text.contains("any text outside the compacted Markdown body."));
+    assert!(!text.contains("<spine_worklog"));
     assert!(!text.contains("What remains to be done"));
     assert!(!text.contains("clear next steps"));
     assert!(!text.contains("next concrete step"));
@@ -1052,4 +1060,21 @@ fn spine_compact_markdown_extraction_accepts_plain_markdown() {
         "## Done\n\nfacts"
     );
     assert!(extract_spine_compact_markdown(" \n\t ").is_err());
+}
+
+#[test]
+fn spine_compact_markdown_extraction_rejects_xml_wrappers() {
+    assert!(
+        extract_spine_compact_markdown(
+            "<spine_worklog node=\"1\" op=\"next\">\n## Done\n\nfacts\n</spine_worklog>"
+        )
+        .is_err()
+    );
+    assert!(extract_spine_compact_markdown("<worklog>\n## Done\n\nfacts\n</worklog>").is_err());
+    assert!(
+        extract_spine_compact_markdown(
+            "<spine_ir id=\"x\">\n<worklog>facts</worklog>\n</spine_ir>"
+        )
+        .is_err()
+    );
 }

@@ -161,7 +161,7 @@ fn build_codex_builtin_prompt_input(input: &SpineCompactInput) -> Vec<ResponseIt
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "Compact only target Spine node `{}` into factual worklog IR.\nKeep durable facts needed by later nodes: outcome, decisions, constraints, files/functions/tests/commands, validation status, blockers, unresolved questions.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\n<spine_tree>\n{}\n</spine_tree>{}\n\nReturn only a dense Markdown worklog for the target suffix. Do not include preambles, apologies, or continuation instructions.",
+                "Compact only target Spine node `{}` into a factual Markdown worklog.\nKeep durable facts needed by later nodes: outcome, decisions, constraints, files/functions/tests/commands, validation status, blockers, unresolved questions.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\n<spine_tree>\n{}\n</spine_tree>{}\n\nReturn exactly the compacted suffix as Markdown. Do not wrap it in XML/HTML tags or code fences. Do not include preambles, apologies, continuation instructions, or any text outside the compacted Markdown body.",
                 target_tree_node_id,
                 target_tree_node_id,
                 input.node_id,
@@ -237,6 +237,18 @@ fn extract_spine_compact_markdown(text: &str) -> CodexResult<String> {
     if body.is_empty() {
         return Err(CodexErr::Fatal(
             "spine compact response worklog is empty".to_string(),
+        ));
+    }
+    if body.starts_with("<spine_worklog")
+        || body.contains("</spine_worklog>")
+        || body.starts_with("<spine_ir")
+        || body.contains("</spine_ir>")
+        || body.starts_with("<worklog>")
+        || body.contains("</worklog>")
+    {
+        return Err(CodexErr::Fatal(
+            "spine compact response must be plain Markdown without XML worklog wrappers"
+                .to_string(),
         ));
     }
     Ok(body.to_string())
@@ -557,11 +569,11 @@ pub(crate) fn render_spine_worklog_item(
     worklog_body: &str,
 ) -> ResponseItem {
     ResponseItem::Message {
-        id: None,
+        id: Some(spine_worklog_synthetic_id(node_id, op)),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text: format!(
-                "<spine_worklog node=\"{}\" op=\"{}\">\nSummary: {}\n\n{}\n</spine_worklog>",
+                "## Spine Worklog\n\nNode: {}\nOperation: {}\nSummary: {}\n\n{}",
                 node_id,
                 op_label(op),
                 summary,
@@ -833,21 +845,69 @@ fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
 }
 
 fn parse_spine_worklog_metadata(item: &ResponseItem) -> Option<SpineWorklogMetadata> {
-    let text = match item {
-        ResponseItem::Message { role, content, .. } if role == "assistant" => {
+    let (id, text) = match item {
+        ResponseItem::Message {
+            id, role, content, ..
+        } if role == "assistant" => (
+            id.as_deref(),
             content.iter().find_map(|content_item| match content_item {
                 ContentItem::OutputText { text } => Some(text.as_str()),
                 _ => None,
-            })?
-        }
+            })?,
+        ),
         _ => return None,
     };
+
+    if let Some(meta) = id.and_then(parse_spine_worklog_id) {
+        return Some(meta);
+    }
+    if let Some(meta) = parse_markdown_spine_worklog_metadata(text) {
+        return Some(meta);
+    }
 
     let header = text.strip_prefix("<spine_worklog ")?;
     let header = header.split_once('>')?.0;
     let node_id = NodeId::parse(parse_tag_string(header, "node")?).ok()?;
     let op = parse_spine_operation_label(parse_tag_string(header, "op")?)?;
     Some(SpineWorklogMetadata { node_id, op })
+}
+
+fn parse_markdown_spine_worklog_metadata(text: &str) -> Option<SpineWorklogMetadata> {
+    let mut lines = text.lines();
+    if lines.next()? != "## Spine Worklog" {
+        return None;
+    }
+
+    let mut node_id = None;
+    let mut op = None;
+    for line in lines.take(8) {
+        if let Some(value) = line.strip_prefix("Node: ") {
+            node_id = Some(NodeId::parse(value).ok()?);
+        } else if let Some(value) = line.strip_prefix("Operation: ") {
+            op = Some(parse_spine_operation_label(value)?);
+        }
+        if node_id.is_some() && op.is_some() {
+            break;
+        }
+    }
+
+    Some(SpineWorklogMetadata {
+        node_id: node_id?,
+        op: op?,
+    })
+}
+
+fn spine_worklog_synthetic_id(node_id: &NodeId, op: SpineOperation) -> String {
+    format!("spine-worklog:{node_id}:{}", op_label(op))
+}
+
+fn parse_spine_worklog_id(id: &str) -> Option<SpineWorklogMetadata> {
+    let rest = id.strip_prefix("spine-worklog:")?;
+    let (node_id, op) = rest.rsplit_once(':')?;
+    Some(SpineWorklogMetadata {
+        node_id: NodeId::parse(node_id).ok()?,
+        op: parse_spine_operation_label(op)?,
+    })
 }
 
 fn parse_spine_operation_label(value: &str) -> Option<SpineOperation> {

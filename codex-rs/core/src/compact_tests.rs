@@ -284,7 +284,9 @@ async fn spine_native_text_outcome_installs_root_epoch_worklog() {
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())
         .expect("serialize history");
-    assert!(rendered_history.contains("<spine_worklog"));
+    assert!(!rendered_history.contains("<spine_worklog"));
+    assert!(rendered_history.contains("## Spine Worklog"));
+    assert!(rendered_history.contains("Operation: archive"));
     assert!(rendered_history.contains("native compact summary"));
     assert!(!rendered_history.contains("raw root epoch detail"));
     let runtime = session.spine.as_ref().expect("spine").lock().await;
