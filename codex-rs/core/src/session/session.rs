@@ -352,61 +352,98 @@ fn response_item_count(items: &[RolloutItem]) -> u64 {
     .unwrap_or(u64::MAX)
 }
 
+pub(crate) struct InitialSpineScan {
+    pub(crate) response_item_count: u64,
+    pub(crate) has_spine_history: bool,
+    pub(crate) has_non_spine_compaction: bool,
+    pub(crate) projection: Option<SpineProjection>,
+}
+
+impl InitialSpineScan {
+    fn empty() -> Self {
+        Self {
+            response_item_count: 0,
+            has_spine_history: false,
+            has_non_spine_compaction: false,
+            projection: None,
+        }
+    }
+}
+
+pub(crate) async fn initial_spine_scan(
+    initial_history: &InitialHistory,
+) -> anyhow::Result<InitialSpineScan> {
+    match initial_history {
+        InitialHistory::New | InitialHistory::Cleared => Ok(InitialSpineScan::empty()),
+        InitialHistory::Resumed(resumed) => {
+            if let Some(rollout_path) = resumed.rollout_path.as_ref() {
+                let (items, _, _) =
+                    crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
+                Ok(initial_spine_scan_items(
+                    &items,
+                    SpineProjectionPolicy::Resume,
+                )?)
+            } else {
+                Ok(initial_spine_scan_items(
+                    &resumed.history,
+                    SpineProjectionPolicy::Resume,
+                )?)
+            }
+        }
+        InitialHistory::Forked(items) => Ok(initial_spine_scan_items(
+            items,
+            SpineProjectionPolicy::Fork,
+        )?),
+    }
+}
+
+enum SpineProjectionPolicy {
+    Resume,
+    Fork,
+}
+
+fn initial_spine_scan_items(
+    items: &[RolloutItem],
+    projection_policy: SpineProjectionPolicy,
+) -> anyhow::Result<InitialSpineScan> {
+    let has_spine_history = has_spine_history_items(items);
+    let needs_projection = match projection_policy {
+        SpineProjectionPolicy::Resume => has_thread_rollback(items) && has_spine_history,
+        SpineProjectionPolicy::Fork => has_spine_history,
+    };
+    Ok(InitialSpineScan {
+        response_item_count: response_item_count(items),
+        has_spine_history,
+        has_non_spine_compaction: latest_compaction_is_non_spine(items),
+        projection: needs_projection
+            .then(|| project_spine_state_from_rollout(items))
+            .transpose()?,
+    })
+}
+
+#[cfg(test)]
 pub(crate) async fn initial_spine_response_item_count(
     initial_history: &InitialHistory,
 ) -> anyhow::Result<u64> {
-    let count = match initial_history {
-        InitialHistory::New | InitialHistory::Cleared => 0,
-        InitialHistory::Resumed(resumed) => {
-            if let Some(rollout_path) = resumed.rollout_path.as_ref() {
-                let (items, _, _) =
-                    crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
-                response_item_count(&items)
-            } else {
-                response_item_count(&resumed.history)
-            }
-        }
-        InitialHistory::Forked(items) => response_item_count(items),
-    };
-    Ok(count)
+    Ok(initial_spine_scan(initial_history)
+        .await?
+        .response_item_count)
 }
 
+#[cfg(test)]
 pub(crate) async fn initial_spine_has_non_spine_compacted_history(
     initial_history: &InitialHistory,
 ) -> anyhow::Result<bool> {
-    let has_non_spine_compaction = match initial_history {
-        InitialHistory::New | InitialHistory::Cleared => false,
-        InitialHistory::Resumed(resumed) => {
-            if let Some(rollout_path) = resumed.rollout_path.as_ref() {
-                let (items, _, _) =
-                    crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
-                latest_compaction_is_non_spine(&items)
-            } else {
-                latest_compaction_is_non_spine(&resumed.history)
-            }
-        }
-        InitialHistory::Forked(items) => latest_compaction_is_non_spine(items),
-    };
-    Ok(has_non_spine_compaction)
+    Ok(initial_spine_scan(initial_history)
+        .await?
+        .has_non_spine_compaction)
 }
 
+#[cfg(test)]
 pub(crate) async fn initial_spine_has_spine_history(
     initial_history: &InitialHistory,
 ) -> anyhow::Result<bool> {
-    let has_spine_history = match initial_history {
-        InitialHistory::New | InitialHistory::Cleared => false,
-        InitialHistory::Resumed(resumed) => {
-            if let Some(rollout_path) = resumed.rollout_path.as_ref() {
-                let (items, _, _) =
-                    crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
-                has_spine_history_items(&items)
-            } else {
-                has_spine_history_items(&resumed.history)
-            }
-        }
-        InitialHistory::Forked(items) => has_spine_history_items(items),
-    };
-    Ok(has_spine_history)
+    Ok(initial_spine_scan(initial_history).await?.has_spine_history)
 }
 
 fn has_spine_history_items(items: &[RolloutItem]) -> bool {
@@ -425,29 +462,11 @@ fn has_thread_rollback(items: &[RolloutItem]) -> bool {
         .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))))
 }
 
+#[cfg(test)]
 pub(crate) async fn initial_spine_projection(
     initial_history: &InitialHistory,
 ) -> anyhow::Result<Option<SpineProjection>> {
-    let projection = match initial_history {
-        InitialHistory::New | InitialHistory::Cleared => None,
-        InitialHistory::Resumed(resumed) => {
-            if let Some(rollout_path) = resumed.rollout_path.as_ref() {
-                let (items, _, _) =
-                    crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
-                (has_thread_rollback(&items) && has_spine_history_items(&items))
-                    .then(|| project_spine_state_from_rollout(&items))
-                    .transpose()?
-            } else {
-                (has_thread_rollback(&resumed.history) && has_spine_history_items(&resumed.history))
-                    .then(|| project_spine_state_from_rollout(&resumed.history))
-                    .transpose()?
-            }
-        }
-        InitialHistory::Forked(items) => has_spine_history_items(items)
-            .then(|| project_spine_state_from_rollout(items))
-            .transpose()?,
-    };
-    Ok(projection)
+    Ok(initial_spine_scan(initial_history).await?.projection)
 }
 
 fn latest_compaction_is_non_spine(items: &[RolloutItem]) -> bool {
@@ -656,36 +675,27 @@ impl Session {
             config.features.enabled(Feature::SpineTaskTree),
             provider_capabilities.namespace_tools,
         );
-        let initial_spine_has_spine_history = if spine_task_tree_enabled {
-            initial_spine_has_spine_history(&initial_history).await?
+        let initial_spine_scan = if spine_task_tree_enabled {
+            initial_spine_scan(&initial_history).await?
         } else {
-            false
+            InitialSpineScan::empty()
         };
         if spine_task_tree_enabled
-            && initial_spine_has_spine_history
+            && initial_spine_scan.has_spine_history
             && matches!(initial_history, InitialHistory::Forked(_))
         {
             initial_history.forked_from_id().ok_or_else(|| {
                 anyhow::anyhow!("forked spine history is missing a source thread id")
             })?;
         }
-        let initial_spine_projection = if spine_task_tree_enabled {
-            initial_spine_projection(&initial_history).await?
-        } else {
-            None
-        };
         let initial_spine_ordinal = if spine_task_tree_enabled {
-            initial_spine_projection
+            initial_spine_scan
+                .projection
                 .as_ref()
                 .map(|projection| projection.response_item_count)
-                .unwrap_or(initial_spine_response_item_count(&initial_history).await?)
+                .unwrap_or(initial_spine_scan.response_item_count)
         } else {
             0
-        };
-        let initial_spine_has_non_spine_compaction = if spine_task_tree_enabled {
-            initial_spine_has_non_spine_compacted_history(&initial_history).await?
-        } else {
-            false
         };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
@@ -808,7 +818,7 @@ impl Session {
                 None
             };
             if spine_task_tree_enabled
-                && initial_spine_has_spine_history
+                && initial_spine_scan.has_spine_history
                 && matches!(initial_history, InitialHistory::Forked(_))
                 && let Some(path) = rollout_path.as_ref()
             {
@@ -821,9 +831,9 @@ impl Session {
                         load_initial_spine_runtime(
                             path,
                             initial_spine_ordinal,
-                            initial_spine_has_spine_history,
-                            initial_spine_has_non_spine_compaction,
-                            initial_spine_projection.as_ref(),
+                            initial_spine_scan.has_spine_history,
+                            initial_spine_scan.has_non_spine_compaction,
+                            initial_spine_scan.projection.as_ref(),
                         )
                     })
                     .transpose()
@@ -1241,7 +1251,7 @@ impl Session {
                     rollout_path,
                 }),
             }];
-            if initial_spine_has_spine_history
+            if initial_spine_scan.has_spine_history
                 && matches!(initial_history, InitialHistory::Resumed(_))
                 && let Some(spine) = sess.spine.as_ref()
             {

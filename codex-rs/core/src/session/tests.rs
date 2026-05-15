@@ -1636,6 +1636,56 @@ async fn spine_resume_detects_existing_namespaced_spine_history_from_rollout() -
     Ok(())
 }
 
+#[tokio::test]
+async fn initial_spine_scan_derives_resume_state_from_one_rollout() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let next_call = ResponseItem::FunctionCall {
+        id: None,
+        name: "spine".to_string(),
+        namespace: None,
+        arguments: r#"{"op":"next","summary":"rolled back next"}"#.to_string(),
+        call_id: "next-1".to_string(),
+    };
+    write_rollout_items_for_test(
+        &rollout_path,
+        &[
+            RolloutItem::ResponseItem(user_message("turn 1 user")),
+            RolloutItem::ResponseItem(spine_function_call("open-1")),
+            RolloutItem::ResponseItem(function_call_output("open-1")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "native summary".to_string(),
+                replacement_history: Some(vec![assistant_message("native compact summary")]),
+            }),
+            RolloutItem::ResponseItem(user_message("turn 2 user")),
+            RolloutItem::ResponseItem(next_call),
+            RolloutItem::ResponseItem(function_call_output("next-1")),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 1,
+            })),
+        ],
+    )?;
+
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: vec![RolloutItem::ResponseItem(user_message(
+            "filtered prompt item",
+        ))],
+        rollout_path: Some(rollout_path),
+    });
+    let scan = crate::session::session::initial_spine_scan(&initial_history).await?;
+
+    assert_eq!(scan.response_item_count, 6);
+    assert!(scan.has_spine_history);
+    assert!(scan.has_non_spine_compaction);
+    let projection = scan
+        .projection
+        .expect("rollback spine history should project");
+    assert_eq!(projection.response_item_count, 3);
+    assert_eq!(projection.state.cursor().to_string(), "1.1.1");
+    Ok(())
+}
+
 #[test]
 fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
