@@ -647,12 +647,21 @@ impl Session {
             .unwrap_or(u64::MAX),
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
-        let initial_spine_has_spine_history = if config.features.enabled(Feature::SpineTaskTree) {
+        let provider_capabilities = create_model_provider(
+            session_configuration.provider.clone(),
+            Some(auth_manager.clone()),
+        )
+        .capabilities();
+        let spine_task_tree_enabled = codex_tools::spine_task_tree_enabled(
+            config.features.enabled(Feature::SpineTaskTree),
+            provider_capabilities.namespace_tools,
+        );
+        let initial_spine_has_spine_history = if spine_task_tree_enabled {
             initial_spine_has_spine_history(&initial_history).await?
         } else {
             false
         };
-        if config.features.enabled(Feature::SpineTaskTree)
+        if spine_task_tree_enabled
             && initial_spine_has_spine_history
             && matches!(initial_history, InitialHistory::Forked(_))
         {
@@ -660,12 +669,12 @@ impl Session {
                 anyhow::anyhow!("forked spine history is missing a source thread id")
             })?;
         }
-        let initial_spine_projection = if config.features.enabled(Feature::SpineTaskTree) {
+        let initial_spine_projection = if spine_task_tree_enabled {
             initial_spine_projection(&initial_history).await?
         } else {
             None
         };
-        let initial_spine_ordinal = if config.features.enabled(Feature::SpineTaskTree) {
+        let initial_spine_ordinal = if spine_task_tree_enabled {
             initial_spine_projection
                 .as_ref()
                 .map(|projection| projection.response_item_count)
@@ -673,12 +682,11 @@ impl Session {
         } else {
             0
         };
-        let initial_spine_has_non_spine_compaction =
-            if config.features.enabled(Feature::SpineTaskTree) {
-                initial_spine_has_non_spine_compacted_history(&initial_history).await?
-            } else {
-                false
-            };
+        let initial_spine_has_non_spine_compaction = if spine_task_tree_enabled {
+            initial_spine_has_non_spine_compacted_history(&initial_history).await?
+        } else {
+            false
+        };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -799,14 +807,14 @@ impl Session {
             } else {
                 None
             };
-            if config.features.enabled(Feature::SpineTaskTree)
+            if spine_task_tree_enabled
                 && initial_spine_has_spine_history
                 && matches!(initial_history, InitialHistory::Forked(_))
                 && let Some(path) = rollout_path.as_ref()
             {
                 seed_forked_spine_sidecar(&thread_store, &initial_history, path).await?;
             }
-            let spine = if config.features.enabled(Feature::SpineTaskTree) {
+            let spine = if spine_task_tree_enabled {
                 rollout_path
                     .as_ref()
                     .map(|path| {

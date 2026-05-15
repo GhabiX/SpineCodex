@@ -1363,6 +1363,22 @@ async fn spine_runtime_initializes_root_when_feature_is_on() -> anyhow::Result<(
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_runtime_is_inert_when_provider_lacks_namespace_tools() -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineTaskTree)
+            .expect("enable spine task tree");
+        config.model_provider =
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+    })
+    .await?;
+
+    assert!(session.spine.is_none());
+    Ok(())
+}
+
 #[tokio::test]
 async fn initial_spine_tree_is_emitted_once_before_first_user_prompt() -> anyhow::Result<()> {
     let (mut session, turn_context, rx) = make_session_and_context_with_rx().await;

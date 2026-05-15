@@ -67,6 +67,7 @@ use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
+use codex_model_provider::create_model_provider;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_network_proxy::NetworkProxy;
@@ -582,6 +583,13 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        let provider_capabilities =
+            create_model_provider(config.model_provider.clone(), Some(auth_manager.clone()))
+                .capabilities();
+        let spine_task_tree_enabled = codex_tools::spine_task_tree_enabled(
+            config.features.enabled(Feature::SpineTaskTree),
+            provider_capabilities.namespace_tools,
+        );
         let base_instructions = config
             .base_instructions
             .clone()
@@ -589,7 +597,7 @@ impl Codex {
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
         let base_instructions = crate::spine::instructions::append_spine_view_instructions(
             base_instructions,
-            config.features.enabled(Feature::SpineTaskTree),
+            spine_task_tree_enabled,
         );
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db

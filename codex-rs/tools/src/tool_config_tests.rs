@@ -225,6 +225,22 @@ fn spine_task_tree_tracks_feature_flag() {
 }
 
 #[test]
+fn spine_task_tree_effective_enablement_requires_namespace_tools() {
+    assert!(super::spine_task_tree_enabled(
+        /*feature_enabled*/ true, /*namespace_tools*/ true
+    ));
+    assert!(!super::spine_task_tree_enabled(
+        /*feature_enabled*/ true, /*namespace_tools*/ false
+    ));
+    assert!(!super::spine_task_tree_enabled(
+        /*feature_enabled*/ false, /*namespace_tools*/ true
+    ));
+    assert!(!super::spine_task_tree_enabled(
+        /*feature_enabled*/ false, /*namespace_tools*/ false
+    ));
+}
+
+#[test]
 fn image_generation_requires_feature_and_supported_model() {
     let supported_model_info = model_info();
     let mut unsupported_model_info = supported_model_info.clone();

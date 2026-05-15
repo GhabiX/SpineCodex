@@ -179,7 +179,10 @@ impl ToolsConfig {
         let include_goal_tools = features.enabled(Feature::Goals);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_collab_tools = include_multi_agent_v2 || features.enabled(Feature::Collab);
-        let include_spine_task_tree = features.enabled(Feature::SpineTaskTree);
+        let include_spine_task_tree = spine_task_tree_enabled(
+            features.enabled(Feature::SpineTaskTree),
+            /*namespace_tools*/ true,
+        );
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_search_tool =
             model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
@@ -279,8 +282,8 @@ impl ToolsConfig {
     pub fn with_namespace_tools_capability(mut self, namespace_tools: bool) -> Self {
         if !namespace_tools {
             self.namespace_tools = false;
-            self.spine_task_tree = false;
         }
+        self.spine_task_tree = spine_task_tree_enabled(self.spine_task_tree, namespace_tools);
         self
     }
 
@@ -382,6 +385,10 @@ impl ToolsConfig {
         nested.spine_task_tree = false;
         nested
     }
+}
+
+pub fn spine_task_tree_enabled(feature_enabled: bool, namespace_tools: bool) -> bool {
+    feature_enabled && namespace_tools
 }
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {
