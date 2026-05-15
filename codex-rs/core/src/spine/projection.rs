@@ -11,6 +11,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
+use serde::de;
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -218,7 +219,12 @@ struct NamespacedOpenArgs {}
 #[serde(deny_unknown_fields)]
 struct NamespacedSummaryArgs {
     summary: String,
-    instruction: Option<String>,
+    #[serde(
+        default,
+        rename = "instruction",
+        deserialize_with = "discard_optional_string"
+    )]
+    _instruction: (),
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,7 +269,7 @@ fn spine_transition_from_response_item(
                     )?;
                     let NamespacedSummaryArgs {
                         summary,
-                        instruction: _,
+                        _instruction: _,
                     } = args;
                     (SpineOperation::Next, Some(summary))
                 }
@@ -276,7 +282,7 @@ fn spine_transition_from_response_item(
                     )?;
                     let NamespacedSummaryArgs {
                         summary,
-                        instruction: _,
+                        _instruction: _,
                     } = args;
                     (SpineOperation::Close, Some(summary))
                 }
@@ -425,4 +431,11 @@ mod instruction_projection_tests {
 
         assert!(matches!(error, SpineProjectionError::ArgsJson { .. }));
     }
+}
+
+fn discard_optional_string<'de, D>(deserializer: D) -> Result<(), D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(|_| ())
 }

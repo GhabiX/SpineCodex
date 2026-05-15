@@ -18,14 +18,6 @@ pub(crate) fn context_budget_is_under_pressure(budget: &SpineContextBudgetHint) 
     u128::from(remaining_tokens) * 4 < u128::from(budget.limit_tokens)
 }
 
-pub(crate) fn render_tool_output(
-    _op: SpineOperation,
-    state: &SpineState,
-    cursor: &NodeId,
-) -> String {
-    render_spine_tree_view(state, cursor)
-}
-
 pub(crate) fn render_tool_output_with_base(
     _op: SpineOperation,
     state: &SpineState,
@@ -35,6 +27,7 @@ pub(crate) fn render_tool_output_with_base(
     render_spine_tree_view_with_base(state, cursor, Some(base))
 }
 
+#[cfg(test)]
 pub(crate) fn render_tree_tool_output(state: &SpineState, cursor: &NodeId) -> String {
     render_spine_tree_view(state, cursor)
 }
@@ -47,6 +40,7 @@ pub(crate) fn render_tree_tool_output_with_base(
     render_spine_tree_view_with_base(state, cursor, Some(base))
 }
 
+#[cfg(test)]
 fn render_spine_tree_view(state: &SpineState, cursor: &NodeId) -> String {
     render_spine_tree_view_with_base(state, cursor, None)
 }

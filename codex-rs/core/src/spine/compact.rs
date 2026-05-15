@@ -12,7 +12,6 @@ use crate::session::session::Session;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
-use async_trait::async_trait;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -69,11 +68,6 @@ pub(crate) struct SpineCompactOutput {
     pub(crate) compacted_body: String,
     pub(crate) compact_message: String,
     pub(crate) strategy_name: &'static str,
-}
-
-#[async_trait]
-pub(crate) trait SpineCompactStrategy: Send + Sync {
-    async fn compact_suffix(&self, input: SpineCompactInput) -> CodexResult<SpineCompactOutput>;
 }
 
 pub(crate) const CODEX_BUILTIN_TEXT_STRATEGY: &str = "codex_builtin_fork_full_history";
@@ -277,6 +271,7 @@ pub(crate) fn build_suffix_replacement_history(
     replacement_history
 }
 
+#[cfg(test)]
 pub(crate) fn plan_suffix_fold(
     history: &[ResponseItem],
     cut_ordinal: u64,
@@ -461,10 +456,6 @@ fn tool_output_call_id(item: &ResponseItem) -> Option<String> {
     }
 }
 
-fn raw_ordinal_for_effective_index(history: &[ResponseItem], target_index: usize) -> Option<u64> {
-    raw_ordinal_for_effective_index_with_spans(history, target_index, &[])
-}
-
 pub(crate) fn raw_ordinal_for_effective_index_with_spans(
     history: &[ResponseItem],
     target_index: usize,
@@ -536,6 +527,7 @@ pub(crate) fn render_spine_handoff_item(from_node: &NodeId, to_node: &NodeId) ->
     }
 }
 
+#[cfg(test)]
 pub(crate) fn render_spine_ir_item(
     node_id: &NodeId,
     op: SpineOperation,
@@ -568,6 +560,7 @@ pub(crate) fn render_spine_ir_item(
     }
 }
 
+#[cfg(test)]
 fn spine_ir_synthetic_id(
     node_id: &NodeId,
     op: SpineOperation,
@@ -619,6 +612,7 @@ pub(crate) fn render_slim_context_compacted_outline(
     rendered
 }
 
+#[cfg(test)]
 pub(crate) fn effective_index_for_raw_ordinal(
     history: &[ResponseItem],
     target_raw_ordinal: u64,

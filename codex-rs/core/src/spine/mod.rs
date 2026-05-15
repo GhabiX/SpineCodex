@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub(crate) mod compact;
 pub(crate) mod ids;
 pub(crate) mod instructions;

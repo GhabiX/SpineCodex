@@ -31,6 +31,7 @@ use codex_protocol::spine_tree::SpineTreePlanTreeSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::HashMap;
 use std::collections::HashSet;
+#[cfg(test)]
 use std::path::Path;
 use thiserror::Error;
 
@@ -57,6 +58,7 @@ pub(crate) enum SpineRuntimeMode {
 }
 
 impl SpineRuntime {
+    #[cfg(test)]
     pub(crate) fn load_or_init(
         rollout_path: impl AsRef<Path>,
         next_raw_ordinal: u64,
@@ -70,6 +72,7 @@ impl SpineRuntime {
         Self::load_or_create(store, next_raw_ordinal)
     }
 
+    #[cfg(test)]
     pub(crate) fn create(store: SpineSidecarStore) -> Result<Self, SpineRuntimeError> {
         let state = store.create()?;
         Ok(Self::from_parts(store, state, 0))
@@ -145,10 +148,6 @@ impl SpineRuntime {
 
     pub(crate) fn take_last_committed_transition(&mut self) -> Option<CommittedTransition> {
         self.last_committed_transition.take()
-    }
-
-    pub(crate) fn mode(&self) -> &SpineRuntimeMode {
-        &self.mode
     }
 
     pub(crate) fn is_mutable(&self) -> bool {

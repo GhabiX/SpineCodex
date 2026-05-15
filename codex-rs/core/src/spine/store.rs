@@ -139,10 +139,6 @@ impl SpineSidecarStore {
         Ok(parent.join(format!("spine-{stem}")))
     }
 
-    pub(crate) fn sidecar_dir_for_rollout(rollout_path: &Path) -> Result<PathBuf, SpineStoreError> {
-        Self::default_sidecar_dir_for_rollout(rollout_path)
-    }
-
     fn validate_rollout_path(rollout_path: &Path) -> Result<(), SpineStoreError> {
         if rollout_path
             .extension()
@@ -360,6 +356,7 @@ impl SpineSidecarStore {
         self.write_state_cache(&state)
     }
 
+    #[cfg(test)]
     pub(crate) fn copy_node_artifacts_from<'a>(
         &self,
         source: &SpineSidecarStore,
@@ -394,22 +391,6 @@ impl SpineSidecarStore {
                 self.copy_node_file_if_present(source, node_id, PLAN_FILE)?;
             }
         }
-        Ok(())
-    }
-
-    pub(crate) fn copy_compact_index_from(
-        &self,
-        source: &SpineSidecarStore,
-    ) -> Result<(), SpineStoreError> {
-        let source_path = source.compact_index_path();
-        if !source_path.exists() {
-            return Ok(());
-        }
-        let destination_path = self.compact_index_path();
-        std::fs::copy(&source_path, &destination_path).map_err(|source| SpineStoreError::Io {
-            path: destination_path,
-            source,
-        })?;
         Ok(())
     }
 
@@ -939,6 +920,7 @@ impl SpineSidecarStore {
         Ok(worklog)
     }
 
+    #[cfg(test)]
     pub(crate) fn read_worklog(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
         self.read_worklog_file(node_id)
     }
@@ -1350,6 +1332,7 @@ impl SpineSidecarStore {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn installed_compact_spans(
         &self,
     ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
@@ -1539,34 +1522,6 @@ impl SpineSidecarStore {
                 source,
             })?;
         Ok(())
-    }
-
-    fn write_worklog_file(&self, node_id: &NodeId, worklog: &str) -> Result<(), SpineStoreError> {
-        self.ensure_node_dir(node_id)?;
-        let path = self.worklog_path(node_id);
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map(Some)
-            .or_else(|source| {
-                if source.kind() == std::io::ErrorKind::AlreadyExists {
-                    let existing = std::fs::read_to_string(&path)?;
-                    if existing == worklog {
-                        return Ok(None);
-                    }
-                }
-                Err(source)
-            })
-            .map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        let Some(file) = file.as_mut() else {
-            return Ok(());
-        };
-        file.write_all(worklog.as_bytes())
-            .map_err(|source| SpineStoreError::Io { path, source })
     }
 
     fn read_worklog_file(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
@@ -2059,8 +2014,6 @@ pub(crate) enum SpineStoreError {
     InvalidLedger(String),
     #[error("spine state cache mismatch at {path}")]
     StateCacheMismatch { path: PathBuf },
-    #[error("spine worklog hash mismatch for {node_id}")]
-    WorklogHashMismatch { node_id: NodeId },
     #[error(transparent)]
     State(#[from] SpineStateError),
     #[error(transparent)]
