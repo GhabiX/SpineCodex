@@ -9,6 +9,7 @@ use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -102,19 +103,19 @@ impl ToolHandler for PlanHandler {
             ));
         }
 
-        let args = parse_update_plan_arguments(&arguments)?;
-        if !self.include_spine_plantree
-            && (args.spine_plantree.is_some() || args.clear_spine_plantree)
-        {
-            return Err(FunctionCallError::RespondToModel(
-                "update_plan received Spine PlanTree fields, but Spine PlanTree is not enabled"
-                    .to_string(),
-            ));
+        if self.include_spine_plantree {
+            let args = parse_spine_update_plan_arguments(&arguments)?;
+            session
+                .record_spine_plan_update_and_emit_progress(turn.as_ref(), args)
+                .await
+                .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+        } else {
+            let args = parse_update_plan_arguments(&arguments)?;
+            session
+                .record_plan_update_and_emit_progress(turn.as_ref(), args)
+                .await
+                .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
         }
-        session
-            .record_plan_update_and_emit_progress(turn.as_ref(), args)
-            .await
-            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
 
         Ok(PlanToolOutput)
     }
@@ -122,6 +123,14 @@ impl ToolHandler for PlanHandler {
 
 fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {
     serde_json::from_str::<UpdatePlanArgs>(arguments).map_err(|e| {
+        FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
+    })
+}
+
+fn parse_spine_update_plan_arguments(
+    arguments: &str,
+) -> Result<SpineUpdatePlanArgs, FunctionCallError> {
+    serde_json::from_str::<SpineUpdatePlanArgs>(arguments).map_err(|e| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
     })
 }

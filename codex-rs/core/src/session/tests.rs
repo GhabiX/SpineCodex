@@ -48,6 +48,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::NonSteerableTurnKind;
@@ -313,6 +314,12 @@ fn update_plan_args_for_test(step: &str, status: StepStatus) -> UpdatePlanArgs {
             step: step.to_string(),
             status,
         }],
+    }
+}
+
+fn spine_update_plan_args_for_test(step: &str, status: StepStatus) -> SpineUpdatePlanArgs {
+    SpineUpdatePlanArgs {
+        flat: update_plan_args_for_test(step, status),
         spine_plantree: None,
         clear_spine_plantree: false,
     }
@@ -1442,9 +1449,9 @@ async fn update_plan_after_non_spine_compact_emits_flat_plan_without_sidecar_wri
     session_mut.spine = Some(Arc::new(Mutex::new(spine)));
 
     session
-        .record_plan_update_and_emit_progress(
+        .record_spine_plan_update_and_emit_progress(
             turn_context.as_ref(),
-            update_plan_args_for_test("mutable sidecar plan", StepStatus::InProgress),
+            spine_update_plan_args_for_test("mutable sidecar plan", StepStatus::InProgress),
         )
         .await?;
     let initial_plan = std::fs::read_to_string(&plan_path)?;
@@ -1464,9 +1471,9 @@ async fn update_plan_after_non_spine_compact_emits_flat_plan_without_sidecar_wri
         .await
         .mark_non_spine_compacted_history();
     session
-        .record_plan_update_and_emit_progress(
+        .record_spine_plan_update_and_emit_progress(
             turn_context.as_ref(),
-            update_plan_args_for_test("flat only after compact", StepStatus::Completed),
+            spine_update_plan_args_for_test("flat only after compact", StepStatus::Completed),
         )
         .await?;
 

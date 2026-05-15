@@ -19,7 +19,7 @@ use super::view::render_tree;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::plan_tool::SpinePlanTreeArg;
 use codex_protocol::plan_tool::SpinePlanTreeScopeArg;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use codex_protocol::spine_tree::SpineTreePlanCheckpointSnapshot;
@@ -509,7 +509,7 @@ impl SpineRuntime {
     pub(crate) fn record_plan_update(
         &mut self,
         turn_id: impl Into<String>,
-        args: UpdatePlanArgs,
+        args: SpineUpdatePlanArgs,
     ) -> Result<PlanSnapshot, SpineRuntimeError> {
         self.ensure_spine_mutation_allowed()?;
         let turn_id = turn_id.into();
@@ -550,7 +550,7 @@ impl SpineRuntime {
             revision,
             event_seq,
             turn_id,
-            args,
+            args.flat,
             spine_plantree,
             previous.as_ref(),
         );

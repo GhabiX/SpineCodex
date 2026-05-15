@@ -26,6 +26,14 @@ pub struct UpdatePlanArgs {
     #[serde(default)]
     pub explanation: Option<String>,
     pub plan: Vec<PlanItemArg>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SpineUpdatePlanArgs {
+    /// Flat plan args shared with the normal upstream-compatible `update_plan` event.
+    #[serde(flatten)]
+    pub flat: UpdatePlanArgs,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spine_plantree: Option<SpinePlanTreeArg>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -75,8 +83,6 @@ mod tests {
                 step: "inspect".to_string(),
                 status: StepStatus::InProgress,
             }],
-            spine_plantree: None,
-            clear_spine_plantree: false,
         };
 
         assert_eq!(
@@ -91,5 +97,20 @@ mod tests {
                 ],
             })
         );
+    }
+
+    #[test]
+    fn flat_update_plan_args_reject_spine_fields() {
+        let err = serde_json::from_value::<UpdatePlanArgs>(json!({
+            "plan": [],
+            "spine_plantree": {
+                "root": {
+                    "summary": "hidden"
+                }
+            }
+        }))
+        .expect_err("flat update_plan args should reject spine-only fields");
+
+        assert!(err.to_string().contains("unknown field"));
     }
 }

@@ -6386,8 +6386,6 @@ impl ChatWidget {
                             },
                         })
                         .collect(),
-                    spine_plantree: None,
-                    clear_spine_plantree: false,
                 })
             }
             ServerNotification::SpineTreeUpdated(notification) => {

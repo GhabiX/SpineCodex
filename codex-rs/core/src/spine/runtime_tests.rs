@@ -10,6 +10,7 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::SpinePlanTreeArg;
 use codex_protocol::plan_tool::SpinePlanTreeCheckpointArg;
 use codex_protocol::plan_tool::SpinePlanTreeScopeArg;
+use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use pretty_assertions::assert_eq;
@@ -44,20 +45,22 @@ fn read_json(path: impl AsRef<Path>) -> Value {
     serde_json::from_str(&contents).expect("parse json")
 }
 
-fn plan_args(step: &str, status: StepStatus) -> UpdatePlanArgs {
+fn plan_args(step: &str, status: StepStatus) -> SpineUpdatePlanArgs {
     plan_args_many(&[(step, status)])
 }
 
-fn plan_args_many(items: &[(&str, StepStatus)]) -> UpdatePlanArgs {
-    UpdatePlanArgs {
-        explanation: Some("PlanBridge test".to_string()),
-        plan: items
-            .iter()
-            .map(|(step, status)| PlanItemArg {
-                step: (*step).to_string(),
-                status: status.clone(),
-            })
-            .collect(),
+fn plan_args_many(items: &[(&str, StepStatus)]) -> SpineUpdatePlanArgs {
+    SpineUpdatePlanArgs {
+        flat: UpdatePlanArgs {
+            explanation: Some("PlanBridge test".to_string()),
+            plan: items
+                .iter()
+                .map(|(step, status)| PlanItemArg {
+                    step: (*step).to_string(),
+                    status: status.clone(),
+                })
+                .collect(),
+        },
         spine_plantree: None,
         clear_spine_plantree: false,
     }
@@ -66,13 +69,15 @@ fn plan_args_many(items: &[(&str, StepStatus)]) -> UpdatePlanArgs {
 fn plan_args_with_plantree(
     anchor: Option<&str>,
     children: Vec<(Option<&str>, &str, Vec<&str>)>,
-) -> UpdatePlanArgs {
-    UpdatePlanArgs {
-        explanation: Some("PlanBridge PlanTree test".to_string()),
-        plan: vec![PlanItemArg {
-            step: "Plan scope tree".to_string(),
-            status: StepStatus::InProgress,
-        }],
+) -> SpineUpdatePlanArgs {
+    SpineUpdatePlanArgs {
+        flat: UpdatePlanArgs {
+            explanation: Some("PlanBridge PlanTree test".to_string()),
+            plan: vec![PlanItemArg {
+                step: "Plan scope tree".to_string(),
+                status: StepStatus::InProgress,
+            }],
+        },
         spine_plantree: Some(SpinePlanTreeArg {
             anchor: anchor.map(str::to_string),
             root: SpinePlanTreeScopeArg {
@@ -522,12 +527,14 @@ fn record_plan_update_can_clear_plantree_explicitly() {
     let cleared = runtime
         .record_plan_update(
             "turn-clear",
-            UpdatePlanArgs {
-                explanation: Some("clear obsolete PlanTree".to_string()),
-                plan: vec![PlanItemArg {
-                    step: "Continue without a planned subtree".to_string(),
-                    status: StepStatus::InProgress,
-                }],
+            SpineUpdatePlanArgs {
+                flat: UpdatePlanArgs {
+                    explanation: Some("clear obsolete PlanTree".to_string()),
+                    plan: vec![PlanItemArg {
+                        step: "Continue without a planned subtree".to_string(),
+                        status: StepStatus::InProgress,
+                    }],
+                },
                 spine_plantree: None,
                 clear_spine_plantree: true,
             },

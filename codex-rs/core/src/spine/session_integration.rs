@@ -4,7 +4,7 @@ use super::runtime::SpineRuntime;
 use super::runtime::SpineRuntimeError;
 use super::store::SpineSidecarStore;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -169,7 +169,7 @@ pub(crate) fn load_initial_spine_runtime(
 pub(crate) fn record_plan_update_snapshot(
     runtime: &mut SpineRuntime,
     turn_id: &str,
-    args: UpdatePlanArgs,
+    args: SpineUpdatePlanArgs,
 ) -> Result<Option<SpineTreeUpdateEvent>, SpineRuntimeError> {
     if !runtime.is_mutable() {
         return Ok(None);

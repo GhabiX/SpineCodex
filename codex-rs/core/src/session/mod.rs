@@ -101,6 +101,7 @@ use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -1647,23 +1648,34 @@ impl Session {
         turn_context: &TurnContext,
         args: UpdatePlanArgs,
     ) -> CodexResult<()> {
+        self.send_event(turn_context, EventMsg::PlanUpdate(args))
+            .await;
+        Ok(())
+    }
+
+    pub(crate) async fn record_spine_plan_update_and_emit_progress(
+        &self,
+        turn_context: &TurnContext,
+        args: SpineUpdatePlanArgs,
+    ) -> CodexResult<()> {
+        let flat_args = args.flat.clone();
         let Some(spine) = self.spine.as_ref() else {
-            self.send_event(turn_context, EventMsg::PlanUpdate(args))
+            self.send_event(turn_context, EventMsg::PlanUpdate(flat_args))
                 .await;
             return Ok(());
         };
 
         let snapshot = {
             let mut spine = spine.lock().await;
-            record_plan_update_snapshot(&mut spine, &turn_context.sub_id, args.clone()).map_err(
-                |err| CodexErr::Fatal(format!("failed to record spine plan update: {err}")),
-            )?
+            record_plan_update_snapshot(&mut spine, &turn_context.sub_id, args).map_err(|err| {
+                CodexErr::Fatal(format!("failed to record spine plan update: {err}"))
+            })?
         };
         if let Some(snapshot) = snapshot {
             self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
                 .await;
         }
-        self.send_event(turn_context, EventMsg::PlanUpdate(args))
+        self.send_event(turn_context, EventMsg::PlanUpdate(flat_args))
             .await;
         Ok(())
     }

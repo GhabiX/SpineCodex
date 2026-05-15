@@ -2955,9 +2955,7 @@ fn split_request_user_input_answer(
 
 /// Render a user‑friendly plan update styled like a checkbox todo list.
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
-    let UpdatePlanArgs {
-        explanation, plan, ..
-    } = update;
+    let UpdatePlanArgs { explanation, plan } = update;
     PlanUpdateCell { explanation, plan }
 }
 
@@ -5518,8 +5516,6 @@ mod tests {
                     status: StepStatus::Pending,
                 },
             ],
-            spine_plantree: None,
-            clear_spine_plantree: false,
         };
 
         let cell = new_plan_update(update);
@@ -5543,8 +5539,6 @@ mod tests {
                     status: StepStatus::Pending,
                 },
             ],
-            spine_plantree: None,
-            clear_spine_plantree: false,
         };
 
         let cell = new_plan_update(update);
@@ -5566,8 +5560,6 @@ mod tests {
                 step: format!("Validate callbacks under {step_url} before rollout."),
                 status: StepStatus::InProgress,
             }],
-            spine_plantree: None,
-            clear_spine_plantree: false,
         };
 
         let cell = new_plan_update(update);
