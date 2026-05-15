@@ -116,7 +116,7 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
             JsonSchema::array(
                 checkpoint_schema,
                 Some(
-                    "Checklist items inside this planned scope. For the current root scope, prefer the top-level plan instead of duplicating it here."
+                    "Checklist items inside this planned scope. For the current real Spine node checklist, use the top-level plan instead of duplicating it here."
                         .to_string(),
                 ),
             ),
@@ -192,7 +192,7 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
         r#"Updates the task plan.
 Provide an optional explanation and a list of plan items, each with a step and status.
 At most one step can be in_progress at a time.
-When Spine is enabled, the top-level plan is the current real Spine node's checklist. Use spine_plantree to maintain the current editable task tree draft: root.children are future planned child scopes, and each child scope's checkpoints are that future scope's checklist. This is planning only; it does not create or move Spine nodes. Omitting spine_plantree preserves the previous draft; use clear_spine_plantree only to clear it.
+When Spine is enabled, the top-level plan is the current real Spine node's checklist. Use spine_plantree to maintain the current editable task tree draft: root.children are future planned child scopes, and each child scope's checkpoints are that future scope's checklist. Successful writable Spine updates return JSON containing the updated spine_tree; treat that returned tree as the authoritative planning state. This is planning only; it does not create or move Spine nodes. Omitting spine_plantree preserves the previous draft; use clear_spine_plantree only to clear it.
 Future planned scopes may display as ~<predicted-id> to distinguish them from real Spine nodes.
 "#
     } else {

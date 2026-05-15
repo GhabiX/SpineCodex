@@ -237,6 +237,8 @@ fn update_plan_schema_exposes_spine_plantree_planning_ir() {
             .contains("current real Spine node's checklist")
     );
     assert!(tool.description.contains("future planned child scopes"));
+    assert!(tool.description.contains("updated spine_tree"));
+    assert!(tool.description.contains("authoritative planning state"));
     assert!(tool.description.contains("planning only"));
     assert!(
         tool.description

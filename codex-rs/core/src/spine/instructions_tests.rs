@@ -50,7 +50,11 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("top-level plan"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("current real Spine node's checklist"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("future child scope's checkpoints"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree.root.children"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("future planned child scopes"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("future child scope's checklist"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("returned `spine_tree` JSON"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("authoritative updated tree"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("task tree draft"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("current editable scope"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("planning only"));
@@ -60,8 +64,7 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("promptly refresh the current spine_plantree"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("displayed PlanTree stays current"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("non-trivial or multi-phase work"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree.children"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("rather than flattening them into root checkpoints"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("current node's top-level plan"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 50k raw tokens"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 30k"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the warning as a cue"));
@@ -72,5 +75,7 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Completed Spine nodes are read-only"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("A node is a working scope, not a checklist item"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("The node summary is only a short tree label"));
+    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree.children"));
+    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("root checkpoints"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("investigate/localize"));
 }
