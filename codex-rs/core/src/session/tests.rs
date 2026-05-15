@@ -2064,6 +2064,94 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
 }
 
 #[tokio::test]
+async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tree_update()
+-> anyhow::Result<()> {
+    let (mut session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let session_mut = Arc::get_mut(&mut session).expect("fresh session has no other refs");
+    let rollout_path = attach_thread_persistence(session_mut).await;
+    let mut runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            None,
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    session_mut.spine = Some(Arc::new(Mutex::new(runtime)));
+    session
+        .try_record_conversation_items(
+            &turn_context,
+            &[
+                spine_function_call("open-1"),
+                function_call_output("open-1"),
+                assistant_message("ROOT_EPOCH_DETAIL should be archived before failure"),
+            ],
+        )
+        .await?;
+    session
+        .spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .take_last_committed_transition();
+    while rx.try_recv().is_ok() {}
+    let history = session.clone_history().await.raw_items().to_vec();
+
+    let error = session
+        .install_spine_root_epoch_compaction(
+            &turn_context,
+            history,
+            format!(
+                "{}\n__spine_fail_root_archive_after_rollout_checkpoint__",
+                crate::compact::SUMMARY_PREFIX
+            ),
+            None,
+        )
+        .await
+        .expect_err("injected post-checkpoint failure should poison");
+
+    assert!(matches!(
+        error,
+        CodexErr::Fatal(message)
+            if message == "injected spine root archive failure after rollout checkpoint"
+    ));
+    session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect_err("poison should block future compact attempts");
+    assert!(
+        rx.try_recv().is_err(),
+        "root archive must not emit a stale tree update after partial install failure"
+    );
+
+    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
+    assert!(rendered_history.contains("<spine_worklog"));
+    assert!(!rendered_history.contains("ROOT_EPOCH_DETAIL should be archived before failure"));
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(
+        runtime.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![1, 1, 1])
+    );
+    let tree = std::fs::read_to_string(runtime.store().tree_path())?;
+    assert!(!tree.contains("\"type\":\"root_epoch_reset\""));
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    assert_eq!(compact_events.len(), 1);
+    assert_eq!(compact_events[0]["type"], "compact_started");
+    assert!(
+        !runtime
+            .store()
+            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
+            .exists()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn repeated_spine_root_compaction_does_not_leave_orphan_tree_output() -> anyhow::Result<()> {
     let (mut session, turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;
