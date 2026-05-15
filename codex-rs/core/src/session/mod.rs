@@ -3085,9 +3085,11 @@ impl Session {
                     CodexErr::Fatal(format!(
                         "failed to record spine root archive install failure after error {err}: {store_err}"
                     ))
-                })?;
+            })?;
             return Err(err);
         }
+        // The rollout checkpoint is already replaced. Later sidecar failures are not rolled back;
+        // poison future Spine compact attempts so partial install state fails fast.
         if let Err(err) = store.append_worklog_section(&boundary.node_id, &worklog_markdown) {
             return Err(self
                 .poison_spine_compact(format!(
@@ -3147,6 +3149,8 @@ impl Session {
                 ))
                 .await);
         }
+        // Only emit the reset snapshot after compact_installed is durable; otherwise the UI could
+        // display a root archive that reload validation may still reject.
         let snapshot = {
             let mut runtime = spine.lock().await;
             runtime.record_surviving_compact_hash(message_hash);
@@ -3348,9 +3352,11 @@ impl Session {
                     CodexErr::Fatal(format!(
                         "failed to record spine compact install failure after error {err}: {store_err}"
                     ))
-                })?;
+            })?;
             return Err(err);
         }
+        // The rollout checkpoint is already replaced. Later sidecar failures are not rolled back;
+        // poison future Spine compact attempts so partial install state fails fast.
         if let Err(err) = store.append_worklog_section(&boundary.node_id, &worklog_markdown) {
             return Err(self
                 .poison_spine_compact(format!(
