@@ -232,6 +232,11 @@ fn update_plan_schema_exposes_spine_plantree_planning_ir() {
         panic!("expected function tool");
     };
     assert!(tool.description.contains("spine_plantree"));
+    assert!(
+        tool.description
+            .contains("current real Spine node's checklist")
+    );
+    assert!(tool.description.contains("future planned child scopes"));
     assert!(tool.description.contains("planning only"));
     assert!(
         tool.description
@@ -248,6 +253,12 @@ fn update_plan_schema_exposes_spine_plantree_planning_ir() {
         .properties
         .as_ref()
         .expect("update_plan object properties");
+    assert!(
+        properties
+            .get("plan")
+            .and_then(|schema| schema.description.as_deref())
+            .is_some_and(|description| description.contains("current real Spine node"))
+    );
     assert!(properties.contains_key("clear_spine_plantree"));
     let plantree = properties
         .get("spine_plantree")
@@ -264,6 +275,18 @@ fn update_plan_schema_exposes_spine_plantree_planning_ir() {
     let root_properties = root.properties.as_ref().expect("root scope properties");
     assert!(root_properties.contains_key("checkpoints"));
     assert!(root_properties.contains_key("children"));
+    assert!(
+        root_properties
+            .get("checkpoints")
+            .and_then(|schema| schema.description.as_deref())
+            .is_some_and(|description| description.contains("top-level plan"))
+    );
+    assert!(
+        root_properties
+            .get("children")
+            .and_then(|schema| schema.description.as_deref())
+            .is_some_and(|description| description.contains("Future planned child scopes"))
+    );
     assert!(
         root_properties
             .get("node")

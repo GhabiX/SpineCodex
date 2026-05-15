@@ -1048,8 +1048,7 @@ fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
 #[test]
 fn spine_compact_markdown_extraction_accepts_plain_markdown() {
     assert_eq!(
-        extract_spine_compact_markdown("\n## Done\n\nfacts\n")
-        .expect("extract compact worklog"),
+        extract_spine_compact_markdown("\n## Done\n\nfacts\n").expect("extract compact worklog"),
         "## Done\n\nfacts"
     );
     assert!(extract_spine_compact_markdown(" \n\t ").is_err());

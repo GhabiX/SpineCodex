@@ -52,6 +52,7 @@ const EXPECTED_SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
 Use Spine as your task plan and context manager. Completed scopes are folded into runtime-generated worklog IR, and later turns carry the visible Spine Tree, completed worklogs, and the current live suffix instead of every old raw message.
 Use Spine effectively and efficiently.
 At the start, use update_plan with spine_plantree to maintain one compact task tree draft for the current editable scope. This is planning only; it does not create Spine nodes or move the cursor.
+Use update_plan's top-level plan for the current real Spine node's checklist; use each future child scope's checkpoints inside spine_plantree.root.children for that future scope's checklist.
 Future PlanTree scopes may display as `~<predicted-id>` to distinguish planned nodes from real Spine nodes.
 Default to staying in the current live node while it remains focused. Use update_plan to revise the current PlanTree when new evidence changes the task structure.
 When your task structure or next work scope changes, promptly refresh the current spine_plantree with update_plan so the displayed PlanTree stays current.
@@ -117,10 +118,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
             ]),
             sse(vec![
                 ev_response_created("resp-spine-compact"),
-                ev_assistant_message(
-                    "msg-spine-compact",
-                    "Compacted child findings.",
-                ),
+                ev_assistant_message("msg-spine-compact", "Compacted child findings."),
                 ev_completed("resp-spine-compact"),
             ]),
             sse(vec![
@@ -135,10 +133,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
             ]),
             sse(vec![
                 ev_response_created("resp-spine-close-compact"),
-                ev_assistant_message(
-                    "msg-spine-close-compact",
-                    "Compacted root findings.",
-                ),
+                ev_assistant_message("msg-spine-close-compact", "Compacted root findings."),
                 ev_completed("resp-spine-close-compact"),
             ]),
             sse(vec![
@@ -181,7 +176,23 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert_function_output_contains(&requests, CHILD_SHELL_CALL_ID, "child-spine");
     assert_function_output_contains(&requests, SIBLING_SHELL_CALL_ID, "sibling-spine");
     assert_function_output_contains(&requests, ROOT_SHELL_CALL_ID, "root-spine");
-    assert_function_output_contains(&requests, PLAN_CALL_ID, "Plan updated");
+    let plan_output = function_output_json(&requests, PLAN_CALL_ID)?;
+    assert_eq!(plan_output["status"], "plan_updated");
+    assert_eq!(plan_output["spine_tree"]["activeNodeId"], "1.1.1.1");
+    let output_active_node = plan_output["spine_tree"]["nodes"]
+        .as_array()
+        .expect("spine tree output nodes")
+        .iter()
+        .find(|node| node["nodeId"] == "1.1.1.1")
+        .expect("active node in output");
+    assert_eq!(
+        output_active_node["plan"]["items"][0]["step"],
+        "Exercise child node"
+    );
+    assert_eq!(
+        output_active_node["plan"]["spinePlantree"]["root"]["children"][0]["checkpoints"][0]["task"],
+        "Exercise future child scope"
+    );
 
     let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
     let tree_path = sidecar_dir.join("tree.jsonl");
@@ -238,6 +249,15 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert_eq!(plan_snapshot["items"][1]["stable_task_id"], "step-2");
     assert_eq!(plan_snapshot["items"][1]["step"], "Exercise sibling node");
     assert_eq!(plan_snapshot["items"][1]["status"], "in_progress");
+    assert_eq!(
+        plan_snapshot["spine_plantree"]["root"]["children"][0]["checkpoints"][0]["task"],
+        "Exercise future child scope"
+    );
+    assert_eq!(
+        plan_snapshot["spine_plantree"]["root"]["children"][0]["existing_node_id"],
+        Value::Null,
+        "future planned child scope must not be materialized as a real node"
+    );
     assert!(
         !index_text.contains("child-spine") && !index_text.contains("sibling-spine"),
         "sidecar index must not duplicate raw shell output: {index_text}"
@@ -796,6 +816,19 @@ fn plan_args() -> String {
             {"step": "Exercise child node", "status": "completed"},
             {"step": "Exercise sibling node", "status": "in_progress"}
         ],
+        "spine_plantree": {
+            "root": {
+                "summary": "Nested implementation scope",
+                "children": [
+                    {
+                        "summary": "Future child scope",
+                        "checkpoints": [
+                            {"task": "Exercise future child scope", "status": "pending"}
+                        ]
+                    }
+                ]
+            }
+        }
     })
     .to_string()
 }
@@ -845,7 +878,20 @@ fn tool_names(req: &ResponsesRequest) -> Vec<String> {
 }
 
 fn assert_function_output_contains(requests: &[ResponsesRequest], call_id: &str, expected: &str) {
-    let output = requests
+    let output = function_output_text(requests, call_id);
+    assert!(
+        output.contains(expected),
+        "expected output for {call_id} to contain {expected:?}, got {output:?}"
+    );
+}
+
+fn function_output_json(requests: &[ResponsesRequest], call_id: &str) -> anyhow::Result<Value> {
+    let output = function_output_text(requests, call_id);
+    serde_json::from_str(&output).with_context(|| format!("parse function output for {call_id}"))
+}
+
+fn function_output_text(requests: &[ResponsesRequest], call_id: &str) -> String {
+    requests
         .iter()
         .find_map(|request| request.function_call_output_text(call_id))
         .unwrap_or_else(|| {
@@ -862,11 +908,7 @@ fn assert_function_output_contains(requests: &[ResponsesRequest], call_id: &str,
                 })
                 .collect::<Vec<_>>();
             panic!("function_call_output missing for {call_id}; available outputs: {available:?}")
-        });
-    assert!(
-        output.contains(expected),
-        "expected output for {call_id} to contain {expected:?}, got {output:?}"
-    );
+        })
 }
 
 fn assert_spine_initialized(tree: &[Value]) {

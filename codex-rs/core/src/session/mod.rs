@@ -125,6 +125,7 @@ use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_rollout_trace::AgentResultTracePayload;
@@ -1656,12 +1657,12 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         args: SpineUpdatePlanArgs,
-    ) -> CodexResult<()> {
+    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
         let flat_args = args.flat.clone();
         let Some(spine) = self.spine.as_ref() else {
             self.send_event(turn_context, EventMsg::PlanUpdate(flat_args))
                 .await;
-            return Ok(());
+            return Ok(None);
         };
 
         let snapshot = {
@@ -1670,13 +1671,13 @@ impl Session {
                 CodexErr::Fatal(format!("failed to record spine plan update: {err}"))
             })?
         };
-        if let Some(snapshot) = snapshot {
-            self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
+        if let Some(snapshot) = snapshot.as_ref() {
+            self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot.clone()))
                 .await;
         }
         self.send_event(turn_context, EventMsg::PlanUpdate(flat_args))
             .await;
-        Ok(())
+        Ok(snapshot)
     }
 
     pub(crate) async fn emit_initial_spine_tree_if_needed(

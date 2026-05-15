@@ -1448,12 +1448,21 @@ async fn update_plan_after_non_spine_compact_emits_flat_plan_without_sidecar_wri
         .plan_path(&crate::spine::ids::NodeId::from_segments(vec![1, 1]));
     session_mut.spine = Some(Arc::new(Mutex::new(spine)));
 
-    session
+    let mutable_snapshot = session
         .record_spine_plan_update_and_emit_progress(
             turn_context.as_ref(),
             spine_update_plan_args_for_test("mutable sidecar plan", StepStatus::InProgress),
         )
         .await?;
+    let mutable_snapshot = mutable_snapshot.expect("mutable spine plan should return snapshot");
+    assert_eq!(mutable_snapshot.active_node_id, "1.1");
+    let returned_plan = mutable_snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1")
+        .and_then(|node| node.plan.as_ref())
+        .expect("current node plan");
+    assert_eq!(returned_plan.items[0].step, "mutable sidecar plan");
     let initial_plan = std::fs::read_to_string(&plan_path)?;
     assert!(initial_plan.contains("mutable sidecar plan"));
 
@@ -1470,12 +1479,16 @@ async fn update_plan_after_non_spine_compact_emits_flat_plan_without_sidecar_wri
         .lock()
         .await
         .mark_non_spine_compacted_history();
-    session
+    let readonly_snapshot = session
         .record_spine_plan_update_and_emit_progress(
             turn_context.as_ref(),
             spine_update_plan_args_for_test("flat only after compact", StepStatus::Completed),
         )
         .await?;
+    assert!(
+        readonly_snapshot.is_none(),
+        "read-only sidecar should not return stale SpineTreeUpdate"
+    );
 
     assert_eq!(std::fs::read_to_string(&plan_path)?, initial_plan);
     let event = rx.recv().await.expect("flat plan update after compact");
@@ -2330,12 +2343,7 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
         vec![
             sse(vec![
                 ev_response_created("resp-open"),
-                ev_function_call_with_namespace(
-                    "call-open",
-                    "spine",
-                    "open",
-                    r#"{}"#,
-                ),
+                ev_function_call_with_namespace("call-open", "spine", "open", r#"{}"#),
                 ev_completed("resp-open"),
             ]),
             sse(vec![
