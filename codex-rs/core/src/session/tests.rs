@@ -47,6 +47,9 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -301,6 +304,18 @@ fn read_json_lines_for_test(path: &Path) -> anyhow::Result<Vec<serde_json::Value
         .lines()
         .map(|line| serde_json::from_str(line).map_err(Into::into))
         .collect()
+}
+
+fn update_plan_args_for_test(step: &str, status: StepStatus) -> UpdatePlanArgs {
+    UpdatePlanArgs {
+        explanation: None,
+        plan: vec![PlanItemArg {
+            step: step.to_string(),
+            status,
+        }],
+        spine_plantree: None,
+        clear_spine_plantree: false,
+    }
 }
 
 fn skill_message(text: &str) -> ResponseItem {
@@ -1410,6 +1425,60 @@ async fn initial_spine_tree_is_emitted_once_before_first_user_prompt() -> anyhow
     assert!(
         rx.try_recv().is_err(),
         "initial spine tree should not be emitted twice"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_plan_after_non_spine_compact_emits_flat_plan_without_sidecar_write()
+-> anyhow::Result<()> {
+    let (mut session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let session_mut = Arc::get_mut(&mut session).expect("fresh test session has no other refs");
+    let rollout_path = attach_thread_persistence(session_mut).await;
+    let spine = crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0)?;
+    let plan_path = spine
+        .store()
+        .plan_path(&crate::spine::ids::NodeId::from_segments(vec![1, 1]));
+    session_mut.spine = Some(Arc::new(Mutex::new(spine)));
+
+    session
+        .record_plan_update_and_emit_progress(
+            turn_context.as_ref(),
+            update_plan_args_for_test("mutable sidecar plan", StepStatus::InProgress),
+        )
+        .await?;
+    let initial_plan = std::fs::read_to_string(&plan_path)?;
+    assert!(initial_plan.contains("mutable sidecar plan"));
+
+    let first = rx.recv().await.expect("spine tree update");
+    assert!(matches!(first.msg, EventMsg::SpineTreeUpdate(_)));
+    let second = rx.recv().await.expect("flat plan update");
+    assert!(matches!(second.msg, EventMsg::PlanUpdate(_)));
+    assert!(rx.try_recv().is_err(), "only initial spine and plan events");
+
+    session
+        .spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .mark_non_spine_compacted_history();
+    session
+        .record_plan_update_and_emit_progress(
+            turn_context.as_ref(),
+            update_plan_args_for_test("flat only after compact", StepStatus::Completed),
+        )
+        .await?;
+
+    assert_eq!(std::fs::read_to_string(&plan_path)?, initial_plan);
+    let event = rx.recv().await.expect("flat plan update after compact");
+    let EventMsg::PlanUpdate(args) = event.msg else {
+        panic!("expected flat PlanUpdate after non-Spine compact");
+    };
+    assert_eq!(args.plan[0].step, "flat only after compact");
+    assert!(
+        rx.try_recv().is_err(),
+        "read-only sidecar should not emit SpineTreeUpdate"
     );
     Ok(())
 }
