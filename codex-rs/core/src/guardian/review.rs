@@ -42,6 +42,8 @@ use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
 use super::review_session::build_guardian_review_session_config;
 
+const GUARDIAN_REVIEW_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
     "The agent must not attempt to achieve the same outcome via workaround, ",
     "indirect execution, or policy circumvention. ",
@@ -538,18 +540,16 @@ pub(crate) async fn review_approval_request(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    // Box the delegated review future so callers do not inline the entire
-    // guardian session state machine into their own async stack.
-    Box::pin(run_guardian_review(
+    let rx = spawn_approval_request_review(
         Arc::clone(session),
         Arc::clone(turn),
         review_id,
         request,
         retry_reason,
         GuardianApprovalRequestSource::MainTurn,
-        /*external_cancel*/ None,
-    ))
-    .await
+        CancellationToken::new(),
+    );
+    rx.await.unwrap_or(ReviewDecision::Denied)
 }
 
 pub(crate) async fn review_approval_request_with_cancel(
@@ -583,25 +583,33 @@ pub(crate) fn spawn_approval_request_review(
     cancel_token: CancellationToken,
 ) -> oneshot::Receiver<ReviewDecision> {
     let (tx, rx) = oneshot::channel();
-    std::thread::spawn(move || {
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
-            let _ = tx.send(ReviewDecision::Denied);
-            return;
-        };
-        let decision = runtime.block_on(review_approval_request_with_cancel(
-            &session,
-            &turn,
-            review_id,
-            request,
-            retry_reason,
-            approval_request_source,
-            cancel_token,
-        ));
-        let _ = tx.send(decision);
-    });
+    let spawn_result = std::thread::Builder::new()
+        .name("codex-guardian-review".to_string())
+        .stack_size(GUARDIAN_REVIEW_THREAD_STACK_SIZE)
+        .spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                let _ = tx.send(ReviewDecision::Denied);
+                return;
+            };
+            let decision = runtime.block_on(review_approval_request_with_cancel(
+                &session,
+                &turn,
+                review_id,
+                request,
+                retry_reason,
+                approval_request_source,
+                cancel_token,
+            ));
+            let _ = tx.send(decision);
+        });
+    if spawn_result.is_err() {
+        // If the review thread cannot be created, fail closed. The sender was
+        // moved into the closure only when spawn succeeds, so a spawn error will
+        // drop it and make the receiver resolve as denied in the caller.
+    }
     rx
 }
 

@@ -1166,7 +1166,11 @@ async fn run_sampling_request(
             turn_context.as_ref(),
             base_instructions.clone(),
         );
-        let err = match try_run_sampling_request(
+        // Spine adds more turn-local state around sampling. Keep the streaming
+        // future off the parent poll stack so guardian review sessions, which
+        // run inside test/default-sized threads, do not overflow while polling
+        // the websocket client stack.
+        let err = match Box::pin(try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -1175,7 +1179,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
-        )
+        ))
         .await
         {
             Ok(output) => {
@@ -2072,20 +2076,22 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
-    let mut stream = client_session
-        .stream(
-            prompt,
-            &turn_context.model_info,
-            &turn_context.session_telemetry,
-            turn_context.reasoning_effort,
-            turn_context.reasoning_summary,
-            turn_context.config.service_tier.clone(),
-            turn_metadata_header,
-            &inference_trace,
-        )
-        .instrument(trace_span!("stream_request"))
-        .or_cancel(&cancellation_token)
-        .await??;
+    let mut stream = Box::pin(
+        client_session
+            .stream(
+                prompt,
+                &turn_context.model_info,
+                &turn_context.session_telemetry,
+                turn_context.reasoning_effort,
+                turn_context.reasoning_summary,
+                turn_context.config.service_tier.clone(),
+                turn_metadata_header,
+                &inference_trace,
+            )
+            .instrument(trace_span!("stream_request"))
+            .or_cancel(&cancellation_token),
+    )
+    .await??;
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
