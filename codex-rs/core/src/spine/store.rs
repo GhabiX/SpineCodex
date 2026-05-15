@@ -26,6 +26,9 @@ use std::io::Write;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 use thiserror::Error;
 
 const TREE_FILE: &str = "tree.jsonl";
@@ -47,9 +50,23 @@ pub(crate) fn compact_message_hash(message: &str) -> String {
     format!("sha1:{:x}", hasher.finalize())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct SpineSidecarStore {
     root: PathBuf,
+    metadata_cache: Arc<Mutex<SpineStoreMetadataCache>>,
+}
+
+impl PartialEq for SpineSidecarStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root
+    }
+}
+
+impl Eq for SpineSidecarStore {}
+
+#[derive(Debug, Default)]
+struct SpineStoreMetadataCache {
+    next_tree_seq: Option<u64>,
 }
 
 impl SpineSidecarStore {
@@ -66,9 +83,7 @@ impl SpineSidecarStore {
         let parent = rollout_parent(rollout_path)?;
         let base = PathBuf::from(locator.base);
         validate_relative_base(&base, rollout_path)?;
-        Ok(Self {
-            root: parent.join(base),
-        })
+        Ok(Self::new(parent.join(base)))
     }
 
     pub(crate) fn create_for_rollout(
@@ -81,7 +96,14 @@ impl SpineSidecarStore {
         }
         let root = Self::default_sidecar_dir_for_rollout(rollout_path)?;
         Self::write_base_locator(rollout_path, &locator_path, &root)?;
-        Ok(Self { root })
+        Ok(Self::new(root))
+    }
+
+    fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            metadata_cache: Arc::new(Mutex::new(SpineStoreMetadataCache::default())),
+        }
     }
 
     pub(crate) fn has_sidecar_for_rollout(rollout_path: &Path) -> Result<bool, SpineStoreError> {
@@ -218,6 +240,7 @@ impl SpineSidecarStore {
             state: StateSnapshot::from_state(&state),
         };
         self.append_json_line(&tree_path, &event)?;
+        self.set_cached_next_tree_seq(2)?;
 
         self.write_state_cache(&state)?;
         Ok(state)
@@ -269,7 +292,7 @@ impl SpineSidecarStore {
             raw_start_ordinal,
             source_turn_id,
         };
-        self.append_json_line(&self.tree_path(), &event)?;
+        self.append_tree_event(&event)?;
 
         *state = next_state;
         self.write_state_cache(state)?;
@@ -310,7 +333,7 @@ impl SpineSidecarStore {
             compact_id,
             source_turn_id,
         };
-        self.append_json_line(&self.tree_path(), &event)?;
+        self.append_tree_event(&event)?;
 
         *state = next_state;
         self.write_state_cache(state)?;
@@ -332,7 +355,7 @@ impl SpineSidecarStore {
             raw_start_ordinal,
             source_turn_id: source_turn_id.into(),
         };
-        self.append_json_line(&self.tree_path(), &event)?;
+        self.append_tree_event(&event)?;
         *state = next_state;
         self.write_state_cache(state)
     }
@@ -352,7 +375,7 @@ impl SpineSidecarStore {
             source_turn_id,
             state: StateSnapshot::from_state(&state),
         };
-        self.append_json_line(&self.tree_path(), &event)?;
+        self.append_tree_event(&event)?;
         self.write_state_cache(&state)
     }
 
@@ -463,7 +486,7 @@ impl SpineSidecarStore {
             spine_plantree: snapshot.spine_plantree.clone(),
             source_turn_id: snapshot.source_turn_id.clone(),
         };
-        self.append_json_line(&self.tree_path(), &event)?;
+        self.append_tree_event(&event)?;
         self.write_plan(node_id, snapshot)
     }
 
@@ -670,7 +693,7 @@ impl SpineSidecarStore {
             estimated_tokens,
             source: source.into(),
         };
-        self.append_json_line(&self.tree_path(), &event)
+        self.append_tree_event(&event)
     }
 
     pub(crate) fn append_transition_committed(
@@ -1165,6 +1188,7 @@ impl SpineSidecarStore {
             events.push(event);
         }
 
+        self.set_cached_next_tree_seq(next_tree_seq_for_event_count(events.len())?)?;
         Ok(events)
     }
 
@@ -1433,9 +1457,12 @@ impl SpineSidecarStore {
     }
 
     fn next_tree_seq(&self) -> Result<u64, SpineStoreError> {
+        if let Some(next_seq) = self.metadata_cache()?.next_tree_seq {
+            return Ok(next_seq);
+        }
+
         let len = self.read_tree_events()?.len();
-        u64::try_from(len + 1)
-            .map_err(|_| SpineStoreError::InvalidLedger("tree.jsonl has too many events".into()))
+        next_tree_seq_for_event_count(len)
     }
 
     pub(crate) fn next_tree_event_seq(&self) -> Result<u64, SpineStoreError> {
@@ -1486,6 +1513,30 @@ impl SpineSidecarStore {
             path: path.to_path_buf(),
             source,
         })
+    }
+
+    fn append_tree_event(&self, event: &TreeEvent) -> Result<(), SpineStoreError> {
+        let expected_seq = self.next_tree_seq()?;
+        let event_seq = event.seq();
+        if event_seq != expected_seq {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "tree event seq {event_seq} does not match next tree seq {expected_seq}"
+            )));
+        }
+
+        self.append_json_line(&self.tree_path(), event)?;
+        self.set_cached_next_tree_seq(next_tree_seq_after(event_seq)?)
+    }
+
+    fn metadata_cache(&self) -> Result<MutexGuard<'_, SpineStoreMetadataCache>, SpineStoreError> {
+        self.metadata_cache.lock().map_err(|_| {
+            SpineStoreError::InvalidLedger("spine store metadata cache lock poisoned".to_string())
+        })
+    }
+
+    fn set_cached_next_tree_seq(&self, next_seq: u64) -> Result<(), SpineStoreError> {
+        self.metadata_cache()?.next_tree_seq = Some(next_seq);
+        Ok(())
     }
 
     fn ensure_sidecar_dir(&self) -> Result<(), SpineStoreError> {
@@ -1910,6 +1961,17 @@ impl CompactIndexEvent {
             | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq = next_seq,
         }
     }
+}
+
+fn next_tree_seq_for_event_count(count: usize) -> Result<u64, SpineStoreError> {
+    u64::try_from(count + 1)
+        .map_err(|_| SpineStoreError::InvalidLedger("tree.jsonl has too many events".into()))
+}
+
+fn next_tree_seq_after(current_seq: u64) -> Result<u64, SpineStoreError> {
+    current_seq
+        .checked_add(1)
+        .ok_or_else(|| SpineStoreError::InvalidLedger("tree.jsonl has too many events".into()))
 }
 
 fn record_compact_terminal(

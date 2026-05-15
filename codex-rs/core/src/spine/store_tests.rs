@@ -316,6 +316,82 @@ fn create_writes_root_ledger_and_state_cache() {
 }
 
 #[test]
+fn tree_metadata_cache_matches_replayed_next_seq() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let rollout_path = temp.path().join("rollout-test.jsonl");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path).expect("create store");
+    let mut state = store.create().expect("create sidecar");
+
+    assert_eq!(
+        store.next_tree_event_seq().expect("next seq after create"),
+        2
+    );
+    store
+        .record_transition(&mut state, SpineOperation::Open, None, 8, "turn-1")
+        .expect("record transition");
+    assert_eq!(
+        store
+            .next_tree_event_seq()
+            .expect("cached next seq after transition"),
+        3
+    );
+
+    let reloaded = SpineSidecarStore::for_rollout(&rollout_path).expect("reload store");
+    assert_eq!(
+        reloaded
+            .next_tree_event_seq()
+            .expect("replayed next seq before load"),
+        3
+    );
+    assert_eq!(reloaded.load().expect("load sidecar"), state);
+    assert_eq!(
+        reloaded
+            .next_tree_event_seq()
+            .expect("replayed next seq after load"),
+        3
+    );
+}
+
+#[test]
+fn failed_tree_append_does_not_advance_metadata_cache() {
+    let (_temp, store) = temp_store();
+    let mut state = store.create().expect("create sidecar");
+
+    assert_eq!(
+        store.next_tree_event_seq().expect("next seq after create"),
+        2
+    );
+    let bad_snapshot = PlanSnapshot {
+        node_id: "1".to_string(),
+        revision: 1,
+        explanation: Some("wrong seq".to_string()),
+        items: Vec::new(),
+        spine_plantree: None,
+        source_turn_id: "turn-bad".to_string(),
+        event_seq: 3,
+    };
+    let error = store
+        .write_plan_snapshot(&id(&[1]), &bad_snapshot)
+        .expect_err("wrong tree seq should fail before append");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("tree event seq 3 does not match next tree seq 2")
+    ));
+    assert_eq!(
+        store
+            .next_tree_event_seq()
+            .expect("next seq after failed append"),
+        2
+    );
+
+    store
+        .record_transition(&mut state, SpineOperation::Open, None, 8, "turn-1")
+        .expect("next valid append should still use seq 2");
+    assert_eq!(read_json_lines(store.tree_path())[1]["seq"], json!(2));
+}
+
+#[test]
 fn records_transition_summary_and_replays_from_tree() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
