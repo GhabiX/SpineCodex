@@ -444,6 +444,8 @@ impl SpineRuntime {
             return Ok(());
         }
 
+        // Fixed prompt/prelude items belong to the hidden root sentinel, while the root epoch and
+        // active leaf start at `end_ordinal`; root archive must not fold this prelude range.
         let turn_id = turn_id.into();
         self.next_raw_ordinal = end_ordinal;
         self.append_raw_range(

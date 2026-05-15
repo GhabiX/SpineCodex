@@ -66,6 +66,8 @@ impl Eq for SpineSidecarStore {}
 
 #[derive(Debug, Default)]
 struct SpineStoreMetadataCache {
+    // The JSONL ledger remains authoritative. This cache is replay-derived and advances only after
+    // a tree event append succeeds.
     next_tree_seq: Option<u64>,
 }
 

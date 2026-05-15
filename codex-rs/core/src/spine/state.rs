@@ -33,6 +33,8 @@ impl SpineState {
     pub(crate) fn new_with_initial_leaf_raw_start(initial_leaf_raw_start_ordinal: u64) -> Self {
         let initial_epoch = NodeId::root_epoch(1);
         let initial_leaf = initial_epoch.child(1);
+        // The empty NodeId is only the hidden sentinel. User-visible work starts at root epoch
+        // `1`, with the first live work leaf at `1.1`; do not collapse this to `1 Current`.
         let initial_epoch_record = NodeRecord {
             node_id: initial_epoch.clone(),
             parent_id: None,
