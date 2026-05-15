@@ -1177,7 +1177,9 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let spawn_args = CodexSpawnArgs {
+        let CodexSpawnOk {
+            codex, thread_id, ..
+        } = Codex::spawn(CodexSpawnArgs {
             config,
             installation_id: self.installation_id.clone(),
             auth_manager,
@@ -1202,10 +1204,8 @@ impl ThreadManagerState {
             environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
-        };
-        let CodexSpawnOk {
-            codex, thread_id, ..
-        } = Box::pin(Codex::spawn(spawn_args)).await?;
+        })
+        .await?;
         let new_thread = self
             .finalize_thread_spawn(codex, thread_id, tracked_session_source, watch_registration)
             .await?;
