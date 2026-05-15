@@ -3159,6 +3159,16 @@ pub(crate) struct SpineTreeUpdateCell {
     snapshot: SpineTreeUpdatedNotification,
 }
 
+impl SpineTreeUpdateCell {
+    pub(crate) fn turn_id(&self) -> &str {
+        &self.turn_id
+    }
+
+    pub(crate) fn snapshot_seq(&self) -> u64 {
+        self.snapshot.snapshot_seq
+    }
+}
+
 impl HistoryCell for SpineTreeUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = vec![vec!["• ".dim(), "Spine Tree".bold()].into()];

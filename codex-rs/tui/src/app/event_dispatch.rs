@@ -215,30 +215,36 @@ impl App {
                 }
             }
             AppEvent::UpsertSpineTreeCell { turn_id, snapshot } => {
+                let incoming_turn_id = turn_id.clone();
+                let snapshot_seq = snapshot.snapshot_seq;
                 let cell: Arc<dyn HistoryCell> =
                     Arc::new(history_cell::new_spine_tree_update(turn_id, snapshot));
-                let replaced = if let Some(last) = self.transcript_cells.last_mut()
-                    && last.as_any().is::<history_cell::SpineTreeUpdateCell>()
+                let action = spine_tree_upsert_action(
+                    self.transcript_cells.last(),
+                    &incoming_turn_id,
+                    snapshot_seq,
+                );
+                if action == SpineTreeUpsertAction::Replace
+                    && let Some(last) = self.transcript_cells.last_mut()
                 {
                     *last = cell.clone();
-                    true
-                } else {
-                    false
-                };
+                }
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    if replaced {
+                    if action == SpineTreeUpsertAction::Replace {
                         t.replace_cells(self.transcript_cells.clone());
-                    } else {
+                    } else if action == SpineTreeUpsertAction::Insert {
                         t.insert_cell(cell.clone());
                     }
-                    tui.frame_requester().schedule_frame();
+                    if action != SpineTreeUpsertAction::Ignore {
+                        tui.frame_requester().schedule_frame();
+                    }
                 }
-                if replaced {
+                if action == SpineTreeUpsertAction::Replace {
                     if self.terminal_resize_reflow_enabled() {
                         self.transcript_reflow.schedule_immediate();
                         tui.frame_requester().schedule_frame();
                     }
-                } else {
+                } else if action == SpineTreeUpsertAction::Insert {
                     self.transcript_cells.push(cell.clone());
                     self.insert_history_cell_lines(
                         tui,
@@ -2161,5 +2167,88 @@ impl App {
                 AppRunControl::Exit(ExitReason::UserRequested)
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpineTreeUpsertAction {
+    Replace,
+    Insert,
+    Ignore,
+}
+
+fn spine_tree_upsert_action(
+    last_cell: Option<&Arc<dyn HistoryCell>>,
+    turn_id: &str,
+    snapshot_seq: u64,
+) -> SpineTreeUpsertAction {
+    let Some(last_cell) = last_cell else {
+        return SpineTreeUpsertAction::Insert;
+    };
+    let Some(last_spine_tree) = last_cell
+        .as_any()
+        .downcast_ref::<history_cell::SpineTreeUpdateCell>()
+    else {
+        return SpineTreeUpsertAction::Insert;
+    };
+    if last_spine_tree.turn_id() != turn_id {
+        return SpineTreeUpsertAction::Insert;
+    }
+    if last_spine_tree.snapshot_seq() <= snapshot_seq {
+        SpineTreeUpsertAction::Replace
+    } else {
+        SpineTreeUpsertAction::Ignore
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spine_cell(turn_id: &str, snapshot_seq: u64) -> Arc<dyn HistoryCell> {
+        Arc::new(history_cell::new_spine_tree_update(
+            turn_id.to_string(),
+            codex_app_server_protocol::SpineTreeUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: turn_id.to_string(),
+                snapshot_seq,
+                active_node_id: "1.1".to_string(),
+                nodes: Vec::new(),
+            },
+        ))
+    }
+
+    #[test]
+    fn spine_tree_upsert_replaces_same_turn_newer_snapshot() {
+        let last = spine_cell("turn-1", 4);
+
+        assert_eq!(
+            spine_tree_upsert_action(Some(&last), "turn-1", 5),
+            SpineTreeUpsertAction::Replace
+        );
+        assert_eq!(
+            spine_tree_upsert_action(Some(&last), "turn-1", 4),
+            SpineTreeUpsertAction::Replace
+        );
+    }
+
+    #[test]
+    fn spine_tree_upsert_inserts_different_turn_snapshot() {
+        let last = spine_cell("turn-1", 4);
+
+        assert_eq!(
+            spine_tree_upsert_action(Some(&last), "turn-2", 1),
+            SpineTreeUpsertAction::Insert
+        );
+    }
+
+    #[test]
+    fn spine_tree_upsert_ignores_stale_same_turn_snapshot() {
+        let last = spine_cell("turn-1", 4);
+
+        assert_eq!(
+            spine_tree_upsert_action(Some(&last), "turn-1", 3),
+            SpineTreeUpsertAction::Ignore
+        );
     }
 }
