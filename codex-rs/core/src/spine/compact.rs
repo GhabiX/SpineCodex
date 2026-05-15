@@ -554,6 +554,9 @@ pub(crate) fn raw_ordinal_for_effective_index_with_spans(
             raw_cursor = span.fold_end_ordinal;
             continue;
         }
+        if is_spine_handoff_item(item) {
+            continue;
+        }
         if is_non_spine_compact_item(item) {
             return None;
         }
@@ -596,6 +599,19 @@ pub(crate) fn render_spine_handoff_item(from_node: &NodeId, to_node: &NodeId) ->
         }],
         phase: None,
     }
+}
+
+fn is_spine_handoff_item(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    if role != "developer" || content.len() != 1 {
+        return false;
+    }
+    let ContentItem::InputText { text } = &content[0] else {
+        return false;
+    };
+    text.starts_with("<spine_handoff>") && text.ends_with("</spine_handoff>")
 }
 
 #[cfg(test)]
@@ -726,6 +742,10 @@ pub(crate) fn effective_index_for_raw_ordinal_with_spans(
                 return None;
             }
             raw_cursor = span.fold_end_ordinal;
+            continue;
+        }
+
+        if is_spine_handoff_item(item) {
             continue;
         }
 

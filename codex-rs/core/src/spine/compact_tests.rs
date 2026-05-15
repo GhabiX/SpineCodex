@@ -157,6 +157,146 @@ fn raw_ordinals_map_slim_spine_worklog_with_runtime_span() {
 }
 
 #[test]
+fn raw_ordinals_treat_spine_handoff_as_zero_width() {
+    let worklog_item = render_spine_worklog_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "previous leaf",
+        "previous facts",
+    );
+    let handoff_item = render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2]));
+    let spans = vec![installed_span(
+        "compact-1-1",
+        id(&[1, 1]),
+        SpineOperation::Next,
+        1,
+        4,
+    )];
+    let history = vec![
+        text_item("prefix"),
+        worklog_item,
+        handoff_item,
+        text_item("tail"),
+    ];
+
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 2, &spans),
+        Some(4),
+        "handoff shares the boundary after the folded worklog span"
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 3, &spans),
+        Some(4),
+        "tail must not be shifted by the zero-width handoff"
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, history.len(), &spans),
+        Some(5)
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
+        Some(3),
+        "raw boundary should map to the next real item, not the handoff marker"
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 5, &spans),
+        Some(history.len())
+    );
+}
+
+#[test]
+fn suffix_fold_does_not_extend_past_handoff_shifted_boundary() {
+    let mut history = vec![
+        text_item("raw 0"),
+        text_item("raw 1"),
+        render_spine_worklog_item(
+            &id(&[1, 1]),
+            SpineOperation::Next,
+            "node 1.1 done",
+            "node 1.1 facts",
+        ),
+        render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2])),
+    ];
+    for raw in 106..215 {
+        history.push(text_item(&format!("raw {raw}")));
+    }
+    history.push(function_call("call-next"));
+    history.push(function_call_output("call-next"));
+
+    let spans = vec![installed_span(
+        "compact-1-1",
+        id(&[1, 1]),
+        SpineOperation::Next,
+        2,
+        106,
+    )];
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[1, 2]),
+        scope_node_id: None,
+        cut_ordinal: 106,
+        fold_end_ordinal: 217,
+        spine_tree: "1.1: finished\n1.2: Current".to_string(),
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: "node 1.2 done".to_string(),
+        compact_instruction: None,
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let plan =
+        plan_suffix_fold_with_spans(&history, 106, 217, &spans, input).expect("plan suffix fold");
+
+    assert_eq!(plan.input.cut_ordinal, 106);
+    assert_eq!(plan.input.fold_end_ordinal, 217);
+    assert_eq!(plan.fold_end_index, history.len());
+    assert_eq!(
+        plan.input.suffix_items.last(),
+        Some(&function_call_output("call-next"))
+    );
+    assert!(
+        plan.replacement_tail.is_empty(),
+        "fold end should already include the transition output, so closure must not extend past it"
+    );
+}
+
+#[test]
+fn future_live_start_remains_mappable_after_handoff_compact() {
+    let history = vec![
+        text_item("raw 0"),
+        text_item("raw 1"),
+        render_spine_worklog_item(
+            &id(&[1, 1]),
+            SpineOperation::Next,
+            "node 1.1 done",
+            "node 1.1 facts",
+        ),
+        render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2])),
+        render_spine_worklog_item(
+            &id(&[1, 2]),
+            SpineOperation::Next,
+            "node 1.2 done",
+            "node 1.2 facts",
+        ),
+        render_spine_handoff_item(&id(&[1, 2]), &id(&[1, 3])),
+    ];
+    let spans = vec![
+        installed_span("compact-1-1", id(&[1, 1]), SpineOperation::Next, 2, 106),
+        installed_span("compact-1-2", id(&[1, 2]), SpineOperation::Next, 106, 217),
+    ];
+
+    let live_start_index = effective_index_for_raw_ordinal_with_spans(&history, 217, &spans)
+        .expect("future live start must remain mappable");
+    assert_eq!(live_start_index, history.len());
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, live_start_index, &spans),
+        Some(217)
+    );
+}
+
+#[test]
 fn raw_ordinals_fail_fast_for_slim_spine_worklog_without_runtime_span() {
     let worklog_item = render_spine_worklog_item(
         &id(&[1, 2]),
