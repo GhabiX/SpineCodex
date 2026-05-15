@@ -65,11 +65,36 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "spinePlanTree": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineTreePlanTree"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "items",
         "revision"
+      ],
+      "type": "object"
+    },
+    "SpineTreePlanCheckpoint": {
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/SpineTreePlanItemStatus"
+        },
+        "task": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "task"
       ],
       "type": "object"
     },
@@ -99,6 +124,62 @@
         "completed"
       ],
       "type": "string"
+    },
+    "SpineTreePlanTree": {
+      "properties": {
+        "anchorNodeId": {
+          "type": "string"
+        },
+        "root": {
+          "$ref": "#/definitions/SpineTreePlanTreeScope"
+        }
+      },
+      "required": [
+        "anchorNodeId",
+        "root"
+      ],
+      "type": "object"
+    },
+    "SpineTreePlanTreeScope": {
+      "properties": {
+        "checkpoints": {
+          "items": {
+            "$ref": "#/definitions/SpineTreePlanCheckpoint"
+          },
+          "type": "array"
+        },
+        "children": {
+          "items": {
+            "$ref": "#/definitions/SpineTreePlanTreeScope"
+          },
+          "type": "array"
+        },
+        "existingNodeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineTreePlanItemStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "checkpoints",
+        "children",
+        "summary"
+      ],
+      "type": "object"
     }
   },
   "properties": {
