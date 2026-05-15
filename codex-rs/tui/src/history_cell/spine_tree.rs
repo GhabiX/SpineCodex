@@ -516,3 +516,436 @@ fn render_spine_tree_plan_item(
     push_owned_lines(&wrapped, &mut out);
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::SpineTreePlan;
+    use ratatui::style::Color;
+    use ratatui::style::Modifier;
+
+    fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn span_style_containing(lines: &[Line<'static>], text: &str) -> Style {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains(text))
+            .map(|span| span.style)
+            .unwrap_or_else(|| panic!("missing span containing {text:?}"))
+    }
+
+    fn snapshot(active_node_id: &str, nodes: Vec<SpineTreeNode>) -> SpineTreeUpdatedNotification {
+        SpineTreeUpdatedNotification {
+            thread_id: "thread-spine-tree".to_string(),
+            turn_id: "turn-spine-tree".to_string(),
+            snapshot_seq: 1,
+            active_node_id: active_node_id.to_string(),
+            nodes,
+        }
+    }
+
+    fn node(
+        node_id: &str,
+        parent_id: Option<&str>,
+        summary: Option<&str>,
+        status: SpineTreeNodeStatus,
+        plan: Option<SpineTreePlan>,
+    ) -> SpineTreeNode {
+        SpineTreeNode {
+            node_id: node_id.to_string(),
+            parent_id: parent_id.map(str::to_string),
+            summary: summary.map(str::to_string),
+            status,
+            plan,
+        }
+    }
+
+    fn plan_item(step: &str, status: SpineTreePlanItemStatus) -> SpineTreePlanItem {
+        SpineTreePlanItem {
+            stable_task_id: step.to_string(),
+            step: step.to_string(),
+            status,
+        }
+    }
+
+    fn plan(
+        items: Vec<SpineTreePlanItem>,
+        spine_plantree: Option<SpineTreePlanTree>,
+    ) -> SpineTreePlan {
+        SpineTreePlan {
+            revision: 1,
+            explanation: None,
+            spine_plantree,
+            items,
+        }
+    }
+
+    fn plantree(anchor_node_id: &str, root: SpineTreePlanTreeScope) -> SpineTreePlanTree {
+        SpineTreePlanTree {
+            anchor_node_id: anchor_node_id.to_string(),
+            root,
+        }
+    }
+
+    fn scope(
+        existing_node_id: Option<&str>,
+        summary: &str,
+        children: Vec<SpineTreePlanTreeScope>,
+    ) -> SpineTreePlanTreeScope {
+        SpineTreePlanTreeScope {
+            existing_node_id: existing_node_id.map(str::to_string),
+            summary: summary.to_string(),
+            status: None,
+            checkpoints: Vec::new(),
+            children,
+        }
+    }
+
+    fn scope_with_checkpoint(
+        existing_node_id: Option<&str>,
+        summary: &str,
+        checkpoint_task: &str,
+        checkpoint_status: SpineTreePlanItemStatus,
+    ) -> SpineTreePlanTreeScope {
+        SpineTreePlanTreeScope {
+            existing_node_id: existing_node_id.map(str::to_string),
+            summary: summary.to_string(),
+            status: None,
+            checkpoints: vec![SpineTreePlanCheckpoint {
+                task: checkpoint_task.to_string(),
+                status: checkpoint_status,
+            }],
+            children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn tree_display_wraps_narrow_width_without_losing_labels() {
+        let snapshot = snapshot(
+            "1.1",
+            vec![
+                node(
+                    "1",
+                    None,
+                    Some("root scope"),
+                    SpineTreeNodeStatus::Opened,
+                    None,
+                ),
+                node(
+                    "1.1",
+                    Some("1"),
+                    Some("focused scope with narrow wrapping visible token"),
+                    SpineTreeNodeStatus::Live,
+                    Some(plan(
+                        vec![plan_item(
+                            "validate narrow wrapping token",
+                            SpineTreePlanItemStatus::InProgress,
+                        )],
+                        None,
+                    )),
+                ),
+            ],
+        );
+
+        let rendered = render_lines(&tree_display_lines(&snapshot, /*width*/ 22));
+        let joined = rendered.join("\n");
+
+        assert!(
+            rendered.len() > 4,
+            "expected narrow rendering to wrap, got: {rendered:?}"
+        );
+        assert!(joined.contains("Spine Tree"));
+        assert!(joined.contains("1.1"));
+        assert!(joined.contains("narrow"));
+        assert!(joined.contains("validate"));
+    }
+
+    #[test]
+    fn tree_display_handles_deep_tree_and_missing_summary() {
+        let snapshot = snapshot(
+            "1.1.1.1",
+            vec![
+                node("1", None, None, SpineTreeNodeStatus::Opened, None),
+                node(
+                    "1.1",
+                    Some("1"),
+                    Some(" "),
+                    SpineTreeNodeStatus::Opened,
+                    None,
+                ),
+                node(
+                    "1.1.1",
+                    Some("1.1"),
+                    Some("nested scope"),
+                    SpineTreeNodeStatus::Finished,
+                    None,
+                ),
+                node(
+                    "1.1.1.1",
+                    Some("1.1.1"),
+                    None,
+                    SpineTreeNodeStatus::Live,
+                    None,
+                ),
+            ],
+        );
+
+        let rendered = render_lines(&tree_display_lines(&snapshot, /*width*/ 80)).join("\n");
+
+        assert!(rendered.contains("1 live"));
+        assert!(rendered.contains("1.1 live"));
+        assert!(rendered.contains("1.1.1 nested scope finished"));
+        assert!(rendered.contains("1.1.1.1 current"));
+    }
+
+    #[test]
+    fn tree_display_shows_node_status_and_root_branches() {
+        let snapshot = snapshot(
+            "2.1",
+            vec![
+                node(
+                    "1",
+                    None,
+                    Some("archived epoch"),
+                    SpineTreeNodeStatus::Closed,
+                    None,
+                ),
+                node(
+                    "2",
+                    None,
+                    Some("current epoch"),
+                    SpineTreeNodeStatus::Opened,
+                    None,
+                ),
+                node(
+                    "2.1",
+                    Some("2"),
+                    Some("focused leaf"),
+                    SpineTreeNodeStatus::Live,
+                    None,
+                ),
+            ],
+        );
+
+        let rendered = render_lines(&tree_display_lines(&snapshot, /*width*/ 80));
+
+        assert!(
+            rendered[1].starts_with("  ├ 1 archived epoch closed"),
+            "expected first root epoch to use a non-last branch and show status, got: {rendered:?}"
+        );
+        assert!(
+            rendered[2].starts_with("  └ 2 current epoch live"),
+            "expected second root epoch to use a last branch and show status, got: {rendered:?}"
+        );
+        assert!(rendered[3].contains("2.1 focused leaf current"));
+    }
+
+    #[test]
+    fn tree_display_uses_active_node_plantree_only() {
+        let stale_plan = plan(
+            Vec::new(),
+            Some(plantree(
+                "1",
+                scope(
+                    Some("1"),
+                    "root scope",
+                    vec![scope(None, "stale future scope", Vec::new())],
+                ),
+            )),
+        );
+        let active_plan = plan(
+            Vec::new(),
+            Some(plantree(
+                "1.1",
+                scope(
+                    Some("1.1"),
+                    "active scope",
+                    vec![scope(None, "active future scope", Vec::new())],
+                ),
+            )),
+        );
+        let snapshot = snapshot(
+            "1.1",
+            vec![
+                node(
+                    "1",
+                    None,
+                    Some("root"),
+                    SpineTreeNodeStatus::Opened,
+                    Some(stale_plan),
+                ),
+                node(
+                    "1.1",
+                    Some("1"),
+                    Some("focused leaf"),
+                    SpineTreeNodeStatus::Live,
+                    Some(active_plan),
+                ),
+            ],
+        );
+
+        let rendered = render_lines(&tree_display_lines(&snapshot, /*width*/ 80)).join("\n");
+
+        assert!(rendered.contains("~1.1.1 active future scope"));
+        assert!(!rendered.contains("stale future scope"));
+    }
+
+    #[test]
+    fn tree_display_predicts_future_ids_after_real_children() {
+        let active_plan = plan(
+            Vec::new(),
+            Some(plantree(
+                "1.1",
+                scope(
+                    Some("1.1"),
+                    "active scope",
+                    vec![scope(
+                        None,
+                        "planned sibling",
+                        vec![scope(None, "planned nested", Vec::new())],
+                    )],
+                ),
+            )),
+        );
+        let snapshot = snapshot(
+            "1.1",
+            vec![
+                node("1", None, Some("root"), SpineTreeNodeStatus::Opened, None),
+                node(
+                    "1.1",
+                    Some("1"),
+                    Some("focused leaf"),
+                    SpineTreeNodeStatus::Live,
+                    Some(active_plan),
+                ),
+                node(
+                    "1.1.1",
+                    Some("1.1"),
+                    Some("real child"),
+                    SpineTreeNodeStatus::Opened,
+                    None,
+                ),
+            ],
+        );
+
+        let rendered = render_lines(&tree_display_lines(&snapshot, /*width*/ 80)).join("\n");
+
+        assert!(rendered.contains("1.1.1 real child live"));
+        assert!(rendered.contains("~1.1.2 planned sibling"));
+        assert!(rendered.contains("~1.1.2.1 planned nested"));
+        assert!(!rendered.contains("~1.1.1 planned sibling"));
+    }
+
+    #[test]
+    fn plantree_display_predicts_future_ids_after_real_children() {
+        let active_plan = plan(
+            Vec::new(),
+            Some(plantree(
+                "1.1",
+                scope(
+                    Some("1.1"),
+                    "active scope",
+                    vec![scope(
+                        None,
+                        "planned sibling",
+                        vec![scope(None, "planned nested", Vec::new())],
+                    )],
+                ),
+            )),
+        );
+        let snapshot = snapshot(
+            "1.1",
+            vec![
+                node("1", None, Some("root"), SpineTreeNodeStatus::Opened, None),
+                node(
+                    "1.1",
+                    Some("1"),
+                    Some("focused leaf"),
+                    SpineTreeNodeStatus::Live,
+                    Some(active_plan),
+                ),
+                node(
+                    "1.1.1",
+                    Some("1.1"),
+                    Some("real child"),
+                    SpineTreeNodeStatus::Opened,
+                    None,
+                ),
+            ],
+        );
+
+        let rendered = render_lines(&plantree_display_lines(&snapshot, /*width*/ 80)).join("\n");
+
+        assert!(rendered.contains("Spine PlanTree"));
+        assert!(rendered.contains("1.1 active scope"));
+        assert!(rendered.contains("~1.1.2 planned sibling"));
+        assert!(rendered.contains("~1.1.2.1 planned nested"));
+        assert!(!rendered.contains("Spine Tree"));
+    }
+
+    #[test]
+    fn planned_checkpoint_in_progress_does_not_use_active_style() {
+        let active_plan = plan(
+            vec![plan_item(
+                "real active checklist item",
+                SpineTreePlanItemStatus::InProgress,
+            )],
+            Some(plantree(
+                "1.1",
+                scope(
+                    Some("1.1"),
+                    "focused work",
+                    vec![scope_with_checkpoint(
+                        None,
+                        "planned future scope",
+                        "planned in-progress metadata",
+                        SpineTreePlanItemStatus::InProgress,
+                    )],
+                ),
+            )),
+        );
+        let snapshot = snapshot(
+            "1.1",
+            vec![
+                node(
+                    "1",
+                    None,
+                    Some("root scope"),
+                    SpineTreeNodeStatus::Opened,
+                    None,
+                ),
+                node(
+                    "1.1",
+                    Some("1"),
+                    Some("focused work"),
+                    SpineTreeNodeStatus::Live,
+                    Some(active_plan),
+                ),
+            ],
+        );
+
+        let lines = tree_display_lines(&snapshot, /*width*/ 80);
+        let rendered = render_lines(&lines).join("\n");
+        assert!(rendered.contains("~1.1.1 planned future scope"));
+        assert!(!rendered.contains("footprint:"));
+
+        let real_style = span_style_containing(&lines, "real active checklist item");
+        assert_eq!(real_style.fg, Some(Color::Cyan));
+        assert!(real_style.add_modifier.contains(Modifier::BOLD));
+
+        let planned_style = span_style_containing(&lines, "planned in-progress metadata");
+        assert_eq!(planned_style.fg, None);
+        assert!(!planned_style.add_modifier.contains(Modifier::BOLD));
+    }
+}

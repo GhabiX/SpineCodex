@@ -219,16 +219,12 @@ impl App {
                 let snapshot_seq = snapshot.snapshot_seq;
                 let cell: Arc<dyn HistoryCell> =
                     Arc::new(history_cell::new_spine_tree_update(turn_id, snapshot));
-                let action = spine_tree_upsert_action(
-                    self.transcript_cells.last(),
+                let action = upsert_spine_tree_transcript_cell(
+                    &mut self.transcript_cells,
+                    cell.clone(),
                     &incoming_turn_id,
                     snapshot_seq,
                 );
-                if action == SpineTreeUpsertAction::Replace
-                    && let Some(last) = self.transcript_cells.last_mut()
-                {
-                    *last = cell.clone();
-                }
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     if action == SpineTreeUpsertAction::Replace {
                         t.replace_cells(self.transcript_cells.clone());
@@ -245,7 +241,6 @@ impl App {
                         tui.frame_requester().schedule_frame();
                     }
                 } else if action == SpineTreeUpsertAction::Insert {
-                    self.transcript_cells.push(cell.clone());
                     self.insert_history_cell_lines(
                         tui,
                         cell.as_ref(),
@@ -2201,6 +2196,27 @@ fn spine_tree_upsert_action(
     }
 }
 
+fn upsert_spine_tree_transcript_cell(
+    transcript_cells: &mut Vec<Arc<dyn HistoryCell>>,
+    cell: Arc<dyn HistoryCell>,
+    turn_id: &str,
+    snapshot_seq: u64,
+) -> SpineTreeUpsertAction {
+    let action = spine_tree_upsert_action(transcript_cells.last(), turn_id, snapshot_seq);
+    match action {
+        SpineTreeUpsertAction::Replace => {
+            if let Some(last) = transcript_cells.last_mut() {
+                *last = cell;
+            }
+        }
+        SpineTreeUpsertAction::Insert => {
+            transcript_cells.push(cell);
+        }
+        SpineTreeUpsertAction::Ignore => {}
+    }
+    action
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2250,5 +2266,59 @@ mod tests {
             spine_tree_upsert_action(Some(&last), "turn-1", 3),
             SpineTreeUpsertAction::Ignore
         );
+    }
+
+    fn spine_snapshot_seq(cell: &Arc<dyn HistoryCell>) -> u64 {
+        cell.as_any()
+            .downcast_ref::<history_cell::SpineTreeUpdateCell>()
+            .expect("spine tree cell")
+            .snapshot_seq()
+    }
+
+    fn spine_turn_id(cell: &Arc<dyn HistoryCell>) -> String {
+        cell.as_any()
+            .downcast_ref::<history_cell::SpineTreeUpdateCell>()
+            .expect("spine tree cell")
+            .turn_id()
+            .to_string()
+    }
+
+    #[test]
+    fn spine_tree_transcript_upsert_replaces_same_turn_cell() {
+        let mut cells = vec![spine_cell("turn-1", 4)];
+
+        let action =
+            upsert_spine_tree_transcript_cell(&mut cells, spine_cell("turn-1", 5), "turn-1", 5);
+
+        assert_eq!(action, SpineTreeUpsertAction::Replace);
+        assert_eq!(cells.len(), 1);
+        assert_eq!(spine_turn_id(&cells[0]), "turn-1");
+        assert_eq!(spine_snapshot_seq(&cells[0]), 5);
+    }
+
+    #[test]
+    fn spine_tree_transcript_upsert_inserts_different_turn_cell() {
+        let mut cells = vec![spine_cell("turn-1", 4)];
+
+        let action =
+            upsert_spine_tree_transcript_cell(&mut cells, spine_cell("turn-2", 1), "turn-2", 1);
+
+        assert_eq!(action, SpineTreeUpsertAction::Insert);
+        assert_eq!(cells.len(), 2);
+        assert_eq!(spine_turn_id(&cells[0]), "turn-1");
+        assert_eq!(spine_turn_id(&cells[1]), "turn-2");
+        assert_eq!(spine_snapshot_seq(&cells[1]), 1);
+    }
+
+    #[test]
+    fn spine_tree_transcript_upsert_ignores_stale_same_turn_cell() {
+        let mut cells = vec![spine_cell("turn-1", 4)];
+
+        let action =
+            upsert_spine_tree_transcript_cell(&mut cells, spine_cell("turn-1", 3), "turn-1", 3);
+
+        assert_eq!(action, SpineTreeUpsertAction::Ignore);
+        assert_eq!(cells.len(), 1);
+        assert_eq!(spine_snapshot_seq(&cells[0]), 4);
     }
 }
