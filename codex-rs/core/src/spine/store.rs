@@ -779,102 +779,123 @@ impl SpineSidecarStore {
 
     pub(crate) fn append_compact_started(
         &self,
-        compact_id: impl Into<String>,
-        node_id: &NodeId,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        strategy: impl Into<String>,
-        rollout: impl Into<String>,
+        record: CompactStartedRecord,
     ) -> Result<(), SpineStoreError> {
+        let CompactStartedRecord {
+            attempt:
+                CompactAttemptRecord {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                },
+            strategy,
+            rollout,
+        } = record;
         let path = self.compact_index_path();
         let event = CompactIndexEvent::CompactStarted {
             seq: self.next_jsonl_seq(&path)?,
-            compact_id: compact_id.into(),
+            compact_id,
             node_id: node_id.to_string(),
             op,
             cut_ordinal,
             fold_end_ordinal,
-            strategy: strategy.into(),
+            strategy,
             raw_trajs: format!("{RAW_DIR}/{RAW_ROLLOUT_FILE}"),
-            rollout: rollout.into(),
+            rollout,
         };
         self.append_json_line(&path, &event)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_compact_installed(
         &self,
-        compact_id: impl Into<String>,
-        node_id: &NodeId,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        replacement_history_len: usize,
-        worklog_path: impl Into<String>,
-        message_hash: impl Into<String>,
+        record: CompactInstalledRecord,
     ) -> Result<(), SpineStoreError> {
+        let CompactInstalledRecord {
+            attempt:
+                CompactAttemptRecord {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                },
+            replacement_history_len,
+            worklog_path,
+            message_hash,
+        } = record;
         let path = self.compact_index_path();
         let event = CompactIndexEvent::CompactInstalled {
             seq: self.next_jsonl_seq(&path)?,
-            compact_id: compact_id.into(),
+            compact_id,
             node_id: node_id.to_string(),
             op,
             cut_ordinal,
             fold_end_ordinal,
             replacement_history_len,
-            worklog_path: worklog_path.into(),
-            message_hash: message_hash.into(),
+            worklog_path,
+            message_hash,
         };
         self.append_json_line(&path, &event)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_compact_failed(
         &self,
-        compact_id: impl Into<String>,
-        node_id: &NodeId,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        strategy: impl Into<String>,
-        error: impl Into<String>,
+        record: CompactTerminalRecord,
     ) -> Result<(), SpineStoreError> {
+        let CompactTerminalRecord {
+            attempt:
+                CompactAttemptRecord {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                },
+            strategy,
+            error,
+        } = record;
         let path = self.compact_index_path();
         let event = CompactIndexEvent::CompactFailed {
             seq: self.next_jsonl_seq(&path)?,
-            compact_id: compact_id.into(),
+            compact_id,
             node_id: node_id.to_string(),
             op,
             cut_ordinal,
             fold_end_ordinal,
-            strategy: strategy.into(),
-            error: error.into(),
+            strategy,
+            error,
         };
         self.append_json_line(&path, &event)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_compact_interrupted(
         &self,
-        compact_id: impl Into<String>,
-        node_id: &NodeId,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        strategy: impl Into<String>,
-        error: impl Into<String>,
+        record: CompactTerminalRecord,
     ) -> Result<(), SpineStoreError> {
+        let CompactTerminalRecord {
+            attempt:
+                CompactAttemptRecord {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                },
+            strategy,
+            error,
+        } = record;
         let path = self.compact_index_path();
         let event = CompactIndexEvent::CompactInterrupted {
             seq: self.next_jsonl_seq(&path)?,
-            compact_id: compact_id.into(),
+            compact_id,
             node_id: node_id.to_string(),
             op,
             cut_ordinal,
             fold_end_ordinal,
-            strategy: strategy.into(),
-            error: error.into(),
+            strategy,
+            error,
         };
         self.append_json_line(&path, &event)
     }
@@ -1613,6 +1634,37 @@ pub(crate) enum SpineOperation {
     Next,
     Close,
     Archive,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CompactAttemptRecord {
+    pub(crate) compact_id: String,
+    pub(crate) node_id: NodeId,
+    pub(crate) op: SpineOperation,
+    pub(crate) cut_ordinal: u64,
+    pub(crate) fold_end_ordinal: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CompactStartedRecord {
+    pub(crate) attempt: CompactAttemptRecord,
+    pub(crate) strategy: String,
+    pub(crate) rollout: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CompactInstalledRecord {
+    pub(crate) attempt: CompactAttemptRecord,
+    pub(crate) replacement_history_len: usize,
+    pub(crate) worklog_path: String,
+    pub(crate) message_hash: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CompactTerminalRecord {
+    pub(crate) attempt: CompactAttemptRecord,
+    pub(crate) strategy: String,
+    pub(crate) error: String,
 }
 
 pub(crate) trait TransitionSummaryArg {

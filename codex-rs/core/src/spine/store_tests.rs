@@ -30,6 +30,75 @@ fn read_json(path: impl AsRef<Path>) -> Value {
     serde_json::from_str(&contents).expect("parse json")
 }
 
+fn compact_attempt(
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+) -> CompactAttemptRecord {
+    CompactAttemptRecord {
+        compact_id: compact_id.to_string(),
+        node_id,
+        op,
+        cut_ordinal,
+        fold_end_ordinal,
+    }
+}
+
+fn compact_started(
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+) -> CompactStartedRecord {
+    CompactStartedRecord {
+        attempt: compact_attempt(compact_id, node_id, op, cut_ordinal, fold_end_ordinal),
+        strategy: "codex_builtin_text".to_string(),
+        rollout: "../rollout.jsonl".to_string(),
+    }
+}
+
+fn compact_installed(
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    replacement_history_len: usize,
+    message_hash: &str,
+) -> CompactInstalledRecord {
+    let worklog_node_path = node_id
+        .segments()
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join("/");
+    let worklog_path = format!("nodes/{worklog_node_path}/worklog.md");
+    CompactInstalledRecord {
+        attempt: compact_attempt(compact_id, node_id, op, cut_ordinal, fold_end_ordinal),
+        replacement_history_len,
+        worklog_path,
+        message_hash: message_hash.to_string(),
+    }
+}
+
+fn compact_terminal(
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    error: &str,
+) -> CompactTerminalRecord {
+    CompactTerminalRecord {
+        attempt: compact_attempt(compact_id, node_id, op, cut_ordinal, fold_end_ordinal),
+        strategy: "codex_builtin_text".to_string(),
+        error: error.to_string(),
+    }
+}
+
 fn assistant_rollout_item(text: &str) -> RolloutItem {
     RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Message {
         id: None,
@@ -832,27 +901,24 @@ fn appends_compact_index_and_raw_mirror_events() {
         )])
         .expect("append raw mirror item");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-1",
-            &id(&[1, 2]),
+            id(&[1, 2]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append compact started");
     store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-1",
-            &id(&[1, 2]),
+            id(&[1, 2]),
             SpineOperation::Next,
             4,
             9,
             7,
-            "nodes/1/2/worklog.md",
             "sha1:abc",
-        )
+        ))
         .expect("append compact installed");
     store
         .append_raw_mirror_compact_checkpoint("compact-1", "sha1:abc", 7)
@@ -906,15 +972,13 @@ fn compact_index_started_without_terminal_fails_load() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append compact started");
 
     let error = store.load().expect_err("dangling compact should fail");
@@ -1099,27 +1163,24 @@ fn compact_index_started_then_installed_loads() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append compact started");
     store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
             7,
-            "nodes/1/worklog.md",
             "sha1:abc",
-        )
+        ))
         .expect("append compact installed");
 
     store.load().expect("resolved compact should load");
@@ -1130,73 +1191,64 @@ fn installed_compact_spans_return_full_runtime_ledger() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-child",
-            &id(&[1, 1]),
+            id(&[1, 1]),
             SpineOperation::Next,
             1,
             4,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append child compact started");
     store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-child",
-            &id(&[1, 1]),
+            id(&[1, 1]),
             SpineOperation::Next,
             1,
             4,
             3,
-            "nodes/1/1/worklog.md",
             "sha1:child",
-        )
+        ))
         .expect("append child compact installed");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-scope",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Close,
             1,
             6,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append scope compact started");
     store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-scope",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Close,
             1,
             6,
             2,
-            "nodes/1/worklog.md",
             "sha1:scope",
-        )
+        ))
         .expect("append scope compact installed");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-sibling",
-            &id(&[2]),
+            id(&[2]),
             SpineOperation::Next,
             7,
             9,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append sibling compact started");
     store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-sibling",
-            &id(&[2]),
+            id(&[2]),
             SpineOperation::Next,
             7,
             9,
             4,
-            "nodes/2/worklog.md",
             "sha1:sibling",
-        )
+        ))
         .expect("append sibling compact installed");
 
     let spans = store
@@ -1225,50 +1277,44 @@ fn projected_compact_spans_filter_stale_duplicate_boundaries() {
     let (temp, source_store) = temp_store();
     source_store.create().expect("create source sidecar");
     source_store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-old",
-            &id(&[1, 1]),
+            id(&[1, 1]),
             SpineOperation::Next,
             1,
             4,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append old compact started");
     source_store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-old",
-            &id(&[1, 1]),
+            id(&[1, 1]),
             SpineOperation::Next,
             1,
             4,
             3,
-            "nodes/1/1/worklog.md",
             "sha1:old",
-        )
+        ))
         .expect("append old compact installed");
     source_store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-new",
-            &id(&[1, 1]),
+            id(&[1, 1]),
             SpineOperation::Next,
             1,
             6,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append new compact started");
     source_store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-new",
-            &id(&[1, 1]),
+            id(&[1, 1]),
             SpineOperation::Next,
             1,
             6,
             3,
-            "nodes/1/1/worklog.md",
             "sha1:new",
-        )
+        ))
         .expect("append new compact installed");
 
     let surviving_hashes = HashSet::from(["sha1:new".to_string()]);
@@ -1305,26 +1351,23 @@ fn compact_index_started_then_failed_loads() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append compact started");
     store
-        .append_compact_failed(
+        .append_compact_failed(compact_terminal(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
             "strategy failed",
-        )
+        ))
         .expect("append compact failed");
 
     store.load().expect("failed compact should be terminal");
@@ -1335,26 +1378,23 @@ fn compact_index_started_then_interrupted_loads() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append compact started");
     store
-        .append_compact_interrupted(
+        .append_compact_interrupted(compact_terminal(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
             "turn aborted",
-        )
+        ))
         .expect("append compact interrupted");
 
     assert_eq!(
@@ -1381,16 +1421,15 @@ fn compact_index_terminal_without_started_fails_load() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
             7,
-            "nodes/1/worklog.md",
             "sha1:abc",
-        )
+        ))
         .expect("append compact installed");
 
     let error = store
@@ -1408,27 +1447,24 @@ fn compact_index_terminal_mismatch_fails_load() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append compact started");
     store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Close,
             4,
             9,
             7,
-            "nodes/1/worklog.md",
             "sha1:abc",
-        )
+        ))
         .expect("append mismatched compact installed");
 
     let error = store.load().expect_err("mismatched terminal should fail");
@@ -1444,38 +1480,34 @@ fn compact_index_duplicate_terminal_fails_load() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
-        .append_compact_started(
+        .append_compact_started(compact_started(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
-            "../rollout.jsonl",
-        )
+        ))
         .expect("append compact started");
     store
-        .append_compact_installed(
+        .append_compact_installed(compact_installed(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
             7,
-            "nodes/1/worklog.md",
             "sha1:abc",
-        )
+        ))
         .expect("append compact installed");
     store
-        .append_compact_failed(
+        .append_compact_failed(compact_terminal(
             "compact-1",
-            &id(&[1]),
+            id(&[1]),
             SpineOperation::Next,
             4,
             9,
-            "codex_builtin_text",
             "late failure",
-        )
+        ))
         .expect("append duplicate terminal");
 
     let error = store.load().expect_err("duplicate terminal should fail");

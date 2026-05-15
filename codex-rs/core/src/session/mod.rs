@@ -191,6 +191,10 @@ use crate::spine::compact::render_spine_worklog_item;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
 use crate::spine::session_integration::record_plan_update_snapshot;
+use crate::spine::store::CompactAttemptRecord;
+use crate::spine::store::CompactInstalledRecord;
+use crate::spine::store::CompactStartedRecord;
+use crate::spine::store::CompactTerminalRecord;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::compact_message_hash;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
@@ -3011,16 +3015,19 @@ impl Session {
             ..boundary.clone()
         };
         let compact_id = deterministic_spine_compact_id(&effective_boundary);
+        let compact_attempt = CompactAttemptRecord {
+            compact_id: compact_id.clone(),
+            node_id: boundary.node_id.clone(),
+            op: boundary.op,
+            cut_ordinal: effective_boundary.cut_ordinal,
+            fold_end_ordinal: effective_boundary.fold_end_ordinal,
+        };
         store
-            .append_compact_started(
-                &compact_id,
-                &boundary.node_id,
-                boundary.op,
-                effective_boundary.cut_ordinal,
-                effective_boundary.fold_end_ordinal,
-                CODEX_BUILTIN_TEXT_STRATEGY,
-                compact_index_rollout_path,
-            )
+            .append_compact_started(CompactStartedRecord {
+                attempt: compact_attempt.clone(),
+                strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
+                rollout: compact_index_rollout_path,
+            })
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to record spine root archive start: {err}"))
             })?;
@@ -3079,15 +3086,11 @@ impl Session {
             .await
         {
             store
-                .append_compact_failed(
-                    &compact_id,
-                    &boundary.node_id,
-                    boundary.op,
-                    effective_boundary.cut_ordinal,
-                    effective_boundary.fold_end_ordinal,
-                    CODEX_BUILTIN_TEXT_STRATEGY,
-                    err.to_string(),
-                )
+                .append_compact_failed(CompactTerminalRecord {
+                    attempt: compact_attempt.clone(),
+                    strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
+                    error: err.to_string(),
+                })
                 .map_err(|store_err| {
                     CodexErr::Fatal(format!(
                         "failed to record spine root archive install failure after error {err}: {store_err}"
@@ -3142,16 +3145,12 @@ impl Session {
                     .await);
             }
         }
-        if let Err(err) = store.append_compact_installed(
-            &compact_id,
-            &boundary.node_id,
-            boundary.op,
-            effective_boundary.cut_ordinal,
-            effective_boundary.fold_end_ordinal,
-            replacement_history.len(),
-            worklog_rel_path.to_string_lossy().into_owned(),
-            message_hash.clone(),
-        ) {
+        if let Err(err) = store.append_compact_installed(CompactInstalledRecord {
+            attempt: compact_attempt,
+            replacement_history_len: replacement_history.len(),
+            worklog_path: worklog_rel_path.to_string_lossy().into_owned(),
+            message_hash: message_hash.clone(),
+        }) {
             return Err(self
                 .poison_spine_compact(format!(
                     "failed to record installed spine root archive after rollout checkpoint: {err}"
@@ -3266,16 +3265,19 @@ impl Session {
             ..boundary.clone()
         };
         let compact_id = deterministic_spine_compact_id(&effective_boundary);
+        let compact_attempt = CompactAttemptRecord {
+            compact_id: compact_id.clone(),
+            node_id: boundary.node_id.clone(),
+            op: boundary.op,
+            cut_ordinal: effective_boundary.cut_ordinal,
+            fold_end_ordinal: effective_boundary.fold_end_ordinal,
+        };
         store
-            .append_compact_started(
-                &compact_id,
-                &boundary.node_id,
-                boundary.op,
-                effective_boundary.cut_ordinal,
-                effective_boundary.fold_end_ordinal,
-                CODEX_BUILTIN_TEXT_STRATEGY,
-                compact_index_rollout_path,
-            )
+            .append_compact_started(CompactStartedRecord {
+                attempt: compact_attempt.clone(),
+                strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
+                rollout: compact_index_rollout_path,
+            })
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to record spine compact start: {err}"))
             })?;
@@ -3293,25 +3295,17 @@ impl Session {
             Ok(output) => output,
             Err(err) => {
                 let terminal = if matches!(err, CodexErr::TurnAborted | CodexErr::Interrupted) {
-                    store.append_compact_interrupted(
-                        &compact_id,
-                        &boundary.node_id,
-                        boundary.op,
-                        effective_boundary.cut_ordinal,
-                        effective_boundary.fold_end_ordinal,
-                        CODEX_BUILTIN_TEXT_STRATEGY,
-                        err.to_string(),
-                    )
+                    store.append_compact_interrupted(CompactTerminalRecord {
+                        attempt: compact_attempt.clone(),
+                        strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
+                        error: err.to_string(),
+                    })
                 } else {
-                    store.append_compact_failed(
-                        &compact_id,
-                        &boundary.node_id,
-                        boundary.op,
-                        effective_boundary.cut_ordinal,
-                        effective_boundary.fold_end_ordinal,
-                        CODEX_BUILTIN_TEXT_STRATEGY,
-                        err.to_string(),
-                    )
+                    store.append_compact_failed(CompactTerminalRecord {
+                        attempt: compact_attempt.clone(),
+                        strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
+                        error: err.to_string(),
+                    })
                 };
                 terminal.map_err(|store_err| {
                     CodexErr::Fatal(format!(
@@ -3365,15 +3359,11 @@ impl Session {
             .await
         {
             store
-                .append_compact_failed(
-                    &compact_id,
-                    &boundary.node_id,
-                    boundary.op,
-                    effective_boundary.cut_ordinal,
-                    effective_boundary.fold_end_ordinal,
-                    CODEX_BUILTIN_TEXT_STRATEGY,
-                    err.to_string(),
-                )
+                .append_compact_failed(CompactTerminalRecord {
+                    attempt: compact_attempt.clone(),
+                    strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
+                    error: err.to_string(),
+                })
                 .map_err(|store_err| {
                     CodexErr::Fatal(format!(
                         "failed to record spine compact install failure after error {err}: {store_err}"
@@ -3413,16 +3403,12 @@ impl Session {
                 ))
                 .await);
         }
-        if let Err(err) = store.append_compact_installed(
-            compact_id,
-            &boundary.node_id,
-            boundary.op,
-            effective_boundary.cut_ordinal,
-            effective_boundary.fold_end_ordinal,
-            replacement_history.len(),
-            worklog_rel_path.to_string_lossy().into_owned(),
-            message_hash.clone(),
-        ) {
+        if let Err(err) = store.append_compact_installed(CompactInstalledRecord {
+            attempt: compact_attempt,
+            replacement_history_len: replacement_history.len(),
+            worklog_path: worklog_rel_path.to_string_lossy().into_owned(),
+            message_hash: message_hash.clone(),
+        }) {
             return Err(self
                 .poison_spine_compact(format!(
                     "failed to record installed spine compact after rollout checkpoint: {err}"
