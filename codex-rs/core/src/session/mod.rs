@@ -3014,20 +3014,10 @@ impl Session {
             fold_end_ordinal: plan.input.fold_end_ordinal,
             ..boundary.clone()
         };
-        let compact_id = deterministic_spine_compact_id(&effective_boundary);
-        let compact_attempt = CompactAttemptRecord {
-            compact_id: compact_id.clone(),
-            node_id: boundary.node_id.clone(),
-            op: boundary.op,
-            cut_ordinal: effective_boundary.cut_ordinal,
-            fold_end_ordinal: effective_boundary.fold_end_ordinal,
-        };
+        let (compact_id, compact_attempt, compact_started) =
+            spine_compact_attempt_records(&effective_boundary, compact_index_rollout_path);
         store
-            .append_compact_started(CompactStartedRecord {
-                attempt: compact_attempt.clone(),
-                strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
-                rollout: compact_index_rollout_path,
-            })
+            .append_compact_started(compact_started)
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to record spine root archive start: {err}"))
             })?;
@@ -3264,20 +3254,10 @@ impl Session {
             fold_end_ordinal: plan.input.fold_end_ordinal,
             ..boundary.clone()
         };
-        let compact_id = deterministic_spine_compact_id(&effective_boundary);
-        let compact_attempt = CompactAttemptRecord {
-            compact_id: compact_id.clone(),
-            node_id: boundary.node_id.clone(),
-            op: boundary.op,
-            cut_ordinal: effective_boundary.cut_ordinal,
-            fold_end_ordinal: effective_boundary.fold_end_ordinal,
-        };
+        let (compact_id, compact_attempt, compact_started) =
+            spine_compact_attempt_records(&effective_boundary, compact_index_rollout_path);
         store
-            .append_compact_started(CompactStartedRecord {
-                attempt: compact_attempt.clone(),
-                strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
-                rollout: compact_index_rollout_path,
-            })
+            .append_compact_started(compact_started)
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to record spine compact start: {err}"))
             })?;
@@ -4301,6 +4281,26 @@ fn deterministic_spine_compact_id(boundary: &SpineCompactBoundary) -> String {
         boundary.transition_summary,
         boundary.compact_instruction.as_deref().unwrap_or_default()
     ))
+}
+
+fn spine_compact_attempt_records(
+    boundary: &SpineCompactBoundary,
+    rollout: String,
+) -> (String, CompactAttemptRecord, CompactStartedRecord) {
+    let compact_id = deterministic_spine_compact_id(boundary);
+    let attempt = CompactAttemptRecord {
+        compact_id: compact_id.clone(),
+        node_id: boundary.node_id.clone(),
+        op: boundary.op,
+        cut_ordinal: boundary.cut_ordinal,
+        fold_end_ordinal: boundary.fold_end_ordinal,
+    };
+    let started = CompactStartedRecord {
+        attempt: attempt.clone(),
+        strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
+        rollout,
+    };
+    (compact_id, attempt, started)
 }
 
 #[cfg(test)]
