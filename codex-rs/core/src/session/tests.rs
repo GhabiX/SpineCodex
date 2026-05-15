@@ -59,6 +59,7 @@ use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::spine::session_integration;
 use crate::state::ActiveTurn;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
@@ -1542,7 +1543,7 @@ async fn spine_resume_ordinal_counts_raw_rollout_items_not_filtered_history() ->
     });
 
     assert_eq!(
-        crate::session::session::initial_spine_response_item_count(&initial_history).await?,
+        session_integration::initial_spine_response_item_count(&initial_history).await?,
         3
     );
     Ok(())
@@ -1573,7 +1574,7 @@ async fn spine_resume_detects_latest_non_spine_compaction() -> anyhow::Result<()
     });
 
     assert!(
-        crate::session::session::initial_spine_has_non_spine_compacted_history(&initial_history)
+        session_integration::initial_spine_has_non_spine_compacted_history(&initial_history)
             .await?
     );
     Ok(())
@@ -1606,7 +1607,7 @@ async fn spine_resume_detects_existing_spine_history_from_rollout() -> anyhow::R
         rollout_path: Some(rollout_path),
     });
 
-    assert!(crate::session::session::initial_spine_has_spine_history(&initial_history).await?);
+    assert!(session_integration::initial_spine_has_spine_history(&initial_history).await?);
     Ok(())
 }
 
@@ -1632,7 +1633,7 @@ async fn spine_resume_detects_existing_namespaced_spine_history_from_rollout() -
         rollout_path: Some(rollout_path),
     });
 
-    assert!(crate::session::session::initial_spine_has_spine_history(&initial_history).await?);
+    assert!(session_integration::initial_spine_has_spine_history(&initial_history).await?);
     Ok(())
 }
 
@@ -1673,7 +1674,7 @@ async fn initial_spine_scan_derives_resume_state_from_one_rollout() -> anyhow::R
         ))],
         rollout_path: Some(rollout_path),
     });
-    let scan = crate::session::session::initial_spine_scan(&initial_history).await?;
+    let scan = session_integration::initial_spine_scan(&initial_history).await?;
 
     assert_eq!(scan.response_item_count, 6);
     assert!(scan.has_spine_history);
@@ -1691,7 +1692,7 @@ fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()>
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
     let runtime =
-        crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
+        session_integration::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
 
     assert_eq!(
         runtime.cursor(),
@@ -1709,10 +1710,10 @@ fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()>
 fn initial_spine_runtime_loads_existing_sidecar_without_transition_history() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
+    session_integration::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
 
     let runtime =
-        crate::session::session::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
+        session_integration::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
 
     assert_eq!(
         runtime.cursor(),
@@ -1733,7 +1734,7 @@ fn initial_spine_runtime_rejects_missing_sidecar_for_existing_spine_history() ->
     let rollout_path = temp.path().join("rollout.jsonl");
 
     let error =
-        crate::session::session::load_initial_spine_runtime(&rollout_path, 3, true, false, None)
+        session_integration::load_initial_spine_runtime(&rollout_path, 3, true, false, None)
             .expect_err("existing Spine rollout history requires sidecar");
 
     assert!(error.to_string().contains("rollout.spine.json"));
@@ -2677,7 +2678,7 @@ async fn reconstruct_history_replays_suffix_after_spine_compact_checkpoint() {
 
     assert_eq!(reconstructed.history, vec![spine_ir, later]);
     assert_eq!(
-        crate::session::session::initial_spine_response_item_count(&InitialHistory::Resumed(
+        session_integration::initial_spine_response_item_count(&InitialHistory::Resumed(
             ResumedHistory {
                 conversation_id: ThreadId::default(),
                 history: rollout_items,
@@ -2803,13 +2804,13 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
         history: Vec::new(),
         rollout_path: Some(rollout_path.clone()),
     });
-    let projection = crate::session::session::initial_spine_projection(&initial_history)
+    let projection = session_integration::initial_spine_projection(&initial_history)
         .await?
         .expect("rollback spine history should project");
     assert_eq!(projection.response_item_count, 3);
     assert_eq!(projection.state.cursor().to_string(), "1.1.1");
 
-    let projected_runtime = crate::session::session::load_initial_spine_runtime(
+    let projected_runtime = session_integration::load_initial_spine_runtime(
         &rollout_path,
         projection.response_item_count,
         /*has_spine_history*/ true,

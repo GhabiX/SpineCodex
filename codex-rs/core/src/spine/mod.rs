@@ -6,6 +6,7 @@ pub(crate) mod instructions;
 pub(crate) mod plan_bridge;
 pub(crate) mod projection;
 pub(crate) mod runtime;
+pub(crate) mod session_integration;
 pub(crate) mod state;
 pub(crate) mod store;
 pub(crate) mod trajs;
