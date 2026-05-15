@@ -398,6 +398,8 @@ pub enum SpineTreeNodeStatus {
 pub struct SpineTreePlan {
     pub revision: u64,
     pub explanation: Option<String>,
+    #[serde(rename = "spinePlanTree")]
+    #[ts(rename = "spinePlanTree")]
     pub spine_plantree: Option<SpineTreePlanTree>,
     pub items: Vec<SpineTreePlanItem>,
 }
