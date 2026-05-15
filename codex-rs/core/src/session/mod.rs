@@ -188,6 +188,8 @@ use crate::spine::compact::plan_suffix_fold_with_spans;
 use crate::spine::compact::render_auto_compact_worklog;
 use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_worklog_item;
+use crate::spine::session_integration::after_prelude_items_recorded;
+use crate::spine::session_integration::after_response_items_recorded;
 use crate::spine::session_integration::record_plan_update_snapshot;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::compact_message_hash;
@@ -2816,21 +2818,14 @@ impl Session {
         let Some(start_ordinal) = start_ordinal else {
             return Ok(());
         };
-        let item_count = u64::try_from(items.len()).map_err(|_| {
-            CodexErr::Fatal("too many response items for spine ordinal tracking".to_string())
-        })?;
-        let end_ordinal = start_ordinal
-            .checked_add(item_count)
-            .ok_or_else(|| CodexErr::Fatal("spine response item ordinal overflow".to_string()))?;
-        spine
-            .lock()
-            .await
-            .after_response_items_recorded(&turn_context.sub_id, items, start_ordinal, end_ordinal)
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "Spine transition failed after response items were recorded. The turn was aborted before the next model request; spine cursor was not advanced. Cause: {err}"
-                ))
-            })?;
+        let mut runtime = spine.lock().await;
+        if let Err(err) =
+            after_response_items_recorded(&mut runtime, &turn_context.sub_id, items, start_ordinal)
+        {
+            return Err(CodexErr::Fatal(format!(
+                "Spine transition failed after response items were recorded. The turn was aborted before the next model request; spine cursor was not advanced. Cause: {err}"
+            )));
+        }
         Ok(())
     }
 
@@ -2846,21 +2841,14 @@ impl Session {
         let Some(start_ordinal) = start_ordinal else {
             return Ok(());
         };
-        let item_count = u64::try_from(items.len()).map_err(|_| {
-            CodexErr::Fatal("too many response items for spine ordinal tracking".to_string())
-        })?;
-        let end_ordinal = start_ordinal
-            .checked_add(item_count)
-            .ok_or_else(|| CodexErr::Fatal("spine response item ordinal overflow".to_string()))?;
-        spine
-            .lock()
-            .await
-            .after_prelude_items_recorded(&turn_context.sub_id, items, start_ordinal, end_ordinal)
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "Spine prelude recording failed after response items were recorded. The turn was aborted before the next model request; spine cursor was not advanced. Cause: {err}"
-                ))
-            })?;
+        let mut runtime = spine.lock().await;
+        if let Err(err) =
+            after_prelude_items_recorded(&mut runtime, &turn_context.sub_id, items, start_ordinal)
+        {
+            return Err(CodexErr::Fatal(format!(
+                "Spine prelude recording failed after response items were recorded. The turn was aborted before the next model request; spine cursor was not advanced. Cause: {err}"
+            )));
+        }
         Ok(())
     }
 

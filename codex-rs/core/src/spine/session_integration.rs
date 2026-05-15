@@ -178,6 +178,28 @@ pub(crate) fn record_plan_update_snapshot(
     Ok(Some(runtime.build_tree_snapshot()?))
 }
 
+pub(crate) fn after_response_items_recorded(
+    runtime: &mut SpineRuntime,
+    turn_id: &str,
+    items: &[ResponseItem],
+    start_ordinal: u64,
+) -> Result<(), SpineRuntimeError> {
+    let end_ordinal = end_ordinal_for_items(start_ordinal, items)?;
+    runtime
+        .after_response_items_recorded(turn_id, items, start_ordinal, end_ordinal)
+        .map(|_| ())
+}
+
+pub(crate) fn after_prelude_items_recorded(
+    runtime: &mut SpineRuntime,
+    turn_id: &str,
+    items: &[ResponseItem],
+    start_ordinal: u64,
+) -> Result<(), SpineRuntimeError> {
+    let end_ordinal = end_ordinal_for_items(start_ordinal, items)?;
+    runtime.after_prelude_items_recorded(turn_id, items, start_ordinal, end_ordinal)
+}
+
 pub(crate) async fn seed_forked_spine_sidecar(
     thread_store: &Arc<dyn ThreadStore>,
     initial_history: &InitialHistory,
@@ -248,6 +270,17 @@ fn response_item_count(items: &[RolloutItem]) -> u64 {
             .count(),
     )
     .unwrap_or(u64::MAX)
+}
+
+fn end_ordinal_for_items(
+    start_ordinal: u64,
+    items: &[ResponseItem],
+) -> Result<u64, SpineRuntimeError> {
+    let item_count =
+        u64::try_from(items.len()).map_err(|_| SpineRuntimeError::RawOrdinalOverflow)?;
+    start_ordinal
+        .checked_add(item_count)
+        .ok_or(SpineRuntimeError::RawOrdinalOverflow)
 }
 
 fn has_spine_history_items(items: &[RolloutItem]) -> bool {
