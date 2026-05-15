@@ -119,7 +119,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
                 ev_response_created("resp-spine-compact"),
                 ev_assistant_message(
                     "msg-spine-compact",
-                    "<spine_compact_worklog>\nCompacted child findings.\n</spine_compact_worklog>",
+                    "Compacted child findings.",
                 ),
                 ev_completed("resp-spine-compact"),
             ]),
@@ -137,7 +137,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
                 ev_response_created("resp-spine-close-compact"),
                 ev_assistant_message(
                     "msg-spine-close-compact",
-                    "<spine_compact_worklog>\nCompacted root findings.\n</spine_compact_worklog>",
+                    "Compacted root findings.",
                 ),
                 ev_completed("resp-spine-close-compact"),
             ]),

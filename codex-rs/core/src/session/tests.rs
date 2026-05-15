@@ -2118,14 +2118,14 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
                 ),
                 ev_completed("resp-next"),
             ]),
-	            sse(vec![
-	                ev_response_created("resp-compact"),
-	                ev_assistant_message(
-	                    "msg-compact",
-	                    "<spine_compact_worklog>\ncompact leaf fact\nNext expected response token: FINAL_AFTER_SPINE_COMPACT.\n</spine_compact_worklog>",
-	                ),
-	                ev_completed("resp-compact"),
-	            ]),
+            sse(vec![
+                ev_response_created("resp-compact"),
+                ev_assistant_message(
+                    "msg-compact",
+                    "compact leaf fact\nNext expected response token: FINAL_AFTER_SPINE_COMPACT.",
+                ),
+                ev_completed("resp-compact"),
+            ]),
             sse(vec![
                 ev_response_created("resp-final"),
                 ev_assistant_message("msg-final", "Done after compact."),

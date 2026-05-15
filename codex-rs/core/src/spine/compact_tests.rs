@@ -920,8 +920,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(rendered.contains("<spine_tree>"));
     assert!(rendered.contains("1.1: finished leaf done [worklog already in context]"));
     assert!(rendered.contains("1.2: Current"));
-    assert!(rendered.contains("<spine_compact_worklog>"));
-    assert!(rendered.contains("</spine_compact_worklog>"));
+    assert!(!rendered.contains("spine_compact_"));
     assert_eq!(prompt[0], input.prefix_items[0]);
     assert_eq!(prompt[1], input.suffix_items[0]);
     let ResponseItem::Message { content, .. } = &prompt[2] else {
@@ -938,6 +937,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(text.contains("Internal node id: 1.1"));
     assert!(text.contains("Target operation: next"));
     assert!(text.contains("Spine Tree summary label: leaf done"));
+    assert!(text.contains("Return only a dense Markdown worklog for the target suffix."));
     assert!(!text.contains("What remains to be done"));
     assert!(!text.contains("clear next steps"));
     assert!(!text.contains("next concrete step"));
@@ -1039,30 +1039,18 @@ fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
     assert_eq!(compact_prompt.output_schema, None);
     assert!(
         compact_prompt.output_schema_strict,
-        "compact response is parsed from a strict XML-like block, not the user final output schema"
+        "compact response is a plain Markdown worklog, not the user final output schema"
     );
     assert_eq!(compact_prompt.input[0], input.prefix_items[0]);
     assert_eq!(compact_prompt.input[1], input.suffix_items[0]);
 }
 
 #[test]
-fn spine_compact_worklog_extraction_requires_exact_outer_block() {
+fn spine_compact_markdown_extraction_accepts_plain_markdown() {
     assert_eq!(
-        extract_spine_compact_worklog(
-            "<spine_compact_worklog>\n## Done\n\nfacts\n</spine_compact_worklog>"
-        )
+        extract_spine_compact_markdown("\n## Done\n\nfacts\n")
         .expect("extract compact worklog"),
         "## Done\n\nfacts"
     );
-    assert!(
-        extract_spine_compact_worklog("prefix\n<spine_compact_worklog>x</spine_compact_worklog>")
-            .is_err()
-    );
-    assert!(
-        extract_spine_compact_worklog("<spine_compact_worklog>x</spine_compact_worklog>\nsuffix")
-            .is_err()
-    );
-    assert!(
-        extract_spine_compact_worklog("<spine_compact_worklog> </spine_compact_worklog>").is_err()
-    );
+    assert!(extract_spine_compact_markdown(" \n\t ").is_err());
 }

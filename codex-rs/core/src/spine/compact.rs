@@ -77,8 +77,6 @@ pub(crate) trait SpineCompactStrategy: Send + Sync {
 }
 
 pub(crate) const CODEX_BUILTIN_TEXT_STRATEGY: &str = "codex_builtin_fork_full_history";
-const COMPACT_WORKLOG_OPEN_TAG: &str = "<spine_compact_worklog>";
-const COMPACT_WORKLOG_CLOSE_TAG: &str = "</spine_compact_worklog>";
 
 pub(crate) async fn compact_suffix_with_codex_builtin_text(
     sess: &Session,
@@ -118,7 +116,7 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
         }
     };
 
-    let compacted_suffix = extract_spine_compact_worklog(&compacted_suffix)?;
+    let compacted_suffix = extract_spine_compact_markdown(&compacted_suffix)?;
     let worklog_markdown = render_auto_compact_worklog(&input, &compacted_suffix);
     Ok(SpineCompactOutput {
         compact_message: format!(
@@ -138,8 +136,8 @@ fn build_codex_builtin_prompt(input: &SpineCompactInput, prompt_envelope: &Promp
         parallel_tool_calls: prompt_envelope.parallel_tool_calls,
         base_instructions: prompt_envelope.base_instructions.clone(),
         personality: prompt_envelope.personality,
-        // The internal compact response is parsed from the XML-like block below.
-        // Carrying a user turn final-output schema would make that response invalid.
+        // Carrying a user turn final-output schema would make this internal compact response
+        // invalid or over-constrained.
         output_schema: None,
         output_schema_strict: true,
     }
@@ -161,16 +159,14 @@ fn build_codex_builtin_prompt_input(input: &SpineCompactInput) -> Vec<ResponseIt
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "Compact only target Spine node `{}` into factual worklog IR.\nKeep durable facts needed by later nodes: outcome, decisions, constraints, files/functions/tests/commands, validation status, blockers, unresolved questions.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\n<spine_tree>\n{}\n</spine_tree>{}\n\nReturn exactly one XML-like block and no text outside it:\n{}\n<dense Markdown compact for the target suffix only>\n{}",
+                "Compact only target Spine node `{}` into factual worklog IR.\nKeep durable facts needed by later nodes: outcome, decisions, constraints, files/functions/tests/commands, validation status, blockers, unresolved questions.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\n<spine_tree>\n{}\n</spine_tree>{}\n\nReturn only a dense Markdown worklog for the target suffix. Do not include preambles, apologies, or continuation instructions.",
                 target_tree_node_id,
                 target_tree_node_id,
                 input.node_id,
                 op_label(input.op),
                 input.transition_summary,
                 input.spine_tree,
-                compact_instruction,
-                COMPACT_WORKLOG_OPEN_TAG,
-                COMPACT_WORKLOG_CLOSE_TAG
+                compact_instruction
             ),
         }],
         phase: None,
@@ -234,24 +230,8 @@ async fn collect_compaction_response(
     }
 }
 
-fn extract_spine_compact_worklog(text: &str) -> CodexResult<String> {
-    let trimmed = text.trim();
-    let Some(after_open) = trimmed.strip_prefix(COMPACT_WORKLOG_OPEN_TAG) else {
-        return Err(CodexErr::Fatal(format!(
-            "spine compact response must start with {COMPACT_WORKLOG_OPEN_TAG}"
-        )));
-    };
-    let Some(body) = after_open.strip_suffix(COMPACT_WORKLOG_CLOSE_TAG) else {
-        return Err(CodexErr::Fatal(format!(
-            "spine compact response must end with {COMPACT_WORKLOG_CLOSE_TAG}"
-        )));
-    };
-    if body.contains(COMPACT_WORKLOG_OPEN_TAG) || body.contains(COMPACT_WORKLOG_CLOSE_TAG) {
-        return Err(CodexErr::Fatal(
-            "spine compact response contains nested compact worklog tags".to_string(),
-        ));
-    }
-    let body = body.trim();
+fn extract_spine_compact_markdown(text: &str) -> CodexResult<String> {
+    let body = text.trim();
     if body.is_empty() {
         return Err(CodexErr::Fatal(
             "spine compact response worklog is empty".to_string(),
