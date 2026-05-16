@@ -76,7 +76,10 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("start a focused child scope"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("matching planned child scope"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("sibling-level under the same parent"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 50k raw tokens"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.next/close are not end-of-response cleanup"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("finish its user-visible work there"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("genuinely new sibling/parent-sibling work"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 80k raw tokens"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 30k"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the warning as a cue"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.next"));
