@@ -117,6 +117,7 @@ impl ContextManager {
     /// include `InputModality::Image`, images are stripped from messages and tool
     /// outputs.
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
+        crate::spine::compact::expand_spine_initial_context_items(&mut self.items);
         self.normalize_history(input_modalities);
         self.items
     }

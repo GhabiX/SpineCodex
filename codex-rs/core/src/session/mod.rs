@@ -188,6 +188,7 @@ use crate::spine::compact::compact_suffix_with_codex_builtin_text;
 use crate::spine::compact::prepare_spine_compact_plan;
 use crate::spine::compact::render_auto_compact_worklog;
 use crate::spine::compact::render_spine_handoff_item;
+use crate::spine::compact::render_spine_initial_context_item;
 use crate::spine::compact::render_spine_worklog_item;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
@@ -3049,6 +3050,7 @@ impl Session {
         );
         if reference_context_item.is_some() {
             let initial_context = self.build_initial_context(turn_context).await;
+            let initial_context = vec![render_spine_initial_context_item(initial_context)?];
             replacement_history =
                 crate::compact::insert_initial_context_before_last_real_user_or_summary(
                     replacement_history,

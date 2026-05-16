@@ -313,6 +313,27 @@ fn for_prompt_preserves_inter_agent_assistant_messages() {
 }
 
 #[test]
+fn for_prompt_expands_spine_initial_context_wrapper() {
+    let initial_context = vec![developer_msg("fresh permissions")];
+    let wrapper = crate::spine::compact::render_spine_initial_context_item(initial_context.clone())
+        .expect("wrap initial context");
+    let history = create_history_with_items(vec![
+        developer_msg("prefix"),
+        wrapper,
+        user_input_text_msg("do work"),
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![
+            developer_msg("prefix"),
+            initial_context[0].clone(),
+            user_input_text_msg("do work"),
+        ]
+    );
+}
+
+#[test]
 fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
     let first_turn = user_input_text_msg("first");
     let first_reply = assistant_msg("done");

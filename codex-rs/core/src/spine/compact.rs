@@ -26,6 +26,9 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+const SPINE_INITIAL_CONTEXT_OPEN_TAG: &str = "<spine_initial_context runtime_generated=\"true\">";
+const SPINE_INITIAL_CONTEXT_CLOSE_TAG: &str = "</spine_initial_context>";
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpineCompactInput {
     pub(crate) op: SpineOperation,
@@ -150,6 +153,7 @@ fn build_codex_builtin_prompt_input(input: &SpineCompactInput) -> Vec<ResponseIt
         Vec::with_capacity(input.prefix_items.len() + input.suffix_items.len() + 1);
     prompt_input.extend(input.prefix_items.clone());
     prompt_input.extend(input.suffix_items.clone());
+    expand_spine_initial_context_items(&mut prompt_input);
     let target_tree_node_id = display_node_id(&input.node_id);
     let compact_instruction = input
         .compact_instruction
@@ -557,6 +561,9 @@ pub(crate) fn raw_ordinal_for_effective_index_with_spans(
         if is_spine_handoff_item(item) {
             continue;
         }
+        if parse_spine_initial_context_item(item).is_some() {
+            continue;
+        }
         if is_non_spine_compact_item(item) {
             return None;
         }
@@ -601,6 +608,38 @@ pub(crate) fn render_spine_handoff_item(from_node: &NodeId, to_node: &NodeId) ->
     }
 }
 
+pub(crate) fn render_spine_initial_context_item(
+    initial_context: Vec<ResponseItem>,
+) -> CodexResult<ResponseItem> {
+    let encoded = serde_json::to_string(&initial_context).map_err(|err| {
+        CodexErr::Fatal(format!(
+            "failed to encode spine initial context wrapper: {err}"
+        ))
+    })?;
+    Ok(ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!(
+                "{SPINE_INITIAL_CONTEXT_OPEN_TAG}\n{encoded}\n{SPINE_INITIAL_CONTEXT_CLOSE_TAG}"
+            ),
+        }],
+        phase: None,
+    })
+}
+
+pub(crate) fn expand_spine_initial_context_items(items: &mut Vec<ResponseItem>) {
+    let mut expanded = Vec::with_capacity(items.len());
+    for item in std::mem::take(items) {
+        if let Some(mut initial_context) = parse_spine_initial_context_item(&item) {
+            expanded.append(&mut initial_context);
+        } else {
+            expanded.push(item);
+        }
+    }
+    *items = expanded;
+}
+
 fn is_spine_handoff_item(item: &ResponseItem) -> bool {
     let ResponseItem::Message { role, content, .. } = item else {
         return false;
@@ -612,6 +651,24 @@ fn is_spine_handoff_item(item: &ResponseItem) -> bool {
         return false;
     };
     text.starts_with("<spine_handoff>") && text.ends_with("</spine_handoff>")
+}
+
+fn parse_spine_initial_context_item(item: &ResponseItem) -> Option<Vec<ResponseItem>> {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return None;
+    };
+    if role != "developer" || content.len() != 1 {
+        return None;
+    }
+    let ContentItem::InputText { text } = &content[0] else {
+        return None;
+    };
+    let body = text
+        .strip_prefix(SPINE_INITIAL_CONTEXT_OPEN_TAG)?
+        .strip_prefix('\n')?
+        .strip_suffix(SPINE_INITIAL_CONTEXT_CLOSE_TAG)?
+        .strip_suffix('\n')?;
+    serde_json::from_str(body).ok()
 }
 
 #[cfg(test)]
@@ -746,6 +803,9 @@ pub(crate) fn effective_index_for_raw_ordinal_with_spans(
         }
 
         if is_spine_handoff_item(item) {
+            continue;
+        }
+        if parse_spine_initial_context_item(item).is_some() {
             continue;
         }
 

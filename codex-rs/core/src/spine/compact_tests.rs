@@ -205,6 +205,135 @@ fn raw_ordinals_treat_spine_handoff_as_zero_width() {
 }
 
 #[test]
+fn raw_ordinals_treat_spine_initial_context_wrapper_as_zero_width() {
+    let worklog_item = render_spine_worklog_item(
+        &id(&[1]),
+        SpineOperation::Archive,
+        "root epoch",
+        "root facts",
+    );
+    let initial_context = vec![ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "fresh permissions".to_string(),
+        }],
+        phase: None,
+    }];
+    let wrapped_context =
+        render_spine_initial_context_item(initial_context.clone()).expect("wrap initial context");
+    let spans = vec![installed_span(
+        "compact-root",
+        id(&[1]),
+        SpineOperation::Archive,
+        2,
+        8,
+    )];
+    let mut prompt_history = vec![
+        text_item("prelude 0"),
+        text_item("prelude 1"),
+        worklog_item.clone(),
+        wrapped_context,
+        user_item("next epoch first live item"),
+    ];
+    let history = prompt_history.clone();
+
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 8, &spans),
+        Some(4),
+        "next root epoch start should map past reinjected context"
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 4, &spans),
+        Some(8),
+        "next live item must keep the root archive fold_end ordinal"
+    );
+
+    expand_spine_initial_context_items(&mut prompt_history);
+    assert_eq!(
+        prompt_history,
+        vec![
+            text_item("prelude 0"),
+            text_item("prelude 1"),
+            worklog_item,
+            initial_context[0].clone(),
+            user_item("next epoch first live item"),
+        ],
+        "model prompt should receive the original initial context item"
+    );
+}
+
+#[test]
+fn suffix_fold_after_root_archive_reinjected_context_starts_at_next_live_item() {
+    let spans = vec![installed_span(
+        "compact-root",
+        id(&[1]),
+        SpineOperation::Archive,
+        2,
+        8,
+    )];
+    let wrapped_context = render_spine_initial_context_item(vec![ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "fresh permissions".to_string(),
+        }],
+        phase: None,
+    }])
+    .expect("wrap initial context");
+    let history = vec![
+        text_item("prelude 0"),
+        text_item("prelude 1"),
+        render_spine_worklog_item(
+            &id(&[1]),
+            SpineOperation::Archive,
+            "root epoch",
+            "root facts",
+        ),
+        wrapped_context,
+        text_item("next epoch live 0"),
+        text_item("next epoch live 1"),
+        text_item("next epoch live 2"),
+        text_item("next epoch live 3"),
+        text_item("future epoch first live item"),
+    ];
+    let input = SpineCompactInput {
+        op: SpineOperation::Next,
+        node_id: id(&[2, 1]),
+        scope_node_id: None,
+        cut_ordinal: 8,
+        fold_end_ordinal: 12,
+        spine_tree: "2.1: Current".to_string(),
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: "next epoch done".to_string(),
+        compact_instruction: None,
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let plan =
+        plan_suffix_fold_with_spans(&history, 8, 12, &spans, input).expect("plan suffix fold");
+
+    assert_eq!(plan.cut_index, 4);
+    assert_eq!(plan.fold_end_index, 8);
+    assert_eq!(
+        plan.input.suffix_items,
+        vec![
+            text_item("next epoch live 0"),
+            text_item("next epoch live 1"),
+            text_item("next epoch live 2"),
+            text_item("next epoch live 3"),
+        ]
+    );
+    assert_eq!(
+        plan.replacement_tail,
+        vec![text_item("future epoch first live item")]
+    );
+}
+
+#[test]
 fn suffix_fold_does_not_extend_past_handoff_shifted_boundary() {
     let mut history = vec![
         text_item("raw 0"),
