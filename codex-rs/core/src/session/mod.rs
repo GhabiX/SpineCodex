@@ -183,6 +183,7 @@ use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
 use crate::spine::compact::SpineCompactBoundary;
+use crate::spine::compact::build_root_archive_replacement_history;
 use crate::spine::compact::build_suffix_replacement_history;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
 use crate::spine::compact::prepare_spine_compact_plan;
@@ -3052,21 +3053,19 @@ impl Session {
             &boundary.transition_summary,
             compacted_body,
         )];
-        let mut replacement_history = build_suffix_replacement_history(
-            &history,
-            prep.plan.cut_index,
-            prep.plan.fold_end_index,
+        let initial_context_items = if reference_context_item.is_some() {
+            vec![render_spine_initial_context_item(
+                self.build_initial_context(turn_context).await,
+            )?]
+        } else {
+            Vec::new()
+        };
+        let replacement_history = build_root_archive_replacement_history(
+            &history[..prep.plan.cut_index],
+            initial_context_items,
             rendered_worklog_items,
+            &prep.plan.replacement_tail,
         );
-        if reference_context_item.is_some() {
-            let initial_context = self.build_initial_context(turn_context).await;
-            let initial_context = vec![render_spine_initial_context_item(initial_context)?];
-            replacement_history =
-                crate::compact::insert_initial_context_before_last_real_user_or_summary(
-                    replacement_history,
-                    initial_context,
-                );
-        }
         let compact_message = format!(
             "Spine compacted root epoch {} [{}, {})",
             boundary.node_id,

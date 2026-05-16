@@ -297,6 +297,33 @@ pub(crate) fn build_suffix_replacement_history(
     replacement_history
 }
 
+pub(crate) fn build_root_archive_replacement_history(
+    prefix_history: &[ResponseItem],
+    initial_context_items: Vec<ResponseItem>,
+    ir_items: Vec<ResponseItem>,
+    live_tail: &[ResponseItem],
+) -> Vec<ResponseItem> {
+    let mut replacement_history = Vec::with_capacity(
+        prefix_history.len() + initial_context_items.len() + ir_items.len() + live_tail.len(),
+    );
+    let mut saw_spine_span = false;
+    for item in prefix_history {
+        if is_non_spine_compact_item(item) || parse_spine_initial_context_item(item).is_some() {
+            continue;
+        }
+        if is_spine_ir_item(item) {
+            saw_spine_span = true;
+            replacement_history.push(item.clone());
+        } else if !saw_spine_span {
+            replacement_history.push(item.clone());
+        }
+    }
+    replacement_history.extend(initial_context_items);
+    replacement_history.extend(ir_items);
+    replacement_history.extend_from_slice(live_tail);
+    replacement_history
+}
+
 #[cfg(test)]
 pub(crate) fn plan_suffix_fold(
     history: &[ResponseItem],

@@ -1071,6 +1071,48 @@ fn replacement_history_splices_prefix_ir_and_tail() {
 }
 
 #[test]
+fn root_archive_replacement_keeps_spine_ir_not_native_summary() {
+    let prior_worklog =
+        render_spine_worklog_item(&id(&[1]), SpineOperation::Archive, "first epoch", "facts");
+    let root_worklog =
+        render_spine_worklog_item(&id(&[2]), SpineOperation::Archive, "second epoch", "facts");
+    let wrapped_initial_context =
+        render_spine_initial_context_item(vec![text_item("fresh initial context")])
+            .expect("wrap initial context");
+    let fixed_prelude = text_item("fixed prelude must remain");
+    let prefix_history = vec![
+        fixed_prelude.clone(),
+        prior_worklog.clone(),
+        text_item("native compact should not keep ordinary assistant prefix"),
+        user_item("recent user message kept by native compact"),
+        user_item(&format!(
+            "{}\nnative compact summary",
+            crate::compact::SUMMARY_PREFIX
+        )),
+    ];
+    let live_tail = vec![user_item("live tail after fold")];
+
+    let replacement = build_root_archive_replacement_history(
+        &prefix_history,
+        vec![wrapped_initial_context.clone()],
+        vec![root_worklog],
+        &live_tail,
+    );
+    let rendered = serde_json::to_string(&replacement).expect("serialize replacement history");
+
+    assert_eq!(replacement.len(), 5);
+    assert_eq!(replacement[0], fixed_prelude);
+    assert_eq!(replacement[1], prior_worklog);
+    assert_eq!(replacement[2], wrapped_initial_context);
+    assert!(rendered.contains("Node: 2"));
+    assert!(rendered.contains("live tail after fold"));
+    assert!(rendered.contains("spine_initial_context"));
+    assert!(!rendered.contains("native compact summary"));
+    assert!(!rendered.contains("recent user message kept by native compact"));
+    assert!(!rendered.contains("ordinary assistant prefix"));
+}
+
+#[test]
 fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
     let history = vec![
         user_item("previous turn asked to open"),

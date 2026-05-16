@@ -2155,6 +2155,86 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
 }
 
 #[tokio::test]
+async fn spine_root_epoch_compaction_installs_slim_native_history() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let mut runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            None,
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    session.spine = Some(Arc::new(Mutex::new(runtime)));
+    let large_prefix = format!("LARGE_ROOT_EPOCH_PREFIX_{}", "x".repeat(50_000));
+    session
+        .try_record_conversation_items(
+            &turn_context,
+            &[
+                assistant_message(&large_prefix),
+                spine_function_call("open-1"),
+                function_call_output("open-1"),
+                assistant_message("ROOT_EPOCH_DETAIL should be archived"),
+                user_message("ROOT_EPOCH_USER_TAIL should be summarized"),
+            ],
+        )
+        .await?;
+    session
+        .spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .take_last_committed_transition();
+    let history = session.clone_history().await.raw_items().to_vec();
+    session
+        .install_spine_root_epoch_compaction(
+            &turn_context,
+            history,
+            format!(
+                "{}\nroot compact fact\nROOT_EPOCH_USER_TAIL compacted fact",
+                crate::compact::SUMMARY_PREFIX
+            ),
+            None,
+        )
+        .await?;
+
+    let replacement = session.clone_history().await.raw_items().to_vec();
+    let rendered_history = serde_json::to_string(&replacement)?;
+    assert!(
+        replacement.len() <= 2,
+        "root archive should install a slim native compact history plus live tail, got {replacement:?}"
+    );
+    assert!(rendered_history.contains("## Spine Worklog"));
+    assert!(rendered_history.contains("Node: 1"));
+    assert!(rendered_history.contains("root compact fact"));
+    assert!(rendered_history.contains("ROOT_EPOCH_USER_TAIL compacted fact"));
+    assert!(!rendered_history.contains("LARGE_ROOT_EPOCH_PREFIX"));
+    assert!(!rendered_history.contains("ROOT_EPOCH_DETAIL should be archived"));
+    assert!(!rendered_history.contains("ROOT_EPOCH_USER_TAIL should be summarized"));
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(
+        runtime.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![2, 1])
+    );
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    let installed = compact_events
+        .iter()
+        .find(|event| event["type"] == "compact_installed")
+        .expect("compact installed event");
+    assert_eq!(
+        installed["replacement_history_len"],
+        json!(replacement.len())
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn spine_root_archive_rejects_fold_end_beyond_recorded_raw_ordinal() -> anyhow::Result<()> {
     let (mut session, turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;
