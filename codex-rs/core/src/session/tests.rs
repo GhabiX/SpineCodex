@@ -2505,10 +2505,19 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
         "Continue following preserved system, developer, and project instructions."
     ));
     assert!(followup_request.body_contains_text(
-        "Treat only the completed node's old user-task content as historical context, not the current request."
+        "Treat raw folded conversation as historical evidence"
     ));
     assert!(followup_request.body_contains_text(
-        "If unfinished work remains, reconstruct the current node plan from the generated worklog, latest user intent, and current evidence before continuing."
+        "unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated worklog as current obligations"
+    ));
+    assert!(followup_request.body_contains_text(
+        "If the latest user request or generated worklog indicates unfinished work, reconstruct the current node plan from the generated worklog, latest user intent, and current evidence before continuing."
+    ));
+    assert!(followup_request.body_contains_text(
+        "Before asking for new instructions, answer or continue any pending latest user request using that context."
+    ));
+    assert!(!followup_request.body_contains_text(
+        "old user-task content as historical context, not the current request"
     ));
     assert!(
         !followup_request.body_contains_text("RAW_SUFFIX_DETAIL should be folded"),

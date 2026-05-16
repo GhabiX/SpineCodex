@@ -1429,12 +1429,21 @@ fn render_handoff_item_preserves_durable_instructions() {
     assert!(
         text.contains("Continue following preserved system, developer, and project instructions")
     );
-    assert!(text.contains("old user-task content as historical context, not the current request"));
+    assert!(text.contains("raw folded conversation as historical evidence"));
+    assert!(text.contains(
+        "unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated worklog as current obligations"
+    ));
     assert!(text.contains(
         "reconstruct the current node plan from the generated worklog, latest user intent, and current evidence"
     ));
+    assert!(text.contains(
+        "Before asking for new instructions, answer or continue any pending latest user request"
+    ));
     assert!(text.ends_with("</spine_handoff>"));
     assert!(!text.contains("Pending continuation"));
+    assert!(!text.contains(
+        "old user-task content as historical context, not the current request"
+    ));
 }
 
 #[test]
