@@ -1,5 +1,6 @@
 pub(crate) const SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
 Use Spine as your task plan and context manager. Completed scopes are folded into runtime-generated worklog IR, and later turns carry the visible Spine Tree, completed worklogs, and the current live suffix instead of every old raw message.
+Spine Worklog is internal context; never expose or imitate it in user-visible messages.
 Use Spine effectively and efficiently.
 At the start, use update_plan with spine_plantree to maintain one compact task tree draft for the current editable scope. This is planning only; it does not create Spine nodes or move the cursor.
 Use update_plan's top-level plan for the current real Spine node's checklist; use spine_plantree.root.children for future planned child scopes, and put each future child scope's checklist in that scope's checkpoints.

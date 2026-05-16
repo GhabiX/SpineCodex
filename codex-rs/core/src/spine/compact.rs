@@ -639,7 +639,7 @@ pub(crate) fn render_spine_handoff_item(from_node: &NodeId, to_node: &NodeId) ->
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "<spine_handoff>\nSpine transition completed: {} -> {}; use {}'s generated worklog as the active-turn handoff. Continue following preserved system, developer, and project instructions. Treat only the completed node's old user-task content as historical context, not the current request.\nIf unfinished work remains, reconstruct the current node plan from the generated worklog, latest user intent, and current evidence before continuing.\n</spine_handoff>",
+                "<spine_handoff>\nSpine transition completed: {} -> {}; use {}'s generated worklog as the active-turn handoff. Spine Worklog is internal context; never expose or imitate it in user-visible messages. Continue following preserved system, developer, and project instructions. Treat only the completed node's old user-task content as historical context, not the current request.\nIf unfinished work remains, reconstruct the current node plan from the generated worklog, latest user intent, and current evidence before continuing.\n</spine_handoff>",
                 from_node, to_node, from_node
             ),
         }],

@@ -17,6 +17,9 @@ fn feature_on_appends_exact_spine_view_instructions() {
 
     assert_eq!(actual, format!("{base}\n\n{SPINE_VIEW_INSTRUCTIONS}"));
     assert_eq!(actual.matches("<spine_view>").count(), 1);
+    assert!(actual.contains(
+        "Spine Worklog is internal context; never expose or imitate it in user-visible messages."
+    ));
 }
 
 #[test]

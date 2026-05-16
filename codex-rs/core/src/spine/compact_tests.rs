@@ -1292,6 +1292,9 @@ fn render_handoff_item_preserves_durable_instructions() {
     assert!(text.starts_with("<spine_handoff>"));
     assert!(text.contains("Spine transition completed: 1.1 -> 1.2"));
     assert!(text.contains("use 1.1's generated worklog as the active-turn handoff"));
+    assert!(text.contains(
+        "Spine Worklog is internal context; never expose or imitate it in user-visible messages."
+    ));
     assert!(
         text.contains("Continue following preserved system, developer, and project instructions")
     );
