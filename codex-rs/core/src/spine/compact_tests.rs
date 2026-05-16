@@ -5,6 +5,9 @@ use crate::spine::view::render_tree;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::LocalShellExecAction;
+use codex_protocol::models::LocalShellStatus;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
@@ -111,6 +114,140 @@ fn custom_tool_call_output(call_id: &str) -> ResponseItem {
             success: Some(true),
         },
     }
+}
+
+fn local_shell_call(call_id: Option<&str>) -> ResponseItem {
+    ResponseItem::LocalShellCall {
+        id: None,
+        call_id: call_id.map(str::to_string),
+        status: LocalShellStatus::Completed,
+        action: LocalShellAction::Exec(LocalShellExecAction {
+            command: Vec::new(),
+            timeout_ms: None,
+            working_directory: None,
+            env: None,
+            user: None,
+        }),
+    }
+}
+
+fn tool_search_call(call_id: Option<&str>) -> ResponseItem {
+    ResponseItem::ToolSearchCall {
+        id: None,
+        call_id: call_id.map(str::to_string),
+        status: None,
+        execution: "client".to_string(),
+        arguments: serde_json::json!({}),
+    }
+}
+
+fn tool_search_output(call_id: Option<&str>, execution: &str) -> ResponseItem {
+    ResponseItem::ToolSearchOutput {
+        call_id: call_id.map(str::to_string),
+        status: "completed".to_string(),
+        execution: execution.to_string(),
+        tools: Vec::new(),
+    }
+}
+
+#[test]
+fn tool_pairing_classifier_covers_response_item_call_shapes() {
+    assert_eq!(
+        tool_pairing(&function_call("fn-call")),
+        ToolPairing::Call("fn-call".to_string())
+    );
+    assert_eq!(
+        tool_pairing(&function_call_output("fn-call")),
+        ToolPairing::Output("fn-call".to_string())
+    );
+    assert_eq!(
+        tool_pairing(&custom_tool_call("custom")),
+        ToolPairing::Call("custom".to_string())
+    );
+    assert_eq!(
+        tool_pairing(&custom_tool_call_output("custom")),
+        ToolPairing::Output("custom".to_string())
+    );
+    assert_eq!(
+        tool_pairing(&local_shell_call(Some("shell"))),
+        ToolPairing::Call("shell".to_string())
+    );
+    assert_eq!(tool_pairing(&local_shell_call(None)), ToolPairing::None);
+    assert_eq!(
+        tool_pairing(&tool_search_call(Some("search"))),
+        ToolPairing::Call("search".to_string())
+    );
+    assert_eq!(tool_pairing(&tool_search_call(None)), ToolPairing::None);
+    assert_eq!(
+        tool_pairing(&tool_search_output(Some("search"), "client")),
+        ToolPairing::Output("search".to_string())
+    );
+    assert_eq!(
+        tool_pairing(&tool_search_output(Some("server"), "server")),
+        ToolPairing::None,
+        "server-side search output has no local call item to keep paired"
+    );
+    assert_eq!(
+        tool_pairing(&tool_search_output(None, "client")),
+        ToolPairing::None
+    );
+    assert_eq!(
+        tool_pairing(&text_item("ordinary message")),
+        ToolPairing::None
+    );
+}
+
+#[test]
+fn effective_mapping_satisfies_formal_item_semantics() {
+    let spans = vec![
+        installed_span("compact-a", id(&[1]), SpineOperation::Next, 1, 4),
+        installed_span("compact-b", id(&[2]), SpineOperation::Next, 5, 8),
+    ];
+    let history = vec![
+        text_item("raw 0"),
+        render_spine_worklog_item(&id(&[1]), SpineOperation::Next, "a", "a facts"),
+        render_spine_handoff_item(&id(&[1]), &id(&[2])),
+        text_item("raw 4"),
+        render_spine_worklog_item(&id(&[2]), SpineOperation::Next, "b", "b facts"),
+        render_spine_initial_context_item(vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "prompt hydration".to_string(),
+            }],
+            phase: None,
+        }])
+        .expect("wrap initial context"),
+        text_item("raw 8"),
+    ];
+
+    for raw in [0, 1, 4, 5, 8, 9] {
+        let index = effective_index_for_raw_ordinal_with_spans(&history, raw, &spans)
+            .unwrap_or_else(|| panic!("raw boundary {raw} should be mappable"));
+        assert_eq!(
+            raw_ordinal_for_effective_index_with_spans(&history, index, &spans),
+            Some(raw),
+            "g(f({raw})) must preserve future live boundaries"
+        );
+    }
+
+    for raw in [2, 3, 6, 7] {
+        assert_eq!(
+            effective_index_for_raw_ordinal_with_spans(&history, raw, &spans),
+            None,
+            "span interior raw boundary {raw} must not be mappable"
+        );
+    }
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 2, &spans),
+        Some(4),
+        "handoff is Zero-width after first span"
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 6, &spans),
+        Some(8),
+        "initial context wrapper is Zero-width after second span"
+    );
 }
 
 #[test]

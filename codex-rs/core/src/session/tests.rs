@@ -2242,6 +2242,15 @@ async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tre
             .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
             .exists()
     );
+    let reload_error = runtime
+        .store()
+        .load()
+        .expect_err("dangling root archive compact must fail closed on reload");
+    assert!(matches!(
+        reload_error,
+        crate::spine::store::SpineStoreError::InvalidLedger(message)
+            if message.contains("dangling compact_started")
+    ));
     Ok(())
 }
 
@@ -2493,6 +2502,135 @@ async fn spine_suffix_compaction_cancellation_records_interrupted_terminal() -> 
         .store()
         .load()
         .expect("interrupted compact terminal should replay");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_suffix_compaction_post_checkpoint_failure_poisons() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    let provider_info =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
+    let provider_info = ModelProviderInfo {
+        supports_websockets: false,
+        ..provider_info
+    };
+    turn_context.provider =
+        codex_model_provider::create_model_provider(provider_info.clone(), None);
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let mut runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    runtime
+        .stage_transition(
+            "next-1",
+            "turn-1",
+            SpineOperation::Next,
+            "leaf done",
+            /*compact_instruction*/ None,
+        )
+        .expect("stage next");
+    session.spine = Some(Arc::new(Mutex::new(runtime)));
+    session
+        .try_record_conversation_items(
+            &turn_context,
+            &[
+                spine_function_call("next-1"),
+                function_call_output("next-1"),
+                assistant_message("RAW_SUFFIX_DETAIL should be folded before failure"),
+            ],
+        )
+        .await?;
+    session
+        .compact_pending_spine_transition(&turn_context)
+        .await?;
+    let _responses = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-compact"),
+            ev_assistant_message(
+                "msg-compact",
+                "compact leaf fact\n__spine_fail_suffix_after_rollout_checkpoint__",
+            ),
+            ev_completed("resp-compact"),
+        ])],
+    )
+    .await;
+
+    let thread_id = ThreadId::new();
+    let mut client_session = crate::client::ModelClient::new(
+        /*auth_manager*/ None,
+        thread_id.into(),
+        thread_id,
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        provider_info,
+        codex_protocol::protocol::SessionSource::Exec,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+    )
+    .new_session();
+    let prompt = Prompt {
+        input: Vec::new(),
+        tools: Vec::new(),
+        parallel_tool_calls: false,
+        base_instructions: BaseInstructions::default(),
+        personality: None,
+        output_schema: None,
+        output_schema_strict: true,
+    };
+    let error = session
+        .install_pending_spine_compactions_with_prompt(
+            &turn_context,
+            &mut client_session,
+            &prompt,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("injected post-checkpoint failure should poison");
+
+    assert!(
+        matches!(
+            error,
+            CodexErr::Fatal(ref message)
+                if message == "injected spine suffix compact failure after rollout checkpoint"
+        ),
+        "unexpected error: {error:?}"
+    );
+    session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect_err("poison should block future compact attempts");
+
+    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
+    assert!(rendered_history.contains("## Spine Worklog"));
+    assert!(rendered_history.contains("Operation: next"));
+    assert!(rendered_history.contains("compact leaf fact"));
+    assert!(
+        rendered_history.contains("<spine_handoff>"),
+        "rollout checkpoint already installed replacement history before the injected failure"
+    );
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    assert_eq!(compact_events.len(), 1);
+    assert_eq!(compact_events[0]["type"], "compact_started");
+    assert!(
+        !runtime
+            .store()
+            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
+            .exists(),
+        "test marker fires before sidecar install finalizes the worklog"
+    );
+    let reload_error = runtime
+        .store()
+        .load()
+        .expect_err("dangling suffix compact must fail closed on reload");
+    assert!(matches!(
+        reload_error,
+        crate::spine::store::SpineStoreError::InvalidLedger(message)
+            if message.contains("dangling compact_started")
+    ));
     Ok(())
 }
 

@@ -3340,6 +3340,17 @@ impl Session {
             })?;
             return Err(err);
         }
+        #[cfg(test)]
+        if compact_output
+            .compacted_body
+            .contains("__spine_fail_suffix_after_rollout_checkpoint__")
+        {
+            return Err(self
+                .poison_spine_compact(
+                    "injected spine suffix compact failure after rollout checkpoint",
+                )
+                .await);
+        }
         // The rollout checkpoint is already replaced. Later sidecar failures are not rolled back;
         // poison future Spine compact attempts so partial install state fails fast.
         if let Err(err) = store.append_worklog_section(&boundary.node_id, &worklog_markdown) {

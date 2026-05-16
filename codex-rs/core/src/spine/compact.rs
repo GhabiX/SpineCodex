@@ -453,14 +453,20 @@ fn adjusted_range_for_tool_call_closure(
 fn call_ids_in(history: &[ResponseItem], start: usize, end: usize) -> HashSet<String> {
     history[start..end]
         .iter()
-        .filter_map(tool_call_id)
+        .filter_map(|item| match tool_pairing(item) {
+            ToolPairing::Call(call_id) => Some(call_id),
+            ToolPairing::Output(_) | ToolPairing::None => None,
+        })
         .collect()
 }
 
 fn output_call_ids_in(history: &[ResponseItem], start: usize, end: usize) -> HashSet<String> {
     history[start..end]
         .iter()
-        .filter_map(tool_output_call_id)
+        .filter_map(|item| match tool_pairing(item) {
+            ToolPairing::Output(call_id) => Some(call_id),
+            ToolPairing::Call(_) | ToolPairing::None => None,
+        })
         .collect()
 }
 
@@ -476,10 +482,9 @@ fn first_output_for_call_after(
         .iter()
         .enumerate()
         .skip(start)
-        .find_map(|(index, item)| {
-            tool_output_call_id(item)
-                .filter(|call_id| call_ids.contains(call_id))
-                .map(|_| index)
+        .find_map(|(index, item)| match tool_pairing(item) {
+            ToolPairing::Output(call_id) if call_ids.contains(&call_id) => Some(index),
+            ToolPairing::Call(_) | ToolPairing::Output(_) | ToolPairing::None => None,
         })
 }
 
@@ -495,16 +500,22 @@ fn last_call_for_output_before(
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(index, item)| {
-            tool_call_id(item)
-                .filter(|call_id| output_call_ids.contains(call_id))
-                .map(|_| index)
+        .find_map(|(index, item)| match tool_pairing(item) {
+            ToolPairing::Call(call_id) if output_call_ids.contains(&call_id) => Some(index),
+            ToolPairing::Call(_) | ToolPairing::Output(_) | ToolPairing::None => None,
         })
 }
 
-fn tool_call_id(item: &ResponseItem) -> Option<String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ToolPairing {
+    Call(String),
+    Output(String),
+    None,
+}
+
+fn tool_pairing(item: &ResponseItem) -> ToolPairing {
     match item {
-        ResponseItem::FunctionCall { call_id, .. } => Some(call_id.clone()),
+        ResponseItem::FunctionCall { call_id, .. } => ToolPairing::Call(call_id.clone()),
         ResponseItem::LocalShellCall {
             call_id: Some(call_id),
             ..
@@ -512,23 +523,67 @@ fn tool_call_id(item: &ResponseItem) -> Option<String> {
         | ResponseItem::ToolSearchCall {
             call_id: Some(call_id),
             ..
-        } => Some(call_id.clone()),
-        ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
-        _ => None,
-    }
-}
-
-fn tool_output_call_id(item: &ResponseItem) -> Option<String> {
-    match item {
+        } => ToolPairing::Call(call_id.clone()),
+        ResponseItem::CustomToolCall { call_id, .. } => ToolPairing::Call(call_id.clone()),
         ResponseItem::FunctionCallOutput { call_id, .. }
-        | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.clone()),
+        | ResponseItem::CustomToolCallOutput { call_id, .. } => {
+            ToolPairing::Output(call_id.clone())
+        }
         ResponseItem::ToolSearchOutput {
             call_id: Some(call_id),
             execution,
             ..
-        } if execution != "server" => Some(call_id.clone()),
-        _ => None,
+        } if execution != "server" => ToolPairing::Output(call_id.clone()),
+        ResponseItem::Message { .. }
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { call_id: None, .. }
+        | ResponseItem::ToolSearchCall { call_id: None, .. }
+        | ResponseItem::ToolSearchOutput { call_id: None, .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::Other => ToolPairing::None,
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectiveItemSemantics {
+    Raw1,
+    Zero,
+    Span { cut: u64, fold_end: u64 },
+    Stop,
+}
+
+fn classify_effective_item(
+    item: &ResponseItem,
+    raw_cursor: u64,
+    runtime_spans: &[InstalledCompactSpan],
+    span_cursor: &mut usize,
+) -> Option<EffectiveItemSemantics> {
+    if let Some(meta) = parse_spine_ir_metadata(item)
+        && consume_runtime_span_for_legacy(runtime_spans, span_cursor, &meta, raw_cursor)
+    {
+        return Some(EffectiveItemSemantics::Span {
+            cut: meta.fold_start,
+            fold_end: meta.fold_end,
+        });
+    }
+    if let Some(meta) = parse_spine_worklog_metadata(item) {
+        let span = consume_runtime_span_for_worklog(runtime_spans, span_cursor, &meta, raw_cursor)?;
+        return Some(EffectiveItemSemantics::Span {
+            cut: span.cut_ordinal,
+            fold_end: span.fold_end_ordinal,
+        });
+    }
+    if is_spine_handoff_item(item) || parse_spine_initial_context_item(item).is_some() {
+        return Some(EffectiveItemSemantics::Zero);
+    }
+    if is_non_spine_compact_item(item) {
+        return Some(EffectiveItemSemantics::Stop);
+    }
+    Some(EffectiveItemSemantics::Raw1)
 }
 
 pub(crate) fn raw_ordinal_for_effective_index_with_spans(
@@ -542,32 +597,16 @@ pub(crate) fn raw_ordinal_for_effective_index_with_spans(
         if index == target_index {
             return Some(raw_cursor);
         }
-        if let Some(meta) = parse_spine_ir_metadata(item)
-            && consume_runtime_span_for_legacy(runtime_spans, &mut span_cursor, &meta, raw_cursor)
-        {
-            raw_cursor = meta.fold_end;
-            continue;
+        match classify_effective_item(item, raw_cursor, runtime_spans, &mut span_cursor)? {
+            EffectiveItemSemantics::Raw1 => {
+                raw_cursor = raw_cursor.checked_add(1)?;
+            }
+            EffectiveItemSemantics::Zero => {}
+            EffectiveItemSemantics::Span { cut: _, fold_end } => {
+                raw_cursor = fold_end;
+            }
+            EffectiveItemSemantics::Stop => return None,
         }
-        if let Some(meta) = parse_spine_worklog_metadata(item) {
-            let span = consume_runtime_span_for_worklog(
-                runtime_spans,
-                &mut span_cursor,
-                &meta,
-                raw_cursor,
-            )?;
-            raw_cursor = span.fold_end_ordinal;
-            continue;
-        }
-        if is_spine_handoff_item(item) {
-            continue;
-        }
-        if parse_spine_initial_context_item(item).is_some() {
-            continue;
-        }
-        if is_non_spine_compact_item(item) {
-            return None;
-        }
-        raw_cursor = raw_cursor.checked_add(1)?;
     }
     (target_index == history.len()).then_some(raw_cursor)
 }
@@ -772,51 +811,27 @@ pub(crate) fn effective_index_for_raw_ordinal_with_spans(
     let mut raw_cursor = 0_u64;
     let mut span_cursor = 0_usize;
     for (index, item) in history.iter().enumerate() {
-        if let Some(meta) = parse_spine_ir_metadata(item)
-            && consume_runtime_span_for_legacy(runtime_spans, &mut span_cursor, &meta, raw_cursor)
-        {
-            if target_raw_ordinal == meta.fold_start {
-                return Some(index);
+        match classify_effective_item(item, raw_cursor, runtime_spans, &mut span_cursor)? {
+            EffectiveItemSemantics::Raw1 => {
+                if raw_cursor == target_raw_ordinal {
+                    return Some(index);
+                }
+                raw_cursor = raw_cursor.checked_add(1)?;
             }
-            if target_raw_ordinal > meta.fold_start && target_raw_ordinal < meta.fold_end {
-                return None;
+            EffectiveItemSemantics::Zero => {}
+            EffectiveItemSemantics::Span { cut, fold_end } => {
+                if target_raw_ordinal == cut {
+                    return Some(index);
+                }
+                if target_raw_ordinal > cut && target_raw_ordinal < fold_end {
+                    return None;
+                }
+                raw_cursor = fold_end;
             }
-            raw_cursor = meta.fold_end;
-            continue;
-        }
-
-        if let Some(meta) = parse_spine_worklog_metadata(item) {
-            let span = consume_runtime_span_for_worklog(
-                runtime_spans,
-                &mut span_cursor,
-                &meta,
-                raw_cursor,
-            )?;
-            if target_raw_ordinal == span.cut_ordinal {
-                return Some(index);
+            EffectiveItemSemantics::Stop => {
+                return (target_raw_ordinal == raw_cursor).then_some(index);
             }
-            if target_raw_ordinal > span.cut_ordinal && target_raw_ordinal < span.fold_end_ordinal {
-                return None;
-            }
-            raw_cursor = span.fold_end_ordinal;
-            continue;
         }
-
-        if is_spine_handoff_item(item) {
-            continue;
-        }
-        if parse_spine_initial_context_item(item).is_some() {
-            continue;
-        }
-
-        if is_non_spine_compact_item(item) {
-            return (target_raw_ordinal == raw_cursor).then_some(index);
-        }
-
-        if raw_cursor == target_raw_ordinal {
-            return Some(index);
-        }
-        raw_cursor = raw_cursor.checked_add(1)?;
     }
     (target_raw_ordinal == raw_cursor).then_some(history.len())
 }
