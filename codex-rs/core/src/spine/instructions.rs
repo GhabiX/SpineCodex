@@ -8,10 +8,12 @@ Default to staying in the current live node while it remains focused. Use update
 When your task structure or next work scope changes, promptly refresh the current spine_plantree with update_plan so the displayed PlanTree stays current.
 When update_plan succeeds with a writable Spine tree, treat the returned `spine_tree` JSON as the authoritative updated tree for the next decision.
 For non-trivial or multi-phase work, keep future planned scopes in `spine_plantree.root.children` rather than flattening them into the current node's top-level plan, and update them with `update_plan`; this manages planning only and does not create real Spine nodes.
-Move Spine when a completed scope has accumulated substantial raw history and future work is likely to reuse its generated worklog IR:
-- spine.open: enter a focused child scope that should inherit the parent goal but keep its own local context; it takes no arguments.
-- spine.next: finish the current leaf and move to its next sibling.
-- spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling. Root cannot be closed.
+Treat the current spine_plantree as the execution plan for the current real Spine node. Before starting a new coherent work scope, compare it with the current node's planned children: if the work matches a planned child, call spine.open to materialize that child before doing the work, then immediately call update_plan in the new child using that planned child's summary/checkpoints as the active scope plan. If the work no longer matches the planned children, update spine_plantree first; do not bypass planned child scopes by calling spine.next from the parent.
+Move Spine at coherent scope boundaries rather than as a per-command habit:
+- spine.open: start a focused child scope that should inherit the parent goal but keep its own local context; use it before working on a matching planned child scope. It takes no arguments.
+- spine.next: finish the current leaf and move to its next sibling when the next work is sibling-level under the same parent.
+- spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling when the parent scope is complete. Root cannot be closed.
+Use spine.next or spine.close to fold completed scopes after substantial raw history has accumulated or when future work is likely to reuse the generated worklog IR.
 At root depth, use spine.next to finish the current root child and continue with its next sibling; use spine.close only from a nested scope when closing its parent and returning to the parent's next sibling.
 For spine.next or spine.close, use summary as the short completion-time Spine Tree label. Use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope. Do not use summary or instruction with spine.open.
 Use spine.tree to inspect the current node and Spine Tree without moving the cursor.

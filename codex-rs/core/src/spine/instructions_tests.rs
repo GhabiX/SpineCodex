@@ -65,6 +65,14 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("displayed PlanTree stays current"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("non-trivial or multi-phase work"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("current node's top-level plan"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("execution plan"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("materialize that child before doing the work"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("immediately call update_plan in the new child"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("do not bypass planned child scopes"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("Move Spine at coherent scope boundaries"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("start a focused child scope"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("matching planned child scope"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("sibling-level under the same parent"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 50k raw tokens"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 30k"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the warning as a cue"));
