@@ -1279,7 +1279,7 @@ fn render_worklog_item_omits_runtime_metadata() {
 }
 
 #[test]
-fn render_handoff_item_marks_prefix_as_background_rules() {
+fn render_handoff_item_preserves_durable_instructions() {
     let item = render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2]));
     let ResponseItem::Message { role, content, .. } = &item else {
         panic!("expected message item");
@@ -1292,7 +1292,13 @@ fn render_handoff_item_marks_prefix_as_background_rules() {
     assert!(text.starts_with("<spine_handoff>"));
     assert!(text.contains("Spine transition completed: 1.1 -> 1.2"));
     assert!(text.contains("use 1.1's generated worklog as the active-turn handoff"));
-    assert!(text.contains("Preserved prefix instructions are background rules"));
+    assert!(
+        text.contains("Continue following preserved system, developer, and project instructions")
+    );
+    assert!(text.contains("old user-task content as historical context, not the current request"));
+    assert!(text.contains(
+        "reconstruct the current node plan from the generated worklog, latest user intent, and current evidence"
+    ));
     assert!(text.ends_with("</spine_handoff>"));
     assert!(!text.contains("Pending continuation"));
 }

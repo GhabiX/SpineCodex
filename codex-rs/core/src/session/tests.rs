@@ -2423,7 +2423,13 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     assert!(followup_request.body_contains_text("<spine_handoff>"));
     assert!(followup_request.body_contains_text("Spine transition completed: 1.1.1 -> 1.1.2"));
     assert!(followup_request.body_contains_text(
-        "Preserved prefix instructions are background rules, not the current request."
+        "Continue following preserved system, developer, and project instructions."
+    ));
+    assert!(followup_request.body_contains_text(
+        "Treat only the completed node's old user-task content as historical context, not the current request."
+    ));
+    assert!(followup_request.body_contains_text(
+        "If unfinished work remains, reconstruct the current node plan from the generated worklog, latest user intent, and current evidence before continuing."
     ));
     assert!(
         !followup_request.body_contains_text("RAW_SUFFIX_DETAIL should be folded"),
