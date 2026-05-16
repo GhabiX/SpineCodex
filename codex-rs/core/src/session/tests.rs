@@ -3063,6 +3063,80 @@ async fn reconstruct_history_does_not_revive_rolled_back_spine_compact_checkpoin
 }
 
 #[tokio::test]
+async fn reconstruct_history_rollback_preserves_older_raw_history_after_compact_checkpoint() {
+    let (session, turn_context) = make_session_and_context().await;
+    let first_turn_id = "surviving-turn".to_string();
+    let rolled_back_turn_id = "rolled-back-compact-turn".to_string();
+    let turn_one_user = user_message("turn 1 user");
+    let turn_one_assistant = assistant_message("turn 1 assistant");
+
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: first_turn_id.clone(),
+            started_at: None,
+            model_context_window: Some(128_000),
+            collaboration_mode_kind: ModeKind::Default,
+        })),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "turn 1 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
+        RolloutItem::ResponseItem(turn_one_user.clone()),
+        RolloutItem::ResponseItem(turn_one_assistant.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: first_turn_id,
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: rolled_back_turn_id.clone(),
+            started_at: None,
+            model_context_window: Some(128_000),
+            collaboration_mode_kind: ModeKind::Default,
+        })),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "turn 2 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
+        RolloutItem::ResponseItem(user_message("turn 2 user")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted rolled back checkpoint".to_string(),
+            replacement_history: Some(vec![
+                turn_one_user.clone(),
+                turn_one_assistant.clone(),
+                user_message("rolled-back compact ir"),
+            ]),
+        }),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: rolled_back_turn_id,
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(
+        reconstructed.history,
+        vec![turn_one_user, turn_one_assistant],
+        "rollback should drop the compact checkpoint turn but preserve older raw history"
+    );
+}
+
+#[tokio::test]
 async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");

@@ -32,7 +32,15 @@ struct ActiveReplaySegment<'a> {
     counts_as_user_turn: bool,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
-    base_replacement_history: Option<&'a [ResponseItem]>,
+    base: Option<ReplayBase<'a>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReplayBase<'a> {
+    replacement_history: &'a [ResponseItem],
+    // The replay suffix belongs to the same checkpoint as this base, so rollback filtering must
+    // accept or reject both together.
+    suffix_start: usize,
 }
 
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
@@ -42,7 +50,7 @@ fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&s
 
 fn finalize_active_segment<'a>(
     active_segment: ActiveReplaySegment<'a>,
-    base_replacement_history: &mut Option<&'a [ResponseItem]>,
+    base: &mut Option<ReplayBase<'a>>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
     pending_rollback_turns: &mut usize,
@@ -59,10 +67,10 @@ fn finalize_active_segment<'a>(
 
     // A surviving replacement-history checkpoint is a complete history base. Once we
     // know the newest surviving one, older rollout items do not affect rebuilt history.
-    if base_replacement_history.is_none()
-        && let Some(segment_base_replacement_history) = active_segment.base_replacement_history
+    if base.is_none()
+        && let Some(segment_base) = active_segment.base
     {
-        *base_replacement_history = Some(segment_base_replacement_history);
+        *base = Some(segment_base);
     }
 
     // `previous_turn_settings` come from the newest surviving user turn that established them.
@@ -94,15 +102,12 @@ impl Session {
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
         // are both known; then replay only the buffered surviving tail forward to preserve exact
         // history semantics.
-        let mut base_replacement_history: Option<&[ResponseItem]> = None;
+        let mut base: Option<ReplayBase<'_>> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
-        // Borrowed suffix of rollout items newer than the newest surviving replacement-history
-        // checkpoint. If no such checkpoint exists, this remains the full rollout.
-        let mut rollout_suffix = rollout_items;
         // Reverse replay accumulates rollout items into the newest in-progress turn segment until
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
         let mut active_segment: Option<ActiveReplaySegment<'_>> = None;
@@ -120,11 +125,13 @@ impl Session {
                     ) {
                         active_segment.reference_context_item = TurnReferenceContextItem::Cleared;
                     }
-                    if active_segment.base_replacement_history.is_none()
+                    if active_segment.base.is_none()
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
-                        active_segment.base_replacement_history = Some(replacement_history);
-                        rollout_suffix = &rollout_items[index + 1..];
+                        active_segment.base = Some(ReplayBase {
+                            replacement_history,
+                            suffix_start: index + 1,
+                        });
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -195,7 +202,7 @@ impl Session {
                     {
                         finalize_active_segment(
                             active_segment,
-                            &mut base_replacement_history,
+                            &mut base,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
                             &mut pending_rollback_turns,
@@ -210,7 +217,7 @@ impl Session {
                 RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
             }
 
-            if base_replacement_history.is_some()
+            if base.is_some()
                 && previous_turn_settings.is_some()
                 && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
             {
@@ -224,7 +231,7 @@ impl Session {
         if let Some(active_segment) = active_segment.take() {
             finalize_active_segment(
                 active_segment,
-                &mut base_replacement_history,
+                &mut base,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
                 &mut pending_rollback_turns,
@@ -233,13 +240,16 @@ impl Session {
 
         let mut history = ContextManager::new();
         let mut saw_legacy_compaction_without_replacement_history = false;
-        if let Some(base_replacement_history) = base_replacement_history {
-            history.replace(base_replacement_history.to_vec());
-        }
+        let rollout_suffix_start = if let Some(base) = base {
+            history.replace(base.replacement_history.to_vec());
+            base.suffix_start
+        } else {
+            0
+        };
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
         // instead of an eagerly loaded `&[RolloutItem]`.
-        for item in rollout_suffix {
+        for item in &rollout_items[rollout_suffix_start..] {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
