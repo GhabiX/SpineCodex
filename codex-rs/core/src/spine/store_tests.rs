@@ -496,6 +496,33 @@ fn records_root_epoch_archive_and_replays_from_tree() {
     assert_eq!(loaded, state);
     assert_eq!(loaded.cursor(), &id(&[2, 1]));
     assert_eq!(
+        loaded.node(&id(&[1])).map(|node| node.status.clone()),
+        Some(NodeStatus::Closed)
+    );
+    assert_eq!(
+        loaded.node(&id(&[1, 1])).map(|node| node.status.clone()),
+        Some(NodeStatus::Closed)
+    );
+    assert_eq!(
+        loaded.node(&id(&[1, 1, 1])).map(|node| node.status.clone()),
+        Some(NodeStatus::Closed)
+    );
+    assert_eq!(
+        loaded
+            .node(&id(&[1, 1, 1, 1]))
+            .map(|node| node.status.clone()),
+        Some(NodeStatus::Finished)
+    );
+    assert_eq!(
+        loaded
+            .nodes()
+            .values()
+            .filter(|node| node.status == NodeStatus::Live)
+            .map(|node| node.node_id.clone())
+            .collect::<Vec<_>>(),
+        vec![id(&[2, 1])]
+    );
+    assert_eq!(
         loaded
             .node(&id(&[2, 1]))
             .and_then(|node| node.raw_start_ordinal),

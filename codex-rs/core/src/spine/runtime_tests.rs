@@ -1,5 +1,6 @@
 use super::*;
 use crate::spine::ids::NodeId;
+use crate::spine::state::NodeStatus;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::SpineSidecarStore;
 use codex_protocol::models::ContentItem;
@@ -1660,6 +1661,30 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
         .expect("record archive");
 
     assert_eq!(runtime.cursor(), &id(&[2, 1]));
+    assert_eq!(
+        runtime
+            .state()
+            .node(&id(&[1, 1]))
+            .map(|node| node.status.clone()),
+        Some(NodeStatus::Closed)
+    );
+    assert_eq!(
+        runtime
+            .state()
+            .node(&id(&[1, 1, 1]))
+            .map(|node| node.status.clone()),
+        Some(NodeStatus::Finished)
+    );
+    assert_eq!(
+        runtime
+            .state()
+            .nodes()
+            .values()
+            .filter(|node| node.status == NodeStatus::Live)
+            .map(|node| node.node_id.clone())
+            .collect::<Vec<_>>(),
+        vec![id(&[2, 1])]
+    );
 }
 
 #[test]

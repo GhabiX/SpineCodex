@@ -144,7 +144,7 @@ fn format_subtree(
             line.push(' ');
             line.push_str(summary);
         }
-        if should_show_worklog_ref(&node.status) {
+        if should_show_worklog_ref(state, node_id, &node.status, current_root_epoch) {
             line.push(' ');
             if worklog_is_already_in_context(
                 state,
@@ -256,8 +256,22 @@ fn is_unfinished_under_closed_ancestor(state: &SpineState, node_id: &NodeId) -> 
     false
 }
 
-fn should_show_worklog_ref(status: &NodeStatus) -> bool {
-    matches!(status, NodeStatus::Finished | NodeStatus::Closed)
+fn should_show_worklog_ref(
+    state: &SpineState,
+    node_id: &NodeId,
+    status: &NodeStatus,
+    current_root_epoch: Option<&NodeId>,
+) -> bool {
+    if !matches!(status, NodeStatus::Finished | NodeStatus::Closed) {
+        return false;
+    }
+    if is_root_epoch(state, node_id) {
+        return true;
+    }
+    let Some(root_epoch) = root_epoch_for(node_id) else {
+        return false;
+    };
+    Some(&root_epoch) == current_root_epoch
 }
 
 pub(crate) fn display_node_id(node_id: &NodeId) -> String {

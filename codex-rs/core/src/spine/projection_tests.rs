@@ -1,4 +1,5 @@
 use super::*;
+use crate::spine::state::NodeStatus;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -7,6 +8,10 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+
+fn id(segments: &[u32]) -> NodeId {
+    NodeId::from_segments(segments.to_vec())
+}
 
 fn user_message(text: &str) -> RolloutItem {
     RolloutItem::ResponseItem(ResponseItem::Message {
@@ -169,5 +174,53 @@ fn projection_keeps_only_surviving_compact_hashes_after_rollback() {
         !projection
             .surviving_compact_hashes
             .contains(&compact_message_hash(rolled_back_message))
+    );
+}
+
+#[test]
+fn projection_root_epoch_compact_seals_archived_subtree() {
+    let projection = project_spine_state_from_rollout(&[
+        user_message("start"),
+        spine_call("open-1", SPINE_TOOL_OPEN, "scope"),
+        call_output("open-1"),
+        compacted("Spine compacted root epoch 1 [0, 3)"),
+        user_message("continue"),
+        spine_call("open-2", SPINE_TOOL_OPEN, "post archive scope"),
+        call_output("open-2"),
+    ])
+    .expect("project");
+
+    assert_eq!(projection.response_item_count, 6);
+    assert_eq!(projection.state.cursor(), &id(&[2, 1, 1]));
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[1]))
+            .map(|node| node.status.clone()),
+        Some(NodeStatus::Closed)
+    );
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[1, 1]))
+            .map(|node| node.status.clone()),
+        Some(NodeStatus::Closed)
+    );
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[1, 1, 1]))
+            .map(|node| node.status.clone()),
+        Some(NodeStatus::Finished)
+    );
+    assert_eq!(
+        projection
+            .state
+            .nodes()
+            .values()
+            .filter(|node| node.status == NodeStatus::Live)
+            .map(|node| node.node_id.clone())
+            .collect::<Vec<_>>(),
+        vec![id(&[2, 1, 1])]
     );
 }

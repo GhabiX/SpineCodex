@@ -196,6 +196,7 @@ impl SpineState {
 
         self.write_summary_if_absent(&from, summary)?;
         self.set_status(&from, NodeStatus::Closed)?;
+        self.seal_archived_subtree(&from)?;
         self.insert_node(next_epoch.clone(), None)?;
         self.set_status(&next_epoch, NodeStatus::Opened)?;
         self.set_raw_start_ordinal(&next_epoch, initial_leaf_raw_start_ordinal)?;
@@ -284,6 +285,39 @@ impl SpineState {
         };
         self.nodes.insert(node_id, node);
         Ok(())
+    }
+
+    fn seal_archived_subtree(&mut self, root: &NodeId) -> Result<(), SpineStateError> {
+        let descendants = self
+            .nodes
+            .keys()
+            .filter(|node_id| *node_id != root && self.is_descendant_of(node_id, root))
+            .cloned()
+            .collect::<Vec<_>>();
+        for node_id in descendants {
+            let status = self
+                .node(&node_id)
+                .ok_or_else(|| SpineStateError::UnknownNode(node_id.clone()))?
+                .status
+                .clone();
+            match status {
+                NodeStatus::Live => self.set_status(&node_id, NodeStatus::Finished)?,
+                NodeStatus::Opened => self.set_status(&node_id, NodeStatus::Closed)?,
+                NodeStatus::Finished | NodeStatus::Closed => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn is_descendant_of(&self, node_id: &NodeId, ancestor_id: &NodeId) -> bool {
+        let mut parent_id = self.node(node_id).and_then(|node| node.parent_id.as_ref());
+        while let Some(parent) = parent_id {
+            if parent == ancestor_id {
+                return true;
+            }
+            parent_id = self.node(parent).and_then(|node| node.parent_id.as_ref());
+        }
+        false
     }
 
     fn write_summary(

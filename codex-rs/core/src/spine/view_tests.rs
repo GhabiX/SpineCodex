@@ -1,6 +1,7 @@
 use super::*;
 use crate::spine::ids::NodeId;
 use crate::spine::runtime::SpineRuntimeHint;
+use crate::spine::state::NodeRecord;
 use std::path::Path;
 
 #[test]
@@ -87,6 +88,19 @@ fn tree_view_shows_paths_for_hidden_finished_descendants() {
 #[test]
 fn tree_view_resets_after_root_epoch_reset() {
     let mut state = SpineState::new();
+    state
+        .reset_root_epoch("Context compacted", 7)
+        .expect("reset root epoch");
+
+    assert_eq!(
+        render_tree_tool_output(&state, state.cursor()),
+        "Current:  2.1\n\n1: closed Context compacted [worklog already in context]\n    1.1: finished\n2: live\n    2.1: Current"
+    );
+}
+
+#[test]
+fn tree_view_shows_sealed_root_archive_descendants_without_worklog_paths() {
+    let mut state = SpineState::new();
     state.open().expect("open child");
     state
         .reset_root_epoch("Context compacted", 7)
@@ -94,7 +108,7 @@ fn tree_view_resets_after_root_epoch_reset() {
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  2.1\n\n1: closed Context compacted [worklog already in context]\n    1.1: [undone as compact]\n        1.1.1: [undone as compact]\n2: live\n    2.1: Current"
+        "Current:  2.1\n\n1: closed Context compacted [worklog already in context]\n    1.1: closed\n        1.1.1: finished\n2: live\n    2.1: Current"
     );
 }
 
@@ -110,6 +124,56 @@ fn tree_view_marks_previous_root_epoch_worklog_as_context() {
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  3.1\n\n1: closed first compact nodes/1/worklog.md\n    1.1: [undone as compact]\n2: closed second compact [worklog already in context]\n    2.1: [undone as compact]\n3: live\n    3.1: Current"
+        "Current:  3.1\n\n1: closed first compact nodes/1/worklog.md\n    1.1: finished\n2: closed second compact [worklog already in context]\n    2.1: finished\n3: live\n    3.1: Current"
+    );
+}
+
+#[test]
+fn tree_view_marks_legacy_unfinished_nodes_under_closed_ancestor() {
+    let state = SpineState::from_records(
+        NodeId::from_segments(vec![2, 1]),
+        vec![
+            NodeRecord {
+                node_id: NodeId::from_segments(vec![1]),
+                parent_id: None,
+                raw_start_ordinal: Some(0),
+                status: NodeStatus::Closed,
+                summary: Some("Context compacted".to_string()),
+            },
+            NodeRecord {
+                node_id: NodeId::from_segments(vec![1, 1]),
+                parent_id: Some(NodeId::from_segments(vec![1])),
+                raw_start_ordinal: Some(0),
+                status: NodeStatus::Opened,
+                summary: None,
+            },
+            NodeRecord {
+                node_id: NodeId::from_segments(vec![1, 1, 1]),
+                parent_id: Some(NodeId::from_segments(vec![1, 1])),
+                raw_start_ordinal: Some(0),
+                status: NodeStatus::Live,
+                summary: None,
+            },
+            NodeRecord {
+                node_id: NodeId::from_segments(vec![2]),
+                parent_id: None,
+                raw_start_ordinal: Some(7),
+                status: NodeStatus::Opened,
+                summary: None,
+            },
+            NodeRecord {
+                node_id: NodeId::from_segments(vec![2, 1]),
+                parent_id: Some(NodeId::from_segments(vec![2])),
+                raw_start_ordinal: Some(7),
+                status: NodeStatus::Live,
+                summary: None,
+            },
+        ],
+    )
+    .expect("construct legacy impossible state");
+
+    assert_eq!(
+        render_tree_tool_output(&state, state.cursor()),
+        "Current:  2.1\n\n1: closed Context compacted [worklog already in context]\n    1.1: [undone as compact]\n        1.1.1: [undone as compact]\n2: live\n    2.1: Current"
     );
 }

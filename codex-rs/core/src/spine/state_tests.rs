@@ -19,6 +19,56 @@ fn summaries(state: &SpineState) -> Vec<(NodeId, Option<String>, NodeStatus)> {
         .collect()
 }
 
+fn assert_tree_invariants(state: &SpineState) {
+    let live_nodes = state
+        .nodes()
+        .values()
+        .filter(|node| node.status == NodeStatus::Live)
+        .map(|node| node.node_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(live_nodes, vec![state.cursor().clone()]);
+
+    for node in state.nodes().values() {
+        if node.status == NodeStatus::Closed {
+            for descendant in state.nodes().values() {
+                if is_descendant(state, &descendant.node_id, &node.node_id) {
+                    assert!(
+                        !matches!(descendant.status, NodeStatus::Live | NodeStatus::Opened),
+                        "closed node {} has unfinished descendant {} with status {:?}",
+                        node.node_id,
+                        descendant.node_id,
+                        descendant.status
+                    );
+                }
+            }
+        }
+
+        if node.status == NodeStatus::Opened {
+            assert!(
+                is_ancestor(state, &node.node_id, state.cursor()),
+                "opened node {} is not on cursor path {}",
+                node.node_id,
+                state.cursor()
+            );
+        }
+    }
+}
+
+fn is_descendant(state: &SpineState, node_id: &NodeId, ancestor_id: &NodeId) -> bool {
+    let mut parent_id = state.node(node_id).and_then(|node| node.parent_id.as_ref());
+    while let Some(parent) = parent_id {
+        if parent == ancestor_id {
+            return true;
+        }
+        parent_id = state.node(parent).and_then(|node| node.parent_id.as_ref());
+    }
+    false
+}
+
+fn is_ancestor(state: &SpineState, ancestor_id: &NodeId, node_id: &NodeId) -> bool {
+    ancestor_id == node_id || is_descendant(state, node_id, ancestor_id)
+}
+
 #[test]
 fn initializes_root_with_initial_leaf() {
     let state = SpineState::new();
@@ -233,12 +283,13 @@ fn reset_root_epoch_replaces_live_tree_under_stable_root() {
                 Some("context compacted".to_string()),
                 NodeStatus::Closed,
             ),
-            (id(&[1, 1]), None, NodeStatus::Opened),
-            (id(&[1, 1, 1]), None, NodeStatus::Live),
+            (id(&[1, 1]), None, NodeStatus::Closed),
+            (id(&[1, 1, 1]), None, NodeStatus::Finished),
             (id(&[2]), None, NodeStatus::Opened),
             (id(&[2, 1]), None, NodeStatus::Live),
         ]
     );
+    assert_tree_invariants(&state);
     assert_eq!(
         state
             .node(&id(&[2, 1]))
@@ -261,6 +312,7 @@ fn reset_root_epoch_replaces_live_tree_under_stable_root() {
         state.node(&id(&[2])).and_then(|node| node.summary.clone()),
         Some("context compacted again".to_string())
     );
+    assert_tree_invariants(&state);
 }
 
 #[test]
