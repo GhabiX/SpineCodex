@@ -297,6 +297,55 @@ async fn spine_native_text_outcome_installs_root_epoch_worklog() {
 }
 
 #[tokio::test]
+async fn spine_native_text_install_failure_emits_error_event() {
+    let (session, turn_context, rx) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let native_summary = format!("{SUMMARY_PREFIX}\n{SPINE_NATIVE_TEXT_INSTALL_FAILURE_MARKER}");
+    let replacement_history = build_compacted_history(Vec::new(), &[], &native_summary);
+    let outcome = NativeTextCompactionOutcome {
+        compaction_item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+        pre_compact_history: Vec::new(),
+        replacement_history: replacement_history.clone(),
+        reference_context_item: None,
+        compacted_item: CompactedItem {
+            message: native_summary.clone(),
+            replacement_history: Some(replacement_history),
+        },
+        summary_text: native_summary,
+    };
+
+    let error = install_spine_native_text_compaction_outcome_or_emit_error(
+        &session,
+        &turn_context,
+        outcome,
+    )
+    .await
+    .expect_err("injected install failure should fail");
+    assert!(matches!(
+        error,
+        CodexErr::Fatal(message)
+            if message == "injected Spine native text compaction install failure"
+    ));
+
+    let event = rx.recv().await.expect("expected visible compact error");
+    let EventMsg::Error(error) = event.msg else {
+        panic!("expected EventMsg::Error for Spine-native install failure");
+    };
+    assert!(
+        error.message.contains("Error running Spine compact task"),
+        "expected Spine compact error prefix, got {}",
+        error.message
+    );
+    assert!(
+        error
+            .message
+            .contains("injected Spine native text compaction install failure"),
+        "expected injected failure detail, got {}",
+        error.message
+    );
+}
+
+#[tokio::test]
 async fn process_compacted_history_replaces_developer_messages() {
     let compacted_history = vec![
         ResponseItem::Message {

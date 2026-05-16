@@ -3009,6 +3009,16 @@ impl Session {
             spine_tree,
             surviving_compact_hashes.as_ref(),
         )?;
+        let acknowledged_raw_ordinal = spine.lock().await.current_ordinal();
+        if prep.effective_boundary.fold_end_ordinal > acknowledged_raw_ordinal {
+            return Err(CodexErr::Fatal(format!(
+                "spine root archive fold end {} for node {} op {:?} exceeds acknowledged raw ordinal {}",
+                prep.effective_boundary.fold_end_ordinal,
+                prep.effective_boundary.node_id,
+                prep.effective_boundary.op,
+                acknowledged_raw_ordinal
+            )));
+        }
         let (compact_id, compact_attempt, compact_started) = spine_compact_attempt_records(
             &prep.effective_boundary,
             prep.compact_index_rollout_path,

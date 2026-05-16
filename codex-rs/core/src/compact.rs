@@ -47,6 +47,8 @@ use codex_model_provider_info::ModelProviderInfo;
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+#[cfg(test)]
+const SPINE_NATIVE_TEXT_INSTALL_FAILURE_MARKER: &str = "__spine_fail_native_text_install__";
 
 /// Controls whether compaction replacement history must include initial context.
 ///
@@ -221,7 +223,8 @@ pub(crate) async fn run_spine_native_text_compact_task(
             InitialContextInjection::DoNotInject,
         )
         .await?;
-        install_spine_native_text_compaction_outcome(&sess, &turn_context, outcome).await
+        install_spine_native_text_compaction_outcome_or_emit_error(&sess, &turn_context, outcome)
+            .await
     }
     .await;
     let status = compaction_status_from_result(&result);
@@ -236,6 +239,19 @@ pub(crate) async fn run_spine_native_text_compact_task(
     }
     attempt.track(sess.as_ref(), status, error).await;
     result.map(|_| ())
+}
+
+async fn emit_spine_native_text_compaction_error(
+    sess: &Session,
+    turn_context: &TurnContext,
+    err: &CodexErr,
+) {
+    if matches!(err, CodexErr::Interrupted | CodexErr::TurnAborted) {
+        return;
+    }
+    let event =
+        EventMsg::Error(err.to_error_event(Some("Error running Spine compact task".to_string())));
+    sess.send_event(turn_context, event).await;
 }
 
 async fn run_compact_task_inner(
@@ -331,6 +347,12 @@ async fn install_spine_native_text_compaction_outcome(
         summary_text,
         ..
     } = outcome;
+    #[cfg(test)]
+    if summary_text.contains(SPINE_NATIVE_TEXT_INSTALL_FAILURE_MARKER) {
+        return Err(CodexErr::Fatal(
+            "injected Spine native text compaction install failure".to_string(),
+        ));
+    }
     sess.install_spine_root_epoch_compaction(
         turn_context.as_ref(),
         pre_compact_history,
@@ -341,6 +363,19 @@ async fn install_spine_native_text_compaction_outcome(
     sess.recompute_token_usage(turn_context).await;
     complete_native_text_compaction(sess, turn_context, compaction_item).await;
     Ok(())
+}
+
+async fn install_spine_native_text_compaction_outcome_or_emit_error(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    outcome: NativeTextCompactionOutcome,
+) -> CodexResult<()> {
+    let install_result =
+        install_spine_native_text_compaction_outcome(sess, turn_context, outcome).await;
+    if let Err(err) = &install_result {
+        emit_spine_native_text_compaction_error(sess, turn_context, err).await;
+    }
+    install_result
 }
 
 async fn complete_native_text_compaction(

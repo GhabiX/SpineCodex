@@ -2155,6 +2155,85 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
 }
 
 #[tokio::test]
+async fn spine_root_archive_rejects_fold_end_beyond_recorded_raw_ordinal() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    session.spine = Some(Arc::new(Mutex::new(runtime)));
+
+    let tool_call = ResponseItem::FunctionCall {
+        id: None,
+        name: "update_plan".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "plan-1".to_string(),
+    };
+    let tool_output = ResponseItem::FunctionCallOutput {
+        call_id: "plan-1".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("Plan updated.".to_string()),
+            success: Some(true),
+        },
+    };
+    session
+        .try_record_conversation_items(
+            &turn_context,
+            &[
+                assistant_message("root detail before plan"),
+                tool_call.clone(),
+            ],
+        )
+        .await?;
+    let original_cursor = session
+        .spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .cursor()
+        .clone();
+    let mut ahead_of_runtime_history = session.clone_history().await.raw_items().to_vec();
+    ahead_of_runtime_history.push(tool_output);
+
+    let err = session
+        .install_spine_root_epoch_compaction(
+            &turn_context,
+            ahead_of_runtime_history,
+            format!("{}\nroot compact fact", crate::compact::SUMMARY_PREFIX),
+            None,
+        )
+        .await
+        .expect_err("root archive must reject fold end past acknowledged raw ordinal");
+    assert!(matches!(
+        err,
+        CodexErr::Fatal(message)
+            if message.contains("spine root archive fold end 3")
+                && message.contains("exceeds acknowledged raw ordinal 2")
+    ));
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(runtime.current_ordinal(), 2);
+    assert_eq!(runtime.cursor(), &original_cursor);
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    assert!(
+        !compact_events
+            .iter()
+            .any(|event| event["type"] == "compact_started"),
+        "admissibility failure must happen before compact_started"
+    );
+    assert!(
+        !compact_events
+            .iter()
+            .any(|event| event["type"] == "compact_installed"),
+        "admissibility failure must happen before compact_installed"
+    );
+    let tree = std::fs::read_to_string(runtime.store().tree_path())?;
+    assert!(!tree.contains("\"type\":\"root_epoch_reset\""));
+    Ok(())
+}
+
+#[tokio::test]
 async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tree_update()
 -> anyhow::Result<()> {
     let (mut session, turn_context, rx) = make_session_and_context_with_rx().await;
