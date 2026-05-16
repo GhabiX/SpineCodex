@@ -212,6 +212,24 @@ fn last_assistant_message_from_item_returns_none_for_generated_spine_worklog() {
 }
 
 #[test]
+fn last_assistant_message_from_item_keeps_plain_final_answer_markdown_spine_worklog() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "## Spine Worklog\n\nNode: 1\nOperation: next\nSummary: visible\n\nfacts"
+                .to_string(),
+        }],
+        phase: Some(MessagePhase::FinalAnswer),
+    };
+
+    assert_eq!(
+        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        Some("## Spine Worklog\n\nNode: 1\nOperation: next\nSummary: visible\n\nfacts".to_string())
+    );
+}
+
+#[test]
 fn last_assistant_message_from_item_returns_none_for_legacy_generated_spine_worklog() {
     let item = ResponseItem::Message {
         id: None,

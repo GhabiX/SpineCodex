@@ -6,6 +6,7 @@ use codex_protocol::items::WebSearchItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -353,6 +354,37 @@ fn skips_generated_spine_worklog_assistant_message() {
     };
 
     assert!(parse_turn_item(&item).is_none());
+}
+
+#[test]
+fn parses_plain_final_answer_markdown_spine_worklog_assistant_message() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "## Spine Worklog\n\nNode: 1\nOperation: next\nSummary: visible\n\nfacts"
+                .to_string(),
+        }],
+        phase: Some(MessagePhase::FinalAnswer),
+    };
+
+    let turn_item = parse_turn_item(&item).expect("expected plain assistant message");
+
+    let TurnItem::AgentMessage(message) = turn_item else {
+        panic!("expected agent message");
+    };
+    let rendered = message
+        .content
+        .into_iter()
+        .map(|content| {
+            let AgentMessageContent::Text { text } = content;
+            text
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec!["## Spine Worklog\n\nNode: 1\nOperation: next\nSummary: visible\n\nfacts".to_string()]
+    );
 }
 
 #[test]

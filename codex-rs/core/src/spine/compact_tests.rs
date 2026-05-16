@@ -8,6 +8,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
+use codex_protocol::models::MessagePhase;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
@@ -290,6 +291,117 @@ fn raw_ordinals_map_slim_spine_worklog_with_runtime_span() {
     assert_eq!(
         raw_ordinal_for_effective_index_with_spans(&history, 2, &spans),
         Some(4)
+    );
+}
+
+#[test]
+fn raw_ordinals_map_serialized_slim_spine_worklog_with_runtime_span() {
+    let worklog_item = rollout_serialized(render_spine_worklog_item(
+        &id(&[1, 2]),
+        SpineOperation::Next,
+        "leaf summary",
+        "leaf body",
+    ));
+    let spans = vec![installed_span(
+        "compact-1",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        1,
+        4,
+    )];
+    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+
+    assert!(
+        is_spine_ir_item(&history[1]),
+        "serialized slim worklogs need a durable runtime marker because message ids are not serialized"
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
+        Some(2)
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 2, &spans),
+        Some(4)
+    );
+}
+
+#[test]
+fn raw_ordinals_treat_plain_final_answer_markdown_worklog_as_raw1() {
+    let previous_worklog = render_spine_worklog_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "previous leaf",
+        "previous facts",
+    );
+    let plain_final_answer = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text:
+                "## Spine Worklog\n\nNode: 1.2\nOperation: next\nSummary: visible answer\n\nfacts"
+                    .to_string(),
+        }],
+        phase: Some(MessagePhase::FinalAnswer),
+    };
+    let spans = vec![installed_span(
+        "compact-1-1",
+        id(&[1, 1]),
+        SpineOperation::Next,
+        1,
+        4,
+    )];
+    let history = vec![
+        text_item("prefix"),
+        previous_worklog,
+        render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2])),
+        plain_final_answer,
+        text_item("tail"),
+    ];
+
+    assert!(
+        !is_spine_ir_item(&history[3]),
+        "plain final answers must not become synthetic worklog items by markdown shape alone"
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
+        Some(3),
+        "the plain final answer starts at the post-handoff raw boundary"
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 5, &spans),
+        Some(4),
+        "the tail boundary proves the markdown final answer consumed Raw1"
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 4, &spans),
+        Some(5)
+    );
+}
+
+#[test]
+fn raw_ordinals_treat_unmarked_markdown_worklog_without_span_as_raw1() {
+    let history = vec![
+        text_item("prefix"),
+        text_item("## Spine Worklog\n\nNode: 1.2\nOperation: next\nSummary: visible\n\nfacts"),
+        text_item("tail"),
+    ];
+
+    assert!(
+        !is_spine_ir_item(&history[1]),
+        "bare markdown is not a durable synthetic marker"
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 1, &[]),
+        Some(1)
+    );
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&history, 2, &[]),
+        Some(2),
+        "the item must consume Raw1 instead of failing span lookup"
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&history, 2, &[]),
+        Some(2)
     );
 }
 
@@ -578,6 +690,25 @@ fn raw_ordinals_fail_fast_for_slim_spine_worklog_without_runtime_span() {
     );
     assert_eq!(
         raw_ordinal_for_effective_index_with_spans(&history, 2, &[]),
+        None
+    );
+
+    let serialized_history = vec![
+        text_item("prefix"),
+        rollout_serialized(render_spine_worklog_item(
+            &id(&[1, 2]),
+            SpineOperation::Next,
+            "leaf summary",
+            "leaf body",
+        )),
+        text_item("tail"),
+    ];
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(&serialized_history, 4, &[]),
+        None
+    );
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(&serialized_history, 2, &[]),
         None
     );
 }
@@ -1241,7 +1372,7 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
 }
 
 #[test]
-fn render_worklog_item_omits_runtime_metadata() {
+fn render_worklog_item_uses_durable_marker_without_span_metadata() {
     let item = render_spine_worklog_item(
         &id(&[1, 2]),
         SpineOperation::Close,
@@ -1256,7 +1387,7 @@ fn render_worklog_item_omits_runtime_metadata() {
         _ => panic!("unexpected item type"),
     };
 
-    assert!(text.starts_with("## Spine Worklog\n\n"));
+    assert!(text.starts_with("<!-- codex-spine-worklog:1.2:close -->\n## Spine Worklog\n\n"));
     assert!(text.contains("Node: 1.2"));
     assert!(text.contains("Operation: close"));
     assert!(text.contains("Summary: scope summary"));

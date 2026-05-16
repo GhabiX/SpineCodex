@@ -28,6 +28,8 @@ use tracing::warn;
 
 const SPINE_INITIAL_CONTEXT_OPEN_TAG: &str = "<spine_initial_context runtime_generated=\"true\">";
 const SPINE_INITIAL_CONTEXT_CLOSE_TAG: &str = "</spine_initial_context>";
+const SPINE_WORKLOG_MARKER_PREFIX: &str = "<!-- codex-spine-worklog:";
+const SPINE_WORKLOG_MARKER_SUFFIX: &str = " -->";
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpineCompactInput {
@@ -577,6 +579,22 @@ fn classify_effective_item(
             fold_end: span.fold_end_ordinal,
         });
     }
+    if let Some(meta) = parse_legacy_markdown_spine_worklog_metadata(item) {
+        // Bare markdown worklogs were emitted before the durable marker existed. They are
+        // synthetic only when the compact ledger validates the exact boundary; otherwise
+        // they are ordinary assistant text.
+        return match lookup_runtime_span_for_worklog(runtime_spans, *span_cursor, &meta, raw_cursor)
+        {
+            RuntimeWorklogSpanMatch::Unique { index, span } => {
+                let cut = span.cut_ordinal;
+                let fold_end = span.fold_end_ordinal;
+                *span_cursor = index + 1;
+                Some(EffectiveItemSemantics::Span { cut, fold_end })
+            }
+            RuntimeWorklogSpanMatch::Ambiguous => None,
+            RuntimeWorklogSpanMatch::NoMatch => Some(EffectiveItemSemantics::Raw1),
+        };
+    }
     if is_spine_handoff_item(item) || parse_spine_initial_context_item(item).is_some() {
         return Some(EffectiveItemSemantics::Zero);
     }
@@ -622,7 +640,8 @@ pub(crate) fn render_spine_worklog_item(
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text: format!(
-                "## Spine Worklog\n\nNode: {}\nOperation: {}\nSummary: {}\n\n{}",
+                "{}\n## Spine Worklog\n\nNode: {}\nOperation: {}\nSummary: {}\n\n{}",
+                spine_worklog_text_marker(node_id, op),
                 node_id,
                 op_label(op),
                 summary,
@@ -883,25 +902,49 @@ fn runtime_span_matches_worklog(span: &InstalledCompactSpan, meta: &SpineWorklog
     span.node_id == meta.node_id && span.op == meta.op
 }
 
+enum RuntimeWorklogSpanMatch<'a> {
+    NoMatch,
+    Unique {
+        index: usize,
+        span: &'a InstalledCompactSpan,
+    },
+    Ambiguous,
+}
+
+fn lookup_runtime_span_for_worklog<'a>(
+    runtime_spans: &'a [InstalledCompactSpan],
+    span_cursor: usize,
+    meta: &SpineWorklogMetadata,
+    cut_ordinal: u64,
+) -> RuntimeWorklogSpanMatch<'a> {
+    let mut found = None;
+    for (index, span) in runtime_spans.iter().enumerate().skip(span_cursor) {
+        if span.cut_ordinal == cut_ordinal && runtime_span_matches_worklog(span, meta) {
+            if found.is_some() {
+                return RuntimeWorklogSpanMatch::Ambiguous;
+            }
+            found = Some((index, span));
+        }
+    }
+    match found {
+        Some((index, span)) => RuntimeWorklogSpanMatch::Unique { index, span },
+        None => RuntimeWorklogSpanMatch::NoMatch,
+    }
+}
+
 fn consume_runtime_span_for_worklog<'a>(
     runtime_spans: &'a [InstalledCompactSpan],
     span_cursor: &mut usize,
     meta: &SpineWorklogMetadata,
     cut_ordinal: u64,
 ) -> Option<&'a InstalledCompactSpan> {
-    let mut matches = runtime_spans
-        .iter()
-        .enumerate()
-        .skip(*span_cursor)
-        .filter(|(_, span)| {
-            span.cut_ordinal == cut_ordinal && runtime_span_matches_worklog(span, meta)
-        });
-    let (index, span) = matches.next()?;
-    if matches.next().is_some() {
-        return None;
+    match lookup_runtime_span_for_worklog(runtime_spans, *span_cursor, meta, cut_ordinal) {
+        RuntimeWorklogSpanMatch::Unique { index, span } => {
+            *span_cursor = index + 1;
+            Some(span)
+        }
+        RuntimeWorklogSpanMatch::NoMatch | RuntimeWorklogSpanMatch::Ambiguous => None,
     }
-    *span_cursor = index + 1;
-    Some(span)
 }
 
 fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
@@ -956,7 +999,7 @@ fn parse_spine_worklog_metadata(item: &ResponseItem) -> Option<SpineWorklogMetad
     if let Some(meta) = id.and_then(parse_spine_worklog_id) {
         return Some(meta);
     }
-    if let Some(meta) = parse_markdown_spine_worklog_metadata(text) {
+    if let Some(meta) = parse_spine_worklog_text_marker(text) {
         return Some(meta);
     }
 
@@ -965,6 +1008,27 @@ fn parse_spine_worklog_metadata(item: &ResponseItem) -> Option<SpineWorklogMetad
     let node_id = NodeId::parse(parse_tag_string(header, "node")?).ok()?;
     let op = parse_spine_operation_label(parse_tag_string(header, "op")?)?;
     Some(SpineWorklogMetadata { node_id, op })
+}
+
+fn parse_legacy_markdown_spine_worklog_metadata(
+    item: &ResponseItem,
+) -> Option<SpineWorklogMetadata> {
+    let text = match item {
+        ResponseItem::Message {
+            id,
+            role,
+            content,
+            phase,
+            ..
+        } if id.is_none() && role == "assistant" && phase.is_none() => {
+            content.iter().find_map(|content_item| match content_item {
+                ContentItem::OutputText { text } => Some(text.as_str()),
+                _ => None,
+            })?
+        }
+        _ => return None,
+    };
+    parse_markdown_spine_worklog_metadata(text)
 }
 
 fn parse_markdown_spine_worklog_metadata(text: &str) -> Option<SpineWorklogMetadata> {
@@ -989,6 +1053,26 @@ fn parse_markdown_spine_worklog_metadata(text: &str) -> Option<SpineWorklogMetad
     Some(SpineWorklogMetadata {
         node_id: node_id?,
         op: op?,
+    })
+}
+
+fn spine_worklog_text_marker(node_id: &NodeId, op: SpineOperation) -> String {
+    format!(
+        "{SPINE_WORKLOG_MARKER_PREFIX}{node_id}:{}{SPINE_WORKLOG_MARKER_SUFFIX}",
+        op_label(op)
+    )
+}
+
+fn parse_spine_worklog_text_marker(text: &str) -> Option<SpineWorklogMetadata> {
+    let marker = text
+        .lines()
+        .next()?
+        .strip_prefix(SPINE_WORKLOG_MARKER_PREFIX)?
+        .strip_suffix(SPINE_WORKLOG_MARKER_SUFFIX)?;
+    let (node_id, op) = marker.rsplit_once(':')?;
+    Some(SpineWorklogMetadata {
+        node_id: NodeId::parse(node_id).ok()?,
+        op: parse_spine_operation_label(op)?,
     })
 }
 
