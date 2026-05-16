@@ -79,6 +79,18 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine.next/close are not end-of-response cleanup"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("finish its user-visible work there"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("genuinely new sibling/parent-sibling work"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains(
+        "Spine transitions are internal context-management steps, not substitutes for normal Codex turn delivery"
+    ));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains(
+        "after spine.next or spine.close, continue work if the latest user request remains unfinished"
+    ));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains(
+        "send the user-facing final answer/update if that request is complete, paused, blocked, or needs a decision"
+    ));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains(
+        "Do not use a Spine Tree update, tool output, or generated worklog as the user-visible report"
+    ));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 80k raw tokens"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 30k"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Treat the warning as a cue"));
