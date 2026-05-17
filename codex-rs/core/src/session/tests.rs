@@ -221,6 +221,16 @@ fn spine_function_call(call_id: &str) -> ResponseItem {
     }
 }
 
+fn spine_next_function_call(call_id: &str, summary: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "spine".to_string(),
+        namespace: None,
+        arguments: format!(r#"{{"op":"next","summary":"{summary}"}}"#),
+        call_id: call_id.to_string(),
+    }
+}
+
 fn function_call_output(call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCallOutput {
         call_id: call_id.to_string(),
@@ -3605,6 +3615,104 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
     assert!(
         std::fs::read_to_string(projected_runtime.store().tree_path())?
             .contains("\"projection_reset\"")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resume_projection_repairs_behind_projection_epoch() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let prefix_items = vec![
+        RolloutItem::ResponseItem(user_message("turn 1 user")),
+        RolloutItem::ResponseItem(spine_function_call("open-1")),
+        RolloutItem::ResponseItem(function_call_output("open-1")),
+    ];
+    let mut rollout_items = prefix_items.clone();
+    rollout_items.push(RolloutItem::ResponseItem(spine_next_function_call(
+        "next-1", "done",
+    )));
+    rollout_items.push(RolloutItem::ResponseItem(function_call_output("next-1")));
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
+
+    let prefix_projection = crate::spine::projection::project_spine_state_from_rollout_with_source(
+        rollout_path.to_string_lossy(),
+        &prefix_items,
+    )?;
+    let store = crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    store.create()?;
+    store.record_projection_reset(
+        prefix_projection.state.clone(),
+        "resume_projection_prefix",
+        None,
+        prefix_projection.epoch.clone(),
+    )?;
+
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: Vec::new(),
+        rollout_path: Some(rollout_path.clone()),
+    });
+    let projection = session_integration::initial_spine_projection(&initial_history)
+        .await?
+        .expect("behind projection epoch should request repair projection");
+    assert_eq!(projection.response_item_count, 5);
+    assert_eq!(projection.state.cursor().to_string(), "1.1.2");
+
+    let projected_runtime = session_integration::load_initial_spine_runtime(
+        &rollout_path,
+        projection.response_item_count,
+        /*has_spine_history*/ true,
+        /*has_non_spine_compaction*/ false,
+        Some(&projection),
+    )?;
+    assert_eq!(projected_runtime.cursor().to_string(), "1.1.2");
+    let tree = std::fs::read_to_string(projected_runtime.store().tree_path())?;
+    assert_eq!(tree.matches("\"type\":\"projection_reset\"").count(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn resume_projection_rejects_ahead_projection_epoch() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let prefix_items = vec![
+        RolloutItem::ResponseItem(user_message("turn 1 user")),
+        RolloutItem::ResponseItem(spine_function_call("open-1")),
+        RolloutItem::ResponseItem(function_call_output("open-1")),
+    ];
+    let mut future_items = prefix_items.clone();
+    future_items.push(RolloutItem::ResponseItem(spine_next_function_call(
+        "next-1", "done",
+    )));
+    future_items.push(RolloutItem::ResponseItem(function_call_output("next-1")));
+    write_rollout_items_for_test(&rollout_path, &prefix_items)?;
+
+    let future_projection = crate::spine::projection::project_spine_state_from_rollout_with_source(
+        rollout_path.to_string_lossy(),
+        &future_items,
+    )?;
+    let store = crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    store.create()?;
+    store.record_projection_reset(
+        future_projection.state.clone(),
+        "future_projection",
+        None,
+        future_projection.epoch.clone(),
+    )?;
+
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: Vec::new(),
+        rollout_path: Some(rollout_path),
+    });
+    let error = session_integration::initial_spine_projection(&initial_history)
+        .await
+        .expect_err("ahead projection epoch must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("spine sidecar projection epoch is ahead")
     );
     Ok(())
 }

@@ -268,7 +268,7 @@ impl SpineSidecarStore {
             let cached = self.read_state_cache(&state_path)?;
             let replayed = StateSnapshot::from_state(&state);
             if cached != replayed {
-                return Err(SpineStoreError::StateCacheMismatch { path: state_path });
+                self.write_state_cache(&state)?;
             }
         }
         Ok(state)
@@ -2649,8 +2649,6 @@ pub(crate) enum SpineStoreError {
     },
     #[error("invalid spine ledger: {0}")]
     InvalidLedger(String),
-    #[error("spine state cache mismatch at {path}")]
-    StateCacheMismatch { path: PathBuf },
     #[error(transparent)]
     State(#[from] SpineStateError),
     #[error(transparent)]

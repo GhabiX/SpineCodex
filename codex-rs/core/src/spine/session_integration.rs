@@ -2,6 +2,9 @@ use super::debug_audit::RuntimeDebugBoundary;
 use super::debug_audit::audit_projection_epoch;
 use super::projection::SpineProjection;
 use super::projection::project_spine_state_from_rollout_with_source;
+use super::projection_epoch::ProjectionEpochClassification;
+use super::projection_epoch::classify_projection_epoch;
+use super::projection_epoch::projection_rollout_position;
 use super::runtime::SpineRuntime;
 use super::runtime::SpineRuntimeError;
 use super::store::SpineSidecarStore;
@@ -43,11 +46,16 @@ pub(crate) async fn initial_spine_scan(
             if let Some(rollout_path) = resumed.rollout_path.as_ref() {
                 let (items, _, _) =
                     crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
-                Ok(initial_spine_scan_items(
+                let mut scan = initial_spine_scan_items(
                     &items,
                     SpineProjectionPolicy::Resume,
                     rollout_path.to_string_lossy(),
-                )?)
+                )?;
+                if scan.has_spine_history {
+                    scan.projection = resume_projection_from_sidecar_epoch(rollout_path, &items)?
+                        .or(scan.projection);
+                }
+                Ok(scan)
             } else {
                 Ok(initial_spine_scan_items(
                     &resumed.history,
@@ -87,6 +95,47 @@ fn initial_spine_scan_items(
             .then(|| project_spine_state_from_rollout_with_source(source_rollout_ref, items))
             .transpose()?,
     })
+}
+
+fn resume_projection_from_sidecar_epoch(
+    rollout_path: &Path,
+    items: &[RolloutItem],
+) -> anyhow::Result<Option<SpineProjection>> {
+    if !SpineSidecarStore::has_sidecar_for_rollout(rollout_path)? {
+        return Ok(None);
+    }
+    let store = SpineSidecarStore::for_rollout(rollout_path)?;
+    if !store.tree_path().exists() {
+        return Ok(None);
+    }
+    let Some(epoch) = store.latest_projection_epoch()? else {
+        return Ok(None);
+    };
+    let epoch_len = usize::try_from(epoch.processed_rollout_len).unwrap_or(usize::MAX);
+    let prefix_len = epoch_len.min(items.len());
+    let source_rollout_ref = rollout_path.to_string_lossy();
+    let current_prefix =
+        projection_rollout_position(source_rollout_ref.as_ref(), &items[..prefix_len])?;
+    let current_processed_rollout_len = u64::try_from(items.len()).unwrap_or(u64::MAX);
+    match classify_projection_epoch(&epoch, &current_prefix, current_processed_rollout_len) {
+        ProjectionEpochClassification::Current | ProjectionEpochClassification::Behind => Ok(Some(
+            project_spine_state_from_rollout_with_source(source_rollout_ref, items)?,
+        )),
+        ProjectionEpochClassification::Ahead => {
+            anyhow::bail!(
+                "spine sidecar projection epoch is ahead of resumed rollout at {}: epoch processed_rollout_len {}, current rollout len {}",
+                store.root().display(),
+                epoch.processed_rollout_len,
+                current_processed_rollout_len
+            )
+        }
+        ProjectionEpochClassification::Divergent => {
+            anyhow::bail!(
+                "spine sidecar projection epoch diverges from resumed rollout at {}",
+                store.root().display()
+            )
+        }
+    }
 }
 
 #[cfg(test)]

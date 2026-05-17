@@ -773,7 +773,7 @@ fn appends_node_trajs_next_to_memory() {
 }
 
 #[test]
-fn state_cache_mismatch_fails_fast() {
+fn state_cache_mismatch_replays_and_repairs_cache() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
@@ -787,9 +787,11 @@ fn state_cache_mismatch_fails_fast() {
     )
     .expect("write mutated cache");
 
-    let error = store.load().expect_err("mismatched cache should fail");
+    let loaded = store.load().expect("mismatched cache should replay");
 
-    assert!(matches!(error, SpineStoreError::StateCacheMismatch { .. }));
+    assert_eq!(loaded.cursor(), &id(&[1, 1, 1]));
+    let repaired = read_json(store.state_path());
+    assert_eq!(repaired["cursor"], json!("1.1.1"));
 }
 
 #[test]
