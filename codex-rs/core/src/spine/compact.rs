@@ -354,6 +354,26 @@ pub(crate) fn build_root_archive_replacement_history(
     root_memory_item: ResponseItem,
     runtime_spans: &[InstalledCompactSpan],
 ) -> CodexResult<RootArchiveReplacementHistory> {
+    build_root_archive_replacement_history_for_compact_id(
+        history,
+        planned_cut_index,
+        fold_end_ordinal,
+        initial_context_items,
+        root_memory_item,
+        runtime_spans,
+        "__spine_root_archive_render_pi__",
+    )
+}
+
+pub(crate) fn build_root_archive_replacement_history_for_compact_id(
+    history: &[ResponseItem],
+    planned_cut_index: usize,
+    fold_end_ordinal: u64,
+    initial_context_items: Vec<ResponseItem>,
+    root_memory_item: ResponseItem,
+    runtime_spans: &[InstalledCompactSpan],
+    root_compact_id: &str,
+) -> CodexResult<RootArchiveReplacementHistory> {
     let prefix_history = &history[..planned_cut_index];
     let mut raw_cursor = 0_u64;
     let mut span_cursor = 0_usize;
@@ -406,7 +426,6 @@ pub(crate) fn build_root_archive_replacement_history(
         .ok_or_else(|| {
             CodexErr::Fatal("spine root archive render(Pi) could not map history end".to_string())
         })?;
-    let root_compact_id = "__spine_root_archive_render_pi__";
     let mut artifacts = artifacts_from_runtime_spans(runtime_spans);
     artifacts.insert(
         root_compact_id.to_string(),

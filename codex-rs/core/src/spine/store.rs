@@ -1055,23 +1055,6 @@ impl SpineSidecarStore {
             .map_err(|source| SpineStoreError::Io { path, source })
     }
 
-    pub(crate) fn memory_with_appended_section(
-        &self,
-        node_id: &NodeId,
-        section: &str,
-    ) -> Result<String, SpineStoreError> {
-        let mut memory = match self.read_memory_file(node_id) {
-            Ok(memory) => memory,
-            Err(SpineStoreError::Io { source, .. }) if source.kind() == ErrorKind::NotFound => {
-                String::new()
-            }
-            Err(err) => return Err(err),
-        };
-        memory.push_str(GENERATED_MEMORY_SECTION_MARKER);
-        memory.push_str(section);
-        Ok(memory)
-    }
-
     #[allow(dead_code)]
     pub(crate) fn generated_memory_sections(
         &self,

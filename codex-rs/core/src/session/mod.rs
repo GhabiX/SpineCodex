@@ -184,6 +184,7 @@ use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
 use crate::spine::compact::SpineCompactBoundary;
 use crate::spine::compact::build_root_archive_replacement_history;
+use crate::spine::compact::build_root_archive_replacement_history_for_compact_id;
 use crate::spine::compact::build_suffix_replacement_history_from_pi;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
 use crate::spine::compact::prepare_spine_compact_plan;
@@ -3058,8 +3059,8 @@ impl Session {
             &history,
             prep.plan.cut_index,
             prep.effective_boundary.fold_end_ordinal,
-            initial_context_items,
-            rendered_memory_item,
+            initial_context_items.clone(),
+            rendered_memory_item.clone(),
             &prep.runtime_spans,
         )?;
         let root_boundary = SpineCompactBoundary {
@@ -3083,11 +3084,6 @@ impl Session {
         memory_input.suffix_items =
             history[root_replacement.archive_cut_index..prep.plan.fold_end_index].to_vec();
         let memory_markdown = render_auto_compact_memory(&memory_input, compacted_body);
-        store
-            .memory_with_appended_section(&boundary.node_id, &memory_markdown)
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to stage spine root archive memory: {err}"))
-            })?;
         let memory_rel_path = prep
             .plan
             .memory_path
@@ -3099,13 +3095,38 @@ impl Session {
             boundary.node_id, root_boundary.cut_ordinal, root_boundary.fold_end_ordinal
         );
         let (compact_id, compact_attempt, compact_started) =
-            spine_compact_attempt_records(&root_boundary, prep.compact_index_rollout_path);
-        let replacement_history = root_replacement.replacement_history;
-        let compacted_item = CompactedItem {
-            message: compact_message.clone(),
-            replacement_history: Some(replacement_history.clone()),
+            spine_compact_attempt_records(&root_boundary, prep.compact_index_rollout_path.clone());
+        store
+            .append_compact_started(compact_started)
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to record spine root archive start: {err}"))
+            })?;
+        let root_replacement = match build_root_archive_replacement_history_for_compact_id(
+            &history,
+            prep.plan.cut_index,
+            root_boundary.fold_end_ordinal,
+            initial_context_items.clone(),
+            rendered_memory_item.clone(),
+            &prep.runtime_spans,
+            &compact_id,
+        ) {
+            Ok(root_replacement) => root_replacement,
+            Err(err) => {
+                record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
+                return Err(err);
+            }
         };
+        let replacement_history = root_replacement.replacement_history;
         let message_hash = compact_message_hash(&compact_message);
+        if let Err(err) = validate_root_mem_install_segment_plan(
+            &history,
+            &prep.runtime_spans,
+            &root_boundary,
+            &compact_id,
+        ) {
+            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
+            return Err(err);
+        }
         if turn_context.config.runtime_debug_checks {
             let spans_after_install = spine_compact_spans_after_install(
                 &prep.runtime_spans,
@@ -3114,57 +3135,38 @@ impl Session {
                 replacement_history.len(),
                 message_hash.clone(),
             );
-            audit_compact_checkpoint(
+            if let Err(err) = audit_compact_checkpoint(
                 RuntimeDebugBoundary::BeforeCheckpointInstall,
                 &replacement_history,
                 &spans_after_install,
                 &[root_boundary.cut_ordinal, root_boundary.fold_end_ordinal],
                 format!("{} compact_id={compact_id}", store.root().display()),
-            )?;
+            ) {
+                record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
+                return Err(err.into());
+            }
         }
-        store
-            .append_compact_started(compact_started)
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to record spine root archive start: {err}"))
-            })?;
-        if let Err(err) = self
-            .try_replace_compacted_history(
-                replacement_history.clone(),
-                reference_context_item,
-                compacted_item,
-            )
-            .await
-        {
-            store
-                .append_compact_failed(CompactTerminalRecord {
-                    attempt: compact_attempt.clone(),
-                    strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
-                    error: err.to_string(),
-                })
-                .map_err(|store_err| {
-                    CodexErr::Fatal(format!(
-                        "failed to record spine root archive install failure after error {err}: {store_err}"
-                    ))
-            })?;
-            return Err(err);
-        }
-        #[cfg(test)]
-        if compacted_body.contains("__spine_fail_root_archive_after_rollout_checkpoint__") {
-            return Err(self
-                .poison_spine_compact(
-                    "injected spine root archive failure after rollout checkpoint",
-                )
-                .await);
-        }
-        // The rollout checkpoint is already replaced. Later sidecar failures are not rolled back;
-        // poison future Spine compact attempts so partial install state fails fast.
+
         if let Err(err) = store.append_memory_section(&boundary.node_id, &memory_markdown) {
-            return Err(self
-                .poison_spine_compact(format!(
-                    "failed to append installed spine root archive memory after rollout checkpoint: {err}"
-                ))
-                .await);
+            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
+            return Err(CodexErr::Fatal(format!(
+                "failed to stage spine root archive memory before MemInstall commit: {err}"
+            )));
         }
+        let body_ref = store
+            .generated_memory_sections(&boundary.node_id)
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to read staged spine root archive memory: {err}"
+                ))
+            })?
+            .last()
+            .map(|section| section.body_ref())
+            .ok_or_else(|| {
+                CodexErr::Fatal(
+                    "staged spine root archive memory has no generated section".to_string(),
+                )
+            })?;
         let node_trajs_items = memory_input
             .suffix_items
             .iter()
@@ -3172,23 +3174,41 @@ impl Session {
             .map(RolloutItem::ResponseItem)
             .collect::<Vec<_>>();
         if let Err(err) = store.append_node_trajs_items(&boundary.node_id, &node_trajs_items) {
-            return Err(self
-                .poison_spine_compact(format!(
-                    "failed to archive installed spine root epoch trajs after rollout checkpoint: {err}"
-                ))
-                .await);
+            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
+            return Err(CodexErr::Fatal(format!(
+                "failed to archive spine root epoch trajs before MemInstall commit: {err}"
+            )));
         }
         if let Err(err) = store.append_raw_mirror_compact_checkpoint(
             &compact_id,
             &message_hash,
             replacement_history.len(),
         ) {
-            return Err(self
-                .poison_spine_compact(format!(
-                    "failed to record spine root archive raw mirror checkpoint after rollout checkpoint: {err}"
-                ))
-                .await);
+            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
+            return Err(CodexErr::Fatal(format!(
+                "failed to stage spine root archive raw mirror checkpoint before MemInstall commit: {err}"
+            )));
         }
+        #[cfg(test)]
+        if compacted_body.contains("__spine_fail_root_archive_before_meminstall__") {
+            let err = "injected spine root archive failure before MemInstall commit";
+            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
+            return Err(CodexErr::Fatal(err.to_string()));
+        }
+        if let Err(err) = store.append_mem_install_committed(MemInstallCommittedRecord {
+            attempt: compact_attempt.clone(),
+            body_ref,
+            replacement_history_len: replacement_history.len(),
+            message_hash: message_hash.clone(),
+            projection_ref: root_mem_install_projection_ref(&compact_id, &root_boundary),
+            source_rollout_ref: prep.compact_index_rollout_path.clone(),
+        }) {
+            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
+            return Err(CodexErr::Fatal(format!(
+                "failed to commit spine root archive MemInstall before host checkpoint: {err}"
+            )));
+        }
+        ensure_meminstall_committed(&store, &compact_id, "root epoch reset")?;
         {
             let mut runtime = spine.lock().await;
             if let Err(err) = runtime.record_root_epoch_archive(
@@ -3199,10 +3219,47 @@ impl Session {
             ) {
                 return Err(self
                     .poison_spine_compact(format!(
-                        "failed to record spine root epoch archive after rollout checkpoint: {err}"
+                        "failed to record spine root epoch archive after MemInstall commit: {err}"
                     ))
                     .await);
             }
+        }
+        ensure_meminstall_committed(&store, &compact_id, "root checkpoint render")?;
+        let root_replacement = build_root_archive_replacement_history_for_compact_id(
+            &history,
+            prep.plan.cut_index,
+            root_boundary.fold_end_ordinal,
+            initial_context_items,
+            rendered_memory_item,
+            &prep.runtime_spans,
+            &compact_id,
+        )?;
+        let replacement_history = root_replacement.replacement_history;
+        let compacted_item = CompactedItem {
+            message: compact_message.clone(),
+            replacement_history: Some(replacement_history.clone()),
+        };
+        if let Err(err) = self
+            .try_replace_compacted_history(
+                replacement_history.clone(),
+                reference_context_item,
+                compacted_item,
+            )
+            .await
+        {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to install spine root archive host checkpoint after MemInstall commit: {err}"
+                ))
+                .await);
+        }
+        #[cfg(test)]
+        if compacted_body.contains("__spine_fail_root_archive_after_rollout_checkpoint__") {
+            return Err(self
+                .poison_spine_compact(
+                    "injected spine root archive failure after rollout checkpoint",
+                )
+                .await);
         }
         if let Err(err) = store.append_compact_installed(CompactInstalledRecord {
             attempt: compact_attempt,
@@ -3492,7 +3549,7 @@ impl Session {
                 "failed to commit spine compact MemInstall before host checkpoint: {err}"
             )));
         }
-        ensure_suffix_meminstall_committed(&store, &compact_id)?;
+        ensure_meminstall_committed(&store, &compact_id, "checkpoint render")?;
         let replacement_history = build_suffix_replacement_history_from_pi(
             &history,
             &prep.runtime_spans,
@@ -4588,6 +4645,59 @@ fn visible_live_starts_for_segment_plan(
     Ok(live_starts)
 }
 
+fn validate_root_mem_install_segment_plan(
+    history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+    boundary: &SpineCompactBoundary,
+    compact_id: &str,
+) -> CodexResult<()> {
+    let raw_len = raw_ordinal_for_effective_index_with_spans(history, history.len(), runtime_spans)
+        .ok_or_else(|| {
+            CodexErr::Fatal("root MemInstall segment plan could not map history end".to_string())
+        })?;
+    let mut artifacts = runtime_spans
+        .iter()
+        .map(|span| {
+            (
+                span.compact_id.clone(),
+                crate::spine::segment::RawSpan {
+                    start: span.cut_ordinal,
+                    end: span.fold_end_ordinal,
+                },
+            )
+        })
+        .collect::<crate::spine::segment::SegmentArtifacts>();
+    artifacts.insert(
+        compact_id.to_string(),
+        crate::spine::segment::RawSpan {
+            start: boundary.cut_ordinal,
+            end: boundary.fold_end_ordinal,
+        },
+    );
+    let mut compact_ids = runtime_spans
+        .iter()
+        .map(|span| span.compact_id.as_str())
+        .collect::<Vec<_>>();
+    compact_ids.push(compact_id);
+    let pi = crate::spine::segment::canonical_cover(raw_len, compact_ids, &artifacts).map_err(
+        |err| {
+            CodexErr::Fatal(format!(
+                "root MemInstall segment cover rejected candidate Mem {compact_id}: {err}"
+            ))
+        },
+    )?;
+    crate::spine::segment::validate_future_live_boundaries(
+        &pi,
+        &artifacts,
+        &[boundary.fold_end_ordinal],
+    )
+    .map_err(|err| {
+        CodexErr::Fatal(format!(
+            "root MemInstall segment live-boundary validation failed for {compact_id}: {err}"
+        ))
+    })
+}
+
 fn suffix_mem_install_projection_ref(compact_id: &str, boundary: &SpineCompactBoundary) -> String {
     format!(
         "projection:suffix:{compact_id}:node={}:span={}-{}",
@@ -4595,13 +4705,21 @@ fn suffix_mem_install_projection_ref(compact_id: &str, boundary: &SpineCompactBo
     )
 }
 
-fn ensure_suffix_meminstall_committed(
+fn root_mem_install_projection_ref(compact_id: &str, boundary: &SpineCompactBoundary) -> String {
+    format!(
+        "projection:root-archive:{compact_id}:node={}:span={}-{}",
+        boundary.node_id, boundary.cut_ordinal, boundary.fold_end_ordinal
+    )
+}
+
+fn ensure_meminstall_committed(
     store: &SpineSidecarStore,
     compact_id: &str,
+    boundary: &str,
 ) -> CodexResult<()> {
     let committed = store.committed_mem_installs().map_err(|err| {
         CodexErr::Fatal(format!(
-            "failed to reload committed spine MemInstall before checkpoint render: {err}"
+            "failed to reload committed spine MemInstall before {boundary}: {err}"
         ))
     })?;
     if committed
@@ -4611,7 +4729,7 @@ fn ensure_suffix_meminstall_committed(
         return Ok(());
     }
     Err(CodexErr::Fatal(format!(
-        "checkpoint render could not find committed MemInstall {compact_id}"
+        "{boundary} could not find committed MemInstall {compact_id}"
     )))
 }
 

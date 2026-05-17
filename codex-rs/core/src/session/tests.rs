@@ -2322,6 +2322,93 @@ async fn spine_root_archive_rejects_fold_end_beyond_recorded_raw_ordinal() -> an
 }
 
 #[tokio::test]
+async fn root_archive_meminstall_order_rejects_checkpoint_before_commit() -> anyhow::Result<()> {
+    let (session, result) =
+        run_root_archive_compaction_with_body("__spine_fail_root_archive_before_meminstall__")
+            .await?;
+
+    let error = result.expect_err("injected pre-MemInstall root archive failure should abort");
+    assert!(matches!(
+        error,
+        CodexErr::Fatal(message)
+            if message == "injected spine root archive failure before MemInstall commit"
+    ));
+    session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect("failure before root MemInstall should not poison future compact attempts");
+
+    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
+    assert!(!rendered_history.contains("## Spine Memory"));
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(
+        runtime.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![1, 1, 1])
+    );
+    let tree = std::fs::read_to_string(runtime.store().tree_path())?;
+    assert!(!tree.contains("\"type\":\"root_epoch_reset\""));
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    assert_eq!(compact_events.len(), 2);
+    assert_eq!(compact_events[0]["type"], "compact_started");
+    assert_eq!(compact_events[1]["type"], "compact_failed");
+    assert!(
+        compact_events
+            .iter()
+            .all(|event| event["type"] != "mem_install_committed")
+    );
+    runtime
+        .store()
+        .load()
+        .expect("failed pre-MemInstall root archive should replay");
+    Ok(())
+}
+
+#[tokio::test]
+async fn root_archive_meminstall_order_recovers_checkpoint_after_commit() -> anyhow::Result<()> {
+    let (session, result) = run_root_archive_compaction_with_body(
+        "__spine_recover_root_archive_after_meminstall_before_checkpoint__",
+    )
+    .await?;
+    result.expect("committed root MemInstall should render and install host checkpoint");
+
+    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
+    assert!(rendered_history.contains("## Spine Memory"));
+    assert!(rendered_history.contains("Node: 1"));
+    assert!(rendered_history.contains("Operation: archive"));
+    assert!(
+        rendered_history
+            .contains("__spine_recover_root_archive_after_meminstall_before_checkpoint__")
+    );
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(
+        runtime.cursor(),
+        &crate::spine::ids::NodeId::from_segments(vec![2, 1])
+    );
+    let tree = std::fs::read_to_string(runtime.store().tree_path())?;
+    assert!(tree.contains("\"type\":\"root_epoch_reset\""));
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    assert_eq!(compact_events.len(), 3);
+    assert_eq!(compact_events[0]["type"], "compact_started");
+    assert_eq!(compact_events[1]["type"], "mem_install_committed");
+    assert_eq!(compact_events[2]["type"], "compact_installed");
+    let committed = runtime.store().committed_mem_installs()?;
+    assert_eq!(committed.len(), 1);
+    assert_eq!(
+        committed[0].source_rollout_ref,
+        compact_events[0]["rollout"]
+            .as_str()
+            .expect("started rollout")
+    );
+    runtime
+        .store()
+        .load()
+        .expect("semantic-first root archive should replay");
+    Ok(())
+}
+
+#[tokio::test]
 async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tree_update()
 -> anyhow::Result<()> {
     let (mut session, turn_context, rx) = make_session_and_context_with_rx().await;
@@ -2383,7 +2470,7 @@ async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tre
         .expect_err("poison should block future compact attempts");
     assert!(
         rx.try_recv().is_err(),
-        "root archive must not emit a stale tree update after partial install failure"
+        "root archive must not emit a tree update before bridge install is durable"
     );
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
@@ -2396,29 +2483,72 @@ async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tre
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     assert_eq!(
         runtime.cursor(),
-        &crate::spine::ids::NodeId::from_segments(vec![1, 1, 1])
+        &crate::spine::ids::NodeId::from_segments(vec![2, 1])
     );
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
-    assert!(!tree.contains("\"type\":\"root_epoch_reset\""));
+    assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 1);
+    assert_eq!(compact_events.len(), 2);
     assert_eq!(compact_events[0]["type"], "compact_started");
+    assert_eq!(compact_events[1]["type"], "mem_install_committed");
+    let storage_ref = compact_events[1]["storage_ref"]
+        .as_str()
+        .expect("MemInstall storage ref");
     assert!(
-        !runtime
-            .store()
-            .memory_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
-            .exists()
+        runtime.store().root().join(storage_ref).exists(),
+        "root archive memory body is durable before bridge terminal is recorded"
     );
-    let reload_error = runtime
+    runtime
         .store()
         .load()
-        .expect_err("dangling root archive compact must fail closed on reload");
-    assert!(matches!(
-        reload_error,
-        crate::spine::store::SpineStoreError::InvalidLedger(message)
-            if message.contains("dangling compact_started")
-    ));
+        .expect("committed root archive without bridge terminal should replay");
     Ok(())
+}
+
+async fn run_root_archive_compaction_with_body(
+    compacted_body: &str,
+) -> anyhow::Result<(Session, Result<(), CodexErr>)> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let mut runtime =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            None,
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    session.spine = Some(Arc::new(Mutex::new(runtime)));
+    session
+        .try_record_conversation_items(
+            &turn_context,
+            &[
+                spine_function_call("open-1"),
+                function_call_output("open-1"),
+                assistant_message("ROOT_EPOCH_DETAIL should be archived"),
+            ],
+        )
+        .await?;
+    session
+        .spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .take_last_committed_transition();
+    let history = session.clone_history().await.raw_items().to_vec();
+    let result = session
+        .install_spine_root_epoch_compaction(
+            &turn_context,
+            history,
+            format!("{}\n{compacted_body}", crate::compact::SUMMARY_PREFIX),
+            None,
+        )
+        .await;
+    Ok((session, result))
 }
 
 #[tokio::test]
