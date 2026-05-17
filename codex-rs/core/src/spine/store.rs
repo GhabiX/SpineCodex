@@ -503,6 +503,69 @@ impl SpineSidecarStore {
         self.write_compact_index_events(filtered_events)
     }
 
+    pub(crate) fn validate_root_meminstall_survivors(
+        &self,
+        surviving_root_message_hashes: &HashSet<String>,
+    ) -> Result<(), SpineStoreError> {
+        if surviving_root_message_hashes.is_empty() {
+            return Ok(());
+        }
+
+        self.validate_compact_index()?;
+
+        let mut reset_compact_ids = HashSet::new();
+        for event in self.read_tree_events()? {
+            if let TreeEvent::RootEpochReset { compact_id, .. } = event {
+                reset_compact_ids.insert(compact_id);
+            }
+        }
+
+        let mut committed_by_hash: HashMap<String, Vec<String>> = HashMap::new();
+        for event in self.read_compact_index_events()? {
+            if let CompactIndexEvent::MemInstallCommitted {
+                compact_id,
+                op,
+                message_hash,
+                ..
+            } = event
+                && surviving_root_message_hashes.contains(&message_hash)
+                && op == SpineOperation::Archive
+            {
+                committed_by_hash
+                    .entry(message_hash)
+                    .or_default()
+                    .push(compact_id);
+            }
+        }
+
+        for message_hash in surviving_root_message_hashes {
+            let compact_ids = committed_by_hash
+                .get(message_hash)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let unique_mem_install = compact_ids.len() == 1;
+            let root_epoch_reset = compact_ids
+                .first()
+                .is_some_and(|compact_id| reset_compact_ids.contains(compact_id));
+            let admission = classify_root_meminstall_survivor(
+                root_epoch_reset,
+                unique_mem_install,
+                unique_mem_install,
+                unique_mem_install,
+                unique_mem_install,
+                true,
+            );
+            if admission != RootMemInstallSurvivorAdmission::RootMemInstallAdmitted {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "partial root MemInstall survivor set for checkpoint {message_hash}: root_epoch_reset={root_epoch_reset}, matching_mem_install_count={}",
+                    compact_ids.len()
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn write_plan<T: Serialize>(
         &self,
         node_id: &NodeId,
@@ -2776,6 +2839,38 @@ fn relative_node_file_path(node_id: &NodeId, file_name: &str) -> String {
 fn is_direct_child_of(node_id: &NodeId, parent_id: &NodeId) -> bool {
     node_id.segments().len() == parent_id.segments().len() + 1
         && node_id.segments().starts_with(parent_id.segments())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RootMemInstallSurvivorAdmission {
+    OldEpochProjected,
+    PartialRootMemInstallFailClosed,
+    RootMemInstallAdmitted,
+}
+
+fn classify_root_meminstall_survivor(
+    root_epoch_reset: bool,
+    mem_install_committed: bool,
+    compact_span: bool,
+    body_artifact: bool,
+    projection_source_ref: bool,
+    bridge_checkpoint_ref: bool,
+) -> RootMemInstallSurvivorAdmission {
+    let survivors = [
+        root_epoch_reset,
+        mem_install_committed,
+        compact_span,
+        body_artifact,
+        projection_source_ref,
+        bridge_checkpoint_ref,
+    ];
+    if survivors.iter().all(|survives| *survives) {
+        RootMemInstallSurvivorAdmission::RootMemInstallAdmitted
+    } else if survivors.iter().all(|survives| !*survives) {
+        RootMemInstallSurvivorAdmission::OldEpochProjected
+    } else {
+        RootMemInstallSurvivorAdmission::PartialRootMemInstallFailClosed
+    }
 }
 
 #[cfg(test)]

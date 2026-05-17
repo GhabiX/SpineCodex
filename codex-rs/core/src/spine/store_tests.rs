@@ -124,6 +124,44 @@ fn mem_install_committed(
     }
 }
 
+fn append_root_meminstall_evidence(
+    store: &SpineSidecarStore,
+    compact_id: &str,
+    message_hash: &str,
+) {
+    store
+        .append_compact_started(compact_started(
+            compact_id,
+            id(&[1]),
+            SpineOperation::Archive,
+            0,
+            7,
+        ))
+        .expect("append root compact started");
+    store
+        .append_memory_section(
+            &id(&[1]),
+            "\n\n## Auto Compact\n\nBase: /base\nFold: response ordinals [0, 7)\nNode trajs: nodes/1/trajs.jsonl\nRaw mirror: raw/rollout.raw.jsonl\nRollout: ../rollout.jsonl\n\nroot body\n\n## Node Summary\n\nsummary\n",
+        )
+        .expect("append root memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+    store
+        .append_mem_install_committed(mem_install_committed(
+            compact_id,
+            id(&[1]),
+            SpineOperation::Archive,
+            0,
+            7,
+            3,
+            message_hash,
+            body_ref,
+        ))
+        .expect("append root mem install");
+}
+
 fn compact_terminal(
     compact_id: &str,
     node_id: NodeId,
@@ -156,6 +194,95 @@ fn event_rollout_item() -> RolloutItem {
             message: "not a response item".to_string(),
         },
     ))
+}
+
+#[test]
+fn root_meminstall_survivor_matrix() {
+    for bits in 0_u8..64 {
+        let root_epoch_reset = bits & 0b000001 != 0;
+        let mem_install_committed = bits & 0b000010 != 0;
+        let compact_span = bits & 0b000100 != 0;
+        let body_artifact = bits & 0b001000 != 0;
+        let projection_source_ref = bits & 0b010000 != 0;
+        let bridge_checkpoint_ref = bits & 0b100000 != 0;
+
+        let admission = classify_root_meminstall_survivor(
+            root_epoch_reset,
+            mem_install_committed,
+            compact_span,
+            body_artifact,
+            projection_source_ref,
+            bridge_checkpoint_ref,
+        );
+
+        match bits {
+            0 => assert_eq!(
+                admission,
+                RootMemInstallSurvivorAdmission::OldEpochProjected
+            ),
+            63 => assert_eq!(
+                admission,
+                RootMemInstallSurvivorAdmission::RootMemInstallAdmitted
+            ),
+            _ => assert_eq!(
+                admission,
+                RootMemInstallSurvivorAdmission::PartialRootMemInstallFailClosed
+            ),
+        }
+    }
+}
+
+#[test]
+fn root_meminstall_survivor_matrix_validates_store_evidence() {
+    let (_temp, store) = temp_store();
+    let mut state = store.create().expect("create sidecar");
+    append_root_meminstall_evidence(&store, "compact-root", "sha1:root");
+    store
+        .record_root_epoch_archive(
+            &mut state,
+            "context compacted",
+            7,
+            "compact-root",
+            "turn-root",
+        )
+        .expect("record root reset");
+
+    let surviving_hashes = HashSet::from(["sha1:root".to_string()]);
+    store
+        .validate_root_meminstall_survivors(&surviving_hashes)
+        .expect("complete root survivor evidence should validate");
+
+    let (_temp_missing_reset, missing_reset_store) = temp_store();
+    missing_reset_store.create().expect("create sidecar");
+    append_root_meminstall_evidence(&missing_reset_store, "compact-root", "sha1:root");
+    let err = missing_reset_store
+        .validate_root_meminstall_survivors(&surviving_hashes)
+        .expect_err("missing root reset must fail closed");
+    assert!(matches!(
+        err,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("partial root MemInstall survivor set")
+    ));
+
+    let (_temp_missing_meminstall, missing_meminstall_store) = temp_store();
+    let mut missing_meminstall_state = missing_meminstall_store.create().expect("create sidecar");
+    missing_meminstall_store
+        .record_root_epoch_archive(
+            &mut missing_meminstall_state,
+            "context compacted",
+            7,
+            "compact-root",
+            "turn-root",
+        )
+        .expect("record root reset");
+    let err = missing_meminstall_store
+        .validate_root_meminstall_survivors(&surviving_hashes)
+        .expect_err("missing MemInstall must fail closed");
+    assert!(matches!(
+        err,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("partial root MemInstall survivor set")
+    ));
 }
 
 #[test]

@@ -118,9 +118,12 @@ fn resume_projection_from_sidecar_epoch(
         projection_rollout_position(source_rollout_ref.as_ref(), &items[..prefix_len])?;
     let current_processed_rollout_len = u64::try_from(items.len()).unwrap_or(u64::MAX);
     match classify_projection_epoch(&epoch, &current_prefix, current_processed_rollout_len) {
-        ProjectionEpochClassification::Current | ProjectionEpochClassification::Behind => Ok(Some(
-            project_spine_state_from_rollout_with_source(source_rollout_ref, items)?,
-        )),
+        ProjectionEpochClassification::Current | ProjectionEpochClassification::Behind => {
+            let projection =
+                project_spine_state_from_rollout_with_source(source_rollout_ref, items)?;
+            store.validate_root_meminstall_survivors(&projection.root_epoch_compact_hashes)?;
+            Ok(Some(projection))
+        }
         ProjectionEpochClassification::Ahead => {
             anyhow::bail!(
                 "spine sidecar projection epoch is ahead of resumed rollout at {}: epoch processed_rollout_len {}, current rollout len {}",
@@ -302,6 +305,7 @@ pub(crate) async fn seed_forked_spine_sidecar(
         parent_rollout_path.to_string_lossy(),
         rollout_items,
     )?;
+    parent_store.validate_root_meminstall_survivors(&projection.root_epoch_compact_hashes)?;
     if runtime_debug_checks {
         audit_projection_epoch(
             RuntimeDebugBoundary::ForkSeed,

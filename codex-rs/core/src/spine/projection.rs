@@ -26,6 +26,7 @@ pub(crate) struct SpineProjection {
     pub(crate) response_item_count: u64,
     pub(crate) surviving_turn_ids: HashSet<String>,
     pub(crate) surviving_compact_hashes: HashSet<String>,
+    pub(crate) root_epoch_compact_hashes: HashSet<String>,
     pub(crate) epoch: ProjectionEpochMetadata,
 }
 
@@ -72,6 +73,7 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
     let mut pending_transition: Option<PendingTransition> = None;
     let surviving_turn_ids = surviving_turn_ids(&effective_items);
     let surviving_compact_hashes = surviving_compact_hashes(&effective_items);
+    let mut root_epoch_compact_hashes = HashSet::new();
 
     for item in effective_items {
         match item {
@@ -109,6 +111,7 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
                     .message
                     .starts_with(ROOT_EPOCH_COMPACT_MESSAGE_PREFIX) =>
             {
+                root_epoch_compact_hashes.insert(compact_message_hash(&compacted.message));
                 state.reset_root_epoch("Context compacted", raw_ordinal)?;
             }
             _ => {}
@@ -129,6 +132,7 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
         response_item_count: raw_ordinal,
         surviving_turn_ids,
         surviving_compact_hashes,
+        root_epoch_compact_hashes,
         epoch,
     })
 }

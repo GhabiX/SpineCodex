@@ -16,6 +16,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
@@ -1188,6 +1189,77 @@ async fn fork_inherited_close_precommit_rejects_without_open_evidence() -> anyho
         std::fs::read_to_string(child_store.trajs_index_path()).unwrap_or_default(),
         trajs_before
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn fork_root_meminstall_survivor_matrix_rejects_partial_root_archive() -> anyhow::Result<()> {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("source start"))]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    source
+        .thread
+        .codex
+        .session
+        .persist_rollout_items(&[RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted root epoch 1 [0, 1)".to_string(),
+            replacement_history: Some(vec![assistant_msg("root archive prompt note")]),
+        })])
+        .await;
+    source.thread.flush_rollout().await?;
+    let source_rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+
+    let result = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            source_rollout_path,
+            Some(ThreadSource::User),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await;
+    let err = match result {
+        Ok(_) => panic!("partial root archive survivor must reject fork seed"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        CodexErr::Fatal(message)
+            if message.contains("partial root MemInstall survivor set")
+    ));
     Ok(())
 }
 
