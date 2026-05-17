@@ -2688,7 +2688,134 @@ async fn spine_suffix_compaction_cancellation_records_interrupted_terminal() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn suffix_meminstall_order_rejects_checkpoint_before_commit() -> anyhow::Result<()> {
+    let (session, result) = run_suffix_compaction_with_body(
+        "compact leaf fact\n__spine_fail_suffix_before_meminstall__",
+    )
+    .await?;
+
+    let error = result.expect_err("injected pre-MemInstall failure should abort");
+    assert!(
+        matches!(
+            error,
+            CodexErr::Fatal(ref message)
+                if message == "injected spine suffix compact failure before MemInstall commit"
+        ),
+        "unexpected error: {error:?}"
+    );
+    session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect("failure before MemInstall should not poison future compact attempts");
+
+    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
+    assert!(!rendered_history.contains("## Spine Memory"));
+    assert!(!rendered_history.contains("<spine_handoff>"));
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    assert_eq!(compact_events.len(), 2);
+    assert_eq!(compact_events[0]["type"], "compact_started");
+    assert_eq!(compact_events[1]["type"], "compact_failed");
+    assert!(
+        compact_events
+            .iter()
+            .all(|event| event["type"] != "mem_install_committed")
+    );
+    runtime
+        .store()
+        .load()
+        .expect("failed pre-MemInstall compact should replay");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn suffix_meminstall_order_recovers_checkpoint_after_commit() -> anyhow::Result<()> {
+    let (session, result) = run_suffix_compaction_with_body(
+        "compact leaf fact\n__spine_recover_suffix_after_meminstall_before_checkpoint__",
+    )
+    .await?;
+    result.expect("committed MemInstall should repair and install host checkpoint");
+
+    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
+    assert!(rendered_history.contains("## Spine Memory"));
+    assert!(rendered_history.contains("Operation: next"));
+    assert!(rendered_history.contains("compact leaf fact"));
+    assert!(rendered_history.contains("<spine_handoff>"));
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    assert_eq!(compact_events.len(), 3);
+    assert_eq!(compact_events[0]["type"], "compact_started");
+    assert_eq!(compact_events[1]["type"], "mem_install_committed");
+    assert_eq!(compact_events[2]["type"], "compact_installed");
+    let committed = runtime.store().committed_mem_installs()?;
+    assert_eq!(committed.len(), 1);
+    assert_eq!(
+        committed[0].source_rollout_ref,
+        compact_events[0]["rollout"]
+            .as_str()
+            .expect("started rollout")
+    );
+    runtime
+        .store()
+        .load()
+        .expect("semantic-first suffix compact should replay");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_suffix_compaction_post_checkpoint_failure_poisons() -> anyhow::Result<()> {
+    let (session, result) = run_suffix_compaction_with_body(
+        "compact leaf fact\n__spine_fail_suffix_after_rollout_checkpoint__",
+    )
+    .await?;
+
+    let error = result.expect_err("injected post-checkpoint bridge failure should poison");
+    assert!(
+        matches!(
+            error,
+            CodexErr::Fatal(ref message)
+                if message == "injected spine suffix compact failure after rollout checkpoint"
+        ),
+        "unexpected error: {error:?}"
+    );
+    session
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect_err("poison should block future compact attempts");
+
+    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
+    assert!(rendered_history.contains("## Spine Memory"));
+    assert!(rendered_history.contains("Operation: next"));
+    assert!(rendered_history.contains("compact leaf fact"));
+    assert!(
+        rendered_history.contains("<spine_handoff>"),
+        "rollout checkpoint was installed after semantic MemInstall committed"
+    );
+
+    let runtime = session.spine.as_ref().expect("spine").lock().await;
+    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
+    assert_eq!(compact_events.len(), 2);
+    assert_eq!(compact_events[0]["type"], "compact_started");
+    assert_eq!(compact_events[1]["type"], "mem_install_committed");
+    let storage_ref = compact_events[1]["storage_ref"]
+        .as_str()
+        .expect("MemInstall storage ref");
+    assert!(
+        runtime.store().root().join(storage_ref).exists(),
+        "memory body is durable before the host checkpoint is exposed"
+    );
+    runtime
+        .store()
+        .load()
+        .expect("committed MemInstall without bridge terminal should replay");
+    Ok(())
+}
+
+async fn run_suffix_compaction_with_body(
+    compacted_body: &str,
+) -> anyhow::Result<(Session, Result<(), CodexErr>)> {
     let server = start_mock_server().await;
     let (mut session, mut turn_context) = make_session_and_context().await;
     let provider_info =
@@ -2729,10 +2856,7 @@ async fn spine_suffix_compaction_post_checkpoint_failure_poisons() -> anyhow::Re
         &server,
         vec![sse(vec![
             ev_response_created("resp-compact"),
-            ev_assistant_message(
-                "msg-compact",
-                "compact leaf fact\n__spine_fail_suffix_after_rollout_checkpoint__",
-            ),
+            ev_assistant_message("msg-compact", compacted_body),
             ev_completed("resp-compact"),
         ])],
     )
@@ -2761,59 +2885,15 @@ async fn spine_suffix_compaction_post_checkpoint_failure_poisons() -> anyhow::Re
         output_schema: None,
         output_schema_strict: true,
     };
-    let error = session
+    let result = session
         .install_pending_spine_compactions_with_prompt(
             &turn_context,
             &mut client_session,
             &prompt,
             &CancellationToken::new(),
         )
-        .await
-        .expect_err("injected post-checkpoint failure should poison");
-
-    assert!(
-        matches!(
-            error,
-            CodexErr::Fatal(ref message)
-                if message == "injected spine suffix compact failure after rollout checkpoint"
-        ),
-        "unexpected error: {error:?}"
-    );
-    session
-        .ensure_spine_compact_not_poisoned()
-        .await
-        .expect_err("poison should block future compact attempts");
-
-    let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
-    assert!(rendered_history.contains("## Spine Memory"));
-    assert!(rendered_history.contains("Operation: next"));
-    assert!(rendered_history.contains("compact leaf fact"));
-    assert!(
-        rendered_history.contains("<spine_handoff>"),
-        "rollout checkpoint already installed replacement history before the injected failure"
-    );
-
-    let runtime = session.spine.as_ref().expect("spine").lock().await;
-    let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 1);
-    assert_eq!(compact_events[0]["type"], "compact_started");
-    assert!(
-        !runtime
-            .store()
-            .memory_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
-            .exists(),
-        "test marker fires before sidecar install finalizes the memory"
-    );
-    let reload_error = runtime
-        .store()
-        .load()
-        .expect_err("dangling suffix compact must fail closed on reload");
-    assert!(matches!(
-        reload_error,
-        crate::spine::store::SpineStoreError::InvalidLedger(message)
-            if message.contains("dangling compact_started")
-    ));
-    Ok(())
+        .await;
+    Ok((session, result))
 }
 
 #[tokio::test]
