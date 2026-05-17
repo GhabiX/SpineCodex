@@ -65,6 +65,13 @@ fn transition_args() -> serde_json::Value {
     })
 }
 
+fn close_args() -> serde_json::Value {
+    json!({
+        "child_summary": "current leaf",
+        "summary": "parent scope",
+    })
+}
+
 fn open_args() -> serde_json::Value {
     json!({})
 }
@@ -79,12 +86,12 @@ fn transition_schema_exposes_instruction_only_for_next_and_close() {
         panic!("expected namespace tool");
     };
     let expected_tools = [
-        (crate::spine::SPINE_TOOL_OPEN, false, false),
-        (crate::spine::SPINE_TOOL_NEXT, true, true),
-        (crate::spine::SPINE_TOOL_CLOSE, true, true),
+        (crate::spine::SPINE_TOOL_OPEN, false, false, false),
+        (crate::spine::SPINE_TOOL_NEXT, true, false, true),
+        (crate::spine::SPINE_TOOL_CLOSE, true, true, true),
     ];
 
-    for (name, expect_summary, expect_instruction) in expected_tools {
+    for (name, expect_summary, expect_child_summary, expect_instruction) in expected_tools {
         let tool = namespace
             .tools
             .iter()
@@ -100,12 +107,18 @@ fn transition_schema_exposes_instruction_only_for_next_and_close() {
             .expect("transition tool should have properties");
 
         assert_eq!(properties.contains_key("summary"), expect_summary);
+        assert_eq!(
+            properties.contains_key("child_summary"),
+            expect_child_summary
+        );
         assert_eq!(properties.contains_key("instruction"), expect_instruction);
-        let expected_required = if expect_summary {
-            vec!["summary".to_string()]
-        } else {
-            Vec::new()
-        };
+        let mut expected_required = Vec::new();
+        if expect_child_summary {
+            expected_required.push("child_summary".to_string());
+        }
+        if expect_summary {
+            expected_required.push("summary".to_string());
+        }
         assert_eq!(tool.parameters.required.as_ref(), Some(&expected_required));
         if expect_instruction {
             assert_eq!(
@@ -418,7 +431,7 @@ async fn close_on_root_rejects_without_staging() {
             Arc::new(turn),
             "call-spine",
             SpineTool::Close,
-            transition_args(),
+            close_args(),
         ))
         .await
         .expect_err("root close should reject");
@@ -426,6 +439,57 @@ async fn close_on_root_rejects_without_staging() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel("cannot close the root spine node".to_string())
+    );
+    let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
+    assert!(runtime.staged_transition().is_none());
+}
+
+#[tokio::test]
+async fn close_requires_child_summary_without_staging() {
+    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    let session = Arc::new(session);
+    let err = handler(SpineTool::Close)
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::new(turn),
+            "call-spine",
+            SpineTool::Close,
+            transition_args(),
+        ))
+        .await
+        .expect_err("missing child_summary should reject");
+
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected model-visible parse error");
+    };
+    assert!(message.contains("failed to parse function arguments"));
+    assert!(message.contains("missing field"));
+    assert!(message.contains("child_summary"));
+    let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
+    assert!(runtime.staged_transition().is_none());
+}
+
+#[tokio::test]
+async fn close_rejects_empty_child_summary_without_staging() {
+    let (_temp, session, turn) = session_and_turn_with_spine().await;
+    let session = Arc::new(session);
+    let err = handler(SpineTool::Close)
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::new(turn),
+            "call-spine",
+            SpineTool::Close,
+            json!({
+                "child_summary": "   ",
+                "summary": "parent scope",
+            }),
+        ))
+        .await
+        .expect_err("empty child_summary should reject");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel("spine close requires child_summary".to_string())
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     assert!(runtime.staged_transition().is_none());

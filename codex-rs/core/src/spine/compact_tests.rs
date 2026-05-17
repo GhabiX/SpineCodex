@@ -1307,6 +1307,106 @@ fn suffix_fold_uses_runtime_span_for_slim_worklog_item() {
 }
 
 #[test]
+fn close_parent_suffix_fold_can_cover_installed_child_worklog_span() {
+    let child_worklog = render_spine_worklog_item(
+        &id(&[1, 1, 1, 2]),
+        SpineOperation::Close,
+        "second child done",
+        "child compact facts",
+    );
+    let child_span = installed_span(
+        "compact-child",
+        id(&[1, 1, 1, 2]),
+        SpineOperation::Close,
+        6,
+        8,
+    );
+    let history = vec![
+        text_item("raw prelude 0"),
+        text_item("raw prelude 1"),
+        text_item("raw parent start 2"),
+        text_item("raw parent detail 3"),
+        text_item("raw first child detail 4"),
+        text_item("raw first child detail 5"),
+        child_worklog.clone(),
+        render_spine_handoff_item(&id(&[1, 1, 1, 2]), &id(&[1, 1, 2])),
+        text_item("future live raw 8"),
+    ];
+    let input = SpineCompactInput {
+        op: SpineOperation::Close,
+        node_id: id(&[1, 1, 1]),
+        scope_node_id: Some(id(&[1, 1, 1])),
+        cut_ordinal: 2,
+        fold_end_ordinal: 8,
+        spine_tree: "1.1.1: closed scope [worklog already in context]\n1.1.2: Current".to_string(),
+        prefix_items: Vec::new(),
+        suffix_items: Vec::new(),
+        transition_summary: "scope done".to_string(),
+        compact_instruction: None,
+        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
+        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
+        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
+    };
+
+    let plan =
+        plan_suffix_fold_with_spans(&history, 2, 8, std::slice::from_ref(&child_span), input)
+            .expect("parent close can cover installed child worklog");
+
+    assert_eq!(plan.cut_index, 2);
+    assert_eq!(plan.fold_end_index, 8);
+    assert_eq!(plan.input.cut_ordinal, 2);
+    assert_eq!(plan.input.fold_end_ordinal, 8);
+    assert_eq!(
+        plan.input.prefix_items,
+        vec![text_item("raw prelude 0"), text_item("raw prelude 1")]
+    );
+    assert_eq!(plan.input.suffix_items[4], child_worklog);
+    assert_eq!(plan.replacement_tail, vec![text_item("future live raw 8")]);
+
+    let parent_worklog = render_spine_worklog_item(
+        &id(&[1, 1, 1]),
+        SpineOperation::Close,
+        "scope done",
+        "parent compact facts",
+    );
+    let replacement = build_suffix_replacement_history(
+        &history,
+        plan.cut_index,
+        plan.fold_end_index,
+        vec![parent_worklog],
+    );
+    assert_eq!(replacement.len(), 4);
+    assert_eq!(replacement[0], text_item("raw prelude 0"));
+    assert_eq!(replacement[1], text_item("raw prelude 1"));
+    assert_eq!(replacement[3], text_item("future live raw 8"));
+    assert!(
+        !replacement.contains(&child_worklog),
+        "parent close IR supersedes the child IR in active replacement history after child worklog is durable"
+    );
+    let parent_span = installed_span(
+        "compact-parent",
+        id(&[1, 1, 1]),
+        SpineOperation::Close,
+        plan.input.cut_ordinal,
+        plan.input.fold_end_ordinal,
+    );
+    let live_start_index = effective_index_for_raw_ordinal_with_spans(
+        &replacement,
+        8,
+        std::slice::from_ref(&parent_span),
+    )
+    .expect("future live start must remain mappable after parent close compact");
+    assert_eq!(
+        raw_ordinal_for_effective_index_with_spans(
+            &replacement,
+            live_start_index,
+            std::slice::from_ref(&parent_span),
+        ),
+        Some(8)
+    );
+}
+
+#[test]
 fn suffix_fold_pulls_call_back_when_output_is_inside_range() {
     let history = vec![
         user_item("previous turn"),
@@ -1483,9 +1583,7 @@ fn render_handoff_item_preserves_durable_instructions() {
     ));
     assert!(text.ends_with("</spine_handoff>"));
     assert!(!text.contains("Pending continuation"));
-    assert!(!text.contains(
-        "old user-task content as historical context, not the current request"
-    ));
+    assert!(!text.contains("old user-task content as historical context, not the current request"));
 }
 
 #[test]

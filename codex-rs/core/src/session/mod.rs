@@ -2887,12 +2887,12 @@ impl Session {
         let Some(spine) = self.spine.as_ref() else {
             return Ok(());
         };
-        let (boundary, snapshot) = {
+        let (boundaries, snapshot) = {
             let mut runtime = spine.lock().await;
             let Some(committed) = runtime.take_last_committed_transition() else {
                 return Ok(());
             };
-            let boundary = runtime
+            let boundaries = runtime
                 .plan_compaction_after_transition(&committed)
                 .map_err(|err| {
                     CodexErr::Fatal(format!(
@@ -2904,15 +2904,15 @@ impl Session {
                     "failed to build spine tree snapshot after transition commit: {err}"
                 ))
             })?;
-            (boundary, snapshot)
+            (boundaries, snapshot)
         };
         self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
             .await;
-        if let Some(boundary) = boundary {
+        if !boundaries.is_empty() {
             self.pending_spine_compact_boundaries
                 .lock()
                 .await
-                .push(boundary);
+                .extend(boundaries);
         }
         Ok(())
     }

@@ -22,11 +22,7 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
                 "Finish the current Spine leaf and move to its next sibling.",
                 CompactInstructionParam::Included,
             )),
-            ResponsesApiNamespaceTool::Function(spine_transition_tool(
-                SPINE_TOOL_CLOSE,
-                "Finish the current Spine leaf, close its non-root parent scope, and continue at the parent's next sibling.",
-                CompactInstructionParam::Included,
-            )),
+            ResponsesApiNamespaceTool::Function(spine_close_tool()),
         ],
     })
 }
@@ -75,6 +71,43 @@ fn spine_transition_tool(
         parameters: JsonSchema::object(
             properties,
             Some(vec!["summary".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    }
+}
+
+fn spine_close_tool() -> ResponsesApiTool {
+    let mut properties = BTreeMap::from([
+        (
+            "child_summary".to_string(),
+            JsonSchema::string(Some(
+                "Short Spine Tree display label for the current leaf being finished.".to_string(),
+            )),
+        ),
+        (
+            "summary".to_string(),
+            JsonSchema::string(Some(
+                "Short Spine Tree display label for the parent scope being closed.".to_string(),
+            )),
+        ),
+    ]);
+    properties.insert(
+        "instruction".to_string(),
+        JsonSchema::string(Some(
+            "Optional guidance for the automatic compact pass after this transition; use it to name what must be preserved or emphasized from the completed leaf or parent scope."
+                .to_string(),
+        )),
+    );
+
+    ResponsesApiTool {
+        name: SPINE_TOOL_CLOSE.to_string(),
+        description: "Finish the current Spine leaf, close its non-root parent scope, and continue at the parent's next sibling.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["child_summary".to_string(), "summary".to_string()]),
             Some(false.into()),
         ),
         output_schema: None,

@@ -47,6 +47,7 @@ const ROOT_SHELL_CALL_ID: &str = "root-shell-call";
 const OPEN_SUMMARY: &str = "open root child scope";
 const NESTED_OPEN_SUMMARY: &str = "open focused child scope";
 const NEXT_SUMMARY: &str = "finish child scope";
+const CLOSE_CHILD_SUMMARY: &str = "finish sibling leaf";
 const CLOSE_SUMMARY: &str = "finish sibling scope";
 const EXPECTED_SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
 Use Spine as your task plan and context manager. Completed scopes are folded into runtime-generated worklog IR, and later turns carry the visible Spine Tree, completed worklogs, and the current live suffix instead of every old raw message.
@@ -63,20 +64,22 @@ Treat the current spine_plantree as the execution plan for the current real Spin
 Move Spine at coherent scope boundaries rather than as a per-command habit:
 - spine.open: start a focused child scope that should inherit the parent goal but keep its own local context; use it before working on a matching planned child scope. It takes no arguments.
 - spine.next: finish the current leaf and move to its next sibling when the next work is sibling-level under the same parent.
-- spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling when the parent scope is complete. Root cannot be closed.
+- spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling when the parent scope is complete. Root cannot be closed. It requires `child_summary` for the current leaf and `summary` for the parent scope.
+spine.next/close are not end-of-response cleanup; when the current response still belongs to the current node, finish its user-visible work there, and only move Spine when beginning genuinely new sibling/parent-sibling work.
+Spine transitions are internal context-management steps, not substitutes for normal Codex turn delivery: after spine.next or spine.close, continue work if the latest user request remains unfinished, or send the user-facing final answer/update if that request is complete, paused, blocked, or needs a decision. Do not use a Spine Tree update, tool output, or generated worklog as the user-visible report.
 Use spine.next or spine.close to fold completed scopes after substantial raw history has accumulated or when future work is likely to reuse the generated worklog IR.
 At root depth, use spine.next to finish the current root child and continue with its next sibling; use spine.close only from a nested scope when closing its parent and returning to the parent's next sibling.
-For spine.next or spine.close, use summary as the short completion-time Spine Tree label. Use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope. Do not use summary or instruction with spine.open.
+For spine.next, use summary as the short completion-time Spine Tree label. For spine.close, use child_summary as the label for the current leaf and summary as the label for the parent scope. Use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope. Do not use summary, child_summary, or instruction with spine.open.
 Use spine.tree to inspect the current node and Spine Tree without moving the cursor.
 Do not move spine only because a new user message arrived, because you answered a short question, or because you updated progress within the same scope.
 Do not create one node per shell command, checklist item, short reply, or conversation turn.
 After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `nodes/1/1/worklog.md`; later context shows the Spine Tree plus `1.1` worklog, not `1.1` raw trace.
-After spine.close from `1.1.2` to `1.2`, the runtime folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes that were already folded are carried through the Spine Tree/worklog IR, while raw child traces stay expandable out of band.
+After spine.close from `1.1.2` to `1.2`, the runtime first folds the closing child into `nodes/1/1/2/worklog.md`, then folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes remain available as durable worklog IR while parent context uses the parent worklog by default.
 Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../worklog.md` against that Base, not against the workspace cwd.
 After spine.next or spine.close, if unfinished work remains, use update_plan to refresh the current PlanTree from the generated worklog, latest user intent, and current evidence.
 Keep working in the current node while its raw details are still useful. When a coherent work scope is complete, fold it so later turns use its worklog instead of its raw trace.
 Avoid tiny splits for individual commands, small observations, or conversation turns.
-The runtime may warn when the current node grows large: around 50k raw tokens, then every additional 30k. Treat the warning as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the worklog.
+The runtime may warn when the current node grows large: around 80k raw tokens, then every additional 30k. Treat the warning as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the worklog.
 When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar trajs/worklog files only when you need historical details.
 Completed Spine nodes are read-only; rely on their worklogs instead of restating their old PlanTree checkpoints.
 In Plan mode, do not call mutating spine operations.
@@ -92,12 +95,12 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
         vec![
             sse(vec![
                 ev_response_created("resp-open"),
-                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY),
+                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY, None),
                 ev_completed("resp-open"),
             ]),
             sse(vec![
                 ev_response_created("resp-nested-open"),
-                ev_spine_transition_call(NESTED_OPEN_CALL_ID, "open", NESTED_OPEN_SUMMARY),
+                ev_spine_transition_call(NESTED_OPEN_CALL_ID, "open", NESTED_OPEN_SUMMARY, None),
                 ev_function_call(
                     CHILD_SHELL_CALL_ID,
                     "shell_command",
@@ -112,7 +115,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
             ]),
             sse(vec![
                 ev_response_created("resp-next"),
-                ev_spine_transition_call(NEXT_CALL_ID, "next", NEXT_SUMMARY),
+                ev_spine_transition_call(NEXT_CALL_ID, "next", NEXT_SUMMARY, None),
                 ev_function_call(
                     SIBLING_SHELL_CALL_ID,
                     "shell_command",
@@ -127,7 +130,12 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
             ]),
             sse(vec![
                 ev_response_created("resp-close"),
-                ev_spine_transition_call(CLOSE_CALL_ID, "close", CLOSE_SUMMARY),
+                ev_spine_transition_call(
+                    CLOSE_CALL_ID,
+                    "close",
+                    CLOSE_SUMMARY,
+                    Some(CLOSE_CHILD_SUMMARY),
+                ),
                 ev_function_call(
                     ROOT_SHELL_CALL_ID,
                     "shell_command",
@@ -136,9 +144,17 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
                 ev_completed("resp-close"),
             ]),
             sse(vec![
-                ev_response_created("resp-spine-close-compact"),
-                ev_assistant_message("msg-spine-close-compact", "Compacted root findings."),
-                ev_completed("resp-spine-close-compact"),
+                ev_response_created("resp-spine-close-child-compact"),
+                ev_assistant_message(
+                    "msg-spine-close-child-compact",
+                    "Compacted sibling leaf findings.",
+                ),
+                ev_completed("resp-spine-close-child-compact"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-spine-close-parent-compact"),
+                ev_assistant_message("msg-spine-close-parent-compact", "Compacted root findings."),
+                ev_completed("resp-spine-close-parent-compact"),
             ]),
             sse(vec![
                 ev_response_created("resp-done"),
@@ -217,7 +233,14 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert_transition(&tree, "open", "1.1.1", "1.1.1.1", None);
     let plan_event_seq = assert_plan_updated(&tree, "1.1.1.1", 1, &plan_turn_id);
     assert_transition(&tree, "next", "1.1.1.1", "1.1.1.2", Some(NEXT_SUMMARY));
-    assert_transition(&tree, "close", "1.1.1.2", "1.1.2", Some(CLOSE_SUMMARY));
+    assert_transition_with_child_summary(
+        &tree,
+        "close",
+        "1.1.1.2",
+        "1.1.2",
+        Some(CLOSE_SUMMARY),
+        Some(CLOSE_CHILD_SUMMARY),
+    );
     assert_transition_committed(&index, OPEN_CALL_ID, "1.1", "1.1.1");
     assert_transition_committed(&index, NESTED_OPEN_CALL_ID, "1.1.1", "1.1.1.1");
     assert_transition_committed(&index, NEXT_CALL_ID, "1.1.1.1", "1.1.1.2");
@@ -234,12 +257,18 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert!(scope_worklog.contains("## Context Compacted"));
     assert!(scope_worklog.contains("[1.1.1] finish sibling scope (nodes/1/1/1/worklog.md)"));
     assert!(scope_worklog.contains("|-- [1.1.1.1] finish child scope (nodes/1/1/1/1/worklog.md)"));
-    assert!(scope_worklog.contains("|-- [1.1.1.2] finished (nodes/1/1/1/2/worklog.md)"));
-    let leaf_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/1/worklog.md"))?;
-    assert!(leaf_worklog.contains("spine:auto-compact-generated"));
-    assert!(leaf_worklog.contains(&base_line));
-    assert!(leaf_worklog.contains("Compacted child findings."));
+    assert!(scope_worklog.contains("|-- [1.1.1.2] finish sibling leaf (nodes/1/1/1/2/worklog.md)"));
+    let first_leaf_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/1/worklog.md"))?;
+    assert!(first_leaf_worklog.contains("spine:auto-compact-generated"));
+    assert!(first_leaf_worklog.contains(&base_line));
+    assert!(first_leaf_worklog.contains("Compacted child findings."));
+    let closing_leaf_worklog =
+        std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/2/worklog.md"))?;
+    assert!(closing_leaf_worklog.contains("spine:auto-compact-generated"));
+    assert!(closing_leaf_worklog.contains(&base_line));
+    assert!(closing_leaf_worklog.contains("Compacted sibling leaf findings."));
     assert_compact_installed(&compact_index, "1.1.1.1", "next");
+    assert_compact_installed_before(&compact_index, "1.1.1.2", "close", "1.1.1", "close");
     assert_compact_installed(&compact_index, "1.1.1", "close");
     let plan_snapshot = read_json(sidecar_dir.join("nodes/1/1/1/1/plan.json"))?;
     assert_eq!(plan_snapshot["node_id"], "1.1.1.1");
@@ -281,8 +310,8 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
         rollout_text.contains(ROOT_SHELL_CALL_ID) && rollout_text.contains("root-spine"),
         "rollout should remain the raw traj source for root shell output"
     );
-    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 2)?;
-    assert_raw_mirror_has_raw_items_and_compact_metadata(&sidecar_dir)?;
+    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 3)?;
+    assert_raw_mirror_has_raw_items_and_compact_metadata(&sidecar_dir, 3)?;
 
     Ok(())
 }
@@ -297,7 +326,7 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
         vec![
             sse(vec![
                 ev_response_created("resp-open"),
-                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY),
+                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY, None),
                 ev_completed_with_tokens("resp-open", 70_000),
             ]),
             sse(vec![
@@ -312,7 +341,12 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
             ]),
             sse(vec![
                 ev_response_created("resp-after"),
-                ev_spine_transition_call("post-archive-open-call", "open", "post archive scope"),
+                ev_spine_transition_call(
+                    "post-archive-open-call",
+                    "open",
+                    "post archive scope",
+                    None,
+                ),
                 ev_completed_with_tokens("resp-after", 120),
             ]),
         ],
@@ -391,7 +425,7 @@ async fn spine_manual_compact_uses_native_text_and_archives_root_epoch() -> anyh
         vec![
             sse(vec![
                 ev_response_created("resp-open"),
-                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY),
+                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY, None),
                 ev_completed("resp-open"),
             ]),
             sse(vec![
@@ -410,6 +444,7 @@ async fn spine_manual_compact_uses_native_text_and_archives_root_epoch() -> anyh
                     "post-manual-archive-open-call",
                     "open",
                     "post manual archive scope",
+                    None,
                 ),
                 ev_completed("resp-after-manual"),
             ]),
@@ -510,7 +545,7 @@ async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request(
         vec![
             sse(vec![
                 ev_response_created("resp-open"),
-                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY),
+                ev_spine_transition_call(OPEN_CALL_ID, "open", OPEN_SUMMARY, None),
                 ev_completed("resp-open"),
             ]),
             sse(vec![
@@ -520,7 +555,7 @@ async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request(
             ]),
             sse(vec![
                 ev_response_created("resp-next"),
-                ev_spine_transition_call(NEXT_CALL_ID, "next", NEXT_SUMMARY),
+                ev_spine_transition_call(NEXT_CALL_ID, "next", NEXT_SUMMARY, None),
                 ev_completed("resp-next"),
             ]),
             sse_failed(
@@ -799,17 +834,33 @@ fn shell_args(command: &str) -> String {
     .to_string()
 }
 
-fn ev_spine_transition_call(call_id: &str, name: &str, summary: &str) -> Value {
-    let arguments = if name == "open" {
-        "{}".to_string()
-    } else {
-        spine_args(summary)
+fn ev_spine_transition_call(
+    call_id: &str,
+    name: &str,
+    summary: &str,
+    child_summary: Option<&str>,
+) -> Value {
+    let arguments = match name {
+        "open" => "{}".to_string(),
+        "close" => spine_close_args(
+            summary,
+            child_summary.expect("close spine call should include child summary"),
+        ),
+        _ => spine_args(summary),
     };
     ev_function_call_with_namespace(call_id, "spine", name, &arguments)
 }
 
 fn spine_args(summary: &str) -> String {
     json!({
+        "summary": summary,
+    })
+    .to_string()
+}
+
+fn spine_close_args(summary: &str, child_summary: &str) -> String {
+    json!({
+        "child_summary": child_summary,
         "summary": summary,
     })
     .to_string()
@@ -959,6 +1010,17 @@ fn assert_transition(
     to_node: &str,
     summary: Option<&str>,
 ) {
+    assert_transition_with_child_summary(tree, op, from_node, to_node, summary, None);
+}
+
+fn assert_transition_with_child_summary(
+    tree: &[Value],
+    op: &str,
+    from_node: &str,
+    to_node: &str,
+    summary: Option<&str>,
+    child_summary: Option<&str>,
+) {
     let event = tree
         .iter()
         .find(|event| {
@@ -970,6 +1032,10 @@ fn assert_transition(
         .unwrap_or_else(|| panic!("missing {op} transition {from_node} -> {to_node}: {tree:?}"));
 
     assert_eq!(event.get("summary").and_then(Value::as_str), summary);
+    assert_eq!(
+        event.get("child_summary").and_then(Value::as_str),
+        child_summary
+    );
 }
 
 fn assert_plan_updated(tree: &[Value], node_id: &str, revision: u64, source_turn_id: &str) -> u64 {
@@ -1127,7 +1193,10 @@ fn assert_rollout_has_spine_compaction_checkpoint(
     Ok(())
 }
 
-fn assert_raw_mirror_has_raw_items_and_compact_metadata(sidecar_dir: &Path) -> anyhow::Result<()> {
+fn assert_raw_mirror_has_raw_items_and_compact_metadata(
+    sidecar_dir: &Path,
+    expected_compact_metadata: usize,
+) -> anyhow::Result<()> {
     let raw_mirror_path = sidecar_dir.join("raw/rollout.raw.jsonl");
     let raw_mirror_text = std::fs::read_to_string(&raw_mirror_path)
         .with_context(|| format!("read {}", raw_mirror_path.display()))?;
@@ -1146,7 +1215,7 @@ fn assert_raw_mirror_has_raw_items_and_compact_metadata(sidecar_dir: &Path) -> a
         "raw mirror should contain raw response items: {raw_mirror_text}"
     );
     assert_eq!(
-        compact_metadata, 2,
+        compact_metadata, expected_compact_metadata,
         "raw mirror should record compact checkpoints only as metadata: {raw_mirror_text}"
     );
     assert!(

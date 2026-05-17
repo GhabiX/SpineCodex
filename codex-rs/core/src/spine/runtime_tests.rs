@@ -1115,10 +1115,11 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
     let committed = runtime
         .take_last_committed_transition()
         .expect("next transition");
-    let boundary = runtime
+    let boundaries = runtime
         .plan_compaction_after_transition(&committed)
-        .expect("compact boundary")
-        .expect("next should compact");
+        .expect("compact boundary");
+    assert_eq!(boundaries.len(), 1);
+    let boundary = &boundaries[0];
 
     assert_eq!(boundary.op, SpineOperation::Next);
     assert_eq!(boundary.node_id, id(&[1, 1, 1]));
@@ -1278,10 +1279,11 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
         .expect("commit next");
     runtime.take_last_committed_transition();
     runtime
-        .stage_transition(
+        .stage_transition_with_child_summary(
             "close-1",
             "turn-4",
             SpineOperation::Close,
+            "scope done",
             "second child done",
             Some("keep subtree decisions".to_string()),
         )
@@ -1297,16 +1299,31 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
     let committed = runtime
         .take_last_committed_transition()
         .expect("close transition");
-    let boundary = runtime
+    let boundaries = runtime
         .plan_compaction_after_transition(&committed)
-        .expect("compact boundary")
-        .expect("close should compact");
+        .expect("compact boundary");
+    assert_eq!(boundaries.len(), 2);
+    let child_boundary = &boundaries[0];
+    let parent_boundary = &boundaries[1];
 
-    assert_eq!(boundary.op, SpineOperation::Close);
-    assert_eq!(boundary.node_id, id(&[1, 1, 1]));
-    assert_eq!(boundary.transition_summary, "second child done");
+    assert_eq!(child_boundary.op, SpineOperation::Close);
+    assert_eq!(child_boundary.node_id, id(&[1, 1, 1, 2]));
+    assert_eq!(child_boundary.scope_node_id, Some(id(&[1, 1, 1])));
+    assert_eq!(child_boundary.cut_ordinal, 6);
+    assert_eq!(child_boundary.fold_end_ordinal, 8);
+    assert_eq!(child_boundary.transition_summary, "second child done");
     assert_eq!(
-        boundary.compact_instruction.as_deref(),
+        child_boundary.compact_instruction.as_deref(),
+        Some("keep subtree decisions")
+    );
+    assert_eq!(parent_boundary.op, SpineOperation::Close);
+    assert_eq!(parent_boundary.node_id, id(&[1, 1, 1]));
+    assert_eq!(parent_boundary.scope_node_id, Some(id(&[1, 1, 1])));
+    assert_eq!(parent_boundary.cut_ordinal, 2);
+    assert_eq!(parent_boundary.fold_end_ordinal, 8);
+    assert_eq!(parent_boundary.transition_summary, "scope done");
+    assert_eq!(
+        parent_boundary.compact_instruction.as_deref(),
         Some("keep subtree decisions")
     );
 
@@ -1317,9 +1334,9 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
 
     assert!(outline.contains("## Context Compacted"));
     assert!(outline.contains(&format!("Base: {base}")));
-    assert!(outline.contains("[1.1.1] second child done (nodes/1/1/1/worklog.md)"));
+    assert!(outline.contains("[1.1.1] scope done (nodes/1/1/1/worklog.md)"));
     assert!(outline.contains("|-- [1.1.1.1] first child done (nodes/1/1/1/1/worklog.md)"));
-    assert!(outline.contains("|-- [1.1.1.2] finished (nodes/1/1/1/2/worklog.md)"));
+    assert!(outline.contains("|-- [1.1.1.2] second child done (nodes/1/1/1/2/worklog.md)"));
     assert!(
         outline.find("|-- [1.1.1.1]").expect("first child row")
             < outline.find("|-- [1.1.1.2]").expect("second child row")
@@ -1329,9 +1346,9 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
         .render_model_context_compacted_outline(&id(&[1, 1, 1]))
         .expect("render model outline");
     assert!(model_outline.contains("## Context Compacted"));
-    assert!(model_outline.contains("[1.1.1] second child done"));
+    assert!(model_outline.contains("[1.1.1] scope done"));
     assert!(model_outline.contains("|-- [1.1.1.1] first child done"));
-    assert!(model_outline.contains("|-- [1.1.1.2] finished"));
+    assert!(model_outline.contains("|-- [1.1.1.2] second child done"));
     assert!(!model_outline.contains("Base:"));
     assert!(!model_outline.contains("worklog.md"));
 }

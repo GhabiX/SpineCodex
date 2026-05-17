@@ -157,8 +157,17 @@ impl SpineState {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn close(
         &mut self,
+        summary: impl Into<String>,
+    ) -> Result<Transition, SpineStateError> {
+        self.close_with_child_summary(None::<String>, summary)
+    }
+
+    pub(crate) fn close_with_child_summary(
+        &mut self,
+        child_summary: impl TransitionChildSummaryArg,
         summary: impl Into<String>,
     ) -> Result<Transition, SpineStateError> {
         let from = self.cursor.clone();
@@ -173,6 +182,9 @@ impl SpineState {
         }
         let parent_sibling = self.next_sibling_id(Some(&grandparent))?;
 
+        if let Some(child_summary) = child_summary.into_transition_child_summary() {
+            self.write_summary(&from, child_summary)?;
+        }
         self.write_summary(&parent, summary)?;
         self.set_status(&from, NodeStatus::Finished)?;
         self.set_status(&parent, NodeStatus::Closed)?;
@@ -427,6 +439,28 @@ pub(crate) enum SpineOperationName {
     Open,
     Next,
     Close,
+}
+
+pub(crate) trait TransitionChildSummaryArg {
+    fn into_transition_child_summary(self) -> Option<String>;
+}
+
+impl TransitionChildSummaryArg for Option<String> {
+    fn into_transition_child_summary(self) -> Option<String> {
+        self
+    }
+}
+
+impl TransitionChildSummaryArg for String {
+    fn into_transition_child_summary(self) -> Option<String> {
+        Some(self)
+    }
+}
+
+impl TransitionChildSummaryArg for &str {
+    fn into_transition_child_summary(self) -> Option<String> {
+        Some(self.to_string())
+    }
 }
 
 impl SpineOperationName {

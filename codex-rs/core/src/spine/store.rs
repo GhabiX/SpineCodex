@@ -270,10 +270,31 @@ impl SpineSidecarStore {
         raw_start_ordinal: u64,
         source_turn_id: impl Into<String>,
     ) -> Result<Transition, SpineStoreError> {
+        self.record_transition_with_child_summary(
+            state,
+            op,
+            summary,
+            None::<String>,
+            raw_start_ordinal,
+            source_turn_id,
+        )
+    }
+
+    pub(crate) fn record_transition_with_child_summary(
+        &self,
+        state: &mut SpineState,
+        op: SpineOperation,
+        summary: impl TransitionSummaryArg,
+        child_summary: impl TransitionSummaryArg,
+        raw_start_ordinal: u64,
+        source_turn_id: impl Into<String>,
+    ) -> Result<Transition, SpineStoreError> {
         let summary = summary.into_transition_summary();
+        let child_summary = child_summary.into_transition_summary();
         let source_turn_id = source_turn_id.into();
         let mut next_state = state.clone();
-        let transition = op.apply(&mut next_state, summary.clone())?;
+        let transition =
+            op.apply_with_child_summary(&mut next_state, summary.clone(), child_summary.clone())?;
         next_state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
         let to_parent_id = next_state
             .node(&transition.to)
@@ -291,6 +312,7 @@ impl SpineSidecarStore {
             to_node: transition.to.to_string(),
             to_parent_id,
             summary,
+            child_summary,
             raw_start_ordinal,
             source_turn_id,
         };
@@ -993,6 +1015,7 @@ impl SpineSidecarStore {
                     to_node,
                     to_parent_id,
                     summary,
+                    child_summary,
                     raw_start_ordinal,
                     ..
                 } => {
@@ -1004,7 +1027,7 @@ impl SpineSidecarStore {
                     let from_node = NodeId::parse(&from_node)?;
                     let to_node = NodeId::parse(&to_node)?;
                     let to_parent_id = to_parent_id.as_deref().map(NodeId::parse).transpose()?;
-                    let transition = op.apply(state, summary)?;
+                    let transition = op.apply_with_child_summary(state, summary, child_summary)?;
                     if transition.from != from_node || transition.to != to_node {
                         return Err(SpineStoreError::InvalidLedger(format!(
                             "transition replay mismatch: expected {} -> {}, got {} -> {}",
@@ -1748,17 +1771,36 @@ impl SpineOperation {
         state: &mut SpineState,
         summary: Option<String>,
     ) -> Result<Transition, SpineStateError> {
+        self.apply_with_child_summary(state, summary, None)
+    }
+
+    pub(crate) fn apply_with_child_summary(
+        self,
+        state: &mut SpineState,
+        summary: Option<String>,
+        child_summary: Option<String>,
+    ) -> Result<Transition, SpineStateError> {
         match self {
             SpineOperation::Open => {
                 if summary.is_some() {
                     return Err(SpineStateError::UnexpectedSummary(SpineOperationName::Open));
                 }
+                if child_summary.is_some() {
+                    return Err(SpineStateError::UnexpectedSummary(SpineOperationName::Open));
+                }
                 state.open()
             }
-            SpineOperation::Next => state
-                .next(summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Next))?),
-            SpineOperation::Close => state
-                .close(summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Close))?),
+            SpineOperation::Next => {
+                if child_summary.is_some() {
+                    return Err(SpineStateError::UnexpectedSummary(SpineOperationName::Next));
+                }
+                state
+                    .next(summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Next))?)
+            }
+            SpineOperation::Close => state.close_with_child_summary(
+                child_summary,
+                summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Close))?,
+            ),
             SpineOperation::Archive => Err(SpineStateError::ArchiveIsInternal),
         }
     }
@@ -1778,6 +1820,8 @@ enum TreeEvent {
         to_node: String,
         to_parent_id: Option<String>,
         summary: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        child_summary: Option<String>,
         raw_start_ordinal: u64,
         #[serde(default)]
         source_turn_id: String,
