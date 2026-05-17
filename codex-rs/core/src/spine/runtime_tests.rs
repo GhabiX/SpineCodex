@@ -8,11 +8,11 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::SpinePlanTreeArg;
-use codex_protocol::plan_tool::SpinePlanTreeCheckpointArg;
-use codex_protocol::plan_tool::SpinePlanTreeScopeArg;
 use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::TaskProjectionArg;
+use codex_protocol::plan_tool::TaskProjectionCurrentArg;
+use codex_protocol::plan_tool::TaskProjectionDraftNodeArg;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -62,49 +62,55 @@ fn plan_args_many(items: &[(&str, StepStatus)]) -> SpineUpdatePlanArgs {
                 })
                 .collect(),
         },
-        spine_plantree: None,
-        clear_spine_plantree: false,
+        task_projection: None,
     }
 }
 
-fn plan_args_with_plantree(
-    anchor: Option<&str>,
-    children: Vec<(Option<&str>, &str, Vec<&str>)>,
+fn plan_args_with_task_projection(
+    current: &str,
+    checklist: Vec<&str>,
+    draft_nodes: Vec<(Option<&str>, &str, &str, Vec<&str>)>,
 ) -> SpineUpdatePlanArgs {
     SpineUpdatePlanArgs {
         flat: UpdatePlanArgs {
-            explanation: Some("PlanBridge PlanTree test".to_string()),
-            plan: vec![PlanItemArg {
-                step: "Plan scope tree".to_string(),
-                status: StepStatus::InProgress,
-            }],
+            explanation: Some("task_projection test".to_string()),
+            plan: checklist
+                .iter()
+                .map(|step| PlanItemArg {
+                    step: (*step).to_string(),
+                    status: StepStatus::InProgress,
+                })
+                .collect(),
         },
-        spine_plantree: Some(SpinePlanTreeArg {
-            anchor: anchor.map(str::to_string),
-            root: SpinePlanTreeScopeArg {
-                node: anchor.map(str::to_string),
-                summary: "Editable task scope".to_string(),
-                status: Some(StepStatus::InProgress),
-                checkpoints: Vec::new(),
-                children: children
+        task_projection: Some(TaskProjectionArg {
+            current: TaskProjectionCurrentArg {
+                node_id: current.to_string(),
+                checklist: checklist
                     .into_iter()
-                    .map(|(node, summary, checkpoints)| SpinePlanTreeScopeArg {
-                        node: node.map(str::to_string),
-                        summary: summary.to_string(),
-                        status: Some(StepStatus::Pending),
-                        checkpoints: checkpoints
-                            .into_iter()
-                            .map(|task| SpinePlanTreeCheckpointArg {
-                                task: task.to_string(),
-                                status: StepStatus::Pending,
-                            })
-                            .collect(),
-                        children: Vec::new(),
+                    .map(|step| PlanItemArg {
+                        step: step.to_string(),
+                        status: StepStatus::InProgress,
                     })
                     .collect(),
             },
+            draft_nodes: draft_nodes
+                .into_iter()
+                .map(
+                    |(draft_id, parent, summary, checklist)| TaskProjectionDraftNodeArg {
+                        draft_id: draft_id.map(str::to_string),
+                        parent: parent.to_string(),
+                        summary: summary.to_string(),
+                        checklist: checklist
+                            .into_iter()
+                            .map(|step| PlanItemArg {
+                                step: step.to_string(),
+                                status: StepStatus::Pending,
+                            })
+                            .collect(),
+                    },
+                )
+                .collect(),
         }),
-        clear_spine_plantree: false,
     }
 }
 
@@ -390,23 +396,26 @@ fn projection_reset_filters_plan_from_non_surviving_turn() {
 }
 
 #[test]
-fn record_plan_update_writes_plantree_without_moving_cursor() {
+fn task_projection_writes_normalized_plantree_without_moving_cursor() {
     let (_temp, mut runtime) = temp_runtime();
     let initial_state = runtime.state().clone();
 
     let snapshot = runtime
         .record_plan_update(
             "turn-alloc",
-            plan_args_with_plantree(
-                None,
+            plan_args_with_task_projection(
+                "1.1",
+                vec!["Plan scope tree"],
                 vec![
                     (
                         None,
+                        "1.1",
                         "Reproduce failure",
                         vec!["run focused repro", "capture failing assertion"],
                     ),
                     (
                         None,
+                        "1.1",
                         "Patch and verify",
                         vec!["apply minimal fix", "run regression test"],
                     ),
@@ -424,7 +433,7 @@ fn record_plan_update_writes_plantree_without_moving_cursor() {
     let spine_plantree = &plan["spine_plantree"];
     assert_eq!(spine_plantree["anchor_node_id"], "1.1");
     assert_eq!(spine_plantree["root"]["existing_node_id"], "1.1");
-    assert_eq!(spine_plantree["root"]["summary"], "Editable task scope");
+    assert_eq!(spine_plantree["root"]["summary"], "Task projection 1.1");
     assert_eq!(
         spine_plantree["root"]["children"][0]["existing_node_id"],
         Value::Null
@@ -482,12 +491,13 @@ fn record_plan_update_preserves_plantree_when_omitted() {
     runtime
         .record_plan_update(
             "turn-plantree",
-            plan_args_with_plantree(
-                None,
-                vec![(None, "Verify scope", vec!["run focused tests"])],
+            plan_args_with_task_projection(
+                "1.1",
+                vec!["Plan scope tree"],
+                vec![(None, "1.1", "Verify scope", vec!["run focused tests"])],
             ),
         )
-        .expect("record PlanTree");
+        .expect("record task_projection PlanTree");
 
     let second = runtime
         .record_plan_update(
@@ -513,42 +523,42 @@ fn record_plan_update_preserves_plantree_when_omitted() {
 }
 
 #[test]
-fn record_plan_update_can_clear_plantree_explicitly() {
+fn task_projection_with_empty_drafts_replaces_previous_plantree() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
         .record_plan_update(
             "turn-plantree",
-            plan_args_with_plantree(
-                None,
-                vec![(None, "Verify scope", vec!["run focused tests"])],
+            plan_args_with_task_projection(
+                "1.1",
+                vec!["Plan scope tree"],
+                vec![(None, "1.1", "Verify scope", vec!["run focused tests"])],
             ),
         )
-        .expect("record PlanTree");
+        .expect("record task_projection PlanTree");
 
-    let cleared = runtime
+    let replaced = runtime
         .record_plan_update(
-            "turn-clear",
-            SpineUpdatePlanArgs {
-                flat: UpdatePlanArgs {
-                    explanation: Some("clear obsolete PlanTree".to_string()),
-                    plan: vec![PlanItemArg {
-                        step: "Continue without a planned subtree".to_string(),
-                        status: StepStatus::InProgress,
-                    }],
-                },
-                spine_plantree: None,
-                clear_spine_plantree: true,
-            },
+            "turn-replace",
+            plan_args_with_task_projection(
+                "1.1",
+                vec!["Continue without a planned subtree"],
+                Vec::new(),
+            ),
         )
-        .expect("clear PlanTree");
+        .expect("replace PlanTree");
 
-    assert!(cleared.spine_plantree.is_none());
+    let spine_plantree = replaced
+        .spine_plantree
+        .as_ref()
+        .expect("empty task_projection still records normalized root");
+    assert_eq!(spine_plantree.anchor_node_id, "1.1");
+    assert!(spine_plantree.root.children.is_empty());
     let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
-    assert!(plan.get("spine_plantree").is_none());
+    assert!(plan["spine_plantree"]["root"].get("children").is_none());
 }
 
 #[test]
-fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
+fn task_projection_defaults_to_open_parent_scope_when_cursor_is_child() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
         .stage_transition(
@@ -572,9 +582,13 @@ fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
     runtime
         .record_plan_update(
             "turn-child-plan",
-            plan_args_with_plantree(None, vec![(None, "Child next scope", vec!["finish child"])]),
+            plan_args_with_task_projection(
+                "1.1.1",
+                vec!["Work inside child"],
+                vec![(None, "1.1", "Child next scope", vec!["finish child"])],
+            ),
         )
-        .expect("record PlanTree at open parent");
+        .expect("record task_projection at open parent");
 
     let plan = read_json(runtime.store().plan_path(&id(&[1, 1, 1])));
     assert_eq!(plan["spine_plantree"]["anchor_node_id"], "1.1");
@@ -603,7 +617,7 @@ fn plantree_defaults_to_open_parent_scope_when_cursor_is_child() {
 }
 
 #[test]
-fn plantree_rejects_finished_scope_nodes() {
+fn task_projection_rejects_finished_real_parents() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
         .stage_transition(
@@ -647,21 +661,23 @@ fn plantree_rejects_finished_scope_nodes() {
     let error = runtime
         .record_plan_update(
             "turn-invalid",
-            plan_args_with_plantree(
-                Some("1.1"),
+            plan_args_with_task_projection(
+                "1.1.2",
+                vec!["Work in next child"],
                 vec![(
-                    Some("1.1.1"),
+                    None,
+                    "1.1.1",
                     "Rewrite finished child",
                     vec!["should be rejected"],
                 )],
             ),
         )
-        .expect_err("finished nodes must be read-only for PlanTree");
+        .expect_err("finished nodes must be read-only for task_projection");
 
     assert!(matches!(
         error,
         SpineRuntimeError::InvalidPlanTree { message }
-            if message.contains("plantree scope [1.1.1] is read-only")
+            if message.contains("plantree task_projection parent [1.1.1] is read-only")
     ));
     assert_eq!(runtime.state(), &initial_state);
     assert_eq!(read_json_lines(runtime.store().tree_path()), initial_tree);
@@ -669,33 +685,199 @@ fn plantree_rejects_finished_scope_nodes() {
 }
 
 #[test]
-fn plantree_rejects_duplicate_existing_scope_nodes() {
+fn task_projection_maps_current_checklist_and_child_draft_without_moving_cursor() {
     let (_temp, mut runtime) = temp_runtime();
     let initial_state = runtime.state().clone();
-    let initial_tree = read_json_lines(runtime.store().tree_path());
 
-    let error = runtime
+    let snapshot = runtime
         .record_plan_update(
-            "turn-invalid",
-            plan_args_with_plantree(
-                None,
+            "turn-task-projection",
+            plan_args_with_task_projection(
+                "1.1",
+                vec!["Inspect adapter"],
                 vec![(
-                    Some("1.1"),
-                    "Duplicate editable scope",
-                    vec!["ambiguous child"],
+                    None,
+                    "1.1",
+                    "Future validation",
+                    vec!["Run projection tests"],
                 )],
             ),
         )
-        .expect_err("duplicate existing scope nodes must be rejected");
+        .expect("record task_projection");
+
+    assert_eq!(runtime.state(), &initial_state);
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
+    assert_eq!(snapshot.items.len(), 1);
+    assert_eq!(snapshot.items[0].step, "Inspect adapter");
+    let spine_plantree = snapshot
+        .spine_plantree
+        .as_ref()
+        .expect("task_projection should create draft PlanTree");
+    assert_eq!(spine_plantree.anchor_node_id, "1.1");
+    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
+    assert_eq!(spine_plantree.root.children.len(), 1);
+    assert_eq!(spine_plantree.root.children[0].existing_node_id, None);
+    assert_eq!(spine_plantree.root.children[0].summary, "Future validation");
+    assert_eq!(
+        spine_plantree.root.children[0].checkpoints[0].task,
+        "Run projection tests"
+    );
+}
+
+#[test]
+fn task_projection_computes_anchor_for_current_child_and_future_sibling() {
+    let (_temp, mut runtime) = temp_runtime();
+    runtime
+        .stage_transition(
+            "open-1",
+            "turn-open",
+            SpineOperation::Open,
+            None,
+            /*compact_instruction*/ None,
+        )
+        .expect("stage open");
+    runtime
+        .after_response_items_recorded(
+            "turn-open",
+            &[spine_call("open-1"), function_call_output("open-1")],
+            0,
+            2,
+        )
+        .expect("commit open");
+    runtime.take_last_committed_transition();
+    let initial_state = runtime.state().clone();
+
+    let snapshot = runtime
+        .record_plan_update(
+            "turn-task-projection",
+            plan_args_with_task_projection(
+                "1.1.1",
+                vec!["Work inside child"],
+                vec![
+                    (None, "1.1.1", "Child follow-up", vec!["check child"]),
+                    (None, "1.1", "Sibling follow-up", vec!["check sibling"]),
+                ],
+            ),
+        )
+        .expect("record task_projection sibling");
+
+    assert_eq!(runtime.state(), &initial_state);
+    assert_eq!(runtime.cursor(), &id(&[1, 1, 1]));
+    let spine_plantree = snapshot.spine_plantree.as_ref().expect("PlanTree");
+    assert_eq!(spine_plantree.anchor_node_id, "1.1");
+    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
+    assert_eq!(spine_plantree.root.children.len(), 2);
+    assert_eq!(
+        spine_plantree.root.children[0].existing_node_id.as_deref(),
+        Some("1.1.1")
+    );
+    assert_eq!(spine_plantree.root.children[0].children.len(), 1);
+    assert_eq!(
+        spine_plantree.root.children[0].children[0].summary,
+        "Child follow-up"
+    );
+    assert_eq!(spine_plantree.root.children[1].summary, "Sibling follow-up");
+}
+
+#[test]
+fn task_projection_supports_nested_draft_with_prior_draft_id() {
+    let (_temp, mut runtime) = temp_runtime();
+
+    let snapshot = runtime
+        .record_plan_update(
+            "turn-task-projection",
+            plan_args_with_task_projection(
+                "1.1",
+                vec!["Design adapter"],
+                vec![
+                    (Some("~adapter"), "1.1", "Adapter PoC", vec!["normalize"]),
+                    (
+                        None,
+                        "~adapter",
+                        "Nested validation",
+                        vec!["validate nested draft"],
+                    ),
+                ],
+            ),
+        )
+        .expect("record nested task_projection");
+
+    let spine_plantree = snapshot.spine_plantree.as_ref().expect("PlanTree");
+    assert_eq!(spine_plantree.root.children.len(), 1);
+    assert_eq!(spine_plantree.root.children[0].summary, "Adapter PoC");
+    assert_eq!(spine_plantree.root.children[0].children.len(), 1);
+    assert_eq!(
+        spine_plantree.root.children[0].children[0].summary,
+        "Nested validation"
+    );
+}
+
+#[test]
+fn task_projection_rejects_fake_current_or_draft_ids() {
+    let (_temp, mut runtime) = temp_runtime();
+    let error = runtime
+        .record_plan_update(
+            "turn-invalid-current",
+            plan_args_with_task_projection("1.2", vec!["Wrong cursor"], Vec::new()),
+        )
+        .expect_err("current must match cursor");
 
     assert!(matches!(
         error,
         SpineRuntimeError::InvalidPlanTree { message }
-            if message.contains("plantree scope [1.1] is duplicated")
+            if message.contains("must match cursor")
     ));
-    assert_eq!(runtime.state(), &initial_state);
-    assert_eq!(read_json_lines(runtime.store().tree_path()), initial_tree);
-    assert!(!runtime.store().plan_path(&id(&[1, 1])).exists());
+
+    let error = runtime
+        .record_plan_update(
+            "turn-invalid-draft-id",
+            plan_args_with_task_projection(
+                "1.1",
+                vec!["Inspect"],
+                vec![(Some("1.1.2"), "1.1", "Bad draft id", Vec::new())],
+            ),
+        )
+        .expect_err("draft id must not look real");
+
+    assert!(matches!(
+        error,
+        SpineRuntimeError::InvalidPlanTree { message }
+            if message.contains("must start with '~'")
+    ));
+}
+
+#[test]
+fn task_projection_rejects_unknown_or_late_draft_parent() {
+    let (_temp, mut runtime) = temp_runtime();
+    let error = runtime
+        .record_plan_update(
+            "turn-invalid-parent",
+            plan_args_with_task_projection(
+                "1.1",
+                vec!["Inspect"],
+                vec![(None, "9.9", "Unknown parent", Vec::new())],
+            ),
+        )
+        .expect_err("unknown real parent should fail");
+
+    assert!(matches!(error, SpineRuntimeError::UnknownNode(_)));
+
+    let error = runtime
+        .record_plan_update(
+            "turn-late-parent",
+            plan_args_with_task_projection(
+                "1.1",
+                vec!["Inspect"],
+                vec![(None, "~later", "Late nested", Vec::new())],
+            ),
+        )
+        .expect_err("draft parent must be earlier");
+
+    assert!(matches!(
+        error,
+        SpineRuntimeError::InvalidPlanTree { message }
+            if message.contains("must reference an earlier draft_id")
+    ));
 }
 
 #[test]

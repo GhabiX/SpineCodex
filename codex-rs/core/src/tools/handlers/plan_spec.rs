@@ -5,135 +5,16 @@ use std::collections::BTreeMap;
 
 pub fn create_update_plan_tool() -> ToolSpec {
     create_update_plan_tool_with_options(UpdatePlanToolOptions {
-        include_spine_plantree: false,
+        include_task_projection: false,
     })
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UpdatePlanToolOptions {
-    pub include_spine_plantree: bool,
+    pub include_task_projection: bool,
 }
 
 pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> ToolSpec {
-    let checkpoint_properties = BTreeMap::from([
-        (
-            "task".to_string(),
-            JsonSchema::string(Some("Checklist item for the planned scope".to_string())),
-        ),
-        (
-            "status".to_string(),
-            JsonSchema::string(Some("One of: pending, in_progress, completed".to_string())),
-        ),
-    ]);
-    let checkpoint_schema = JsonSchema::object(
-        checkpoint_properties,
-        Some(vec!["task".to_string(), "status".to_string()]),
-        Some(false.into()),
-    );
-    let leaf_scope_properties = BTreeMap::from([
-        (
-            "node".to_string(),
-            JsonSchema::string(Some(
-                "Existing editable Spine node id, such as 1.2. Omit for a future scope proposal."
-                    .to_string(),
-            )),
-        ),
-        (
-            "summary".to_string(),
-            JsonSchema::string(Some("Scope summary".to_string())),
-        ),
-        (
-            "status".to_string(),
-            JsonSchema::string(Some("One of: pending, in_progress, completed".to_string())),
-        ),
-        (
-            "checkpoints".to_string(),
-            JsonSchema::array(
-                checkpoint_schema.clone(),
-                Some("Checklist items inside this planned scope".to_string()),
-            ),
-        ),
-    ]);
-    let leaf_scope_schema = JsonSchema::object(
-        leaf_scope_properties,
-        Some(vec!["summary".to_string()]),
-        Some(false.into()),
-    );
-    let child_scope_properties = BTreeMap::from([
-        (
-            "node".to_string(),
-            JsonSchema::string(Some(
-                "Existing editable Spine node id, such as 1.2. Omit for a future scope proposal."
-                    .to_string(),
-            )),
-        ),
-        (
-            "summary".to_string(),
-            JsonSchema::string(Some("Scope summary".to_string())),
-        ),
-        (
-            "status".to_string(),
-            JsonSchema::string(Some("One of: pending, in_progress, completed".to_string())),
-        ),
-        (
-            "checkpoints".to_string(),
-            JsonSchema::array(
-                checkpoint_schema.clone(),
-                Some("Checklist items inside this planned scope".to_string()),
-            ),
-        ),
-        (
-            "children".to_string(),
-            JsonSchema::array(
-                leaf_scope_schema.clone(),
-                Some("Future planned child scopes".to_string()),
-            ),
-        ),
-    ]);
-    let child_scope_schema = JsonSchema::object(
-        child_scope_properties,
-        Some(vec!["summary".to_string()]),
-        Some(false.into()),
-    );
-    let root_scope_properties = BTreeMap::from([
-        (
-            "node".to_string(),
-            JsonSchema::string(Some(
-                "Existing editable Spine node id, such as 1.2. Omit to use the resolved anchor."
-                    .to_string(),
-            )),
-        ),
-        (
-            "summary".to_string(),
-            JsonSchema::string(Some("Scope summary".to_string())),
-        ),
-        (
-            "status".to_string(),
-            JsonSchema::string(Some("One of: pending, in_progress, completed".to_string())),
-        ),
-        (
-            "checkpoints".to_string(),
-            JsonSchema::array(
-                checkpoint_schema,
-                Some(
-                    "Checklist items inside this planned scope. For the current real Spine node checklist, use the top-level plan instead of duplicating it here."
-                        .to_string(),
-                ),
-            ),
-        ),
-        (
-            "children".to_string(),
-            JsonSchema::array(
-                child_scope_schema,
-                Some("Future planned child scopes".to_string()),
-            ),
-        ),
-    ]);
-    let root_scope_schema = JsonSchema::object(
-        root_scope_properties,
-        Some(vec!["summary".to_string()]),
-        Some(false.into()),
-    );
     let plan_item_properties = BTreeMap::from([
         ("step".to_string(), JsonSchema::string(/*description*/ None)),
         (
@@ -141,6 +22,11 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
             JsonSchema::string(Some("One of: pending, in_progress, completed".to_string())),
         ),
     ]);
+    let plan_item_schema = JsonSchema::object(
+        plan_item_properties,
+        Some(vec!["step".to_string(), "status".to_string()]),
+        Some(false.into()),
+    );
     let mut properties = BTreeMap::from([
         (
             "explanation".to_string(),
@@ -149,11 +35,7 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
         (
             "plan".to_string(),
             JsonSchema::array(
-                JsonSchema::object(
-                    plan_item_properties,
-                    Some(vec!["step".to_string(), "status".to_string()]),
-                    Some(false.into()),
-                ),
+                plan_item_schema.clone(),
                 Some(
                     "The current checklist. When Spine is enabled, this is the current real Spine node's checklist."
                         .to_string(),
@@ -161,39 +43,94 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
             ),
         ),
     ]);
-    if options.include_spine_plantree {
-        let plantree_properties = BTreeMap::from([
+    if options.include_task_projection {
+        let projection_current_properties = BTreeMap::from([
             (
-                "anchor".to_string(),
+                "node_id".to_string(),
                 JsonSchema::string(Some(
-                    "Editable Spine anchor node id. Omit to use the current editable scope."
+                    "Current real Spine node id. For the MVP this must match the runtime cursor."
                         .to_string(),
                 )),
             ),
-            ("root".to_string(), root_scope_schema),
+            (
+                "checklist".to_string(),
+                JsonSchema::array(
+                    plan_item_schema.clone(),
+                    Some(
+                        "Checklist for the current real Spine node; this is normalized to the flat plan."
+                            .to_string(),
+                    ),
+                ),
+            ),
+        ]);
+        let projection_current_schema = JsonSchema::object(
+            projection_current_properties,
+            Some(vec!["node_id".to_string()]),
+            Some(false.into()),
+        );
+        let projection_draft_properties = BTreeMap::from([
+            (
+                "draft_id".to_string(),
+                JsonSchema::string(Some(
+                    "Optional local draft id for nested draft references. If provided, it must start with '~' and is not a real Spine node id."
+                        .to_string(),
+                )),
+            ),
+            (
+                "parent".to_string(),
+                JsonSchema::string(Some(
+                    "Editable real Spine node id or earlier draft_id that this draft scope is under."
+                        .to_string(),
+                )),
+            ),
+            (
+                "summary".to_string(),
+                JsonSchema::string(Some("Draft scope summary".to_string())),
+            ),
+            (
+                "checklist".to_string(),
+                JsonSchema::array(
+                    plan_item_schema,
+                    Some("Checklist items for this future draft scope".to_string()),
+                ),
+            ),
+        ]);
+        let projection_draft_schema = JsonSchema::object(
+            projection_draft_properties,
+            Some(vec!["parent".to_string(), "summary".to_string()]),
+            Some(false.into()),
+        );
+        let task_projection_properties = BTreeMap::from([
+            ("current".to_string(), projection_current_schema),
+            (
+                "draft_nodes".to_string(),
+                JsonSchema::array(
+                    projection_draft_schema,
+                    Some(
+                        "Future draft scopes. Order among entries with the same parent is sibling order."
+                            .to_string(),
+                    ),
+                ),
+            ),
         ]);
         properties.insert(
-            "spine_plantree".to_string(),
+            "task_projection".to_string(),
             JsonSchema::object(
-                plantree_properties,
-                Some(vec!["root".to_string()]),
+                task_projection_properties,
+                Some(vec!["current".to_string()]),
                 Some(false.into()),
             ),
         );
-        properties.insert(
-            "clear_spine_plantree".to_string(),
-            JsonSchema::boolean(Some(
-                "Set true only to explicitly clear the current Spine PlanTree.".to_string(),
-            )),
-        );
     }
 
-    let description = if options.include_spine_plantree {
+    let description = if options.include_task_projection {
         r#"Updates the task plan.
 Provide an optional explanation and a list of plan items, each with a step and status.
 At most one step can be in_progress at a time.
-When Spine is enabled, the top-level plan is the current real Spine node's checklist. Use spine_plantree to maintain the current editable task tree draft: root.children are future planned child scopes, and each child scope's checkpoints are that future scope's checklist. Successful writable Spine updates return JSON containing the updated spine_tree; treat that returned tree as the authoritative planning state. This is planning only; it does not create or move Spine nodes. Omitting spine_plantree preserves the previous draft; use clear_spine_plantree only to clear it.
-Future planned scopes may display as ~<predicted-id> to distinguish them from real Spine nodes.
+When Spine is enabled, use task_projection for model-authored planning. task_projection.current.checklist is normalized to the current real Spine node's flat plan, and task_projection.draft_nodes is normalized to the editable task tree draft. task_projection is a draft projection only: it does not create, finish, close, compact, or move Spine nodes. Do not combine task_projection with top-level plan.
+Successful writable Spine updates return JSON containing the updated spine_tree; treat that returned tree as the authoritative planning state.
+The returned tree may contain a normalized spine_plantree; that is runtime-normalized draft state, not a model-authored input path.
+Future draft scopes may display as ~<predicted-id> to distinguish them from real Spine nodes.
 "#
     } else {
         r#"Updates the task plan.
@@ -209,7 +146,11 @@ At most one step can be in_progress at a time.
         defer_loading: None,
         parameters: JsonSchema::object(
             properties,
-            Some(vec!["plan".to_string()]),
+            if options.include_task_projection {
+                None
+            } else {
+                Some(vec!["plan".to_string()])
+            },
             Some(false.into()),
         ),
         output_schema: None,

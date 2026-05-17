@@ -1,7 +1,4 @@
 use super::ids::NodeId;
-use codex_protocol::plan_tool::SpinePlanTreeArg;
-use codex_protocol::plan_tool::SpinePlanTreeCheckpointArg;
-use codex_protocol::plan_tool::SpinePlanTreeScopeArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use serde::Deserialize;
@@ -64,12 +61,33 @@ pub(crate) struct PlanTreeSnapshot {
 }
 
 impl PlanTreeSnapshot {
-    pub(crate) fn from_update(anchor_node_id: &NodeId, plantree: SpinePlanTreeArg) -> Self {
+    pub(crate) fn from_update(anchor_node_id: &NodeId, plantree: PlanTreeDraft) -> Self {
         Self {
             anchor_node_id: anchor_node_id.to_string(),
             root: PlanTreeScope::from_update(plantree.root),
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlanTreeDraft {
+    pub(crate) anchor: Option<String>,
+    pub(crate) root: PlanTreeScopeDraft,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlanTreeScopeDraft {
+    pub(crate) node: Option<String>,
+    pub(crate) summary: String,
+    pub(crate) status: Option<StepStatus>,
+    pub(crate) checkpoints: Vec<PlanTreeCheckpointDraft>,
+    pub(crate) children: Vec<PlanTreeScopeDraft>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlanTreeCheckpointDraft {
+    pub(crate) task: String,
+    pub(crate) status: StepStatus,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -85,7 +103,7 @@ pub(crate) struct PlanTreeScope {
 }
 
 impl PlanTreeScope {
-    fn from_update(scope: SpinePlanTreeScopeArg) -> Self {
+    fn from_update(scope: PlanTreeScopeDraft) -> Self {
         Self {
             existing_node_id: scope.node,
             summary: scope.summary,
@@ -115,7 +133,7 @@ pub(crate) struct PlanTreeCheckpoint {
 }
 
 impl PlanTreeCheckpoint {
-    fn from_update(checkpoint: SpinePlanTreeCheckpointArg) -> Self {
+    fn from_update(checkpoint: PlanTreeCheckpointDraft) -> Self {
         Self {
             task: checkpoint.task,
             status: step_status_label(&checkpoint.status).to_string(),

@@ -18,13 +18,13 @@ use serde_json::Value as JsonValue;
 
 #[derive(Default)]
 pub struct PlanHandler {
-    include_spine_plantree: bool,
+    include_task_projection: bool,
 }
 
 impl PlanHandler {
-    pub fn new(include_spine_plantree: bool) -> Self {
+    pub fn new(include_task_projection: bool) -> Self {
         Self {
-            include_spine_plantree,
+            include_task_projection,
         }
     }
 }
@@ -101,10 +101,10 @@ impl ToolHandler for PlanHandler {
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        if self.include_spine_plantree {
+        if self.include_task_projection {
             Some(create_update_plan_tool_with_options(
                 UpdatePlanToolOptions {
-                    include_spine_plantree: true,
+                    include_task_projection: true,
                 },
             ))
         } else {
@@ -140,7 +140,7 @@ impl ToolHandler for PlanHandler {
             ));
         }
 
-        if self.include_spine_plantree {
+        if self.include_task_projection {
             let args = parse_spine_update_plan_arguments(&arguments)?;
             let spine_tree = session
                 .record_spine_plan_update_and_emit_progress(turn.as_ref(), args)
@@ -200,10 +200,11 @@ mod tests {
 
         assert!(!properties.contains_key("spine_plantree"));
         assert!(!properties.contains_key("clear_spine_plantree"));
+        assert!(!properties.contains_key("task_projection"));
     }
 
     #[test]
-    fn spine_plan_handler_schema_includes_plantree_fields() {
+    fn spine_plan_handler_schema_includes_task_projection_only() {
         let ToolSpec::Function(tool) = PlanHandler::new(true).spec().expect("spec") else {
             panic!("expected function spec");
         };
@@ -213,8 +214,9 @@ mod tests {
             .as_ref()
             .expect("schema properties");
 
-        assert!(properties.contains_key("spine_plantree"));
-        assert!(properties.contains_key("clear_spine_plantree"));
+        assert!(!properties.contains_key("spine_plantree"));
+        assert!(!properties.contains_key("clear_spine_plantree"));
+        assert!(properties.contains_key("task_projection"));
     }
 
     #[test]

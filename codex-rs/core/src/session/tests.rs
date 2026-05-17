@@ -320,8 +320,7 @@ fn update_plan_args_for_test(step: &str, status: StepStatus) -> UpdatePlanArgs {
 fn spine_update_plan_args_for_test(step: &str, status: StepStatus) -> SpineUpdatePlanArgs {
     SpineUpdatePlanArgs {
         flat: update_plan_args_for_test(step, status),
-        spine_plantree: None,
-        clear_spine_plantree: false,
+        task_projection: None,
     }
 }
 

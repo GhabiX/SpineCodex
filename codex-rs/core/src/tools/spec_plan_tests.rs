@@ -190,7 +190,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
 }
 
 #[test]
-fn update_plan_schema_includes_spine_plantree_when_spine_is_effectively_enabled() {
+fn update_plan_schema_includes_task_projection_when_spine_is_effectively_enabled() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::SpineTaskTree);
@@ -220,34 +220,34 @@ fn update_plan_schema_includes_spine_plantree_when_spine_is_effectively_enabled(
         .properties
         .as_ref()
         .expect("update_plan object properties");
-    assert!(properties.contains_key("spine_plantree"));
-    assert!(properties.contains_key("clear_spine_plantree"));
+    assert!(!properties.contains_key("spine_plantree"));
+    assert!(!properties.contains_key("clear_spine_plantree"));
+    assert!(properties.contains_key("task_projection"));
 }
 
 #[test]
-fn update_plan_schema_exposes_spine_plantree_planning_ir() {
+fn update_plan_schema_exposes_task_projection() {
     let ToolSpec::Function(tool) = create_update_plan_tool_with_options(UpdatePlanToolOptions {
-        include_spine_plantree: true,
+        include_task_projection: true,
     }) else {
         panic!("expected function tool");
     };
+    assert!(tool.description.contains("use task_projection"));
     assert!(tool.description.contains("spine_plantree"));
+    assert!(tool.description.contains("task_projection"));
     assert!(
         tool.description
-            .contains("current real Spine node's checklist")
+            .contains("current real Spine node's flat plan")
     );
-    assert!(tool.description.contains("future planned child scopes"));
+    assert!(tool.description.contains("task_projection.draft_nodes"));
     assert!(tool.description.contains("updated spine_tree"));
     assert!(tool.description.contains("authoritative planning state"));
-    assert!(tool.description.contains("planning only"));
+    assert!(tool.description.contains("draft projection only"));
     assert!(
         tool.description
-            .contains("does not create or move Spine nodes")
+            .contains("does not create, finish, close, compact, or move Spine nodes")
     );
-    assert!(
-        tool.description
-            .contains("Omitting spine_plantree preserves")
-    );
+    assert!(tool.description.contains("runtime-normalized draft state"));
     assert!(tool.description.contains("~<predicted-id>"));
 
     let properties = tool
@@ -261,40 +261,19 @@ fn update_plan_schema_exposes_spine_plantree_planning_ir() {
             .and_then(|schema| schema.description.as_deref())
             .is_some_and(|description| description.contains("current real Spine node"))
     );
-    assert!(properties.contains_key("clear_spine_plantree"));
-    let plantree = properties
-        .get("spine_plantree")
-        .expect("spine_plantree schema");
-    assert_eq!(plantree.required, Some(vec!["root".to_string()]));
-    let plantree_properties = plantree
+    assert!(!properties.contains_key("spine_plantree"));
+    assert!(!properties.contains_key("clear_spine_plantree"));
+    assert!(properties.contains_key("task_projection"));
+    let task_projection = properties
+        .get("task_projection")
+        .expect("task_projection schema");
+    assert_eq!(task_projection.required, Some(vec!["current".to_string()]));
+    let task_projection_properties = task_projection
         .properties
         .as_ref()
-        .expect("plantree object properties");
-    let root = plantree_properties
-        .get("root")
-        .expect("plantree root schema");
-    assert_eq!(root.required, Some(vec!["summary".to_string()]));
-    let root_properties = root.properties.as_ref().expect("root scope properties");
-    assert!(root_properties.contains_key("checkpoints"));
-    assert!(root_properties.contains_key("children"));
-    assert!(
-        root_properties
-            .get("checkpoints")
-            .and_then(|schema| schema.description.as_deref())
-            .is_some_and(|description| description.contains("top-level plan"))
-    );
-    assert!(
-        root_properties
-            .get("children")
-            .and_then(|schema| schema.description.as_deref())
-            .is_some_and(|description| description.contains("Future planned child scopes"))
-    );
-    assert!(
-        root_properties
-            .get("node")
-            .and_then(|schema| schema.description.as_deref())
-            .is_some_and(|description| description.contains("resolved anchor"))
-    );
+        .expect("task_projection object properties");
+    assert!(task_projection_properties.contains_key("current"));
+    assert!(task_projection_properties.contains_key("draft_nodes"));
 }
 
 #[test]
@@ -303,6 +282,7 @@ fn update_plan_schema_omits_spine_plantree_by_default() {
         panic!("expected function tool");
     };
     assert!(!tool.description.contains("spine_plantree"));
+    assert!(!tool.description.contains("task_projection"));
 
     let properties = tool
         .parameters
@@ -311,6 +291,7 @@ fn update_plan_schema_omits_spine_plantree_by_default() {
         .expect("update_plan object properties");
     assert!(!properties.contains_key("spine_plantree"));
     assert!(!properties.contains_key("clear_spine_plantree"));
+    assert!(!properties.contains_key("task_projection"));
 }
 
 #[test]
