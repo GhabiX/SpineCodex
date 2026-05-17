@@ -1,4 +1,7 @@
 use super::*;
+use crate::spine::mem_install::MemoryBodyError;
+use crate::spine::mem_install::MemoryBodyRef;
+use crate::spine::mem_install::MemorySectionId;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -615,6 +618,85 @@ fn generated_memory_sections_do_not_break_transition_replay_hash() {
     let loaded = store.load().expect("load sidecar");
 
     assert_eq!(loaded, state);
+}
+
+#[test]
+fn mem_install_generated_sections_are_independently_referenced() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_memory_section(
+            &id(&[1]),
+            "\n\n## Auto Compact\n\nBase: /parent/base\nFold: response ordinals [2, 10)\nNode trajs: nodes/1/trajs.jsonl\nRaw mirror: raw/rollout.raw.jsonl\nRollout: /parent/rollout.jsonl\n\nfirst body\n\n## Node Summary\n\nfirst\n",
+        )
+        .expect("append first generated section");
+    store
+        .append_memory_section(
+            &id(&[1]),
+            "\n\n## Auto Compact\n\nBase: /parent/base\nFold: response ordinals [10, 20)\nNode trajs: nodes/1/trajs.jsonl\nRaw mirror: raw/rollout.raw.jsonl\nRollout: /parent/rollout.jsonl\n\nsecond body\n\n## Node Summary\n\nsecond\n",
+        )
+        .expect("append second generated section");
+
+    let sections = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections");
+
+    assert_eq!(sections.len(), 2);
+    assert_eq!(
+        sections[0].section_id.to_string(),
+        "nodes/1/memory.md#section-0"
+    );
+    assert_eq!(sections[0].body, "first body");
+    assert_eq!(
+        sections[1].section_id.to_string(),
+        "nodes/1/memory.md#section-1"
+    );
+    assert_eq!(sections[1].body, "second body");
+    assert_eq!(
+        store
+            .verify_memory_body_ref(&id(&[1]), &sections[1].body_ref())
+            .expect("verify second section"),
+        sections[1]
+    );
+
+    let wrong_storage_ref = MemoryBodyRef {
+        section_id: MemorySectionId::new("nodes/2/memory.md", 1),
+        body_hash: sections[1].body_hash.clone(),
+    };
+    assert!(matches!(
+        store.verify_memory_body_ref(&id(&[1]), &wrong_storage_ref),
+        Err(SpineStoreError::MemoryBody(
+            MemoryBodyError::StorageMismatch { .. }
+        ))
+    ));
+}
+
+#[test]
+fn mem_install_body_hash_ignores_imported_audit_path_drift() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_memory_section(
+            &id(&[1]),
+            "\n\n## Auto Compact\n\nBase: /parent/base\nFold: response ordinals [2, 10)\nNode trajs: nodes/1/trajs.jsonl\nRaw mirror: raw/rollout.raw.jsonl\nRollout: /parent/rollout.jsonl\n\nportable body\n\n## Node Summary\n\nsummary\n",
+        )
+        .expect("append generated section");
+    let original = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("read original");
+    let memory_path = store.memory_path(&id(&[1]));
+    let relocated = std::fs::read_to_string(&memory_path)
+        .expect("read memory")
+        .replace("/parent/base", "/child/base")
+        .replace("/parent/rollout.jsonl", "/child/rollout.jsonl");
+    std::fs::write(&memory_path, relocated).expect("rewrite memory");
+
+    let relocated = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("read relocated");
+
+    assert_eq!(original[0].body, "portable body");
+    assert_eq!(original[0].body_hash, relocated[0].body_hash);
 }
 
 #[test]

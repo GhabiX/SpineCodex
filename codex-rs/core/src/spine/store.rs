@@ -1,5 +1,11 @@
 use super::ids::NodeId;
 use super::ids::NodeIdParseError;
+use super::mem_install::GENERATED_MEMORY_SECTION_MARKER;
+use super::mem_install::GeneratedMemorySection;
+use super::mem_install::MemoryBodyError;
+use super::mem_install::MemoryBodyRef;
+use super::mem_install::parse_generated_memory_sections;
+use super::mem_install::verify_memory_body_ref as verify_memory_body_ref_in_memory;
 use super::plan_bridge::PlanSnapshot;
 use super::plan_bridge::PlanSnapshotItem;
 use super::plan_bridge::PlanTreeScope;
@@ -41,7 +47,6 @@ const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
-const GENERATED_MEMORY_SECTION_MARKER: &str = "\n\n<!-- spine:auto-compact-generated -->\n";
 const SPINE_BASE_LOCATOR_VERSION: u32 = 1;
 
 pub(crate) fn compact_message_hash(message: &str) -> String {
@@ -986,6 +991,29 @@ impl SpineSidecarStore {
         memory.push_str(GENERATED_MEMORY_SECTION_MARKER);
         memory.push_str(section);
         Ok(memory)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn generated_memory_sections(
+        &self,
+        node_id: &NodeId,
+    ) -> Result<Vec<GeneratedMemorySection>, SpineStoreError> {
+        let memory = self.read_memory_file(node_id)?;
+        Ok(parse_generated_memory_sections(
+            relative_memory_path(node_id),
+            &memory,
+        ))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn verify_memory_body_ref(
+        &self,
+        node_id: &NodeId,
+        body_ref: &MemoryBodyRef,
+    ) -> Result<GeneratedMemorySection, SpineStoreError> {
+        let memory = self.read_memory_file(node_id)?;
+        verify_memory_body_ref_in_memory(relative_memory_path(node_id), &memory, body_ref)
+            .map_err(Into::into)
     }
 
     #[cfg(test)]
@@ -2145,6 +2173,8 @@ pub(crate) enum SpineStoreError {
     State(#[from] SpineStateError),
     #[error(transparent)]
     NodeId(#[from] NodeIdParseError),
+    #[error(transparent)]
+    MemoryBody(#[from] MemoryBodyError),
 }
 
 fn status_label(status: &NodeStatus) -> &'static str {

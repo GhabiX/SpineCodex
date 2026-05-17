@@ -1,6 +1,7 @@
 pub(crate) mod compact;
 pub(crate) mod ids;
 pub(crate) mod instructions;
+pub(crate) mod mem_install;
 pub(crate) mod plan_bridge;
 pub(crate) mod projection;
 pub(crate) mod runtime;
