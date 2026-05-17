@@ -213,7 +213,7 @@ fn should_use_remote_compact_task_for_azure_provider() {
 }
 
 #[tokio::test]
-async fn spine_native_text_outcome_installs_root_epoch_worklog() {
+async fn spine_native_text_outcome_installs_root_epoch_memory() {
     let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;
     let turn_context = Arc::new(turn_context);
     let rollout_path = crate::session::tests::attach_thread_persistence(&mut session).await;
@@ -284,8 +284,8 @@ async fn spine_native_text_outcome_installs_root_epoch_worklog() {
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())
         .expect("serialize history");
-    assert!(!rendered_history.contains("<spine_worklog"));
-    assert!(rendered_history.contains("## Spine Worklog"));
+    assert!(!rendered_history.contains("<spine_memory"));
+    assert!(rendered_history.contains("## Spine Memory"));
     assert!(rendered_history.contains("Operation: archive"));
     assert!(rendered_history.contains("native compact summary"));
     assert!(!rendered_history.contains("raw root epoch detail"));

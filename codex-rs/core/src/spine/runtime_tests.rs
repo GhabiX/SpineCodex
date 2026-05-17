@@ -172,7 +172,7 @@ fn initial_tree_event(raw_start_ordinal: u64) -> Value {
                     "raw_start_ordinal": 0,
                     "status": "opened",
                     "summary": null,
-                    "worklog_path": "nodes/1/worklog.md",
+                    "memory_path": "nodes/1/memory.md",
                     "plan_path": "nodes/1/plan.json",
                 },
                 {
@@ -181,7 +181,7 @@ fn initial_tree_event(raw_start_ordinal: u64) -> Value {
                     "raw_start_ordinal": raw_start_ordinal,
                     "status": "live",
                     "summary": null,
-                    "worklog_path": "nodes/1/1/worklog.md",
+                    "memory_path": "nodes/1/1/memory.md",
                     "plan_path": "nodes/1/1/plan.json",
                 },
             ],
@@ -1063,7 +1063,7 @@ fn stage_does_not_advance_cursor_or_write_transition() {
     assert_eq!(staged.to_node, id(&[1, 1, 1]));
     assert_eq!(runtime.cursor(), &id(&[1, 1]));
     assert_eq!(runtime.state().visible_spine(), vec![id(&[1]), id(&[1, 1])]);
-    assert!(!runtime.store().worklog_path(&id(&[1, 1])).exists());
+    assert!(!runtime.store().memory_path(&id(&[1, 1])).exists());
     assert_eq!(
         read_json_lines(runtime.store().tree_path()),
         vec![initial_tree_event(0)]
@@ -1516,9 +1516,9 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
 
     assert!(outline.contains("## Context Compacted"));
     assert!(outline.contains(&format!("Base: {base}")));
-    assert!(outline.contains("[1.1.1] scope done (nodes/1/1/1/worklog.md)"));
-    assert!(outline.contains("|-- [1.1.1.1] first child done (nodes/1/1/1/1/worklog.md)"));
-    assert!(outline.contains("|-- [1.1.1.2] second child done (nodes/1/1/1/2/worklog.md)"));
+    assert!(outline.contains("[1.1.1] scope done (nodes/1/1/1/memory.md)"));
+    assert!(outline.contains("|-- [1.1.1.1] first child done (nodes/1/1/1/1/memory.md)"));
+    assert!(outline.contains("|-- [1.1.1.2] second child done (nodes/1/1/1/2/memory.md)"));
     assert!(
         outline.find("|-- [1.1.1.1]").expect("first child row")
             < outline.find("|-- [1.1.1.2]").expect("second child row")
@@ -1532,7 +1532,7 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
     assert!(model_outline.contains("|-- [1.1.1.1] first child done"));
     assert!(model_outline.contains("|-- [1.1.1.2] second child done"));
     assert!(!model_outline.contains("Base:"));
-    assert!(!model_outline.contains("worklog.md"));
+    assert!(!model_outline.contains("memory.md"));
 }
 
 #[test]
@@ -1773,7 +1773,7 @@ fn commit_failure_leaves_cursor_and_tree_unchanged() {
     assert_eq!(runtime.cursor(), &id(&[1, 1]));
     assert_eq!(runtime.current_ordinal(), 2);
     assert!(runtime.staged_transition().is_some());
-    assert!(!runtime.store().worklog_path(&id(&[1])).exists());
+    assert!(!runtime.store().memory_path(&id(&[1])).exists());
     assert_eq!(
         read_json_lines(runtime.store().tree_path()),
         vec![initial_tree_event(0)]

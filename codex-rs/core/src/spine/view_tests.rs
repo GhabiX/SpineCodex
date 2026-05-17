@@ -5,13 +5,13 @@ use crate::spine::state::NodeRecord;
 use std::path::Path;
 
 #[test]
-fn tree_view_omits_root_and_marks_visible_worklogs() {
+fn tree_view_omits_root_and_marks_visible_memories() {
     let mut state = SpineState::new();
     state.next("first child done").expect("finish child");
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  1.2\n\n1: live\n    1.1: finished first child done [worklog already in context]\n    1.2: Current"
+        "Current:  1.2\n\n1: live\n    1.1: finished first child done [memory already in context]\n    1.2: Current"
     );
 }
 
@@ -22,7 +22,7 @@ fn tree_tool_view_can_include_base_path() {
 
     assert_eq!(
         render_tree_tool_output_with_base(&state, state.cursor(), Path::new("/tmp/spine")),
-        "Current:  1.2\nBase: /tmp/spine\n\n1: live\n    1.1: finished first child done [worklog already in context]\n    1.2: Current"
+        "Current:  1.2\nBase: /tmp/spine\n\n1: live\n    1.1: finished first child done [memory already in context]\n    1.2: Current"
     );
 }
 
@@ -42,7 +42,7 @@ fn renders_runtime_size_hint_as_standalone_observation_text() {
                 limit_tokens: 900_000,
             }),
         ),
-        "\n\nSpine warning: context pressure is high at 812k/900k tokens (88k left); current live node is about 63k. At the next natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch."
+        "\n\nSpine warning: context pressure is high at 812k/900k tokens (88k left); current live node is about 63k. At the next natural boundary, use spine.next/close to move finished work into a memory before Codex auto-compacts the root epoch."
     );
 }
 
@@ -56,7 +56,7 @@ fn renders_runtime_size_hint_without_budget_as_node_only_text() {
 
     assert_eq!(
         render_size_hint(&hint, None),
-        "\n\nSpine warning: current live node is about 63k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a worklog."
+        "\n\nSpine warning: current live node is about 63k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a memory."
     );
 }
 
@@ -81,7 +81,7 @@ fn tree_view_shows_paths_for_hidden_finished_descendants() {
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  1.2\n\n1: live\n    1.1: closed child scope [worklog already in context]\n        1.1.1: finished first leaf done nodes/1/1/1/worklog.md\n        1.1.2: finished nodes/1/1/2/worklog.md\n    1.2: Current"
+        "Current:  1.2\n\n1: live\n    1.1: closed child scope [memory already in context]\n        1.1.1: finished first leaf done nodes/1/1/1/memory.md\n        1.1.2: finished nodes/1/1/2/memory.md\n    1.2: Current"
     );
 }
 
@@ -94,12 +94,12 @@ fn tree_view_resets_after_root_epoch_reset() {
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  2.1\n\n1: closed Context compacted [worklog already in context]\n    1.1: finished\n2: live\n    2.1: Current"
+        "Current:  2.1\n\n1: closed Context compacted [memory already in context]\n    1.1: finished\n2: live\n    2.1: Current"
     );
 }
 
 #[test]
-fn tree_view_shows_sealed_root_archive_descendants_without_worklog_paths() {
+fn tree_view_shows_sealed_root_archive_descendants_without_memory_paths() {
     let mut state = SpineState::new();
     state.open().expect("open child");
     state
@@ -108,12 +108,12 @@ fn tree_view_shows_sealed_root_archive_descendants_without_worklog_paths() {
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  2.1\n\n1: closed Context compacted [worklog already in context]\n    1.1: closed\n        1.1.1: finished\n2: live\n    2.1: Current"
+        "Current:  2.1\n\n1: closed Context compacted [memory already in context]\n    1.1: closed\n        1.1.1: finished\n2: live\n    2.1: Current"
     );
 }
 
 #[test]
-fn tree_view_marks_previous_root_epoch_worklog_as_context() {
+fn tree_view_marks_previous_root_epoch_memory_as_context() {
     let mut state = SpineState::new();
     state
         .reset_root_epoch("first compact", 7)
@@ -124,7 +124,7 @@ fn tree_view_marks_previous_root_epoch_worklog_as_context() {
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  3.1\n\n1: closed first compact nodes/1/worklog.md\n    1.1: finished\n2: closed second compact [worklog already in context]\n    2.1: finished\n3: live\n    3.1: Current"
+        "Current:  3.1\n\n1: closed first compact nodes/1/memory.md\n    1.1: finished\n2: closed second compact [memory already in context]\n    2.1: finished\n3: live\n    3.1: Current"
     );
 }
 
@@ -174,6 +174,6 @@ fn tree_view_marks_legacy_unfinished_nodes_under_closed_ancestor() {
 
     assert_eq!(
         render_tree_tool_output(&state, state.cursor()),
-        "Current:  2.1\n\n1: closed Context compacted [worklog already in context]\n    1.1: [undone as compact]\n        1.1.1: [undone as compact]\n2: live\n    2.1: Current"
+        "Current:  2.1\n\n1: closed Context compacted [memory already in context]\n    1.1: [undone as compact]\n        1.1.1: [undone as compact]\n2: live\n    2.1: Current"
     );
 }

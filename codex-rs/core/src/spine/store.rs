@@ -34,14 +34,14 @@ use thiserror::Error;
 const TREE_FILE: &str = "tree.jsonl";
 const STATE_FILE: &str = "state.json";
 const NODES_DIR: &str = "nodes";
-const WORKLOG_FILE: &str = "worklog.md";
+const MEMORY_FILE: &str = "memory.md";
 const NODE_TRAJS_FILE: &str = "trajs.jsonl";
 const PLAN_FILE: &str = "plan.json";
 const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
-const GENERATED_WORKLOG_SECTION_MARKER: &str = "\n\n<!-- spine:auto-compact-generated -->\n";
+const GENERATED_MEMORY_SECTION_MARKER: &str = "\n\n<!-- spine:auto-compact-generated -->\n";
 const SPINE_BASE_LOCATOR_VERSION: u32 = 1;
 
 pub(crate) fn compact_message_hash(message: &str) -> String {
@@ -209,8 +209,8 @@ impl SpineSidecarStore {
         path
     }
 
-    pub(crate) fn worklog_path(&self, node_id: &NodeId) -> PathBuf {
-        self.node_dir(node_id).join(WORKLOG_FILE)
+    pub(crate) fn memory_path(&self, node_id: &NodeId) -> PathBuf {
+        self.node_dir(node_id).join(MEMORY_FILE)
     }
 
     pub(crate) fn node_trajs_path(&self, node_id: &NodeId) -> PathBuf {
@@ -411,7 +411,7 @@ impl SpineSidecarStore {
     ) -> Result<(), SpineStoreError> {
         for node_id in node_ids {
             self.ensure_node_dir(node_id)?;
-            self.copy_node_file_if_present(source, node_id, WORKLOG_FILE)?;
+            self.copy_node_file_if_present(source, node_id, MEMORY_FILE)?;
             self.copy_node_file_if_present(source, node_id, PLAN_FILE)?;
         }
         Ok(())
@@ -426,10 +426,10 @@ impl SpineSidecarStore {
         for node_id in node_ids {
             self.ensure_node_dir(node_id)?;
             if source
-                .latest_worklog_source_turn_id(node_id)?
+                .latest_memory_source_turn_id(node_id)?
                 .is_some_and(|turn_id| surviving_turn_ids.contains(&turn_id))
             {
-                self.copy_node_file_if_present(source, node_id, WORKLOG_FILE)?;
+                self.copy_node_file_if_present(source, node_id, MEMORY_FILE)?;
             }
             if source
                 .read_plan_snapshot(node_id)?
@@ -869,7 +869,7 @@ impl SpineSidecarStore {
                     fold_end_ordinal,
                 },
             replacement_history_len,
-            worklog_path,
+            memory_path,
             message_hash,
         } = record;
         let path = self.compact_index_path();
@@ -881,7 +881,7 @@ impl SpineSidecarStore {
             cut_ordinal,
             fold_end_ordinal,
             replacement_history_len,
-            worklog_path,
+            memory_path,
             message_hash,
         };
         self.append_json_line(&path, &event)
@@ -947,13 +947,13 @@ impl SpineSidecarStore {
         self.append_json_line(&path, &event)
     }
 
-    pub(crate) fn append_worklog_section(
+    pub(crate) fn append_memory_section(
         &self,
         node_id: &NodeId,
         section: &str,
     ) -> Result<(), SpineStoreError> {
         self.ensure_node_dir(node_id)?;
-        let path = self.worklog_path(node_id);
+        let path = self.memory_path(node_id);
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -962,7 +962,7 @@ impl SpineSidecarStore {
                 path: path.clone(),
                 source,
             })?;
-        file.write_all(GENERATED_WORKLOG_SECTION_MARKER.as_bytes())
+        file.write_all(GENERATED_MEMORY_SECTION_MARKER.as_bytes())
             .map_err(|source| SpineStoreError::Io {
                 path: path.clone(),
                 source,
@@ -971,26 +971,26 @@ impl SpineSidecarStore {
             .map_err(|source| SpineStoreError::Io { path, source })
     }
 
-    pub(crate) fn worklog_with_appended_section(
+    pub(crate) fn memory_with_appended_section(
         &self,
         node_id: &NodeId,
         section: &str,
     ) -> Result<String, SpineStoreError> {
-        let mut worklog = match self.read_worklog_file(node_id) {
-            Ok(worklog) => worklog,
+        let mut memory = match self.read_memory_file(node_id) {
+            Ok(memory) => memory,
             Err(SpineStoreError::Io { source, .. }) if source.kind() == ErrorKind::NotFound => {
                 String::new()
             }
             Err(err) => return Err(err),
         };
-        worklog.push_str(GENERATED_WORKLOG_SECTION_MARKER);
-        worklog.push_str(section);
-        Ok(worklog)
+        memory.push_str(GENERATED_MEMORY_SECTION_MARKER);
+        memory.push_str(section);
+        Ok(memory)
     }
 
     #[cfg(test)]
-    pub(crate) fn read_worklog(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
-        self.read_worklog_file(node_id)
+    pub(crate) fn read_memory(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
+        self.read_memory_file(node_id)
     }
 
     fn replay_tree(&self) -> Result<SpineState, SpineStoreError> {
@@ -1621,12 +1621,12 @@ impl SpineSidecarStore {
         Ok(())
     }
 
-    fn read_worklog_file(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
-        let path = self.worklog_path(node_id);
+    fn read_memory_file(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
+        let path = self.memory_path(node_id);
         std::fs::read_to_string(&path).map_err(|source| SpineStoreError::Io { path, source })
     }
 
-    fn latest_worklog_source_turn_id(
+    fn latest_memory_source_turn_id(
         &self,
         node_id: &NodeId,
     ) -> Result<Option<String>, SpineStoreError> {
@@ -1732,7 +1732,7 @@ pub(crate) struct CompactStartedRecord {
 pub(crate) struct CompactInstalledRecord {
     pub(crate) attempt: CompactAttemptRecord,
     pub(crate) replacement_history_len: usize,
-    pub(crate) worklog_path: String,
+    pub(crate) memory_path: String,
     pub(crate) message_hash: String,
 }
 
@@ -1964,7 +1964,7 @@ enum CompactIndexEvent {
         cut_ordinal: u64,
         fold_end_ordinal: u64,
         replacement_history_len: usize,
-        worklog_path: String,
+        memory_path: String,
         message_hash: String,
     },
     CompactFailed {
@@ -2102,7 +2102,7 @@ impl StateSnapshot {
                     raw_start_ordinal: node.raw_start_ordinal,
                     status: status_label(&node.status).to_string(),
                     summary: node.summary.clone(),
-                    worklog_path: Some(relative_worklog_path(&node.node_id)),
+                    memory_path: Some(relative_memory_path(&node.node_id)),
                     plan_path: Some(relative_plan_path(&node.node_id)),
                 })
                 .collect(),
@@ -2142,7 +2142,7 @@ struct NodeSnapshot {
     raw_start_ordinal: Option<u64>,
     status: String,
     summary: Option<String>,
-    worklog_path: Option<String>,
+    memory_path: Option<String>,
     plan_path: Option<String>,
 }
 
@@ -2279,8 +2279,8 @@ fn validate_plantree_scope_references(
     Ok(())
 }
 
-fn relative_worklog_path(node_id: &NodeId) -> String {
-    relative_node_file_path(node_id, WORKLOG_FILE)
+fn relative_memory_path(node_id: &NodeId) -> String {
+    relative_node_file_path(node_id, MEMORY_FILE)
 }
 
 fn relative_plan_path(node_id: &NodeId) -> String {

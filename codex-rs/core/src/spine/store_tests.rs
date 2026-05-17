@@ -69,17 +69,17 @@ fn compact_installed(
     replacement_history_len: usize,
     message_hash: &str,
 ) -> CompactInstalledRecord {
-    let worklog_node_path = node_id
+    let memory_node_path = node_id
         .segments()
         .iter()
         .map(u32::to_string)
         .collect::<Vec<_>>()
         .join("/");
-    let worklog_path = format!("nodes/{worklog_node_path}/worklog.md");
+    let memory_path = format!("nodes/{memory_node_path}/memory.md");
     CompactInstalledRecord {
         attempt: compact_attempt(compact_id, node_id, op, cut_ordinal, fold_end_ordinal),
         replacement_history_len,
-        worklog_path,
+        memory_path,
         message_hash: message_hash.to_string(),
     }
 }
@@ -266,7 +266,7 @@ fn create_writes_root_ledger_and_state_cache() {
                         "raw_start_ordinal": 0,
                         "status": "opened",
                         "summary": null,
-                        "worklog_path": "nodes/1/worklog.md",
+                        "memory_path": "nodes/1/memory.md",
                         "plan_path": "nodes/1/plan.json",
                     },
                     {
@@ -275,7 +275,7 @@ fn create_writes_root_ledger_and_state_cache() {
                         "raw_start_ordinal": 0,
                         "status": "live",
                         "summary": null,
-                        "worklog_path": "nodes/1/1/worklog.md",
+                        "memory_path": "nodes/1/1/memory.md",
                         "plan_path": "nodes/1/1/plan.json",
                     },
                 ],
@@ -293,7 +293,7 @@ fn create_writes_root_ledger_and_state_cache() {
                     "raw_start_ordinal": 0,
                     "status": "opened",
                     "summary": null,
-                    "worklog_path": "nodes/1/worklog.md",
+                    "memory_path": "nodes/1/memory.md",
                     "plan_path": "nodes/1/plan.json",
                 },
                 {
@@ -302,7 +302,7 @@ fn create_writes_root_ledger_and_state_cache() {
                     "raw_start_ordinal": 0,
                     "status": "live",
                     "summary": null,
-                    "worklog_path": "nodes/1/1/worklog.md",
+                    "memory_path": "nodes/1/1/memory.md",
                     "plan_path": "nodes/1/1/plan.json",
                 },
             ],
@@ -407,7 +407,7 @@ fn records_transition_summary_and_replays_from_tree() {
             to: id(&[1, 1, 1]),
         }
     );
-    assert!(!store.worklog_path(&id(&[1, 1])).exists());
+    assert!(!store.memory_path(&id(&[1, 1])).exists());
     assert!(
         store
             .root()
@@ -597,7 +597,7 @@ fn root_cursor_archive_parent_links_survive_reload() {
 }
 
 #[test]
-fn generated_worklog_sections_do_not_break_transition_replay_hash() {
+fn generated_memory_sections_do_not_break_transition_replay_hash() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
@@ -605,12 +605,12 @@ fn generated_worklog_sections_do_not_break_transition_replay_hash() {
         .expect("record transition");
 
     store
-        .append_worklog_section(&id(&[1]), "\n\n## Auto Compact\n\ngenerated summary\n")
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\ngenerated summary\n")
         .expect("append generated section");
 
-    let worklog = std::fs::read_to_string(store.worklog_path(&id(&[1]))).expect("read worklog");
-    assert!(worklog.contains("spine:auto-compact-generated"));
-    assert!(worklog.contains("generated summary"));
+    let memory = std::fs::read_to_string(store.memory_path(&id(&[1]))).expect("read memory");
+    assert!(memory.contains("spine:auto-compact-generated"));
+    assert!(memory.contains("generated summary"));
 
     let loaded = store.load().expect("load sidecar");
 
@@ -618,7 +618,7 @@ fn generated_worklog_sections_do_not_break_transition_replay_hash() {
 }
 
 #[test]
-fn appends_node_trajs_next_to_worklog() {
+fn appends_node_trajs_next_to_memory() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
     store
@@ -626,17 +626,17 @@ fn appends_node_trajs_next_to_worklog() {
         .expect("record transition");
 
     store
-        .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\ngenerated summary\n")
-        .expect("append generated worklog");
+        .append_memory_section(&id(&[1, 1]), "\n\n## Auto Compact\n\ngenerated summary\n")
+        .expect("append generated memory");
     store
         .append_node_trajs_items(&id(&[1, 1]), &[assistant_rollout_item("folded suffix")])
         .expect("append node trajs");
 
-    let worklog_path = store.worklog_path(&id(&[1, 1]));
+    let memory_path = store.memory_path(&id(&[1, 1]));
     let trajs_path = store.node_trajs_path(&id(&[1, 1]));
-    assert_eq!(worklog_path.parent(), trajs_path.parent());
+    assert_eq!(memory_path.parent(), trajs_path.parent());
     assert_eq!(trajs_path, store.root().join("nodes/1/1/trajs.jsonl"));
-    assert!(worklog_path.exists());
+    assert!(memory_path.exists());
     assert_eq!(
         read_json_lines(trajs_path),
         vec![json!({
@@ -1051,7 +1051,7 @@ fn appends_compact_index_and_raw_mirror_events() {
                 "cut_ordinal": 4,
                 "fold_end_ordinal": 9,
                 "replacement_history_len": 7,
-                "worklog_path": "nodes/1/2/worklog.md",
+                "memory_path": "nodes/1/2/memory.md",
                 "message_hash": "sha1:abc",
             }),
         ]
@@ -1100,8 +1100,8 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
         .record_transition(&mut source_state, SpineOperation::Open, None, 2, "turn-1")
         .expect("record source transition");
     source_store
-        .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsource worklog\n")
-        .expect("write source worklog");
+        .append_memory_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsource memory\n")
+        .expect("write source memory");
 
     let child_rollout = temp.path().join("rollout-child.jsonl");
     let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
@@ -1118,9 +1118,9 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
     assert_eq!(replayed.node(&id(&[1])).expect("root").summary, None);
     assert!(
         child_store
-            .read_worklog(&id(&[1, 1]))
-            .expect("read copied worklog")
-            .contains("source worklog")
+            .read_memory(&id(&[1, 1]))
+            .expect("read copied memory")
+            .contains("source memory")
     );
     assert_eq!(read_json_lines(child_store.tree_path()).len(), 2);
 }
@@ -1205,14 +1205,14 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
         )
         .expect("record source transition");
     source_store
-        .append_worklog_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsurviving worklog\n")
-        .expect("write surviving worklog");
+        .append_memory_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsurviving memory\n")
+        .expect("write surviving memory");
     source_store
-        .append_worklog_section(
+        .append_memory_section(
             &id(&[1, 1, 1]),
-            "\n\n## Auto Compact\n\nrolled back worklog\n",
+            "\n\n## Auto Compact\n\nrolled back memory\n",
         )
-        .expect("write rolled back worklog");
+        .expect("write rolled back memory");
     source_store
         .write_plan_snapshot(
             &id(&[1, 1]),
@@ -1250,12 +1250,12 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
 
     assert!(
         child_store
-            .read_worklog(&id(&[1, 1]))
-            .expect("read copied surviving worklog")
-            .contains("surviving worklog")
+            .read_memory(&id(&[1, 1]))
+            .expect("read copied surviving memory")
+            .contains("surviving memory")
     );
     assert!(matches!(
-        child_store.read_worklog(&id(&[1, 1, 1])),
+        child_store.read_memory(&id(&[1, 1, 1])),
         Err(SpineStoreError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound
     ));
     assert!(!child_store.plan_path(&id(&[1, 1])).exists());

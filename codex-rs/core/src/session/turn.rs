@@ -2933,7 +2933,7 @@ mod spine_tool_order_tests {
             content.as_slice(),
             [ContentItem::InputText { text }]
                 if text.contains("Spine warning: current live node is about")
-                    && text.contains("At a natural boundary, use spine.next/close to move finished work into a worklog.")
+                    && text.contains("At a natural boundary, use spine.next/close to move finished work into a memory.")
                     && !text.contains("/900k tokens")
         ));
         let history_after_first = session.clone_history().await.raw_items().to_vec();
@@ -2946,7 +2946,7 @@ mod spine_tool_order_tests {
                                 content.as_slice(),
                                 [ContentItem::InputText { text }]
 	                                    if text.contains("Spine warning: current live node is about")
-	                                        && text.contains("At a natural boundary, use spine.next/close to move finished work into a worklog.")
+	                                        && text.contains("At a natural boundary, use spine.next/close to move finished work into a memory.")
 	                                        && !text.contains("/900k tokens")
                             )
             )),

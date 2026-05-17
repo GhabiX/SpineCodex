@@ -201,7 +201,7 @@ async fn valid_next_returns_compact_tree_view() {
     assert_eq!(
         output.log_preview(),
         format!(
-            "Current:  1.2\nBase: {}\n\n1: live\n    1.1: finished Completed reproduction and patch verification [worklog already in context]\n    1.2: Current",
+            "Current:  1.2\nBase: {}\n\n1: live\n    1.1: finished Completed reproduction and patch verification [memory already in context]\n    1.2: Current",
             spine_base(&temp)
         )
     );

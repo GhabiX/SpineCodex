@@ -186,10 +186,10 @@ impl SpineRuntime {
                 .ok_or_else(|| SpineRuntimeError::MissingSummary {
                     node_id: scope_node_id.clone(),
                 })?;
-        let scope_worklog_path = self.store.worklog_path(scope_node_id);
-        let scope_worklog_path = scope_worklog_path
+        let scope_memory_path = self.store.memory_path(scope_node_id);
+        let scope_memory_path = scope_memory_path
             .strip_prefix(self.store.root())
-            .unwrap_or(scope_worklog_path.as_path())
+            .unwrap_or(scope_memory_path.as_path())
             .to_path_buf();
         let mut child_rows = Vec::new();
         for child in self
@@ -202,16 +202,16 @@ impl SpineRuntime {
                 .summary
                 .clone()
                 .unwrap_or_else(|| compact_outline_status_label(&child.status).to_string());
-            let worklog_path = self.store.worklog_path(&child.node_id);
-            let worklog_path = worklog_path
+            let memory_path = self.store.memory_path(&child.node_id);
+            let memory_path = memory_path
                 .strip_prefix(self.store.root())
-                .unwrap_or(worklog_path.as_path())
+                .unwrap_or(memory_path.as_path())
                 .to_string_lossy()
                 .into_owned();
             child_rows.push((
                 child.node_id.clone(),
                 format!("[{}] {}", child.node_id, summary),
-                worklog_path,
+                memory_path,
             ));
         }
         child_rows.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
@@ -223,7 +223,7 @@ impl SpineRuntime {
             scope_node_id,
             scope_summary,
             self.store.root(),
-            &scope_worklog_path,
+            &scope_memory_path,
             &child_rows,
         ))
     }

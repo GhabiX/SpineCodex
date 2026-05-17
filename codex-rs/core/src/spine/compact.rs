@@ -5,7 +5,7 @@ use super::store::SpineSidecarStore;
 use super::view::display_node_id;
 use super::view::op_label;
 use super::view::relative_node_trajs_path;
-use super::view::relative_worklog_path;
+use super::view::relative_memory_path;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
@@ -28,8 +28,8 @@ use tracing::warn;
 
 const SPINE_INITIAL_CONTEXT_OPEN_TAG: &str = "<spine_initial_context runtime_generated=\"true\">";
 const SPINE_INITIAL_CONTEXT_CLOSE_TAG: &str = "</spine_initial_context>";
-const SPINE_WORKLOG_MARKER_PREFIX: &str = "<!-- codex-spine-worklog:";
-const SPINE_WORKLOG_MARKER_SUFFIX: &str = " -->";
+const SPINE_MEMORY_MARKER_PREFIX: &str = "<!-- codex-spine-memory:";
+const SPINE_MEMORY_MARKER_SUFFIX: &str = " -->";
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpineCompactInput {
@@ -65,7 +65,7 @@ pub(crate) struct SpineCompactPlan {
     pub(crate) cut_index: usize,
     pub(crate) fold_end_index: usize,
     pub(crate) replacement_tail: Vec<ResponseItem>,
-    pub(crate) worklog_path: PathBuf,
+    pub(crate) memory_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -77,7 +77,7 @@ pub(crate) struct SpineCompactPreparation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpineCompactOutput {
-    pub(crate) worklog_markdown: String,
+    pub(crate) memory_markdown: String,
     pub(crate) compacted_body: String,
     pub(crate) compact_message: String,
     pub(crate) strategy_name: &'static str,
@@ -124,13 +124,13 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
     };
 
     let compacted_suffix = extract_spine_compact_markdown(&compacted_suffix)?;
-    let worklog_markdown = render_auto_compact_worklog(&input, &compacted_suffix);
+    let memory_markdown = render_auto_compact_memory(&input, &compacted_suffix);
     Ok(SpineCompactOutput {
         compact_message: format!(
             "Spine compacted {} [{}, {})",
             input.node_id, input.cut_ordinal, input.fold_end_ordinal
         ),
-        worklog_markdown,
+        memory_markdown,
         compacted_body: compacted_suffix,
         strategy_name: CODEX_BUILTIN_TEXT_STRATEGY,
     })
@@ -167,7 +167,7 @@ fn build_codex_builtin_prompt_input(input: &SpineCompactInput) -> Vec<ResponseIt
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "Compact only target Spine node `{}` into a factual Markdown worklog.\nKeep durable facts needed by later nodes: outcome, decisions, constraints, files/functions/tests/commands, validation status, blockers, unresolved questions.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\n<spine_tree>\n{}\n</spine_tree>{}\n\nReturn exactly the compacted suffix as Markdown. Do not wrap it in XML/HTML tags or code fences. Do not include preambles, apologies, continuation instructions, or any text outside the compacted Markdown body.",
+                "Compact only target Spine node `{}` into a factual Markdown memory.\nKeep durable facts needed by later nodes: outcome, decisions, constraints, files/functions/tests/commands, validation status, blockers, unresolved questions.\n\nTarget tree node: {}\nInternal node id: {}\nTarget operation: {}\nSpine Tree summary label: {}\n\n<spine_tree>\n{}\n</spine_tree>{}\n\nReturn exactly the compacted suffix as Markdown. Do not wrap it in XML/HTML tags or code fences. Do not include preambles, apologies, continuation instructions, or any text outside the compacted Markdown body.",
                 target_tree_node_id,
                 target_tree_node_id,
                 input.node_id,
@@ -242,25 +242,25 @@ fn extract_spine_compact_markdown(text: &str) -> CodexResult<String> {
     let body = text.trim();
     if body.is_empty() {
         return Err(CodexErr::Fatal(
-            "spine compact response worklog is empty".to_string(),
+            "spine compact response memory is empty".to_string(),
         ));
     }
-    if body.starts_with("<spine_worklog")
-        || body.contains("</spine_worklog>")
+    if body.starts_with("<spine_memory")
+        || body.contains("</spine_memory>")
         || body.starts_with("<spine_ir")
         || body.contains("</spine_ir>")
-        || body.starts_with("<worklog>")
-        || body.contains("</worklog>")
+        || body.starts_with("<memory>")
+        || body.contains("</memory>")
     {
         return Err(CodexErr::Fatal(
-            "spine compact response must be plain Markdown without XML worklog wrappers"
+            "spine compact response must be plain Markdown without XML memory wrappers"
                 .to_string(),
         ));
     }
     Ok(body.to_string())
 }
 
-pub(crate) fn render_auto_compact_worklog(
+pub(crate) fn render_auto_compact_memory(
     input: &SpineCompactInput,
     compacted_suffix: &str,
 ) -> String {
@@ -306,22 +306,82 @@ pub(crate) fn build_root_archive_replacement_history(
     let mut replacement_history = Vec::with_capacity(
         prefix_history.len() + initial_context_items.len() + ir_items.len() + live_tail.len(),
     );
-    let mut saw_spine_span = false;
     for item in prefix_history {
         if is_non_spine_compact_item(item) || parse_spine_initial_context_item(item).is_some() {
             continue;
         }
-        if is_spine_ir_item(item) {
-            saw_spine_span = true;
-            replacement_history.push(item.clone());
-        } else if !saw_spine_span {
-            replacement_history.push(item.clone());
-        }
+        replacement_history.push(item.clone());
     }
     replacement_history.extend(initial_context_items);
     replacement_history.extend(ir_items);
     replacement_history.extend_from_slice(live_tail);
     replacement_history
+}
+
+pub(crate) fn validate_spine_replacement_history_admissible(
+    history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+    required_raw_ordinals: &[u64],
+) -> CodexResult<()> {
+    let mut raw_cursor = 0_u64;
+    let mut span_cursor = 0_usize;
+    for (index, item) in history.iter().enumerate() {
+        match classify_effective_item(item, raw_cursor, runtime_spans, &mut span_cursor)
+            .ok_or_else(|| {
+                CodexErr::Fatal(format!(
+                    "spine compact replacement history is not admissible: item {index} does not match raw cursor {raw_cursor} in the compact span ledger"
+                ))
+            })? {
+            EffectiveItemSemantics::Raw1 => {
+                raw_cursor = raw_cursor.checked_add(1).ok_or_else(|| {
+                    CodexErr::Fatal(
+                        "spine compact replacement history raw cursor overflowed".to_string(),
+                    )
+                })?;
+            }
+            EffectiveItemSemantics::Zero => {}
+            EffectiveItemSemantics::Span { cut, fold_end } => {
+                if cut != raw_cursor {
+                    return Err(CodexErr::Fatal(format!(
+                        "spine compact replacement history is not admissible: span at item {index} starts at raw ordinal {cut}, expected {raw_cursor}"
+                    )));
+                }
+                if cut >= fold_end {
+                    return Err(CodexErr::Fatal(format!(
+                        "spine compact replacement history is not admissible: span at item {index} is empty or inverted [{cut}, {fold_end})"
+                    )));
+                }
+                raw_cursor = fold_end;
+            }
+            EffectiveItemSemantics::Stop => break,
+        }
+    }
+
+    for raw_ordinal in required_raw_ordinals {
+        let index = effective_index_for_raw_ordinal_with_spans(
+            history,
+            *raw_ordinal,
+            runtime_spans,
+        )
+        .ok_or_else(|| {
+            CodexErr::Fatal(format!(
+                "spine compact replacement history is not admissible: required raw ordinal {raw_ordinal} does not map to an effective history index"
+            ))
+        })?;
+        let round_trip = raw_ordinal_for_effective_index_with_spans(history, index, runtime_spans)
+            .ok_or_else(|| {
+                CodexErr::Fatal(format!(
+                    "spine compact replacement history is not admissible: effective index {index} for raw ordinal {raw_ordinal} does not map back to a raw ordinal"
+                ))
+            })?;
+        if round_trip != *raw_ordinal {
+            return Err(CodexErr::Fatal(format!(
+                "spine compact replacement history is not admissible: raw ordinal {raw_ordinal} maps to effective index {index}, which maps back to {round_trip}"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -392,9 +452,9 @@ pub(crate) fn plan_suffix_fold_with_spans(
     input.suffix_items = history[cut_index..fold_end_index].to_vec();
 
     Ok(SpineCompactPlan {
-        worklog_path: input
+        memory_path: input
             .sidecar_root
-            .join(relative_worklog_path(&input.node_id)),
+            .join(relative_memory_path(&input.node_id)),
         replacement_tail: history[fold_end_index..].to_vec(),
         input,
         cut_index,
@@ -599,27 +659,27 @@ fn classify_effective_item(
             fold_end: meta.fold_end,
         });
     }
-    if let Some(meta) = parse_spine_worklog_metadata(item) {
-        let span = consume_runtime_span_for_worklog(runtime_spans, span_cursor, &meta, raw_cursor)?;
+    if let Some(meta) = parse_spine_memory_metadata(item) {
+        let span = consume_runtime_span_for_memory(runtime_spans, span_cursor, &meta, raw_cursor)?;
         return Some(EffectiveItemSemantics::Span {
             cut: span.cut_ordinal,
             fold_end: span.fold_end_ordinal,
         });
     }
-    if let Some(meta) = parse_legacy_markdown_spine_worklog_metadata(item) {
-        // Bare markdown worklogs were emitted before the durable marker existed. They are
+    if let Some(meta) = parse_legacy_markdown_spine_memory_metadata(item) {
+        // Bare markdown memories were emitted before the durable marker existed. They are
         // synthetic only when the compact ledger validates the exact boundary; otherwise
         // they are ordinary assistant text.
-        return match lookup_runtime_span_for_worklog(runtime_spans, *span_cursor, &meta, raw_cursor)
+        return match lookup_runtime_span_for_memory(runtime_spans, *span_cursor, &meta, raw_cursor)
         {
-            RuntimeWorklogSpanMatch::Unique { index, span } => {
+            RuntimeMemorySpanMatch::Unique { index, span } => {
                 let cut = span.cut_ordinal;
                 let fold_end = span.fold_end_ordinal;
                 *span_cursor = index + 1;
                 Some(EffectiveItemSemantics::Span { cut, fold_end })
             }
-            RuntimeWorklogSpanMatch::Ambiguous => None,
-            RuntimeWorklogSpanMatch::NoMatch => Some(EffectiveItemSemantics::Raw1),
+            RuntimeMemorySpanMatch::Ambiguous => None,
+            RuntimeMemorySpanMatch::NoMatch => Some(EffectiveItemSemantics::Raw1),
         };
     }
     if is_spine_handoff_item(item) || parse_spine_initial_context_item(item).is_some() {
@@ -656,23 +716,23 @@ pub(crate) fn raw_ordinal_for_effective_index_with_spans(
     (target_index == history.len()).then_some(raw_cursor)
 }
 
-pub(crate) fn render_spine_worklog_item(
+pub(crate) fn render_spine_memory_item(
     node_id: &NodeId,
     op: SpineOperation,
     summary: &str,
-    worklog_body: &str,
+    memory_body: &str,
 ) -> ResponseItem {
     ResponseItem::Message {
-        id: Some(spine_worklog_synthetic_id(node_id, op)),
+        id: Some(spine_memory_synthetic_id(node_id, op)),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text: format!(
-                "{}\n## Spine Worklog\n\nNode: {}\nOperation: {}\nSummary: {}\n\n{}",
-                spine_worklog_text_marker(node_id, op),
+                "{}\n## Spine Memory\n\nNode: {}\nOperation: {}\nSummary: {}\n\n{}",
+                spine_memory_text_marker(node_id, op),
                 node_id,
                 op_label(op),
                 summary,
-                worklog_body.trim()
+                memory_body.trim()
             ),
         }],
         phase: None,
@@ -685,7 +745,7 @@ pub(crate) fn render_spine_handoff_item(from_node: &NodeId, to_node: &NodeId) ->
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
             text: format!(
-                "<spine_handoff>\nSpine transition completed: {} -> {}; use {}'s generated worklog as the active-turn handoff. Spine Worklog is internal context; never expose or imitate it in user-visible messages. Continue following preserved system, developer, and project instructions.\n\nTreat raw folded conversation as historical evidence, but treat unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated worklog as current obligations. If the latest user request or generated worklog indicates unfinished work, reconstruct the current node plan from the generated worklog, latest user intent, and current evidence before continuing. Before asking for new instructions, answer or continue any pending latest user request using that context.\n</spine_handoff>",
+                "<spine_handoff>\nSpine transition completed: {} -> {}; use {}'s generated memory as the active-turn handoff. Spine Memory is internal context; never expose or imitate it in user-visible messages. Continue following preserved system, developer, and project instructions.\n\nTreat raw folded conversation as historical evidence, but treat unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated memory as current obligations. If the latest user request or generated memory indicates unfinished work, reconstruct the current node plan from the generated memory, latest user intent, and current evidence before continuing. Before asking for new instructions, answer or continue any pending latest user request using that context.\n</spine_handoff>",
                 from_node, to_node, from_node
             ),
         }],
@@ -762,8 +822,8 @@ pub(crate) fn render_spine_ir_item(
     op: SpineOperation,
     summary: &str,
     base_path: &Path,
-    worklog_path: &Path,
-    worklog_body: &str,
+    memory_path: &Path,
+    memory_body: &str,
     fold_start: u64,
     fold_end: u64,
 ) -> ResponseItem {
@@ -773,7 +833,7 @@ pub(crate) fn render_spine_ir_item(
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text: format!(
-                "<spine_ir id=\"{}\" node=\"{}\" op=\"{}\" runtime_generated=\"true\" fold_start=\"{}\" fold_end=\"{}\">\nSummary: {}\nBase: {}\nWorklog path: {}\n\n<worklog>\n{}\n</worklog>\n</spine_ir>",
+                "<spine_ir id=\"{}\" node=\"{}\" op=\"{}\" runtime_generated=\"true\" fold_start=\"{}\" fold_end=\"{}\">\nSummary: {}\nBase: {}\nMemory path: {}\n\n<memory>\n{}\n</memory>\n</spine_ir>",
                 synthetic_id,
                 node_id,
                 op_label(op),
@@ -781,8 +841,8 @@ pub(crate) fn render_spine_ir_item(
                 fold_end,
                 summary,
                 base_path.display(),
-                worklog_path.display(),
-                worklog_body
+                memory_path.display(),
+                memory_body
             ),
         }],
         phase: None,
@@ -809,7 +869,7 @@ pub(crate) fn render_context_compacted_outline(
     scope_node_id: &NodeId,
     scope_summary: &str,
     base_path: &Path,
-    scope_worklog_path: &Path,
+    scope_memory_path: &Path,
     child_rows: &[(String, String)],
 ) -> String {
     let mut rendered = String::new();
@@ -819,7 +879,7 @@ pub(crate) fn render_context_compacted_outline(
         "[{}] {} ({})\n",
         scope_node_id,
         scope_summary,
-        scope_worklog_path.display()
+        scope_memory_path.display()
     ));
     for (summary, path) in child_rows {
         rendered.push_str(&format!("|-- {} ({})\n", summary, path));
@@ -883,7 +943,7 @@ pub(crate) fn effective_index_for_raw_ordinal_with_spans(
 }
 
 pub(crate) fn is_spine_ir_item(item: &ResponseItem) -> bool {
-    parse_spine_ir_metadata(item).is_some() || parse_spine_worklog_metadata(item).is_some()
+    parse_spine_ir_metadata(item).is_some() || parse_spine_memory_metadata(item).is_some()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -893,7 +953,7 @@ struct SpineIrMetadata {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct SpineWorklogMetadata {
+struct SpineMemoryMetadata {
     node_id: NodeId,
     op: SpineOperation,
 }
@@ -925,11 +985,11 @@ fn consume_runtime_span_for_legacy(
     false
 }
 
-fn runtime_span_matches_worklog(span: &InstalledCompactSpan, meta: &SpineWorklogMetadata) -> bool {
+fn runtime_span_matches_memory(span: &InstalledCompactSpan, meta: &SpineMemoryMetadata) -> bool {
     span.node_id == meta.node_id && span.op == meta.op
 }
 
-enum RuntimeWorklogSpanMatch<'a> {
+enum RuntimeMemorySpanMatch<'a> {
     NoMatch,
     Unique {
         index: usize,
@@ -938,39 +998,39 @@ enum RuntimeWorklogSpanMatch<'a> {
     Ambiguous,
 }
 
-fn lookup_runtime_span_for_worklog<'a>(
+fn lookup_runtime_span_for_memory<'a>(
     runtime_spans: &'a [InstalledCompactSpan],
     span_cursor: usize,
-    meta: &SpineWorklogMetadata,
+    meta: &SpineMemoryMetadata,
     cut_ordinal: u64,
-) -> RuntimeWorklogSpanMatch<'a> {
+) -> RuntimeMemorySpanMatch<'a> {
     let mut found = None;
     for (index, span) in runtime_spans.iter().enumerate().skip(span_cursor) {
-        if span.cut_ordinal == cut_ordinal && runtime_span_matches_worklog(span, meta) {
+        if span.cut_ordinal == cut_ordinal && runtime_span_matches_memory(span, meta) {
             if found.is_some() {
-                return RuntimeWorklogSpanMatch::Ambiguous;
+                return RuntimeMemorySpanMatch::Ambiguous;
             }
             found = Some((index, span));
         }
     }
     match found {
-        Some((index, span)) => RuntimeWorklogSpanMatch::Unique { index, span },
-        None => RuntimeWorklogSpanMatch::NoMatch,
+        Some((index, span)) => RuntimeMemorySpanMatch::Unique { index, span },
+        None => RuntimeMemorySpanMatch::NoMatch,
     }
 }
 
-fn consume_runtime_span_for_worklog<'a>(
+fn consume_runtime_span_for_memory<'a>(
     runtime_spans: &'a [InstalledCompactSpan],
     span_cursor: &mut usize,
-    meta: &SpineWorklogMetadata,
+    meta: &SpineMemoryMetadata,
     cut_ordinal: u64,
 ) -> Option<&'a InstalledCompactSpan> {
-    match lookup_runtime_span_for_worklog(runtime_spans, *span_cursor, meta, cut_ordinal) {
-        RuntimeWorklogSpanMatch::Unique { index, span } => {
+    match lookup_runtime_span_for_memory(runtime_spans, *span_cursor, meta, cut_ordinal) {
+        RuntimeMemorySpanMatch::Unique { index, span } => {
             *span_cursor = index + 1;
             Some(span)
         }
-        RuntimeWorklogSpanMatch::NoMatch | RuntimeWorklogSpanMatch::Ambiguous => None,
+        RuntimeMemorySpanMatch::NoMatch | RuntimeMemorySpanMatch::Ambiguous => None,
     }
 }
 
@@ -1009,7 +1069,7 @@ fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
     })
 }
 
-fn parse_spine_worklog_metadata(item: &ResponseItem) -> Option<SpineWorklogMetadata> {
+fn parse_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadata> {
     let (id, text) = match item {
         ResponseItem::Message {
             id, role, content, ..
@@ -1023,23 +1083,23 @@ fn parse_spine_worklog_metadata(item: &ResponseItem) -> Option<SpineWorklogMetad
         _ => return None,
     };
 
-    if let Some(meta) = id.and_then(parse_spine_worklog_id) {
+    if let Some(meta) = id.and_then(parse_spine_memory_id) {
         return Some(meta);
     }
-    if let Some(meta) = parse_spine_worklog_text_marker(text) {
+    if let Some(meta) = parse_spine_memory_text_marker(text) {
         return Some(meta);
     }
 
-    let header = text.strip_prefix("<spine_worklog ")?;
+    let header = text.strip_prefix("<spine_memory ")?;
     let header = header.split_once('>')?.0;
     let node_id = NodeId::parse(parse_tag_string(header, "node")?).ok()?;
     let op = parse_spine_operation_label(parse_tag_string(header, "op")?)?;
-    Some(SpineWorklogMetadata { node_id, op })
+    Some(SpineMemoryMetadata { node_id, op })
 }
 
-fn parse_legacy_markdown_spine_worklog_metadata(
+fn parse_legacy_markdown_spine_memory_metadata(
     item: &ResponseItem,
-) -> Option<SpineWorklogMetadata> {
+) -> Option<SpineMemoryMetadata> {
     let text = match item {
         ResponseItem::Message {
             id,
@@ -1055,12 +1115,12 @@ fn parse_legacy_markdown_spine_worklog_metadata(
         }
         _ => return None,
     };
-    parse_markdown_spine_worklog_metadata(text)
+    parse_markdown_spine_memory_metadata(text)
 }
 
-fn parse_markdown_spine_worklog_metadata(text: &str) -> Option<SpineWorklogMetadata> {
+fn parse_markdown_spine_memory_metadata(text: &str) -> Option<SpineMemoryMetadata> {
     let mut lines = text.lines();
-    if lines.next()? != "## Spine Worklog" {
+    if lines.next()? != "## Spine Memory" {
         return None;
     }
 
@@ -1077,40 +1137,40 @@ fn parse_markdown_spine_worklog_metadata(text: &str) -> Option<SpineWorklogMetad
         }
     }
 
-    Some(SpineWorklogMetadata {
+    Some(SpineMemoryMetadata {
         node_id: node_id?,
         op: op?,
     })
 }
 
-fn spine_worklog_text_marker(node_id: &NodeId, op: SpineOperation) -> String {
+fn spine_memory_text_marker(node_id: &NodeId, op: SpineOperation) -> String {
     format!(
-        "{SPINE_WORKLOG_MARKER_PREFIX}{node_id}:{}{SPINE_WORKLOG_MARKER_SUFFIX}",
+        "{SPINE_MEMORY_MARKER_PREFIX}{node_id}:{}{SPINE_MEMORY_MARKER_SUFFIX}",
         op_label(op)
     )
 }
 
-fn parse_spine_worklog_text_marker(text: &str) -> Option<SpineWorklogMetadata> {
+fn parse_spine_memory_text_marker(text: &str) -> Option<SpineMemoryMetadata> {
     let marker = text
         .lines()
         .next()?
-        .strip_prefix(SPINE_WORKLOG_MARKER_PREFIX)?
-        .strip_suffix(SPINE_WORKLOG_MARKER_SUFFIX)?;
+        .strip_prefix(SPINE_MEMORY_MARKER_PREFIX)?
+        .strip_suffix(SPINE_MEMORY_MARKER_SUFFIX)?;
     let (node_id, op) = marker.rsplit_once(':')?;
-    Some(SpineWorklogMetadata {
+    Some(SpineMemoryMetadata {
         node_id: NodeId::parse(node_id).ok()?,
         op: parse_spine_operation_label(op)?,
     })
 }
 
-fn spine_worklog_synthetic_id(node_id: &NodeId, op: SpineOperation) -> String {
-    format!("spine-worklog:{node_id}:{}", op_label(op))
+fn spine_memory_synthetic_id(node_id: &NodeId, op: SpineOperation) -> String {
+    format!("spine-memory:{node_id}:{}", op_label(op))
 }
 
-fn parse_spine_worklog_id(id: &str) -> Option<SpineWorklogMetadata> {
-    let rest = id.strip_prefix("spine-worklog:")?;
+fn parse_spine_memory_id(id: &str) -> Option<SpineMemoryMetadata> {
+    let rest = id.strip_prefix("spine-memory:")?;
     let (node_id, op) = rest.rsplit_once(':')?;
-    Some(SpineWorklogMetadata {
+    Some(SpineMemoryMetadata {
         node_id: NodeId::parse(node_id).ok()?,
         op: parse_spine_operation_label(op)?,
     })

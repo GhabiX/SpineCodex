@@ -18,7 +18,7 @@ fn feature_on_appends_exact_spine_view_instructions() {
     assert_eq!(actual, format!("{base}\n\n{SPINE_VIEW_INSTRUCTIONS}"));
     assert_eq!(actual.matches("<spine_view>").count(), 1);
     assert!(actual.contains(
-        "Spine Worklog is internal context; never expose or imitate it in user-visible messages."
+        "Spine Memory is internal context; never expose or imitate it in user-visible messages."
     ));
 }
 
@@ -44,34 +44,36 @@ fn strip_spine_view_restores_original_base_suffix() {
 fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("<spine_view>"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("</spine_view>"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("runtime-generated worklog IR"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("runtime-generated memory IR"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Use Spine effectively and efficiently"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("substantial raw history"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("future work is likely to reuse"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("raw details are still useful"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("coherent work scope is complete"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("task_projection"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("single Spine planning input"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("One call should include both"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("task_projection.current.checklist"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("task_projection.draft_nodes"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("current real Spine node checklist"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("future planned scopes"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("parent real node id or earlier ~draft_id"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("never send spine_plantree as input"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("returned normalized spine_plantree is runtime output only"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("top-level plan"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("current real Spine node's checklist"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree.root.children"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("future planned child scopes"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("future child scope's checklist"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("returned `spine_tree` JSON"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("authoritative updated tree"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("task tree draft"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("current editable scope"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("Successful writable updates return spine_tree"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("treat it as authoritative"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("planning only"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("does not create Spine nodes"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("~<predicted-id>"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("task structure or next work scope changes"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("promptly refresh the current spine_plantree"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("displayed PlanTree stays current"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("non-trivial or multi-phase work"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("current node's top-level plan"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("execution plan"));
-    assert!(SPINE_VIEW_INSTRUCTIONS.contains("materialize that child before doing the work"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains(
+        "does not create, finish, close, compact, or move Spine nodes"
+    ));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("refresh task_projection"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("planned draft children"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("materialize it before doing the work"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("immediately call update_plan in the new child"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("that draft's summary/checklist"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("do not bypass planned child scopes"));
+    assert!(SPINE_VIEW_INSTRUCTIONS.contains("Do not combine task_projection with top-level plan"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Move Spine at coherent scope boundaries"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("start a focused child scope"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("matching planned child scope"));
@@ -89,7 +91,7 @@ fn spine_view_instructions_keep_core_contract() {
         "send the user-facing final answer/update if that request is complete, paused, blocked, or needs a decision"
     ));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains(
-        "Do not use a Spine Tree update, tool output, or generated worklog as the user-visible report"
+        "Do not use a Spine Tree update, tool output, or generated memory as the user-visible report"
     ));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("around 80k raw tokens"));
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("every additional 30k"));
@@ -105,6 +107,12 @@ fn spine_view_instructions_keep_core_contract() {
     assert!(SPINE_VIEW_INSTRUCTIONS.contains("Completed Spine nodes are read-only"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("A node is a working scope, not a checklist item"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("The node summary is only a short tree label"));
+    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("use update_plan with spine_plantree"));
+    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree.root.children"));
+    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("current spine_plantree"));
+    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("update spine_plantree first"));
+    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("task tree draft"));
+    assert!(!SPINE_VIEW_INSTRUCTIONS.contains("model-authored input path"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("spine_plantree.children"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("root checkpoints"));
     assert!(!SPINE_VIEW_INSTRUCTIONS.contains("investigate/localize"));

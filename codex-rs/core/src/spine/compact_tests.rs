@@ -206,10 +206,10 @@ fn effective_mapping_satisfies_formal_item_semantics() {
     ];
     let history = vec![
         text_item("raw 0"),
-        render_spine_worklog_item(&id(&[1]), SpineOperation::Next, "a", "a facts"),
+        render_spine_memory_item(&id(&[1]), SpineOperation::Next, "a", "a facts"),
         render_spine_handoff_item(&id(&[1]), &id(&[2])),
         text_item("raw 4"),
-        render_spine_worklog_item(&id(&[2]), SpineOperation::Next, "b", "b facts"),
+        render_spine_memory_item(&id(&[2]), SpineOperation::Next, "b", "b facts"),
         render_spine_initial_context_item(vec![ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -252,8 +252,8 @@ fn effective_mapping_satisfies_formal_item_semantics() {
 }
 
 #[test]
-fn raw_ordinals_map_slim_spine_worklog_with_runtime_span() {
-    let worklog_item = render_spine_worklog_item(
+fn raw_ordinals_map_slim_spine_memory_with_runtime_span() {
+    let memory_item = render_spine_memory_item(
         &id(&[1, 2]),
         SpineOperation::Next,
         "leaf summary",
@@ -266,7 +266,7 @@ fn raw_ordinals_map_slim_spine_worklog_with_runtime_span() {
         1,
         4,
     )];
-    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+    let history = vec![text_item("prefix"), memory_item, text_item("tail")];
 
     assert_eq!(
         effective_index_for_raw_ordinal_with_spans(&history, 0, &spans),
@@ -295,8 +295,8 @@ fn raw_ordinals_map_slim_spine_worklog_with_runtime_span() {
 }
 
 #[test]
-fn raw_ordinals_map_serialized_slim_spine_worklog_with_runtime_span() {
-    let worklog_item = rollout_serialized(render_spine_worklog_item(
+fn raw_ordinals_map_serialized_slim_spine_memory_with_runtime_span() {
+    let memory_item = rollout_serialized(render_spine_memory_item(
         &id(&[1, 2]),
         SpineOperation::Next,
         "leaf summary",
@@ -309,11 +309,11 @@ fn raw_ordinals_map_serialized_slim_spine_worklog_with_runtime_span() {
         1,
         4,
     )];
-    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+    let history = vec![text_item("prefix"), memory_item, text_item("tail")];
 
     assert!(
         is_spine_ir_item(&history[1]),
-        "serialized slim worklogs need a durable runtime marker because message ids are not serialized"
+        "serialized slim memories need a durable runtime marker because message ids are not serialized"
     );
     assert_eq!(
         effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
@@ -326,8 +326,8 @@ fn raw_ordinals_map_serialized_slim_spine_worklog_with_runtime_span() {
 }
 
 #[test]
-fn raw_ordinals_treat_plain_final_answer_markdown_worklog_as_raw1() {
-    let previous_worklog = render_spine_worklog_item(
+fn raw_ordinals_treat_plain_final_answer_markdown_memory_as_raw1() {
+    let previous_memory = render_spine_memory_item(
         &id(&[1, 1]),
         SpineOperation::Next,
         "previous leaf",
@@ -338,7 +338,7 @@ fn raw_ordinals_treat_plain_final_answer_markdown_worklog_as_raw1() {
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text:
-                "## Spine Worklog\n\nNode: 1.2\nOperation: next\nSummary: visible answer\n\nfacts"
+                "## Spine Memory\n\nNode: 1.2\nOperation: next\nSummary: visible answer\n\nfacts"
                     .to_string(),
         }],
         phase: Some(MessagePhase::FinalAnswer),
@@ -352,7 +352,7 @@ fn raw_ordinals_treat_plain_final_answer_markdown_worklog_as_raw1() {
     )];
     let history = vec![
         text_item("prefix"),
-        previous_worklog,
+        previous_memory,
         render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2])),
         plain_final_answer,
         text_item("tail"),
@@ -360,7 +360,7 @@ fn raw_ordinals_treat_plain_final_answer_markdown_worklog_as_raw1() {
 
     assert!(
         !is_spine_ir_item(&history[3]),
-        "plain final answers must not become synthetic worklog items by markdown shape alone"
+        "plain final answers must not become synthetic memory items by markdown shape alone"
     );
     assert_eq!(
         effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
@@ -379,10 +379,10 @@ fn raw_ordinals_treat_plain_final_answer_markdown_worklog_as_raw1() {
 }
 
 #[test]
-fn raw_ordinals_treat_unmarked_markdown_worklog_without_span_as_raw1() {
+fn raw_ordinals_treat_unmarked_markdown_memory_without_span_as_raw1() {
     let history = vec![
         text_item("prefix"),
-        text_item("## Spine Worklog\n\nNode: 1.2\nOperation: next\nSummary: visible\n\nfacts"),
+        text_item("## Spine Memory\n\nNode: 1.2\nOperation: next\nSummary: visible\n\nfacts"),
         text_item("tail"),
     ];
 
@@ -407,7 +407,7 @@ fn raw_ordinals_treat_unmarked_markdown_worklog_without_span_as_raw1() {
 
 #[test]
 fn raw_ordinals_treat_spine_handoff_as_zero_width() {
-    let worklog_item = render_spine_worklog_item(
+    let memory_item = render_spine_memory_item(
         &id(&[1, 1]),
         SpineOperation::Next,
         "previous leaf",
@@ -423,7 +423,7 @@ fn raw_ordinals_treat_spine_handoff_as_zero_width() {
     )];
     let history = vec![
         text_item("prefix"),
-        worklog_item,
+        memory_item,
         handoff_item,
         text_item("tail"),
     ];
@@ -431,7 +431,7 @@ fn raw_ordinals_treat_spine_handoff_as_zero_width() {
     assert_eq!(
         raw_ordinal_for_effective_index_with_spans(&history, 2, &spans),
         Some(4),
-        "handoff shares the boundary after the folded worklog span"
+        "handoff shares the boundary after the folded memory span"
     );
     assert_eq!(
         raw_ordinal_for_effective_index_with_spans(&history, 3, &spans),
@@ -455,7 +455,7 @@ fn raw_ordinals_treat_spine_handoff_as_zero_width() {
 
 #[test]
 fn raw_ordinals_treat_spine_initial_context_wrapper_as_zero_width() {
-    let worklog_item = render_spine_worklog_item(
+    let memory_item = render_spine_memory_item(
         &id(&[1]),
         SpineOperation::Archive,
         "root epoch",
@@ -481,7 +481,7 @@ fn raw_ordinals_treat_spine_initial_context_wrapper_as_zero_width() {
     let mut prompt_history = vec![
         text_item("prelude 0"),
         text_item("prelude 1"),
-        worklog_item.clone(),
+        memory_item.clone(),
         wrapped_context,
         user_item("next epoch first live item"),
     ];
@@ -504,7 +504,7 @@ fn raw_ordinals_treat_spine_initial_context_wrapper_as_zero_width() {
         vec![
             text_item("prelude 0"),
             text_item("prelude 1"),
-            worklog_item,
+            memory_item,
             initial_context[0].clone(),
             user_item("next epoch first live item"),
         ],
@@ -533,7 +533,7 @@ fn suffix_fold_after_root_archive_reinjected_context_starts_at_next_live_item() 
     let history = vec![
         text_item("prelude 0"),
         text_item("prelude 1"),
-        render_spine_worklog_item(
+        render_spine_memory_item(
             &id(&[1]),
             SpineOperation::Archive,
             "root epoch",
@@ -587,7 +587,7 @@ fn suffix_fold_does_not_extend_past_handoff_shifted_boundary() {
     let mut history = vec![
         text_item("raw 0"),
         text_item("raw 1"),
-        render_spine_worklog_item(
+        render_spine_memory_item(
             &id(&[1, 1]),
             SpineOperation::Next,
             "node 1.1 done",
@@ -645,14 +645,14 @@ fn future_live_start_remains_mappable_after_handoff_compact() {
     let history = vec![
         text_item("raw 0"),
         text_item("raw 1"),
-        render_spine_worklog_item(
+        render_spine_memory_item(
             &id(&[1, 1]),
             SpineOperation::Next,
             "node 1.1 done",
             "node 1.1 facts",
         ),
         render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2])),
-        render_spine_worklog_item(
+        render_spine_memory_item(
             &id(&[1, 2]),
             SpineOperation::Next,
             "node 1.2 done",
@@ -675,14 +675,14 @@ fn future_live_start_remains_mappable_after_handoff_compact() {
 }
 
 #[test]
-fn raw_ordinals_fail_fast_for_slim_spine_worklog_without_runtime_span() {
-    let worklog_item = render_spine_worklog_item(
+fn raw_ordinals_fail_fast_for_slim_spine_memory_without_runtime_span() {
+    let memory_item = render_spine_memory_item(
         &id(&[1, 2]),
         SpineOperation::Next,
         "leaf summary",
         "leaf body",
     );
-    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+    let history = vec![text_item("prefix"), memory_item, text_item("tail")];
 
     assert_eq!(
         effective_index_for_raw_ordinal_with_spans(&history, 4, &[]),
@@ -695,7 +695,7 @@ fn raw_ordinals_fail_fast_for_slim_spine_worklog_without_runtime_span() {
 
     let serialized_history = vec![
         text_item("prefix"),
-        rollout_serialized(render_spine_worklog_item(
+        rollout_serialized(render_spine_memory_item(
             &id(&[1, 2]),
             SpineOperation::Next,
             "leaf summary",
@@ -715,7 +715,7 @@ fn raw_ordinals_fail_fast_for_slim_spine_worklog_without_runtime_span() {
 
 #[test]
 fn raw_ordinals_ignore_unmatched_later_runtime_spans() {
-    let worklog_item = render_spine_worklog_item(
+    let memory_item = render_spine_memory_item(
         &id(&[1, 1]),
         SpineOperation::Next,
         "leaf summary",
@@ -725,7 +725,7 @@ fn raw_ordinals_ignore_unmatched_later_runtime_spans() {
         installed_span("compact-child", id(&[1, 1]), SpineOperation::Next, 1, 4),
         installed_span("rolled-back-scope", id(&[1]), SpineOperation::Close, 1, 6),
     ];
-    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+    let history = vec![text_item("prefix"), memory_item, text_item("tail")];
 
     assert_eq!(
         effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
@@ -744,7 +744,7 @@ fn raw_ordinals_map_to_synthetic_spine_ir_boundaries_only() {
         SpineOperation::Next,
         "leaf summary",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/2/worklog.md"),
+        Path::new("nodes/1/2/memory.md"),
         "leaf body",
         1,
         4,
@@ -784,7 +784,7 @@ fn raw_ordinals_map_serialized_spine_ir_marker() {
         SpineOperation::Next,
         "leaf summary",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/2/worklog.md"),
+        Path::new("nodes/1/2/memory.md"),
         "leaf body",
         1,
         4,
@@ -816,13 +816,13 @@ fn runtime_span_mapping_consumes_legacy_spans_before_slim_items() {
         SpineOperation::Next,
         "legacy leaf",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/1/worklog.md"),
+        Path::new("nodes/1/1/memory.md"),
         "legacy body",
         1,
         4,
     );
     let slim =
-        render_spine_worklog_item(&id(&[1, 2]), SpineOperation::Next, "slim leaf", "slim body");
+        render_spine_memory_item(&id(&[1, 2]), SpineOperation::Next, "slim leaf", "slim body");
     let spans = vec![
         installed_span("compact-legacy", id(&[1, 1]), SpineOperation::Next, 1, 4),
         installed_span("compact-slim", id(&[1, 2]), SpineOperation::Next, 5, 7),
@@ -846,7 +846,7 @@ fn runtime_span_mapping_counts_unmatched_legacy_ir_as_raw_text() {
         SpineOperation::Next,
         "trusted legacy",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/1/worklog.md"),
+        Path::new("nodes/1/1/memory.md"),
         "trusted body",
         1,
         4,
@@ -856,7 +856,7 @@ fn runtime_span_mapping_counts_unmatched_legacy_ir_as_raw_text() {
         SpineOperation::Next,
         "stale root",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/worklog.md"),
+        Path::new("nodes/1/memory.md"),
         "stale body",
         1,
         5,
@@ -894,8 +894,8 @@ fn runtime_span_mapping_counts_unmatched_legacy_ir_as_raw_text() {
 }
 
 #[test]
-fn runtime_span_mapping_uses_filtered_slim_worklog_span_after_redo() {
-    let worklog_item = render_spine_worklog_item(
+fn runtime_span_mapping_uses_filtered_slim_memory_span_after_redo() {
+    let memory_item = render_spine_memory_item(
         &id(&[1, 1]),
         SpineOperation::Next,
         "redo leaf",
@@ -903,7 +903,7 @@ fn runtime_span_mapping_uses_filtered_slim_worklog_span_after_redo() {
     );
     let stale_span = installed_span("compact-old", id(&[1, 1]), SpineOperation::Next, 1, 4);
     let current_span = installed_span("compact-new", id(&[1, 1]), SpineOperation::Next, 1, 6);
-    let history = vec![text_item("prefix"), worklog_item, text_item("tail")];
+    let history = vec![text_item("prefix"), memory_item, text_item("tail")];
 
     assert_eq!(
         effective_index_for_raw_ordinal_with_spans(
@@ -928,7 +928,7 @@ fn suffix_fold_maps_after_visible_stale_legacy_ir_text() {
         SpineOperation::Next,
         "node 1.1 done",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/1/worklog.md"),
+        Path::new("nodes/1/1/memory.md"),
         "node 1.1 body",
         2,
         293,
@@ -938,7 +938,7 @@ fn suffix_fold_maps_after_visible_stale_legacy_ir_text() {
         SpineOperation::Next,
         "node 1.2 done",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/2/worklog.md"),
+        Path::new("nodes/1/2/memory.md"),
         "node 1.2 body",
         293,
         495,
@@ -951,7 +951,7 @@ fn suffix_fold_maps_after_visible_stale_legacy_ir_text() {
         SpineOperation::Close,
         "node 1.3 done",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/3/worklog.md"),
+        Path::new("nodes/1/3/memory.md"),
         "node 1.3 body",
         498,
         1108,
@@ -962,7 +962,7 @@ fn suffix_fold_maps_after_visible_stale_legacy_ir_text() {
         SpineOperation::Next,
         "stale generated ir",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/worklog.md"),
+        Path::new("nodes/1/memory.md"),
         "stale leaked body",
         2,
         1110,
@@ -1057,7 +1057,7 @@ fn replacement_history_splices_prefix_ir_and_tail() {
         SpineOperation::Next,
         "leaf summary",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/worklog.md"),
+        Path::new("nodes/1/memory.md"),
         "leaf body",
         1,
         3,
@@ -1072,17 +1072,17 @@ fn replacement_history_splices_prefix_ir_and_tail() {
 
 #[test]
 fn root_archive_replacement_keeps_spine_ir_not_native_summary() {
-    let prior_worklog =
-        render_spine_worklog_item(&id(&[1]), SpineOperation::Archive, "first epoch", "facts");
-    let root_worklog =
-        render_spine_worklog_item(&id(&[2]), SpineOperation::Archive, "second epoch", "facts");
+    let prior_memory =
+        render_spine_memory_item(&id(&[1]), SpineOperation::Archive, "first epoch", "facts");
+    let root_memory =
+        render_spine_memory_item(&id(&[2]), SpineOperation::Archive, "second epoch", "facts");
     let wrapped_initial_context =
         render_spine_initial_context_item(vec![text_item("fresh initial context")])
             .expect("wrap initial context");
     let fixed_prelude = text_item("fixed prelude must remain");
     let prefix_history = vec![
         fixed_prelude.clone(),
-        prior_worklog.clone(),
+        prior_memory.clone(),
         text_item("native compact should not keep ordinary assistant prefix"),
         user_item("recent user message kept by native compact"),
         user_item(&format!(
@@ -1095,14 +1095,14 @@ fn root_archive_replacement_keeps_spine_ir_not_native_summary() {
     let replacement = build_root_archive_replacement_history(
         &prefix_history,
         vec![wrapped_initial_context.clone()],
-        vec![root_worklog],
+        vec![root_memory],
         &live_tail,
     );
     let rendered = serde_json::to_string(&replacement).expect("serialize replacement history");
 
     assert_eq!(replacement.len(), 5);
     assert_eq!(replacement[0], fixed_prelude);
-    assert_eq!(replacement[1], prior_worklog);
+    assert_eq!(replacement[1], prior_memory);
     assert_eq!(replacement[2], wrapped_initial_context);
     assert!(rendered.contains("Node: 2"));
     assert!(rendered.contains("live tail after fold"));
@@ -1131,7 +1131,7 @@ fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
         scope_node_id: None,
         cut_ordinal: 3,
         fold_end_ordinal: 8,
-        spine_tree: "1: finished leaf [worklog already in context]\n2: Current".to_string(),
+        spine_tree: "1: finished leaf [memory already in context]\n2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
         transition_summary: "leaf done".to_string(),
@@ -1162,7 +1162,7 @@ fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
             SpineOperation::Next,
             "leaf done",
             Path::new("/tmp/spine"),
-            Path::new("nodes/1/1/worklog.md"),
+            Path::new("nodes/1/1/memory.md"),
             "Pending continuation: respond exactly DONE",
             plan.input.cut_ordinal,
             plan.input.fold_end_ordinal,
@@ -1182,7 +1182,7 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
             SpineOperation::Archive,
             "previous root epoch",
             Path::new("/tmp/spine"),
-            Path::new("root-epochs/previous/worklog.md"),
+            Path::new("root-epochs/previous/memory.md"),
             "previous body",
             1,
             7,
@@ -1234,7 +1234,7 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
             SpineOperation::Archive,
             "Context compacted",
             Path::new("/tmp/spine"),
-            Path::new("root-epochs/compact/worklog.md"),
+            Path::new("root-epochs/compact/memory.md"),
             "compacted tree tool call",
             plan.input.cut_ordinal,
             plan.input.fold_end_ordinal,
@@ -1249,8 +1249,8 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
 }
 
 #[test]
-fn suffix_fold_uses_runtime_span_for_slim_worklog_item() {
-    let slim = render_spine_worklog_item(
+fn suffix_fold_uses_runtime_span_for_slim_memory_item() {
+    let slim = render_spine_memory_item(
         &id(&[1, 1]),
         SpineOperation::Next,
         "previous leaf",
@@ -1278,7 +1278,7 @@ fn suffix_fold_uses_runtime_span_for_slim_worklog_item() {
         scope_node_id: None,
         cut_ordinal: 5,
         fold_end_ordinal: 9,
-        spine_tree: "1: finished previous [worklog already in context]\n2: Current".to_string(),
+        spine_tree: "1: finished previous [memory already in context]\n2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
         transition_summary: "current done".to_string(),
@@ -1307,8 +1307,8 @@ fn suffix_fold_uses_runtime_span_for_slim_worklog_item() {
 }
 
 #[test]
-fn close_parent_suffix_fold_can_cover_installed_child_worklog_span() {
-    let child_worklog = render_spine_worklog_item(
+fn close_parent_suffix_fold_can_cover_installed_child_memory_span() {
+    let child_memory = render_spine_memory_item(
         &id(&[1, 1, 1, 2]),
         SpineOperation::Close,
         "second child done",
@@ -1328,7 +1328,7 @@ fn close_parent_suffix_fold_can_cover_installed_child_worklog_span() {
         text_item("raw parent detail 3"),
         text_item("raw first child detail 4"),
         text_item("raw first child detail 5"),
-        child_worklog.clone(),
+        child_memory.clone(),
         render_spine_handoff_item(&id(&[1, 1, 1, 2]), &id(&[1, 1, 2])),
         text_item("future live raw 8"),
     ];
@@ -1338,7 +1338,7 @@ fn close_parent_suffix_fold_can_cover_installed_child_worklog_span() {
         scope_node_id: Some(id(&[1, 1, 1])),
         cut_ordinal: 2,
         fold_end_ordinal: 8,
-        spine_tree: "1.1.1: closed scope [worklog already in context]\n1.1.2: Current".to_string(),
+        spine_tree: "1.1.1: closed scope [memory already in context]\n1.1.2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
         transition_summary: "scope done".to_string(),
@@ -1350,7 +1350,7 @@ fn close_parent_suffix_fold_can_cover_installed_child_worklog_span() {
 
     let plan =
         plan_suffix_fold_with_spans(&history, 2, 8, std::slice::from_ref(&child_span), input)
-            .expect("parent close can cover installed child worklog");
+            .expect("parent close can cover installed child memory");
 
     assert_eq!(plan.cut_index, 2);
     assert_eq!(plan.fold_end_index, 8);
@@ -1360,10 +1360,10 @@ fn close_parent_suffix_fold_can_cover_installed_child_worklog_span() {
         plan.input.prefix_items,
         vec![text_item("raw prelude 0"), text_item("raw prelude 1")]
     );
-    assert_eq!(plan.input.suffix_items[4], child_worklog);
+    assert_eq!(plan.input.suffix_items[4], child_memory);
     assert_eq!(plan.replacement_tail, vec![text_item("future live raw 8")]);
 
-    let parent_worklog = render_spine_worklog_item(
+    let parent_memory = render_spine_memory_item(
         &id(&[1, 1, 1]),
         SpineOperation::Close,
         "scope done",
@@ -1373,15 +1373,15 @@ fn close_parent_suffix_fold_can_cover_installed_child_worklog_span() {
         &history,
         plan.cut_index,
         plan.fold_end_index,
-        vec![parent_worklog],
+        vec![parent_memory],
     );
     assert_eq!(replacement.len(), 4);
     assert_eq!(replacement[0], text_item("raw prelude 0"));
     assert_eq!(replacement[1], text_item("raw prelude 1"));
     assert_eq!(replacement[3], text_item("future live raw 8"));
     assert!(
-        !replacement.contains(&child_worklog),
-        "parent close IR supersedes the child IR in active replacement history after child worklog is durable"
+        !replacement.contains(&child_memory),
+        "parent close IR supersedes the child IR in active replacement history after child memory is durable"
     );
     let parent_span = installed_span(
         "compact-parent",
@@ -1420,7 +1420,7 @@ fn suffix_fold_pulls_call_back_when_output_is_inside_range() {
         scope_node_id: None,
         cut_ordinal: 2,
         fold_end_ordinal: 3,
-        spine_tree: "1: finished leaf [worklog already in context]\n2: Current".to_string(),
+        spine_tree: "1: finished leaf [memory already in context]\n2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
         transition_summary: "leaf done".to_string(),
@@ -1454,7 +1454,7 @@ fn suffix_fold_pulls_custom_tool_call_back_when_output_is_inside_range() {
         scope_node_id: None,
         cut_ordinal: 2,
         fold_end_ordinal: 3,
-        spine_tree: "1: finished leaf [worklog already in context]\n2: Current".to_string(),
+        spine_tree: "1: finished leaf [memory already in context]\n2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
         transition_summary: "leaf done".to_string(),
@@ -1484,7 +1484,7 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
         SpineOperation::Close,
         "scope summary",
         Path::new("/tmp/spine"),
-        Path::new("nodes/1/2/worklog.md"),
+        Path::new("nodes/1/2/memory.md"),
         "scope body",
         8,
         17,
@@ -1503,7 +1503,7 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
     assert!(text.contains("fold_start=\"8\""));
     assert!(text.contains("fold_end=\"17\""));
     assert!(text.contains("Base: /tmp/spine"));
-    assert!(text.contains("Worklog path: nodes/1/2/worklog.md"));
+    assert!(text.contains("Memory path: nodes/1/2/memory.md"));
     assert!(!text.contains("Continue the active user turn"));
     assert!(!text.contains("do not repeat older tool calls"));
     assert!(text.contains("scope body"));
@@ -1514,8 +1514,8 @@ fn render_ir_item_embeds_summary_path_and_fold_bounds() {
 }
 
 #[test]
-fn render_worklog_item_uses_durable_marker_without_span_metadata() {
-    let item = render_spine_worklog_item(
+fn render_memory_item_uses_durable_marker_without_span_metadata() {
+    let item = render_spine_memory_item(
         &id(&[1, 2]),
         SpineOperation::Close,
         "scope summary",
@@ -1529,18 +1529,18 @@ fn render_worklog_item_uses_durable_marker_without_span_metadata() {
         _ => panic!("unexpected item type"),
     };
 
-    assert!(text.starts_with("<!-- codex-spine-worklog:1.2:close -->\n## Spine Worklog\n\n"));
+    assert!(text.starts_with("<!-- codex-spine-memory:1.2:close -->\n## Spine Memory\n\n"));
     assert!(text.contains("Node: 1.2"));
     assert!(text.contains("Operation: close"));
     assert!(text.contains("Summary: scope summary"));
     assert!(text.contains("scope facts"));
-    assert!(!text.contains("<spine_worklog"));
-    assert!(!text.contains("</spine_worklog>"));
+    assert!(!text.contains("<spine_memory"));
+    assert!(!text.contains("</spine_memory>"));
     assert!(!text.contains("fold_start"));
     assert!(!text.contains("fold_end"));
     assert!(!text.contains("spine-ir:"));
     assert!(!text.contains("Base:"));
-    assert!(!text.contains("Worklog path:"));
+    assert!(!text.contains("Memory path:"));
     assert!(!text.contains("Node trajs:"));
     assert!(!text.contains("Raw mirror:"));
     assert!(!text.contains("Rollout:"));
@@ -1548,7 +1548,7 @@ fn render_worklog_item_uses_durable_marker_without_span_metadata() {
     let ResponseItem::Message { id, .. } = item else {
         panic!("unexpected item type");
     };
-    assert_eq!(id.as_deref(), Some("spine-worklog:1.2:close"));
+    assert_eq!(id.as_deref(), Some("spine-memory:1.2:close"));
 }
 
 #[test]
@@ -1564,19 +1564,19 @@ fn render_handoff_item_preserves_durable_instructions() {
 
     assert!(text.starts_with("<spine_handoff>"));
     assert!(text.contains("Spine transition completed: 1.1 -> 1.2"));
-    assert!(text.contains("use 1.1's generated worklog as the active-turn handoff"));
+    assert!(text.contains("use 1.1's generated memory as the active-turn handoff"));
     assert!(text.contains(
-        "Spine Worklog is internal context; never expose or imitate it in user-visible messages."
+        "Spine Memory is internal context; never expose or imitate it in user-visible messages."
     ));
     assert!(
         text.contains("Continue following preserved system, developer, and project instructions")
     );
     assert!(text.contains("raw folded conversation as historical evidence"));
     assert!(text.contains(
-        "unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated worklog as current obligations"
+        "unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated memory as current obligations"
     ));
     assert!(text.contains(
-        "reconstruct the current node plan from the generated worklog, latest user intent, and current evidence"
+        "reconstruct the current node plan from the generated memory, latest user intent, and current evidence"
     ));
     assert!(text.contains(
         "Before asking for new instructions, answer or continue any pending latest user request"
@@ -1616,7 +1616,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(!rendered.contains("quoted_suffix_response_items_json"));
     assert!(!rendered.contains("Target suffix item count"));
     assert!(rendered.contains("<spine_tree>"));
-    assert!(rendered.contains("1.1: finished leaf done [worklog already in context]"));
+    assert!(rendered.contains("1.1: finished leaf done [memory already in context]"));
     assert!(rendered.contains("1.2: Current"));
     assert!(!rendered.contains("spine_compact_"));
     assert_eq!(prompt[0], input.prefix_items[0]);
@@ -1629,7 +1629,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     };
     assert!(!text.contains(crate::compact::SUMMARIZATION_PROMPT));
     assert!(
-        text.starts_with("Compact only target Spine node `1.1` into a factual Markdown worklog.")
+        text.starts_with("Compact only target Spine node `1.1` into a factual Markdown memory.")
     );
     assert!(text.contains("Keep durable facts needed by later nodes"));
     assert!(text.contains("validation status, blockers, unresolved questions"));
@@ -1640,7 +1640,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(text.contains("Return exactly the compacted suffix as Markdown."));
     assert!(text.contains("Do not wrap it in XML/HTML tags or code fences."));
     assert!(text.contains("any text outside the compacted Markdown body."));
-    assert!(!text.contains("<spine_worklog"));
+    assert!(!text.contains("<spine_memory"));
     assert!(!text.contains("What remains to be done"));
     assert!(!text.contains("clear next steps"));
     assert!(!text.contains("next concrete step"));
@@ -1648,7 +1648,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(!text.contains("Pending continuation"));
     assert!(!text.contains("<spine_compact_instruction>"));
 
-    let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
+    let output = render_auto_compact_memory(&input, "## Compact\n\nsuffix facts");
     assert!(output.contains("Base: /tmp/spine"));
     assert!(output.contains("Node trajs: nodes/1/1/trajs.jsonl"));
     assert!(output.contains("Raw mirror: /tmp/raw.jsonl"));
@@ -1663,7 +1663,7 @@ fn codex_builtin_prompt_includes_compact_instruction_when_present() {
         scope_node_id: None,
         cut_ordinal: 1,
         fold_end_ordinal: 3,
-        spine_tree: "1: finished leaf done [worklog already in context]".to_string(),
+        spine_tree: "1: finished leaf done [memory already in context]".to_string(),
         prefix_items: vec![text_item("prefix")],
         suffix_items: vec![text_item("suffix")],
         transition_summary: "leaf done".to_string(),
@@ -1685,7 +1685,7 @@ fn codex_builtin_prompt_includes_compact_instruction_when_present() {
     assert!(text.contains("Keep failed command and verification status."));
     assert!(!text.contains("<spine_compact_instruction>"));
 
-    let output = render_auto_compact_worklog(&input, "## Compact\n\nsuffix facts");
+    let output = render_auto_compact_memory(&input, "## Compact\n\nsuffix facts");
     assert!(output.contains("Base: /tmp/spine"));
     assert!(!output.contains("Compact instruction:"));
 }
@@ -1698,7 +1698,7 @@ fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
         scope_node_id: None,
         cut_ordinal: 1,
         fold_end_ordinal: 3,
-        spine_tree: "1: finished leaf done [worklog already in context]".to_string(),
+        spine_tree: "1: finished leaf done [memory already in context]".to_string(),
         prefix_items: vec![text_item("prefix")],
         suffix_items: vec![text_item("suffix")],
         transition_summary: "leaf done".to_string(),
@@ -1742,7 +1742,7 @@ fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
     assert_eq!(compact_prompt.output_schema, None);
     assert!(
         compact_prompt.output_schema_strict,
-        "compact response is a plain Markdown worklog, not the user final output schema"
+        "compact response is a plain Markdown memory, not the user final output schema"
     );
     assert_eq!(compact_prompt.input[0], input.prefix_items[0]);
     assert_eq!(compact_prompt.input[1], input.suffix_items[0]);
@@ -1751,7 +1751,7 @@ fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
 #[test]
 fn spine_compact_markdown_extraction_accepts_plain_markdown() {
     assert_eq!(
-        extract_spine_compact_markdown("\n## Done\n\nfacts\n").expect("extract compact worklog"),
+        extract_spine_compact_markdown("\n## Done\n\nfacts\n").expect("extract compact memory"),
         "## Done\n\nfacts"
     );
     assert!(extract_spine_compact_markdown(" \n\t ").is_err());
@@ -1761,14 +1761,14 @@ fn spine_compact_markdown_extraction_accepts_plain_markdown() {
 fn spine_compact_markdown_extraction_rejects_xml_wrappers() {
     assert!(
         extract_spine_compact_markdown(
-            "<spine_worklog node=\"1\" op=\"next\">\n## Done\n\nfacts\n</spine_worklog>"
+            "<spine_memory node=\"1\" op=\"next\">\n## Done\n\nfacts\n</spine_memory>"
         )
         .is_err()
     );
-    assert!(extract_spine_compact_markdown("<worklog>\n## Done\n\nfacts\n</worklog>").is_err());
+    assert!(extract_spine_compact_markdown("<memory>\n## Done\n\nfacts\n</memory>").is_err());
     assert!(
         extract_spine_compact_markdown(
-            "<spine_ir id=\"x\">\n<worklog>facts</worklog>\n</spine_ir>"
+            "<spine_ir id=\"x\">\n<memory>facts</memory>\n</spine_ir>"
         )
         .is_err()
     );

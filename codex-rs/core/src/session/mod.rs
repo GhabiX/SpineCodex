@@ -187,10 +187,10 @@ use crate::spine::compact::build_root_archive_replacement_history;
 use crate::spine::compact::build_suffix_replacement_history;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
 use crate::spine::compact::prepare_spine_compact_plan;
-use crate::spine::compact::render_auto_compact_worklog;
+use crate::spine::compact::render_auto_compact_memory;
 use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_initial_context_item;
-use crate::spine::compact::render_spine_worklog_item;
+use crate::spine::compact::render_spine_memory_item;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
 use crate::spine::session_integration::record_plan_update_snapshot;
@@ -3035,19 +3035,19 @@ impl Session {
             .map(str::trim)
             .filter(|body| !body.is_empty())
             .unwrap_or(compact_summary.as_str());
-        let worklog_markdown = render_auto_compact_worklog(&prep.plan.input, compacted_body);
+        let memory_markdown = render_auto_compact_memory(&prep.plan.input, compacted_body);
         store
-            .worklog_with_appended_section(&boundary.node_id, &worklog_markdown)
+            .memory_with_appended_section(&boundary.node_id, &memory_markdown)
             .map_err(|err| {
-                CodexErr::Fatal(format!("failed to stage spine root archive worklog: {err}"))
+                CodexErr::Fatal(format!("failed to stage spine root archive memory: {err}"))
             })?;
-        let worklog_rel_path = prep
+        let memory_rel_path = prep
             .plan
-            .worklog_path
+            .memory_path
             .strip_prefix(store.root())
-            .unwrap_or(prep.plan.worklog_path.as_path())
+            .unwrap_or(prep.plan.memory_path.as_path())
             .to_path_buf();
-        let rendered_worklog_items = vec![render_spine_worklog_item(
+        let rendered_memory_items = vec![render_spine_memory_item(
             &boundary.node_id,
             boundary.op,
             &boundary.transition_summary,
@@ -3063,7 +3063,7 @@ impl Session {
         let replacement_history = build_root_archive_replacement_history(
             &history[..prep.plan.cut_index],
             initial_context_items,
-            rendered_worklog_items,
+            rendered_memory_items,
             &prep.plan.replacement_tail,
         );
         let compact_message = format!(
@@ -3108,10 +3108,10 @@ impl Session {
         }
         // The rollout checkpoint is already replaced. Later sidecar failures are not rolled back;
         // poison future Spine compact attempts so partial install state fails fast.
-        if let Err(err) = store.append_worklog_section(&boundary.node_id, &worklog_markdown) {
+        if let Err(err) = store.append_memory_section(&boundary.node_id, &memory_markdown) {
             return Err(self
                 .poison_spine_compact(format!(
-                    "failed to append installed spine root archive worklog after rollout checkpoint: {err}"
+                    "failed to append installed spine root archive memory after rollout checkpoint: {err}"
                 ))
                 .await);
         }
@@ -3159,7 +3159,7 @@ impl Session {
         if let Err(err) = store.append_compact_installed(CompactInstalledRecord {
             attempt: compact_attempt,
             replacement_history_len: replacement_history.len(),
-            worklog_path: worklog_rel_path.to_string_lossy().into_owned(),
+            memory_path: memory_rel_path.to_string_lossy().into_owned(),
             message_hash: message_hash.clone(),
         }) {
             return Err(self
@@ -3292,32 +3292,32 @@ impl Session {
                 return Err(err);
             }
         };
-        let mut worklog_markdown = compact_output.worklog_markdown.clone();
-        let mut model_worklog_body = compact_output.compacted_body.clone();
+        let mut memory_markdown = compact_output.memory_markdown.clone();
+        let mut model_memory_body = compact_output.compacted_body.clone();
         if let Some((audit_outline, model_outline)) = close_outlines {
-            worklog_markdown.push_str("\n\n");
-            worklog_markdown.push_str(&audit_outline);
-            model_worklog_body.push_str("\n\n");
-            model_worklog_body.push_str(&model_outline);
+            memory_markdown.push_str("\n\n");
+            memory_markdown.push_str(&audit_outline);
+            model_memory_body.push_str("\n\n");
+            model_memory_body.push_str(&model_outline);
         }
         store
-            .worklog_with_appended_section(&boundary.node_id, &worklog_markdown)
+            .memory_with_appended_section(&boundary.node_id, &memory_markdown)
             .map_err(|err| {
-                CodexErr::Fatal(format!("failed to stage spine compact worklog: {err}"))
+                CodexErr::Fatal(format!("failed to stage spine compact memory: {err}"))
             })?;
-        let worklog_rel_path = prep
+        let memory_rel_path = prep
             .plan
-            .worklog_path
+            .memory_path
             .strip_prefix(store.root())
-            .unwrap_or(prep.plan.worklog_path.as_path())
+            .unwrap_or(prep.plan.memory_path.as_path())
             .to_path_buf();
         let to_node = spine.lock().await.cursor().clone();
-        let rendered_worklog_items = vec![
-            render_spine_worklog_item(
+        let rendered_memory_items = vec![
+            render_spine_memory_item(
                 &boundary.node_id,
                 boundary.op,
                 &boundary.transition_summary,
-                &model_worklog_body,
+                &model_memory_body,
             ),
             render_spine_handoff_item(&boundary.node_id, &to_node),
         ];
@@ -3325,7 +3325,7 @@ impl Session {
             &history,
             prep.plan.cut_index,
             prep.plan.fold_end_index,
-            rendered_worklog_items,
+            rendered_memory_items,
         );
         let compacted_item = CompactedItem {
             message: compact_output.compact_message.clone(),
@@ -3362,10 +3362,10 @@ impl Session {
         }
         // The rollout checkpoint is already replaced. Later sidecar failures are not rolled back;
         // poison future Spine compact attempts so partial install state fails fast.
-        if let Err(err) = store.append_worklog_section(&boundary.node_id, &worklog_markdown) {
+        if let Err(err) = store.append_memory_section(&boundary.node_id, &memory_markdown) {
             return Err(self
                 .poison_spine_compact(format!(
-                    "failed to append installed spine compact worklog after rollout checkpoint: {err}"
+                    "failed to append installed spine compact memory after rollout checkpoint: {err}"
                 ))
                 .await);
         }
@@ -3398,7 +3398,7 @@ impl Session {
         if let Err(err) = store.append_compact_installed(CompactInstalledRecord {
             attempt: compact_attempt,
             replacement_history_len: replacement_history.len(),
-            worklog_path: worklog_rel_path.to_string_lossy().into_owned(),
+            memory_path: memory_rel_path.to_string_lossy().into_owned(),
             message_hash: message_hash.clone(),
         }) {
             return Err(self

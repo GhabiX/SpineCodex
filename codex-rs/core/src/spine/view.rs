@@ -68,7 +68,7 @@ pub(crate) fn render_size_hint(
     if let Some(budget) = budget {
         let remaining_tokens = budget.limit_tokens.saturating_sub(budget.used_tokens);
         return format!(
-            "\n\nSpine warning: context pressure is high at {}k/{}k tokens ({}k left); current live node is about {}k. At the next natural boundary, use spine.next/close to move finished work into a worklog before Codex auto-compacts the root epoch.",
+            "\n\nSpine warning: context pressure is high at {}k/{}k tokens ({}k left); current live node is about {}k. At the next natural boundary, use spine.next/close to move finished work into a memory before Codex auto-compacts the root epoch.",
             rounded_k_tokens(budget.used_tokens),
             rounded_k_tokens(budget.limit_tokens),
             rounded_k_tokens(remaining_tokens),
@@ -76,7 +76,7 @@ pub(crate) fn render_size_hint(
         );
     }
     format!(
-        "\n\nSpine warning: current live node is about {}k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a worklog.",
+        "\n\nSpine warning: current live node is about {}k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a memory.",
         rounded_k_tokens(hint.estimated_tokens)
     )
 }
@@ -144,18 +144,18 @@ fn format_subtree(
             line.push(' ');
             line.push_str(summary);
         }
-        if should_show_worklog_ref(state, node_id, &node.status, current_root_epoch) {
+        if should_show_memory_ref(state, node_id, &node.status, current_root_epoch) {
             line.push(' ');
-            if worklog_is_already_in_context(
+            if memory_is_already_in_context(
                 state,
                 node_id,
                 visible,
                 current_root_epoch,
                 previous_epoch,
             ) {
-                line.push_str("[worklog already in context]");
+                line.push_str("[memory already in context]");
             } else {
-                line.push_str(&relative_worklog_path(node_id).display().to_string());
+                line.push_str(&relative_memory_path(node_id).display().to_string());
             }
         }
     }
@@ -184,7 +184,7 @@ fn format_subtree(
     }
 }
 
-fn worklog_is_already_in_context(
+fn memory_is_already_in_context(
     state: &SpineState,
     node_id: &NodeId,
     visible: &HashSet<NodeId>,
@@ -256,7 +256,7 @@ fn is_unfinished_under_closed_ancestor(state: &SpineState, node_id: &NodeId) -> 
     false
 }
 
-fn should_show_worklog_ref(
+fn should_show_memory_ref(
     state: &SpineState,
     node_id: &NodeId,
     status: &NodeStatus,
@@ -294,12 +294,12 @@ pub(crate) fn op_label(op: SpineOperation) -> &'static str {
     }
 }
 
-pub(crate) fn relative_worklog_path(node_id: &NodeId) -> PathBuf {
+pub(crate) fn relative_memory_path(node_id: &NodeId) -> PathBuf {
     let mut path = PathBuf::from("nodes");
     for segment in node_id.segments() {
         path.push(segment.to_string());
     }
-    path.push("worklog.md");
+    path.push("memory.md");
     path
 }
 

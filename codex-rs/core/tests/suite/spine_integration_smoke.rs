@@ -50,38 +50,34 @@ const NEXT_SUMMARY: &str = "finish child scope";
 const CLOSE_CHILD_SUMMARY: &str = "finish sibling leaf";
 const CLOSE_SUMMARY: &str = "finish sibling scope";
 const EXPECTED_SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
-Use Spine as your task plan and context manager. Completed scopes are folded into runtime-generated worklog IR, and later turns carry the visible Spine Tree, completed worklogs, and the current live suffix instead of every old raw message.
-Spine Worklog is internal context; never expose or imitate it in user-visible messages.
+Use Spine as your task plan and context manager. Completed scopes are folded into runtime-generated memory IR, and later turns carry the visible Spine Tree, completed memories, and the current live suffix instead of every old raw message.
+Spine Memory is internal context; never expose or imitate it in user-visible messages.
 Use Spine effectively and efficiently.
-At the start, use update_plan with spine_plantree to maintain one compact task tree draft for the current editable scope. This is planning only; it does not create Spine nodes or move the cursor.
-Use update_plan's top-level plan for the current real Spine node's checklist; use spine_plantree.root.children for future planned child scopes, and put each future child scope's checklist in that scope's checkpoints.
-Future PlanTree scopes may display as `~<predicted-id>` to distinguish planned nodes from real Spine nodes.
-Default to staying in the current live node while it remains focused. Use update_plan to revise the current PlanTree when new evidence changes the task structure.
-When your task structure or next work scope changes, promptly refresh the current spine_plantree with update_plan so the displayed PlanTree stays current.
-When update_plan succeeds with a writable Spine tree, treat the returned `spine_tree` JSON as the authoritative updated tree for the next decision.
-For non-trivial or multi-phase work, keep future planned scopes in `spine_plantree.root.children` rather than flattening them into the current node's top-level plan, and update them with `update_plan`; this manages planning only and does not create real Spine nodes.
-Treat the current spine_plantree as the execution plan for the current real Spine node. Before starting a new coherent work scope, compare it with the current node's planned children: if the work matches a planned child, call spine.open to materialize that child before doing the work, then immediately call update_plan in the new child using that planned child's summary/checkpoints as the active scope plan. If the work no longer matches the planned children, update spine_plantree first; do not bypass planned child scopes by calling spine.next from the parent.
+Use update_plan with task_projection as the single Spine planning input. One call should include both task_projection.current.checklist (the current real Spine node checklist) and task_projection.draft_nodes (future planned scopes, each with summary/checklist and a parent real node id or earlier ~draft_id for nesting).
+task_projection is planning only: it does not create, finish, close, compact, or move Spine nodes. Do not combine task_projection with top-level plan, and never send spine_plantree as input. Successful writable updates return spine_tree; treat it as authoritative. A returned normalized spine_plantree is runtime output only.
+Default to staying in the current live node while it remains focused. Use update_plan to refresh task_projection when evidence changes the task structure.
+Before starting a new coherent work scope, compare it with current planned draft children: if it matches one, call spine.open to materialize it before doing the work, then immediately call update_plan in the new child using that draft's summary/checklist. If it no longer matches, update task_projection first; do not bypass planned child scopes with spine.next from the parent.
 Move Spine at coherent scope boundaries rather than as a per-command habit:
 - spine.open: start a focused child scope that should inherit the parent goal but keep its own local context; use it before working on a matching planned child scope. It takes no arguments.
 - spine.next: finish the current leaf and move to its next sibling when the next work is sibling-level under the same parent.
 - spine.close: finish the current leaf, close its non-root parent scope, and continue at the parent's next sibling when the parent scope is complete. Root cannot be closed. It requires `child_summary` for the current leaf and `summary` for the parent scope.
 spine.next/close are not end-of-response cleanup; when the current response still belongs to the current node, finish its user-visible work there, and only move Spine when beginning genuinely new sibling/parent-sibling work.
-Spine transitions are internal context-management steps, not substitutes for normal Codex turn delivery: after spine.next or spine.close, continue work if the latest user request remains unfinished, or send the user-facing final answer/update if that request is complete, paused, blocked, or needs a decision. Do not use a Spine Tree update, tool output, or generated worklog as the user-visible report.
-Use spine.next or spine.close to fold completed scopes after substantial raw history has accumulated or when future work is likely to reuse the generated worklog IR.
+Spine transitions are internal context-management steps, not substitutes for normal Codex turn delivery: after spine.next or spine.close, continue work if the latest user request remains unfinished, or send the user-facing final answer/update if that request is complete, paused, blocked, or needs a decision. Do not use a Spine Tree update, tool output, or generated memory as the user-visible report.
+Use spine.next or spine.close to fold completed scopes after substantial raw history has accumulated or when future work is likely to reuse the generated memory IR.
 At root depth, use spine.next to finish the current root child and continue with its next sibling; use spine.close only from a nested scope when closing its parent and returning to the parent's next sibling.
 For spine.next, use summary as the short completion-time Spine Tree label. For spine.close, use child_summary as the label for the current leaf and summary as the label for the parent scope. Use the optional instruction argument when the automatic compact pass should prioritize specific facts to preserve from the completed leaf or scope. Do not use summary, child_summary, or instruction with spine.open.
 Use spine.tree to inspect the current node and Spine Tree without moving the cursor.
 Do not move spine only because a new user message arrived, because you answered a short question, or because you updated progress within the same scope.
 Do not create one node per shell command, checklist item, short reply, or conversation turn.
-After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `nodes/1/1/worklog.md`; later context shows the Spine Tree plus `1.1` worklog, not `1.1` raw trace.
-After spine.close from `1.1.2` to `1.2`, the runtime first folds the closing child into `nodes/1/1/2/worklog.md`, then folds the completed `1.1` scope into `nodes/1/1/worklog.md`; child scopes remain available as durable worklog IR while parent context uses the parent worklog by default.
-Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../worklog.md` against that Base, not against the workspace cwd.
-After spine.next or spine.close, if unfinished work remains, use update_plan to refresh the current PlanTree from the generated worklog, latest user intent, and current evidence.
-Keep working in the current node while its raw details are still useful. When a coherent work scope is complete, fold it so later turns use its worklog instead of its raw trace.
+After spine.next from `1.1` to `1.2`, the runtime folds `1.1`'s raw trace into `nodes/1/1/memory.md`; later context shows the Spine Tree plus `1.1` memory, not `1.1` raw trace.
+After spine.close from `1.1.2` to `1.2`, the runtime first folds the closing child into `nodes/1/1/2/memory.md`, then folds the completed `1.1` scope into `nodes/1/1/memory.md`; child scopes remain available as durable memory IR while parent context uses the parent memory by default.
+Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../memory.md` against that Base, not against the workspace cwd.
+After spine.next or spine.close, if unfinished work remains, use update_plan to refresh the current PlanTree from the generated memory, latest user intent, and current evidence.
+Keep working in the current node while its raw details are still useful. When a coherent work scope is complete, fold it so later turns use its memory instead of its raw trace.
 Avoid tiny splits for individual commands, small observations, or conversation turns.
-The runtime may warn when the current node grows large: around 80k raw tokens, then every additional 30k. Treat the warning as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the worklog.
-When moving between nodes, rely on the runtime Spine Tree and generated worklogs; inspect sidecar trajs/worklog files only when you need historical details.
-Completed Spine nodes are read-only; rely on their worklogs instead of restating their old PlanTree checkpoints.
+The runtime may warn when the current node grows large: around 80k raw tokens, then every additional 30k. Treat the warning as a cue to finish the current scope cleanly, then use spine.next or spine.close if the next work can rely on the memory.
+When moving between nodes, rely on the runtime Spine Tree and generated memories; inspect sidecar trajs/memory files only when you need historical details.
+Completed Spine nodes are read-only; rely on their memories instead of restating their old PlanTree checkpoints.
 In Plan mode, do not call mutating spine operations.
 </spine_view>"#;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -249,24 +245,24 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert_raw_range_for_node_after_transition(&index, NEXT_CALL_ID, "1.1.1.2");
     assert_raw_range_for_node_after_transition(&index, CLOSE_CALL_ID, "1.1.2");
 
-    let scope_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/worklog.md"))?;
+    let scope_memory = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/memory.md"))?;
     let base_line = format!("Base: {}", sidecar_dir.display());
-    assert!(scope_worklog.contains("spine:auto-compact-generated"));
-    assert!(scope_worklog.contains(&base_line));
-    assert!(scope_worklog.contains("Compacted root findings."));
-    assert!(scope_worklog.contains("## Context Compacted"));
-    assert!(scope_worklog.contains("[1.1.1] finish sibling scope (nodes/1/1/1/worklog.md)"));
-    assert!(scope_worklog.contains("|-- [1.1.1.1] finish child scope (nodes/1/1/1/1/worklog.md)"));
-    assert!(scope_worklog.contains("|-- [1.1.1.2] finish sibling leaf (nodes/1/1/1/2/worklog.md)"));
-    let first_leaf_worklog = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/1/worklog.md"))?;
-    assert!(first_leaf_worklog.contains("spine:auto-compact-generated"));
-    assert!(first_leaf_worklog.contains(&base_line));
-    assert!(first_leaf_worklog.contains("Compacted child findings."));
-    let closing_leaf_worklog =
-        std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/2/worklog.md"))?;
-    assert!(closing_leaf_worklog.contains("spine:auto-compact-generated"));
-    assert!(closing_leaf_worklog.contains(&base_line));
-    assert!(closing_leaf_worklog.contains("Compacted sibling leaf findings."));
+    assert!(scope_memory.contains("spine:auto-compact-generated"));
+    assert!(scope_memory.contains(&base_line));
+    assert!(scope_memory.contains("Compacted root findings."));
+    assert!(scope_memory.contains("## Context Compacted"));
+    assert!(scope_memory.contains("[1.1.1] finish sibling scope (nodes/1/1/1/memory.md)"));
+    assert!(scope_memory.contains("|-- [1.1.1.1] finish child scope (nodes/1/1/1/1/memory.md)"));
+    assert!(scope_memory.contains("|-- [1.1.1.2] finish sibling leaf (nodes/1/1/1/2/memory.md)"));
+    let first_leaf_memory = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/1/memory.md"))?;
+    assert!(first_leaf_memory.contains("spine:auto-compact-generated"));
+    assert!(first_leaf_memory.contains(&base_line));
+    assert!(first_leaf_memory.contains("Compacted child findings."));
+    let closing_leaf_memory =
+        std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/2/memory.md"))?;
+    assert!(closing_leaf_memory.contains("spine:auto-compact-generated"));
+    assert!(closing_leaf_memory.contains(&base_line));
+    assert!(closing_leaf_memory.contains("Compacted sibling leaf findings."));
     assert_compact_installed(&compact_index, "1.1.1.1", "next");
     assert_compact_installed_before(&compact_index, "1.1.1.2", "close", "1.1.1", "close");
     assert_compact_installed(&compact_index, "1.1.1", "close");
@@ -386,8 +382,8 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
         "root auto compact should not use the Spine suffix compact prompt"
     );
     assert!(
-        !requests[3].body_contains_text("<spine_worklog")
-            && requests[3].body_contains_text("## Spine Worklog")
+        !requests[3].body_contains_text("<spine_memory")
+            && requests[3].body_contains_text("## Spine Memory")
             && requests[3].body_contains_text("auto root archive summary"),
         "follow-up should use a readable spine root-epoch IR checkpoint"
     );
@@ -508,10 +504,10 @@ async fn spine_manual_compact_uses_native_text_and_archives_root_epoch() -> anyh
             panic!("expected a post-compact request to contain the manual root summary")
         });
     assert!(
-        !post_compact_request.body_contains_text("<spine_worklog")
-            && post_compact_request.body_contains_text("## Spine Worklog")
+        !post_compact_request.body_contains_text("<spine_memory")
+            && post_compact_request.body_contains_text("## Spine Memory")
             && post_compact_request.body_contains_text("manual native root summary"),
-        "post-compact turn should see the native summary as root-epoch worklog"
+        "post-compact turn should see the native summary as root-epoch memory"
     );
 
     let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
@@ -610,7 +606,7 @@ async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request(
     assert!(
         !requests[3].body_contains_text(SUMMARIZATION_PROMPT)
             && !requests[4].body_contains_text(SUMMARIZATION_PROMPT),
-        "suffix compact should use the Spine factual worklog prompt, not the normal compact prompt"
+        "suffix compact should use the Spine factual memory prompt, not the normal compact prompt"
     );
     assert!(
         requests
@@ -869,22 +865,23 @@ fn spine_close_args(summary: &str, child_summary: &str) -> String {
 fn plan_args() -> String {
     json!({
         "explanation": "plan still works",
-        "plan": [
-            {"step": "Exercise child node", "status": "completed"},
-            {"step": "Exercise sibling node", "status": "in_progress"}
-        ],
-        "spine_plantree": {
-            "root": {
-                "summary": "Nested implementation scope",
-                "children": [
-                    {
-                        "summary": "Future child scope",
-                        "checkpoints": [
-                            {"task": "Exercise future child scope", "status": "pending"}
-                        ]
-                    }
+        "task_projection": {
+            "current": {
+                "node_id": "1.1.1.1",
+                "checklist": [
+                    {"step": "Exercise child node", "status": "completed"},
+                    {"step": "Exercise sibling node", "status": "in_progress"}
                 ]
-            }
+            },
+            "draft_nodes": [
+                {
+                    "parent": "1.1.1.1",
+                    "summary": "Future child scope",
+                    "checklist": [
+                        {"step": "Exercise future child scope", "status": "pending"}
+                    ]
+                }
+            ]
         }
     })
     .to_string()
@@ -1132,6 +1129,32 @@ fn assert_compact_installed(index: &[Value], node_id: &str, op: &str) {
         }),
         "compact index should contain install for {node_id} {op}: {index:?}"
     );
+}
+
+fn assert_compact_installed_before(
+    index: &[Value],
+    first_node_id: &str,
+    first_op: &str,
+    second_node_id: &str,
+    second_op: &str,
+) {
+    let first_index = compact_installed_index(index, first_node_id, first_op);
+    let second_index = compact_installed_index(index, second_node_id, second_op);
+    assert!(
+        first_index < second_index,
+        "expected compact install {first_node_id} {first_op} before {second_node_id} {second_op}: {index:?}"
+    );
+}
+
+fn compact_installed_index(index: &[Value], node_id: &str, op: &str) -> usize {
+    index
+        .iter()
+        .position(|event| {
+            event.get("type").and_then(Value::as_str) == Some("compact_installed")
+                && event.get("node_id").and_then(Value::as_str) == Some(node_id)
+                && event.get("op").and_then(Value::as_str) == Some(op)
+        })
+        .unwrap_or_else(|| panic!("missing compact install for {node_id} {op}: {index:?}"))
 }
 
 fn assert_compact_failed(index: &[Value], node_id: &str, op: &str) {

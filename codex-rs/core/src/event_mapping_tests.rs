@@ -333,7 +333,7 @@ fn skips_generated_spine_ir_assistant_message() {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: "<spine_ir id=\"spine-ir:1:2-3:next\" node=\"1\" op=\"next\" runtime_generated=\"true\" fold_start=\"2\" fold_end=\"3\">\n<worklog>\ninternal\n</worklog>\n</spine_ir>".to_string(),
+            text: "<spine_ir id=\"spine-ir:1:2-3:next\" node=\"1\" op=\"next\" runtime_generated=\"true\" fold_start=\"2\" fold_end=\"3\">\n<memory>\ninternal\n</memory>\n</spine_ir>".to_string(),
         }],
         phase: None,
     };
@@ -342,12 +342,12 @@ fn skips_generated_spine_ir_assistant_message() {
 }
 
 #[test]
-fn skips_generated_spine_worklog_assistant_message() {
+fn skips_generated_spine_memory_assistant_message() {
     let item = ResponseItem::Message {
-        id: Some("spine-worklog:1:next".to_string()),
+        id: Some("spine-memory:1:next".to_string()),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: "## Spine Worklog\n\nNode: 1\nOperation: next\nSummary: leaf\n\nfacts"
+            text: "## Spine Memory\n\nNode: 1\nOperation: next\nSummary: leaf\n\nfacts"
                 .to_string(),
         }],
         phase: None,
@@ -357,12 +357,12 @@ fn skips_generated_spine_worklog_assistant_message() {
 }
 
 #[test]
-fn parses_plain_final_answer_markdown_spine_worklog_assistant_message() {
+fn parses_plain_final_answer_markdown_spine_memory_assistant_message() {
     let item = ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: "## Spine Worklog\n\nNode: 1\nOperation: next\nSummary: visible\n\nfacts"
+            text: "## Spine Memory\n\nNode: 1\nOperation: next\nSummary: visible\n\nfacts"
                 .to_string(),
         }],
         phase: Some(MessagePhase::FinalAnswer),
@@ -383,18 +383,18 @@ fn parses_plain_final_answer_markdown_spine_worklog_assistant_message() {
         .collect::<Vec<_>>();
     assert_eq!(
         rendered,
-        vec!["## Spine Worklog\n\nNode: 1\nOperation: next\nSummary: visible\n\nfacts".to_string()]
+        vec!["## Spine Memory\n\nNode: 1\nOperation: next\nSummary: visible\n\nfacts".to_string()]
     );
 }
 
 #[test]
-fn skips_legacy_generated_spine_worklog_assistant_message() {
+fn skips_legacy_generated_spine_memory_assistant_message() {
     let item = ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text:
-                "<spine_worklog node=\"1\" op=\"next\">\nSummary: leaf\n\nfacts\n</spine_worklog>"
+                "<spine_memory node=\"1\" op=\"next\">\nSummary: leaf\n\nfacts\n</spine_memory>"
                     .to_string(),
         }],
         phase: None,

@@ -2126,8 +2126,8 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
         .await?;
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
-    assert!(!rendered_history.contains("<spine_worklog"));
-    assert!(rendered_history.contains("## Spine Worklog"));
+    assert!(!rendered_history.contains("<spine_memory"));
+    assert!(rendered_history.contains("## Spine Memory"));
     assert!(rendered_history.contains("Node: 1"));
     assert!(rendered_history.contains("Operation: archive"));
     assert!(rendered_history.contains("root compact fact"));
@@ -2135,7 +2135,7 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
     assert!(!rendered_history.contains("fold_end"));
     assert!(!rendered_history.contains("spine-ir:"));
     assert!(!rendered_history.contains("Base:"));
-    assert!(!rendered_history.contains("Worklog path:"));
+    assert!(!rendered_history.contains("Memory path:"));
     assert!(!rendered_history.contains("ROOT_EPOCH_DETAIL should be archived"));
 
     let runtime = session.spine.as_ref().expect("spine").lock().await;
@@ -2144,8 +2144,8 @@ async fn spine_root_epoch_compaction_archives_epoch_and_replaces_history() -> an
         &crate::spine::ids::NodeId::from_segments(vec![2, 1])
     );
     let root_epoch = crate::spine::ids::NodeId::from_segments(vec![1]);
-    let root_epoch_worklog = std::fs::read_to_string(runtime.store().worklog_path(&root_epoch))?;
-    assert!(root_epoch_worklog.contains("root compact fact"));
+    let root_epoch_memory = std::fs::read_to_string(runtime.store().memory_path(&root_epoch))?;
+    assert!(root_epoch_memory.contains("root compact fact"));
     assert!(runtime.store().node_trajs_path(&root_epoch).exists());
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(tree.contains("\"type\":\"root_epoch_reset\""));
@@ -2208,7 +2208,7 @@ async fn spine_root_epoch_compaction_installs_slim_native_history() -> anyhow::R
         replacement.len() <= 2,
         "root archive should install a slim native compact history plus live tail, got {replacement:?}"
     );
-    assert!(rendered_history.contains("## Spine Worklog"));
+    assert!(rendered_history.contains("## Spine Memory"));
     assert!(rendered_history.contains("Node: 1"));
     assert!(rendered_history.contains("root compact fact"));
     assert!(rendered_history.contains("ROOT_EPOCH_USER_TAIL compacted fact"));
@@ -2378,8 +2378,8 @@ async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tre
     );
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
-    assert!(!rendered_history.contains("<spine_worklog"));
-    assert!(rendered_history.contains("## Spine Worklog"));
+    assert!(!rendered_history.contains("<spine_memory"));
+    assert!(rendered_history.contains("## Spine Memory"));
     assert!(rendered_history.contains("Node: 1"));
     assert!(rendered_history.contains("Operation: archive"));
     assert!(!rendered_history.contains("ROOT_EPOCH_DETAIL should be archived before failure"));
@@ -2397,7 +2397,7 @@ async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tre
     assert!(
         !runtime
             .store()
-            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
+            .memory_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
             .exists()
     );
     let reload_error = runtime
@@ -2488,13 +2488,13 @@ async fn repeated_spine_root_compaction_does_not_leave_orphan_tree_output() -> a
     assert!(
         runtime
             .store()
-            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
+            .memory_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
             .exists()
     );
     assert!(
         runtime
             .store()
-            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![2]))
+            .memory_path(&crate::spine::ids::NodeId::from_segments(vec![2]))
             .exists()
     );
     Ok(())
@@ -2566,15 +2566,15 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     assert!(compact_request.tool_by_name("spine", "next").is_some());
 
     let followup_request = &requests[3];
-    assert!(!followup_request.body_contains_text("<spine_worklog"));
-    assert!(followup_request.body_contains_text("## Spine Worklog"));
+    assert!(!followup_request.body_contains_text("<spine_memory"));
+    assert!(followup_request.body_contains_text("## Spine Memory"));
     assert!(followup_request.body_contains_text("Node: 1.1.1"));
     assert!(followup_request.body_contains_text("Operation: next"));
     assert!(followup_request.body_contains_text("compact leaf fact"));
     assert!(!followup_request.body_contains_text("fold_start"));
     assert!(!followup_request.body_contains_text("fold_end"));
     assert!(!followup_request.body_contains_text("spine-ir:"));
-    assert!(!followup_request.body_contains_text("Worklog path:"));
+    assert!(!followup_request.body_contains_text("Memory path:"));
     assert!(!followup_request.body_contains_text("Pending continuation"));
     assert!(followup_request.body_contains_text("FINAL_AFTER_SPINE_COMPACT"));
     assert!(!followup_request.body_contains_text("Continue the active user turn"));
@@ -2587,10 +2587,10 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
         "Treat raw folded conversation as historical evidence"
     ));
     assert!(followup_request.body_contains_text(
-        "unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated worklog as current obligations"
+        "unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated memory as current obligations"
     ));
     assert!(followup_request.body_contains_text(
-        "If the latest user request or generated worklog indicates unfinished work, reconstruct the current node plan from the generated worklog, latest user intent, and current evidence before continuing."
+        "If the latest user request or generated memory indicates unfinished work, reconstruct the current node plan from the generated memory, latest user intent, and current evidence before continuing."
     ));
     assert!(followup_request.body_contains_text(
         "Before asking for new instructions, answer or continue any pending latest user request using that context."
@@ -2668,7 +2668,7 @@ async fn spine_suffix_compaction_cancellation_records_interrupted_terminal() -> 
     assert!(
         !runtime
             .store()
-            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![1, 1]))
+            .memory_path(&crate::spine::ids::NodeId::from_segments(vec![1, 1]))
             .exists()
     );
     runtime
@@ -2776,7 +2776,7 @@ async fn spine_suffix_compaction_post_checkpoint_failure_poisons() -> anyhow::Re
         .expect_err("poison should block future compact attempts");
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
-    assert!(rendered_history.contains("## Spine Worklog"));
+    assert!(rendered_history.contains("## Spine Memory"));
     assert!(rendered_history.contains("Operation: next"));
     assert!(rendered_history.contains("compact leaf fact"));
     assert!(
@@ -2791,9 +2791,9 @@ async fn spine_suffix_compaction_post_checkpoint_failure_poisons() -> anyhow::Re
     assert!(
         !runtime
             .store()
-            .worklog_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
+            .memory_path(&crate::spine::ids::NodeId::from_segments(vec![1]))
             .exists(),
-        "test marker fires before sidecar install finalizes the worklog"
+        "test marker fires before sidecar install finalizes the memory"
     );
     let reload_error = runtime
         .store()
