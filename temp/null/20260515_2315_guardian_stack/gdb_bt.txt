@@ -1,0 +1,219 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /data/swe/FramePilot/cachetree/scaffold/codex-home/codex/codex-rs/target/debug/deps/codex_core-2b300cbbb7c1d96e.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+warning: File "/data/swe/FramePilot/cachetree/scaffold/codex-home/codex/codex-rs/target/debug/deps/codex_core-2b300cbbb7c1d96e" auto-loading has been declined by your `auto-load safe-path' set to "$debugdir:$datadir/auto-load".
+To enable execution of this file add
+	add-auto-load-safe-path /data/swe/FramePilot/cachetree/scaffold/codex-home/codex/codex-rs/target/debug/deps/codex_core-2b300cbbb7c1d96e
+line to your configuration file "/home/ghabi/.gdbinit".
+To completely disable this security protection add
+	set auto-load safe-path /
+line to your configuration file "/home/ghabi/.gdbinit".
+For more information about this security protection see the
+"Auto-loading safe path" section in the GDB manual.  E.g., run from the shell:
+	info "(gdb)Auto-loading safe path"
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff789d700 (LWP 1126826)]
+[New Thread 0x7ffff769c700 (LWP 1126827)]
+[New Thread 0x7ffff749b700 (LWP 1126828)]
+[Detaching after fork from child process 1126829]
+[Detaching after vfork from child process 1126832]
+[Detaching after vfork from child process 1126846]
+[Detaching after vfork from child process 1126847]
+[Detaching after vfork from child process 1126848]
+[Detaching after vfork from child process 1126849]
+[Detaching after vfork from child process 1126850]
+[Detaching after vfork from child process 1126859]
+[Detaching after vfork from child process 1126860]
+[Detaching after vfork from child process 1126861]
+[Detaching after vfork from child process 1126870]
+[Detaching after vfork from child process 1126871]
+[Detaching after vfork from child process 1126872]
+[Detaching after vfork from child process 1126881]
+[Detaching after vfork from child process 1126883]
+[Detaching after vfork from child process 1126884]
+[Detaching after vfork from child process 1126885]
+[Detaching after vfork from child process 1126887]
+
+Thread 2 "mcp_tool_call::" received signal SIGSEGV, Segmentation fault.
+[Switching to Thread 0x7ffff789d700 (LWP 1126826)]
+0x0000555562d3a8e2 in tungstenite::handshake::MidHandshake<Role>::handshake () at /home/ghabi/.cargo/git/checkouts/tungstenite-rs-006aed970da0a0a9/9200079/src/handshake/mod.rs:39
+39	    pub fn handshake(mut self) -> Result<Role::FinalResult, HandshakeError<Role>> {
+
+Thread 4 (Thread 0x7ffff749b700 (LWP 1126828)):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000555565218b79 in parking_lot_core::thread_parker::imp::ThreadParker::futex_wait () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12/src/thread_parker/linux.rs:112
+#2  0x0000555565218653 in <parking_lot_core::thread_parker::imp::ThreadParker as parking_lot_core::thread_parker::ThreadParkerT>::park_until () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12/src/thread_parker/linux.rs:87
+#3  0x0000555565222b89 in parking_lot_core::parking_lot::park::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12/src/parking_lot.rs:633
+#4  0x00005555652200b9 in parking_lot_core::parking_lot::with_thread_data () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12/src/parking_lot.rs:207
+#5  parking_lot_core::parking_lot::park () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12/src/parking_lot.rs:600
+#6  0x0000555565224853 in parking_lot::condvar::Condvar::wait_until_internal () at src/condvar.rs:334
+#7  0x00005555651c1fef in parking_lot::condvar::Condvar::wait_for () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot-0.12.5/src/condvar.rs:387
+#8  0x00005555651883d7 in tokio::loom::std::parking_lot::Condvar::wait_timeout () at src/loom/std/parking_lot.rs:171
+#9  0x00005555651c7584 in tokio::runtime::blocking::pool::Inner::run () at src/runtime/blocking/pool.rs:525
+#10 0x00005555651c88d4 in tokio::runtime::blocking::pool::Spawner::spawn_thread::{{closure}} () at src/runtime/blocking/pool.rs:474
+#11 0x00005555651ee956 in std::sys::backtrace::__rust_begin_short_backtrace () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:160
+#12 0x00005555651714b2 in std::thread::lifecycle::spawn_unchecked::{{closure}}::{{closure}} () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:92
+#13 0x00005555651dd711 in <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:274
+#14 0x00005555651ef251 in std::panicking::catch_unwind::do_call () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:581
+#15 0x000055556517b8ab in __rust_try ()
+#16 0x00005555651712e6 in std::panicking::catch_unwind () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544
+#17 std::panic::catch_unwind () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359
+#18 std::thread::lifecycle::spawn_unchecked::{{closure}} () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:90
+#19 0x00005555651b32c7 in core::ops::function::FnOnce::call_once{{vtable-shim}} () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#20 0x0000555565338cdf in <alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once () at library/alloc/src/boxed.rs:2206
+#21 std::sys::thread::unix::Thread::new::thread_start () at library/std/src/sys/thread/unix.rs:118
+#22 0x00007ffff7bf4609 in start_thread (arg=<optimized out>) at pthread_create.c:477
+#23 0x00007ffff79c2353 in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:95
+
+Thread 3 (Thread 0x7ffff769c700 (LWP 1126827)):
+#0  0x00007ffff79c268e in epoll_wait (epfd=12, events=0x7fffe8000be0, maxevents=1024, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x00005555652122bc in mio::sys::unix::selector::Selector::select () at src/sys/unix/mod.rs:8
+#2  0x00005555652125be in mio::poll::Poll::poll () at src/poll.rs:437
+#3  0x000055556519f642 in tokio::runtime::io::driver::Driver::turn () at src/runtime/io/driver.rs:188
+#4  0x000055556519f555 in tokio::runtime::io::driver::Driver::park () at src/runtime/io/driver.rs:161
+#5  0x00005555651ebb4a in tokio::runtime::signal::Driver::park () at src/runtime/signal/mod.rs:92
+#6  0x0000555565198e1a in tokio::runtime::process::Driver::park () at src/runtime/process.rs:32
+#7  0x00005555651af8fd in tokio::runtime::driver::IoStack::park () at src/runtime/driver.rs:172
+#8  0x0000555565196323 in tokio::runtime::time::Driver::park_internal () at src/runtime/time/mod.rs:249
+#9  0x00005555651968eb in tokio::runtime::time::Driver::park () at src/runtime/time/mod.rs:182
+#10 0x00005555651ae85f in tokio::runtime::driver::TimeDriver::park () at src/runtime/driver.rs:330
+#11 0x00005555651af736 in tokio::runtime::driver::Driver::park () at src/runtime/driver.rs:67
+#12 0x00005555651d07dd in tokio::runtime::scheduler::current_thread::Context::park_internal::{{closure}} () at src/runtime/scheduler/current_thread/mod.rs:427
+#13 0x00005555651d140f in tokio::runtime::scheduler::current_thread::Context::enter () at src/runtime/scheduler/current_thread/mod.rs:442
+#14 0x00005555651d0772 in tokio::runtime::scheduler::current_thread::Context::park_internal () at src/runtime/scheduler/current_thread/mod.rs:424
+#15 0x00005555651d0b89 in tokio::runtime::scheduler::current_thread::Context::park () at src/runtime/scheduler/current_thread/mod.rs:390
+#16 0x000055555bd072db in tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:781
+#17 0x000055555bd06908 in tokio::runtime::scheduler::current_thread::CoreGuard::enter::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:840
+#18 0x000055555bfc52b5 in tokio::runtime::context::scoped::Scoped<T>::set () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/context/scoped.rs:40
+#19 0x000055555bcf1af8 in tokio::runtime::context::set_scheduler::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/context.rs:176
+#20 0x000055555bcf038b in std::thread::local::LocalKey<T>::try_with () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/local.rs:513
+#21 0x000055555bcefa9a in std::thread::local::LocalKey<T>::with () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/local.rs:477
+#22 0x000055555bcf1a6f in tokio::runtime::context::set_scheduler () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/context.rs:176
+#23 0x000055555bd066a8 in tokio::runtime::scheduler::current_thread::CoreGuard::enter () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:840
+#24 0x000055555bd06943 in tokio::runtime::scheduler::current_thread::CoreGuard::block_on () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:740
+#25 0x000055555bd033d4 in tokio::runtime::scheduler::current_thread::CurrentThread::block_on::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:200
+#26 0x000055555bfd4d33 in tokio::runtime::context::runtime::enter_runtime () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/context/runtime.rs:65
+#27 0x000055555bd02db9 in tokio::runtime::scheduler::current_thread::CurrentThread::block_on () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:188
+#28 0x000055555bfc4bac in tokio::runtime::runtime::Runtime::block_on_inner () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/runtime.rs:368
+#29 0x000055555bfc4eca in tokio::runtime::runtime::Runtime::block_on () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/runtime.rs:342
+#30 0x000055555bd202ca in wiremock::mock_server::bare_server::BareMockServer::start::{{closure}}::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wiremock-0.6.5/src/mock_server/bare_server.rs:83
+#31 0x000055555bfd5567 in std::sys::backtrace::__rust_begin_short_backtrace () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:160
+#32 0x000055555bf95b32 in std::thread::lifecycle::spawn_unchecked::{{closure}}::{{closure}} () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:92
+#33 0x000055555bed3f01 in <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:274
+#34 0x000055555bed1201 in std::panicking::catch_unwind::do_call () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:581
+#35 0x000055555bf95d0b in __rust_try ()
+#36 0x000055555bf95846 in std::panicking::catch_unwind () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544
+#37 std::panic::catch_unwind () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359
+#38 std::thread::lifecycle::spawn_unchecked::{{closure}} () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:90
+#39 0x000055555bef0be7 in core::ops::function::FnOnce::call_once{{vtable-shim}} () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#40 0x0000555565338cdf in <alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once () at library/alloc/src/boxed.rs:2206
+#41 std::sys::thread::unix::Thread::new::thread_start () at library/std/src/sys/thread/unix.rs:118
+#42 0x00007ffff7bf4609 in start_thread (arg=<optimized out>) at pthread_create.c:477
+#43 0x00007ffff79c2353 in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:95
+
+Thread 2 (Thread 0x7ffff789d700 (LWP 1126826)):
+#0  0x0000555562d3a8e2 in tungstenite::handshake::MidHandshake<Role>::handshake () at /home/ghabi/.cargo/git/checkouts/tungstenite-rs-006aed970da0a0a9/9200079/src/handshake/mod.rs:39
+#1  0x0000555562c8ef7e in tokio_tungstenite::client_async_with_config::{{closure}}::{{closure}} () at /home/ghabi/.cargo/git/checkouts/tokio-tungstenite-ea4445d9acecae62/132f5b3/src/lib.rs:109
+#2  0x0000555562de1337 in <tokio_tungstenite::handshake::StartedHandshakeFuture<F,S> as core::future::future::Future>::poll () at /home/ghabi/.cargo/git/checkouts/tokio-tungstenite-ea4445d9acecae62/132f5b3/src/handshake.rs:147
+#3  0x0000555562de1f63 in tokio_tungstenite::handshake::handshake::{{closure}} () at /home/ghabi/.cargo/git/checkouts/tokio-tungstenite-ea4445d9acecae62/132f5b3/src/handshake.rs:84
+#4  0x0000555562de1895 in tokio_tungstenite::handshake::client_handshake::{{closure}} () at /home/ghabi/.cargo/git/checkouts/tokio-tungstenite-ea4445d9acecae62/132f5b3/src/handshake.rs:107
+#5  0x0000555562c8ead8 in tokio_tungstenite::client_async_with_config::{{closure}} () at /home/ghabi/.cargo/git/checkouts/tokio-tungstenite-ea4445d9acecae62/132f5b3/src/lib.rs:111
+#6  0x0000555562c47993 in tokio_tungstenite::tls::client_async_tls_with_config::{{closure}} () at /home/ghabi/.cargo/git/checkouts/tokio-tungstenite-ea4445d9acecae62/132f5b3/src/tls.rs:236
+#7  0x0000555562c24e1a in tokio_tungstenite::connect::connect::{{closure}} () at /home/ghabi/.cargo/git/checkouts/tokio-tungstenite-ea4445d9acecae62/132f5b3/src/connect.rs:99
+#8  0x000055555c250cc5 in tokio_tungstenite::connect::connect_async_tls_with_config::{{closure}} () at /home/ghabi/.cargo/git/checkouts/tokio-tungstenite-ea4445d9acecae62/132f5b3/src/connect.rs:73
+#9  0x000055555c725d8e in codex_api::endpoint::responses_websocket::connect_websocket::{{closure}} () at codex-api/src/endpoint/responses_websocket.rs:411
+#10 0x000055555c72a70e in codex_api::endpoint::responses_websocket::ResponsesWebsocketClient::connect::{{closure}}::{{closure}} () at codex-api/src/endpoint/responses_websocket.rs:357
+#11 0x000055555c729d80 in codex_api::endpoint::responses_websocket::ResponsesWebsocketClient::connect::{{closure}} () at codex-api/src/endpoint/responses_websocket.rs:334
+#12 0x000055555c917680 in <tokio::time::timeout::Timeout<T> as core::future::future::Future>::poll () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/time/timeout.rs:202
+#13 0x000055555a8b0c75 in codex_core::client::ModelClient::connect_websocket::{{closure}} () at core/src/client.rs:798
+#14 0x000055555a8bb9ae in codex_core::client::ModelClientSession::websocket_connection::{{closure}}::{{closure}} () at core/src/client.rs:1117
+#15 0x000055555a8bb0d4 in codex_core::client::ModelClientSession::websocket_connection::{{closure}} () at core/src/client.rs:1069
+#16 0x000055555a8bf420 in codex_core::client::ModelClientSession::stream_responses_websocket::{{closure}}::{{closure}} () at core/src/client.rs:1357
+#17 0x000055555a8bdeb6 in codex_core::client::ModelClientSession::stream_responses_websocket::{{closure}} () at core/src/client.rs:1284
+#18 0x000055555a8c0daf in codex_core::client::ModelClientSession::stream::{{closure}} () at core/src/client.rs:1547
+#19 0x000055555b6da7f2 in <tracing::instrument::Instrumented<T> as core::future::future::Future>::poll () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tracing-0.1.44/src/instrument.rs:321
+#20 0x000055555a92817e in <F as codex_async_utils::OrCancelExt>::or_cancel::{{closure}}::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/macros/select.rs:707
+#21 0x000055555b9117cd in <core::future::poll_fn::PollFn<F> as core::future::future::Future>::poll () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/future/poll_fn.rs:151
+#22 0x000055555a927281 in <F as codex_async_utils::OrCancelExt>::or_cancel::{{closure}} () at /data/swe/FramePilot/cachetree/temp/null/20260512_1918/codex-clean-head/codex-rs/async-utils/src/lib.rs:26
+#23 0x000055555a5cd2f8 in <core::pin::Pin<P> as core::future::future::Future>::poll () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/future/future.rs:133
+#24 0x000055555b7883d4 in codex_core::session::turn::try_run_sampling_request::{{closure}}::{{closure}} () at core/src/session/turn.rs:2158
+#25 0x000055555b786381 in codex_core::session::turn::try_run_sampling_request::{{closure}} () at core/src/session/turn.rs:2115
+#26 0x000055555b781db2 in codex_core::session::turn::run_sampling_request::{{closure}}::{{closure}} () at core/src/session/turn.rs:1200
+#27 0x000055555b77fd6f in codex_core::session::turn::run_sampling_request::{{closure}} () at core/src/session/turn.rs:1114
+#28 0x000055555b7a2e09 in codex_core::session::turn::run_turn::{{closure}} () at core/src/session/turn.rs:477
+#29 0x000055555b6dbbf2 in <tracing::instrument::Instrumented<T> as core::future::future::Future>::poll () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tracing-0.1.44/src/instrument.rs:321
+#30 0x000055555ba2cd8f in <codex_core::tasks::regular::RegularTask as codex_core::tasks::SessionTask>::run::{{closure}} () at core/src/tasks/regular.rs:80
+#31 0x000055555ccc4be9 in <core::pin::Pin<P> as core::future::future::Future>::poll () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/future/future.rs:133
+#32 0x000055555aa6f604 in codex_core::tasks::<impl codex_core::session::session::Session>::start_task::{{closure}}::{{closure}} () at core/src/tasks/mod.rs:394
+#33 0x000055555b6da302 in <tracing::instrument::Instrumented<T> as core::future::future::Future>::poll () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tracing-0.1.44/src/instrument.rs:321
+#34 0x000055555a5cc776 in <core::pin::Pin<P> as core::future::future::Future>::poll () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/future/future.rs:133
+#35 0x000055555b051c7a in tokio::runtime::task::core::Core<T,S>::poll::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/task/core.rs:374
+#36 0x000055555b044884 in tokio::loom::std::unsafe_cell::UnsafeCell<T>::with_mut () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/loom/std/unsafe_cell.rs:16
+#37 tokio::runtime::task::core::Core<T,S>::poll () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/task/core.rs:363
+#38 0x000055555acfc18a in tokio::runtime::task::harness::poll_future::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/task/harness.rs:535
+#39 0x000055555b488210 in <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:274
+#40 0x000055555b6949d5 in std::panicking::catch_unwind::do_call () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:581
+#41 0x000055555b5a088b in __rust_try ()
+#42 0x000055555b59f758 in std::panicking::catch_unwind () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544
+#43 std::panic::catch_unwind () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359
+#44 0x000055555acf4857 in tokio::runtime::task::harness::poll_future () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/task/harness.rs:523
+#45 0x000055555ad1a7da in tokio::runtime::task::harness::Harness<T,S>::poll_inner () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/task/harness.rs:210
+#46 0x000055555ad56113 in tokio::runtime::task::harness::Harness<T,S>::poll () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/task/harness.rs:155
+#47 0x000055555b1b6bce in tokio::runtime::task::raw::poll () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/task/raw.rs:337
+#48 0x00005555651f574b in tokio::runtime::task::raw::RawTask::poll () at src/runtime/task/raw.rs:267
+#49 0x00005555651476e5 in tokio::runtime::task::LocalNotified<S>::run () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/task/mod.rs:515
+#50 0x000055555a983447 in tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}}::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:800
+#51 0x000055555a974f90 in tokio::task::coop::with_budget () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/task/coop/mod.rs:167
+#52 tokio::task::coop::budget () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/task/coop/mod.rs:133
+#53 tokio::runtime::scheduler::current_thread::Context::run_task::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:368
+#54 0x000055555a96eb66 in tokio::runtime::scheduler::current_thread::Context::enter () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:442
+#55 0x000055555a973717 in tokio::runtime::scheduler::current_thread::Context::run_task () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:368
+#56 0x000055555a981e40 in tokio::runtime::scheduler::current_thread::CoreGuard::block_on::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:796
+#57 0x000055555a9795f4 in tokio::runtime::scheduler::current_thread::CoreGuard::enter::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:840
+#58 0x000055555a1a2891 in tokio::runtime::context::scoped::Scoped<T>::set () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/context/scoped.rs:40
+#59 0x000055555b44eb84 in tokio::runtime::context::set_scheduler::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/context.rs:176
+#60 0x000055555bb391a7 in std::thread::local::LocalKey<T>::try_with () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/local.rs:513
+#61 0x000055555bb2a079 in std::thread::local::LocalKey<T>::with () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/local.rs:477
+#62 0x000055555b44e7eb in tokio::runtime::context::set_scheduler () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/context.rs:176
+#63 0x000055555a976094 in tokio::runtime::scheduler::current_thread::CoreGuard::enter () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:840
+#64 0x000055555a979dc2 in tokio::runtime::scheduler::current_thread::CoreGuard::block_on () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:740
+#65 0x000055555a9535e0 in tokio::runtime::scheduler::current_thread::CurrentThread::block_on::{{closure}} () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:200
+#66 0x000055555a99bf0b in tokio::runtime::context::runtime::enter_runtime () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/context/runtime.rs:65
+#67 0x000055555a950c38 in tokio::runtime::scheduler::current_thread::CurrentThread::block_on () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/current_thread/mod.rs:188
+#68 0x000055555b849c55 in tokio::runtime::runtime::Runtime::block_on_inner () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/runtime.rs:368
+#69 0x000055555b84b44b in tokio::runtime::runtime::Runtime::block_on () at /home/ghabi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/runtime.rs:342
+#70 0x000055555a54158b in codex_core::mcp_tool_call::tests::guardian_mode_mcp_denial_returns_rationale_message () at core/src/mcp_tool_call_tests.rs:2552
+#71 0x000055555b8cb9a3 in codex_core::mcp_tool_call::tests::guardian_mode_mcp_denial_returns_rationale_message::{{closure}} () at core/src/mcp_tool_call_tests.rs:2469
+#72 0x000055555aa8dbd6 in core::ops::function::FnOnce::call_once () at /home/ghabi/.rustup/toolchains/1.93.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#73 0x000055555bb7c03b in core::ops::function::FnOnce::call_once () at library/core/src/ops/function.rs:250
+#74 test::__rust_begin_short_backtrace () at library/test/src/lib.rs:663
+#75 0x000055555bb8f9ca in test::run_test_in_process::{{closure}} () at library/test/src/lib.rs:686
+#76 <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once () at library/core/src/panic/unwind_safe.rs:274
+#77 std::panicking::catch_unwind::do_call () at library/std/src/panicking.rs:581
+#78 std::panicking::catch_unwind () at library/std/src/panicking.rs:544
+#79 std::panic::catch_unwind () at library/std/src/panic.rs:359
+
+Thread 1 (Thread 0x7ffff789eec0 (LWP 1126822)):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000555565340e36 in std::sys::pal::unix::futex::futex_wait () at library/std/src/sys/pal/unix/futex.rs:73
+#2  std::sys::sync::thread_parking::futex::Parker::park_timeout () at library/std/src/sys/sync/thread_parking/futex.rs:75
+#3  std::thread::thread::Thread::park_timeout () at library/std/src/thread/thread.rs:132
+#4  0x000055555bb6b689 in std::sync::mpmc::context::Context::wait_until () at library/std/src/sync/mpmc/context.rs:133
+#5  std::sync::mpmc::list::Channel<T>::recv::{{closure}} () at library/std/src/sync/mpmc/list.rs:453
+#6  0x000055555bb6b1ac in std::sync::mpmc::context::Context::with::{{closure}} () at library/std/src/sync/mpmc/context.rs:49
+#7  std::sync::mpmc::context::Context::with::{{closure}} () at library/std/src/sync/mpmc/context.rs:57
+#8  std::thread::local::LocalKey<T>::try_with () at library/std/src/thread/local.rs:513
+#9  std::sync::mpmc::context::Context::with () at library/std/src/sync/mpmc/context.rs:53
+#10 std::sync::mpmc::list::Channel<T>::recv () at library/std/src/sync/mpmc/list.rs:442
+#11 0x000055555bb88311 in std::sync::mpmc::Receiver<T>::recv_deadline () at library/std/src/sync/mpmc/mod.rs:1119
+#12 std::sync::mpmc::Receiver<T>::recv_timeout () at library/std/src/sync/mpmc/mod.rs:1051
+#13 std::sync::mpsc::Receiver<T>::recv_timeout () at library/std/src/sync/mpsc.rs:909
+#14 test::run_tests () at library/test/src/lib.rs:456
+#15 test::console::run_tests_console () at library/test/src/console.rs:327
+#16 0x000055555bb90cc9 in test::test_main_with_exit_callback () at library/test/src/lib.rs:160
+#17 test::test_main () at library/test/src/lib.rs:101
+#18 0x000055555bb7bc4b in test::test_main_static () at library/test/src/lib.rs:183
+#19 0x000055555a537fd3 in codex_core::main () at core/src/realtime_context.rs:341
