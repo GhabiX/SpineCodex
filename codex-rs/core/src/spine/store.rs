@@ -1752,14 +1752,6 @@ impl TransitionSummaryArg for &str {
 }
 
 impl SpineOperation {
-    pub(crate) fn apply(
-        self,
-        state: &mut SpineState,
-        summary: Option<String>,
-    ) -> Result<Transition, SpineStateError> {
-        self.apply_with_child_summary(state, summary, None)
-    }
-
     pub(crate) fn apply_with_child_summary(
         self,
         state: &mut SpineState,

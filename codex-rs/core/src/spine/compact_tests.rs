@@ -337,9 +337,8 @@ fn raw_ordinals_treat_plain_final_answer_markdown_memory_as_raw1() {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text:
-                "## Spine Memory\n\nNode: 1.2\nOperation: next\nSummary: visible answer\n\nfacts"
-                    .to_string(),
+            text: "## Spine Memory\n\nNode: 1.2\nOperation: next\nSummary: visible answer\n\nfacts"
+                .to_string(),
         }],
         phase: Some(MessagePhase::FinalAnswer),
     };
@@ -1068,7 +1067,7 @@ fn replacement_history_splices_prefix_ir_and_tail() {
 }
 
 #[test]
-fn root_archive_replacement_keeps_spine_ir_not_native_summary() {
+fn root_archive_replacement_folds_prior_spine_memory_into_archive_span() {
     let prior_memory =
         render_spine_memory_item(&id(&[1]), SpineOperation::Archive, "first epoch", "facts");
     let root_memory =
@@ -1094,19 +1093,95 @@ fn root_archive_replacement_keeps_spine_ir_not_native_summary() {
         vec![wrapped_initial_context.clone()],
         vec![root_memory],
         &live_tail,
-    );
-    let rendered = serde_json::to_string(&replacement).expect("serialize replacement history");
+        &[installed_span(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Archive,
+            1,
+            3,
+        )],
+    )
+    .expect("build root archive replacement");
+    let rendered = serde_json::to_string(&replacement.replacement_history)
+        .expect("serialize replacement history");
 
-    assert_eq!(replacement.len(), 5);
-    assert_eq!(replacement[0], fixed_prelude);
-    assert_eq!(replacement[1], prior_memory);
-    assert_eq!(replacement[2], wrapped_initial_context);
+    assert_eq!(replacement.archive_cut_ordinal, 1);
+    assert_eq!(replacement.archive_cut_index, 1);
+    assert_eq!(replacement.replacement_history.len(), 4);
+    assert_eq!(replacement.replacement_history[0], fixed_prelude);
+    assert_eq!(replacement.replacement_history[1], wrapped_initial_context);
     assert!(rendered.contains("Node: 2"));
+    assert!(!rendered.contains("Node: 1"));
     assert!(rendered.contains("live tail after fold"));
     assert!(rendered.contains("spine_initial_context"));
     assert!(!rendered.contains("native compact summary"));
     assert!(!rendered.contains("recent user message kept by native compact"));
     assert!(!rendered.contains("ordinary assistant prefix"));
+}
+
+#[test]
+fn root_archive_replacement_must_not_emit_discontinuous_memory_spans() {
+    let prefix_history = vec![
+        text_item("raw 0"),
+        text_item("raw 1"),
+        render_spine_memory_item(
+            &id(&[1, 1, 1]),
+            SpineOperation::Next,
+            "first",
+            "first facts",
+        ),
+        text_item("raw gap 10"),
+        render_spine_memory_item(
+            &id(&[1, 1, 2]),
+            SpineOperation::Next,
+            "second",
+            "second facts",
+        ),
+        text_item("raw gap 25"),
+    ];
+    let root_memory =
+        render_spine_memory_item(&id(&[1]), SpineOperation::Archive, "root", "root facts");
+    let replacement = build_root_archive_replacement_history(
+        &prefix_history,
+        Vec::new(),
+        vec![root_memory],
+        &[text_item("future live raw 50")],
+        &[
+            installed_span("compact-1", id(&[1, 1, 1]), SpineOperation::Next, 2, 10),
+            installed_span("compact-2", id(&[1, 1, 2]), SpineOperation::Next, 11, 25),
+        ],
+    )
+    .expect("build root archive replacement");
+
+    assert_eq!(replacement.archive_cut_ordinal, 2);
+    assert_eq!(replacement.archive_cut_index, 2);
+    let rendered = serde_json::to_string(&replacement.replacement_history)
+        .expect("serialize replacement history");
+    assert!(rendered.contains("Node: 1"));
+    assert!(!rendered.contains("Node: 1.1.1"));
+    assert!(!rendered.contains("Node: 1.1.2"));
+
+    let spans_after_install = vec![installed_span(
+        "compact-root",
+        id(&[1]),
+        SpineOperation::Archive,
+        2,
+        50,
+    )];
+    validate_spine_replacement_history_admissible(
+        &replacement.replacement_history,
+        &spans_after_install,
+        &[2, 50],
+    )
+    .expect("root archive replacement should be mappable");
+    assert_eq!(
+        effective_index_for_raw_ordinal_with_spans(
+            &replacement.replacement_history,
+            50,
+            &spans_after_install,
+        ),
+        Some(replacement.replacement_history.len() - 1)
+    );
 }
 
 #[test]
@@ -1755,9 +1830,7 @@ fn spine_compact_markdown_extraction_rejects_xml_wrappers() {
     );
     assert!(extract_spine_compact_markdown("<memory>\n## Done\n\nfacts\n</memory>").is_err());
     assert!(
-        extract_spine_compact_markdown(
-            "<spine_ir id=\"x\">\n<memory>facts</memory>\n</spine_ir>"
-        )
-        .is_err()
+        extract_spine_compact_markdown("<spine_ir id=\"x\">\n<memory>facts</memory>\n</spine_ir>")
+            .is_err()
     );
 }

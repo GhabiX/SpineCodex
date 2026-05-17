@@ -1,4 +1,5 @@
 use super::*;
+use codex_utils_cli::RUNTIME_DEBUG_CHECKS_OVERRIDE;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -69,6 +70,19 @@ fn parses_config_isolation_flags() {
 
     assert!(cli.ignore_user_config);
     assert!(cli.ignore_rules);
+}
+
+#[test]
+fn parses_runtime_debug_checks_flag() {
+    let cli = Cli::parse_from(["codex-exec", "--debug", "summarize"]);
+    assert!(cli.runtime_debug_checks);
+
+    let mut overrides = cli.config_overrides;
+    overrides.enable_runtime_debug_checks();
+    assert_eq!(
+        overrides.raw_overrides,
+        vec![RUNTIME_DEBUG_CHECKS_OVERRIDE.to_string()]
+    );
 }
 
 #[test]

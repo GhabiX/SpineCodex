@@ -191,6 +191,7 @@ use crate::spine::compact::render_auto_compact_memory;
 use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_initial_context_item;
 use crate::spine::compact::render_spine_memory_item;
+use crate::spine::compact::validate_spine_replacement_history_admissible;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
 use crate::spine::session_integration::record_plan_update_snapshot;
@@ -198,6 +199,7 @@ use crate::spine::store::CompactAttemptRecord;
 use crate::spine::store::CompactInstalledRecord;
 use crate::spine::store::CompactStartedRecord;
 use crate::spine::store::CompactTerminalRecord;
+use crate::spine::store::InstalledCompactSpan;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::compact_message_hash;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
@@ -3020,33 +3022,11 @@ impl Session {
                 acknowledged_raw_ordinal
             )));
         }
-        let (compact_id, compact_attempt, compact_started) = spine_compact_attempt_records(
-            &prep.effective_boundary,
-            prep.compact_index_rollout_path,
-        );
-        store
-            .append_compact_started(compact_started)
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to record spine root archive start: {err}"))
-            })?;
-
         let compacted_body = compact_summary
             .strip_prefix(crate::compact::SUMMARY_PREFIX)
             .map(str::trim)
             .filter(|body| !body.is_empty())
             .unwrap_or(compact_summary.as_str());
-        let memory_markdown = render_auto_compact_memory(&prep.plan.input, compacted_body);
-        store
-            .memory_with_appended_section(&boundary.node_id, &memory_markdown)
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to stage spine root archive memory: {err}"))
-            })?;
-        let memory_rel_path = prep
-            .plan
-            .memory_path
-            .strip_prefix(store.root())
-            .unwrap_or(prep.plan.memory_path.as_path())
-            .to_path_buf();
         let rendered_memory_items = vec![render_spine_memory_item(
             &boundary.node_id,
             boundary.op,
@@ -3060,23 +3040,64 @@ impl Session {
         } else {
             Vec::new()
         };
-        let replacement_history = build_root_archive_replacement_history(
+        let root_replacement = build_root_archive_replacement_history(
             &history[..prep.plan.cut_index],
             initial_context_items,
             rendered_memory_items,
             &prep.plan.replacement_tail,
-        );
+            &prep.runtime_spans,
+        )?;
+        let root_boundary = SpineCompactBoundary {
+            cut_ordinal: root_replacement.archive_cut_ordinal,
+            ..prep.effective_boundary.clone()
+        };
+        let mut memory_input = prep.plan.input.clone();
+        memory_input.cut_ordinal = root_boundary.cut_ordinal;
+        memory_input.suffix_items =
+            history[root_replacement.archive_cut_index..prep.plan.fold_end_index].to_vec();
+        let memory_markdown = render_auto_compact_memory(&memory_input, compacted_body);
+        store
+            .memory_with_appended_section(&boundary.node_id, &memory_markdown)
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to stage spine root archive memory: {err}"))
+            })?;
+        let memory_rel_path = prep
+            .plan
+            .memory_path
+            .strip_prefix(store.root())
+            .unwrap_or(prep.plan.memory_path.as_path())
+            .to_path_buf();
         let compact_message = format!(
             "Spine compacted root epoch {} [{}, {})",
-            boundary.node_id,
-            prep.effective_boundary.cut_ordinal,
-            prep.effective_boundary.fold_end_ordinal
+            boundary.node_id, root_boundary.cut_ordinal, root_boundary.fold_end_ordinal
         );
+        let (compact_id, compact_attempt, compact_started) =
+            spine_compact_attempt_records(&root_boundary, prep.compact_index_rollout_path);
+        let replacement_history = root_replacement.replacement_history;
         let compacted_item = CompactedItem {
             message: compact_message.clone(),
             replacement_history: Some(replacement_history.clone()),
         };
         let message_hash = compact_message_hash(&compact_message);
+        if turn_context.config.runtime_debug_checks {
+            let spans_after_install = spine_compact_spans_after_install(
+                &prep.runtime_spans,
+                compact_id.clone(),
+                &root_boundary,
+                replacement_history.len(),
+                message_hash.clone(),
+            );
+            validate_spine_replacement_history_admissible(
+                &replacement_history,
+                &spans_after_install,
+                &[root_boundary.cut_ordinal, root_boundary.fold_end_ordinal],
+            )?;
+        }
+        store
+            .append_compact_started(compact_started)
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to record spine root archive start: {err}"))
+            })?;
         if let Err(err) = self
             .try_replace_compacted_history(
                 replacement_history.clone(),
@@ -3115,9 +3136,7 @@ impl Session {
                 ))
                 .await);
         }
-        let node_trajs_items = prep
-            .plan
-            .input
+        let node_trajs_items = memory_input
             .suffix_items
             .iter()
             .cloned()
@@ -3145,7 +3164,7 @@ impl Session {
             let mut runtime = spine.lock().await;
             if let Err(err) = runtime.record_root_epoch_archive(
                 boundary.transition_summary.clone(),
-                prep.effective_boundary.fold_end_ordinal,
+                root_boundary.fold_end_ordinal,
                 &compact_id,
                 &turn_context.sub_id,
             ) {
@@ -3332,6 +3351,36 @@ impl Session {
             replacement_history: Some(replacement_history.clone()),
         };
         let message_hash = compact_message_hash(&compact_output.compact_message);
+        if turn_context.config.runtime_debug_checks {
+            let spans_after_install = spine_compact_spans_after_install(
+                &prep.runtime_spans,
+                compact_id.clone(),
+                &prep.effective_boundary,
+                replacement_history.len(),
+                message_hash.clone(),
+            );
+            if let Err(err) = validate_spine_replacement_history_admissible(
+                &replacement_history,
+                &spans_after_install,
+                &[
+                    prep.effective_boundary.cut_ordinal,
+                    prep.effective_boundary.fold_end_ordinal,
+                ],
+            ) {
+                store
+                    .append_compact_failed(CompactTerminalRecord {
+                        attempt: compact_attempt.clone(),
+                        strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
+                        error: err.to_string(),
+                    })
+                    .map_err(|store_err| {
+                        CodexErr::Fatal(format!(
+                            "failed to record spine compact install failure after invariant error {err}: {store_err}"
+                        ))
+                    })?;
+                return Err(err);
+            }
+        }
         if let Err(err) = self
             .try_replace_compacted_history(replacement_history.clone(), None, compacted_item)
             .await
@@ -4320,6 +4369,26 @@ fn spine_compact_attempt_records(
         rollout,
     };
     (compact_id, attempt, started)
+}
+
+fn spine_compact_spans_after_install(
+    runtime_spans: &[InstalledCompactSpan],
+    compact_id: String,
+    boundary: &SpineCompactBoundary,
+    replacement_history_len: usize,
+    message_hash: String,
+) -> Vec<InstalledCompactSpan> {
+    let mut spans = runtime_spans.to_vec();
+    spans.push(InstalledCompactSpan {
+        compact_id,
+        node_id: boundary.node_id.clone(),
+        op: boundary.op,
+        cut_ordinal: boundary.cut_ordinal,
+        fold_end_ordinal: boundary.fold_end_ordinal,
+        replacement_history_len,
+        message_hash,
+    });
+    spans
 }
 
 #[cfg(test)]

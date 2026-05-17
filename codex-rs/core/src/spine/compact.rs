@@ -4,8 +4,8 @@ use super::store::SpineOperation;
 use super::store::SpineSidecarStore;
 use super::view::display_node_id;
 use super::view::op_label;
-use super::view::relative_node_trajs_path;
 use super::view::relative_memory_path;
+use super::view::relative_node_trajs_path;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
@@ -72,6 +72,7 @@ pub(crate) struct SpineCompactPreparation {
     pub(crate) plan: SpineCompactPlan,
     pub(crate) effective_boundary: SpineCompactBoundary,
     pub(crate) compact_index_rollout_path: String,
+    pub(crate) runtime_spans: Vec<InstalledCompactSpan>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -250,8 +251,7 @@ fn extract_spine_compact_markdown(text: &str) -> CodexResult<String> {
         || body.contains("</memory>")
     {
         return Err(CodexErr::Fatal(
-            "spine compact response must be plain Markdown without XML memory wrappers"
-                .to_string(),
+            "spine compact response must be plain Markdown without XML memory wrappers".to_string(),
         ));
     }
     Ok(body.to_string())
@@ -299,20 +299,73 @@ pub(crate) fn build_root_archive_replacement_history(
     initial_context_items: Vec<ResponseItem>,
     ir_items: Vec<ResponseItem>,
     live_tail: &[ResponseItem],
-) -> Vec<ResponseItem> {
+    runtime_spans: &[InstalledCompactSpan],
+) -> CodexResult<RootArchiveReplacementHistory> {
     let mut replacement_history = Vec::with_capacity(
         prefix_history.len() + initial_context_items.len() + ir_items.len() + live_tail.len(),
     );
-    for item in prefix_history {
+    let mut raw_cursor = 0_u64;
+    let mut span_cursor = 0_usize;
+    let mut archive_cut_ordinal = None;
+    let mut archive_cut_index = None;
+    for (index, item) in prefix_history.iter().enumerate() {
         if is_non_spine_compact_item(item) || parse_spine_initial_context_item(item).is_some() {
             continue;
         }
-        replacement_history.push(item.clone());
+        match classify_effective_item(item, raw_cursor, runtime_spans, &mut span_cursor)
+            .ok_or_else(|| {
+                CodexErr::Fatal(format!(
+                    "spine root archive prefix is not admissible: item {index} does not match raw cursor {raw_cursor} in the compact span ledger"
+                ))
+            })? {
+            EffectiveItemSemantics::Raw1 => {
+                if archive_cut_ordinal.is_none() {
+                    replacement_history.push(item.clone());
+                }
+                raw_cursor = raw_cursor.checked_add(1).ok_or_else(|| {
+                    CodexErr::Fatal(
+                        "spine root archive prefix raw cursor overflowed".to_string(),
+                    )
+                })?;
+            }
+            EffectiveItemSemantics::Zero => {
+                if archive_cut_ordinal.is_none() {
+                    replacement_history.push(item.clone());
+                }
+            }
+            EffectiveItemSemantics::Span { cut, fold_end } => {
+                if cut != raw_cursor {
+                    return Err(CodexErr::Fatal(format!(
+                        "spine root archive prefix is not admissible: span at item {index} starts at raw ordinal {cut}, expected {raw_cursor}"
+                    )));
+                }
+                if cut >= fold_end {
+                    return Err(CodexErr::Fatal(format!(
+                        "spine root archive prefix is not admissible: span at item {index} is empty or inverted [{cut}, {fold_end})"
+                    )));
+                }
+                archive_cut_ordinal = Some(raw_cursor);
+                archive_cut_index = Some(index);
+                break;
+            }
+            EffectiveItemSemantics::Stop => break,
+        }
     }
     replacement_history.extend(initial_context_items);
     replacement_history.extend(ir_items);
     replacement_history.extend_from_slice(live_tail);
-    replacement_history
+    Ok(RootArchiveReplacementHistory {
+        replacement_history,
+        archive_cut_ordinal: archive_cut_ordinal.unwrap_or(raw_cursor),
+        archive_cut_index: archive_cut_index.unwrap_or(prefix_history.len()),
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RootArchiveReplacementHistory {
+    pub(crate) replacement_history: Vec<ResponseItem>,
+    pub(crate) archive_cut_ordinal: u64,
+    pub(crate) archive_cut_index: usize,
 }
 
 pub(crate) fn validate_spine_replacement_history_admissible(
@@ -506,6 +559,7 @@ pub(crate) fn prepare_spine_compact_plan(
         plan,
         effective_boundary,
         compact_index_rollout_path,
+        runtime_spans,
     })
 }
 
@@ -1093,9 +1147,7 @@ fn parse_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadat
     Some(SpineMemoryMetadata { node_id, op })
 }
 
-fn parse_legacy_markdown_spine_memory_metadata(
-    item: &ResponseItem,
-) -> Option<SpineMemoryMetadata> {
+fn parse_legacy_markdown_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadata> {
     let text = match item {
         ResponseItem::Message {
             id,

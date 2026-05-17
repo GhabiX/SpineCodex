@@ -82,7 +82,11 @@ pub(crate) fn project_spine_state_from_rollout(
                     let transition = pending_transition
                         .take()
                         .expect("pending transition checked above");
-                    let applied = transition.op.apply(&mut state, transition.summary)?;
+                    let applied = transition.op.apply_with_child_summary(
+                        &mut state,
+                        transition.summary,
+                        transition.child_summary,
+                    )?;
                     state.set_raw_start_ordinal(&applied.to, item_end)?;
                 }
                 raw_ordinal = item_end;
@@ -209,6 +213,7 @@ struct PendingTransition {
     call_id: String,
     op: SpineOperation,
     summary: Option<String>,
+    child_summary: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -218,6 +223,19 @@ struct NamespacedOpenArgs {}
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NamespacedSummaryArgs {
+    summary: String,
+    #[serde(
+        default,
+        rename = "instruction",
+        deserialize_with = "discard_optional_string"
+    )]
+    _instruction: (),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamespacedCloseArgs {
+    child_summary: String,
     summary: String,
     #[serde(
         default,
@@ -249,7 +267,7 @@ fn spine_transition_from_response_item(
     };
 
     if namespace.as_deref() == Some(SPINE_NAMESPACE) {
-        let (op, summary) =
+        let (op, summary, child_summary) =
             match name.as_str() {
                 SPINE_TOOL_OPEN => {
                     serde_json::from_str::<NamespacedOpenArgs>(arguments).map_err(|source| {
@@ -258,7 +276,7 @@ fn spine_transition_from_response_item(
                             source,
                         }
                     })?;
-                    (SpineOperation::Open, None)
+                    (SpineOperation::Open, None, None)
                 }
                 SPINE_TOOL_NEXT => {
                     let args = serde_json::from_str::<NamespacedSummaryArgs>(arguments).map_err(
@@ -271,20 +289,21 @@ fn spine_transition_from_response_item(
                         summary,
                         _instruction: _,
                     } = args;
-                    (SpineOperation::Next, Some(summary))
+                    (SpineOperation::Next, Some(summary), None)
                 }
                 SPINE_TOOL_CLOSE => {
-                    let args = serde_json::from_str::<NamespacedSummaryArgs>(arguments).map_err(
+                    let args = serde_json::from_str::<NamespacedCloseArgs>(arguments).map_err(
                         |source| SpineProjectionError::ArgsJson {
                             call_id: call_id.clone(),
                             source,
                         },
                     )?;
-                    let NamespacedSummaryArgs {
+                    let NamespacedCloseArgs {
+                        child_summary,
                         summary,
                         _instruction: _,
                     } = args;
-                    (SpineOperation::Close, Some(summary))
+                    (SpineOperation::Close, Some(summary), Some(child_summary))
                 }
                 _ => return Ok(None),
             };
@@ -292,6 +311,7 @@ fn spine_transition_from_response_item(
             call_id: call_id.clone(),
             op,
             summary,
+            child_summary,
         }));
     }
 
@@ -317,6 +337,7 @@ fn spine_transition_from_response_item(
             call_id: call_id.clone(),
             op,
             summary: args.summary,
+            child_summary: None,
         }));
     }
 
@@ -399,7 +420,7 @@ mod instruction_projection_tests {
             spine_call(
                 "close-1",
                 SPINE_TOOL_CLOSE,
-                r#"{"summary":"done","instruction":"keep child context"}"#,
+                r#"{"child_summary":"leaf done","summary":"done","instruction":"keep child context"}"#,
             ),
             call_output("close-1"),
         ])
@@ -414,6 +435,15 @@ mod instruction_projection_tests {
                 .summary
                 .as_deref(),
             Some("done")
+        );
+        assert_eq!(
+            projection
+                .state
+                .node(&NodeId::from_segments(vec![1, 1, 1]))
+                .expect("child node")
+                .summary
+                .as_deref(),
+            Some("leaf done")
         );
     }
 

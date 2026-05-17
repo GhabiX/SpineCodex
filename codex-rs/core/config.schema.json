@@ -749,6 +749,9 @@
       "properties": {
         "config_lockfile": {
           "$ref": "#/definitions/DebugConfigLockToml"
+        },
+        "runtime_checks": {
+          "type": "boolean"
         }
       },
       "type": "object"

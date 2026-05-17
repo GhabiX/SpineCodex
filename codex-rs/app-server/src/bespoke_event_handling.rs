@@ -3485,8 +3485,6 @@ mod tests {
                     status: StepStatus::Completed,
                 },
             ],
-            spine_plantree: None,
-            clear_spine_plantree: false,
         };
 
         let conversation_id = ThreadId::new();

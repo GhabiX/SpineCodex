@@ -25,15 +25,28 @@ fn user_message(text: &str) -> RolloutItem {
 }
 
 fn spine_call(call_id: &str, op: &str, summary: &str) -> RolloutItem {
+    let arguments = if op == SPINE_TOOL_OPEN {
+        "{}".to_string()
+    } else {
+        format!(r#"{{"summary":"{summary}"}}"#)
+    };
+    spine_call_with_args(call_id, op, &arguments)
+}
+
+fn spine_close_call(call_id: &str, child_summary: &str, summary: &str) -> RolloutItem {
+    spine_call_with_args(
+        call_id,
+        SPINE_TOOL_CLOSE,
+        &format!(r#"{{"child_summary":"{child_summary}","summary":"{summary}"}}"#),
+    )
+}
+
+fn spine_call_with_args(call_id: &str, op: &str, arguments: &str) -> RolloutItem {
     RolloutItem::ResponseItem(ResponseItem::FunctionCall {
         id: None,
         name: op.to_string(),
         namespace: Some(SPINE_NAMESPACE.to_string()),
-        arguments: if op == SPINE_TOOL_OPEN {
-            "{}".to_string()
-        } else {
-            format!(r#"{{"summary":"{summary}"}}"#)
-        },
+        arguments: arguments.to_string(),
         call_id: call_id.to_string(),
     })
 }
@@ -99,6 +112,39 @@ fn projects_committed_spine_transitions_from_rollout_prefix() {
 }
 
 #[test]
+fn projects_namespaced_close_with_child_summary() {
+    let projection = project_spine_state_from_rollout(&[
+        user_message("start"),
+        spine_call("open-1", SPINE_TOOL_OPEN, "scope"),
+        call_output("open-1"),
+        spine_close_call("close-1", "leaf done", "scope done"),
+        call_output("close-1"),
+    ])
+    .expect("project");
+
+    assert_eq!(projection.response_item_count, 5);
+    assert_eq!(projection.state.cursor().to_string(), "1.2");
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[1, 1, 1]))
+            .expect("child node")
+            .summary
+            .as_deref(),
+        Some("leaf done")
+    );
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[1, 1]))
+            .expect("parent node")
+            .summary
+            .as_deref(),
+        Some("scope done")
+    );
+}
+
+#[test]
 fn projection_applies_thread_rollback_markers() {
     let projection = project_spine_state_from_rollout(&[
         user_message("start"),
@@ -120,6 +166,38 @@ fn projection_applies_thread_rollback_markers() {
             .state
             .node(&NodeId::from_segments(vec![1, 2]))
             .is_none()
+    );
+}
+
+#[test]
+fn projection_rolls_back_namespaced_close_with_child_summary() {
+    let projection = project_spine_state_from_rollout(&[
+        turn_started("turn-1"),
+        user_message("start"),
+        spine_call("open-1", SPINE_TOOL_OPEN, "scope"),
+        call_output("open-1"),
+        turn_complete("turn-1"),
+        turn_started("rolled-back-turn"),
+        user_message("drop close"),
+        spine_close_call("close-1", "rolled leaf", "rolled scope"),
+        call_output("close-1"),
+        turn_complete("rolled-back-turn"),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    ])
+    .expect("project");
+
+    assert_eq!(projection.response_item_count, 3);
+    assert_eq!(projection.state.cursor().to_string(), "1.1.1");
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[1, 1]))
+            .expect("parent node")
+            .summary
+            .as_deref(),
+        None
     );
 }
 

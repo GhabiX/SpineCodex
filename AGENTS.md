@@ -1,5 +1,12 @@
 # Rust/codex-rs
 
+For CacheTree Spine work, `/data/swe/FramePilot/cachetree/doc/spine_memory_segment_model.md`
+is the highest-priority design reference. It contains the canonical definitions
+and modeling design for Spine memory/segment behavior. If Codex source,
+tests, plans, or local instructions conflict with that document, update the
+conflicting material or explicitly revise the model document before continuing
+implementation.
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`

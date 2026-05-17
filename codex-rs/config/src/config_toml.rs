@@ -467,6 +467,7 @@ pub struct ConfigLockfileToml {
 #[schemars(deny_unknown_fields)]
 pub struct DebugToml {
     pub config_lockfile: Option<DebugConfigLockToml>,
+    pub runtime_checks: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
