@@ -3,6 +3,7 @@ use crate::session::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use pretty_assertions::assert_eq;
@@ -38,6 +39,42 @@ fn inter_agent_msg(text: &str, trigger_turn: bool) -> ResponseItem {
         trigger_turn,
     );
     communication.to_response_input_item().into()
+}
+
+#[test]
+fn last_n_turns_ancestor_mem_policy() {
+    let nested_spine_call = ResponseItem::FunctionCall {
+        id: None,
+        call_id: "hidden-spine-call".to_string(),
+        name: crate::spine::SPINE_TOOL_OPEN.to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+    };
+    let items = vec![
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted hidden ancestor".to_string(),
+            replacement_history: Some(vec![nested_spine_call]),
+        }),
+        RolloutItem::Compacted(CompactedItem {
+            message: "Native compacted context".to_string(),
+            replacement_history: Some(vec![assistant_msg("native summary")]),
+        }),
+    ];
+
+    let downgraded = downgrade_spine_compactions_to_read_only_notes(items);
+
+    let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = &downgraded[0]
+    else {
+        panic!("spine compact should become a read-only message");
+    };
+    assert_eq!(role, "assistant");
+    assert!(content.iter().any(|item| match item {
+        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            text == "Spine compacted hidden ancestor"
+        }
+        ContentItem::InputImage { .. } => false,
+    }));
+    assert!(matches!(downgraded[1], RolloutItem::Compacted(_)));
 }
 
 #[test]

@@ -17,6 +17,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -60,6 +61,17 @@ fn text_input(text: &str) -> Op {
         text_elements: Vec::new(),
     }]
     .into()
+}
+
+fn user_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
 }
 
 fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
@@ -940,6 +952,120 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .submit(Op::Shutdown {})
         .await
         .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn spawn_agent_last_n_turns_downgrades_spine_compaction_to_read_only_note()
+-> anyhow::Result<()> {
+    let (_home, mut config) = test_config().await;
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    let state_db = init_state_db(&config).await;
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        state_db,
+    );
+    let control = manager.agent_control();
+    let parent_thread = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
+    let parent_thread_id = parent_thread.thread_id;
+    let parent_thread = parent_thread.thread;
+    let parent_spawn_call_id = "spawn-call-last-n-spine".to_string();
+
+    parent_thread
+        .codex
+        .session
+        .persist_rollout_items(&[
+            RolloutItem::ResponseItem(user_message("outside retained window")),
+            RolloutItem::ResponseItem(user_message("retained parent task")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "Spine compacted hidden ancestor".to_string(),
+                replacement_history: Some(vec![ResponseItem::FunctionCall {
+                    id: None,
+                    call_id: "hidden-spine-call".to_string(),
+                    name: crate::spine::SPINE_TOOL_OPEN.to_string(),
+                    namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+                    arguments: "{}".to_string(),
+                }]),
+            }),
+            RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
+        ])
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("parent rollout should flush");
+
+    let child_thread_id = control
+        .spawn_agent_with_metadata(
+            config,
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some(parent_spawn_call_id),
+                fork_mode: Some(SpawnAgentForkMode::LastNTurns(1)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("last-N fork should keep Spine compaction as read-only context")
+        .thread_id;
+
+    let child_thread = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+    assert!(
+        history_contains_text(history.raw_items(), "Spine compacted hidden ancestor"),
+        "retained Spine compact message should remain visible as read-only host context"
+    );
+
+    let child_rollout_path = child_thread
+        .rollout_path()
+        .expect("child rollout path should exist");
+    let child_store = crate::spine::store::SpineSidecarStore::for_rollout(&child_rollout_path)?;
+    let child_tree = std::fs::read_to_string(child_store.tree_path())?;
+    assert!(
+        !child_tree.contains("\"projection_reset\""),
+        "LastNTurns should not seed mutable Spine projection from a read-only compact note"
+    );
+    let compact_index =
+        std::fs::read_to_string(child_store.compact_index_path()).unwrap_or_else(|_| String::new());
+    assert!(
+        !compact_index.contains("mem_install_committed"),
+        "LastNTurns should not import compact Mem evidence from outside the retained window"
+    );
+
+    let _ = control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+    Ok(())
 }
 
 #[tokio::test]
