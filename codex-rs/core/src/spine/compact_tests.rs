@@ -735,7 +735,7 @@ fn raw_ordinals_ignore_unmatched_later_runtime_spans() {
 }
 
 #[test]
-fn raw_ordinals_map_to_synthetic_spine_ir_boundaries_only() {
+fn legacy_spine_read_only_parser_only_ir_is_raw1() {
     let ir_item = render_spine_ir_item(
         &id(&[1, 2]),
         SpineOperation::Next,
@@ -750,9 +750,9 @@ fn raw_ordinals_map_to_synthetic_spine_ir_boundaries_only() {
 
     assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
     assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 2), None);
-    assert_eq!(effective_index_for_raw_ordinal(&history, 3), None);
-    assert_eq!(effective_index_for_raw_ordinal(&history, 4), Some(2));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 2), Some(2));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 3), Some(3));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 4), None);
 }
 
 #[test]
@@ -801,9 +801,38 @@ fn raw_ordinals_map_serialized_spine_ir_marker() {
 
     assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
     assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 2), None);
-    assert_eq!(effective_index_for_raw_ordinal(&history, 3), None);
-    assert_eq!(effective_index_for_raw_ordinal(&history, 4), Some(2));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 2), Some(2));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 3), Some(3));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 4), None);
+}
+
+#[test]
+fn legacy_spine_read_only_parser_only_memory_carriers_are_raw1() {
+    let legacy_xml = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "<spine_memory node=\"1\" op=\"next\">\nSummary: leaf\n\nfacts\n</spine_memory>"
+                .to_string(),
+        }],
+        phase: None,
+    };
+    let bare_markdown =
+        text_item("## Spine Memory\n\nNode: 1\nOperation: next\nSummary: leaf\n\nfacts");
+    let history = vec![
+        text_item("prefix"),
+        legacy_xml,
+        bare_markdown,
+        text_item("tail"),
+    ];
+
+    assert!(is_spine_ir_item(&history[1]));
+    assert!(!is_spine_ir_item(&history[2]));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 2), Some(2));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 3), Some(3));
+    assert_eq!(effective_index_for_raw_ordinal(&history, 4), Some(4));
 }
 
 #[test]
@@ -1381,7 +1410,15 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
         sidecar_root: Path::new("/tmp/spine").to_path_buf(),
     };
 
-    let plan = plan_suffix_fold(&history, 7, 9, input).expect("plan suffix fold");
+    let spans = vec![installed_span(
+        "compact-previous-root",
+        id(&[1, 1]),
+        SpineOperation::Archive,
+        1,
+        7,
+    )];
+    let plan =
+        plan_suffix_fold_with_spans(&history, 7, 9, &spans, input).expect("plan suffix fold");
 
     assert_eq!(plan.cut_index, 2);
     assert_eq!(plan.fold_end_index, 5);

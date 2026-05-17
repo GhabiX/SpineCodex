@@ -1004,12 +1004,25 @@ fn classify_effective_item(
             fold_end: meta.fold_end,
         });
     }
-    if let Some(meta) = parse_spine_memory_metadata(item) {
+    if let Some(meta) = parse_current_spine_memory_metadata(item) {
         let span = consume_runtime_span_for_memory(runtime_spans, span_cursor, &meta, raw_cursor)?;
         return Some(EffectiveItemSemantics::Span {
             cut: span.cut_ordinal,
             fold_end: span.fold_end_ordinal,
         });
+    }
+    if let Some(meta) = parse_legacy_xml_spine_memory_metadata(item) {
+        return match lookup_runtime_span_for_memory(runtime_spans, *span_cursor, &meta, raw_cursor)
+        {
+            RuntimeMemorySpanMatch::Unique { index, span } => {
+                let cut = span.cut_ordinal;
+                let fold_end = span.fold_end_ordinal;
+                *span_cursor = index + 1;
+                Some(EffectiveItemSemantics::Span { cut, fold_end })
+            }
+            RuntimeMemorySpanMatch::Ambiguous => None,
+            RuntimeMemorySpanMatch::NoMatch => Some(EffectiveItemSemantics::Raw1),
+        };
     }
     if let Some(meta) = parse_legacy_markdown_spine_memory_metadata(item) {
         // Bare markdown memories were emitted before the durable marker existed. They are
@@ -1309,9 +1322,6 @@ fn consume_runtime_span_for_legacy(
     meta: &SpineIrMetadata,
     raw_cursor: u64,
 ) -> bool {
-    if runtime_spans.is_empty() {
-        return true;
-    }
     if meta.fold_start != raw_cursor {
         return false;
     }
@@ -1415,6 +1425,11 @@ fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
 }
 
 fn parse_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadata> {
+    parse_current_spine_memory_metadata(item)
+        .or_else(|| parse_legacy_xml_spine_memory_metadata(item))
+}
+
+fn parse_current_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadata> {
     let (id, text) = match item {
         ResponseItem::Message {
             id, role, content, ..
@@ -1434,6 +1449,20 @@ fn parse_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadat
     if let Some(meta) = parse_spine_memory_text_marker(text) {
         return Some(meta);
     }
+
+    None
+}
+
+fn parse_legacy_xml_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadata> {
+    let text = match item {
+        ResponseItem::Message { role, content, .. } if role == "assistant" => {
+            content.iter().find_map(|content_item| match content_item {
+                ContentItem::OutputText { text } => Some(text.as_str()),
+                _ => None,
+            })?
+        }
+        _ => return None,
+    };
 
     let header = text.strip_prefix("<spine_memory ")?;
     let header = header.split_once('>')?.0;
