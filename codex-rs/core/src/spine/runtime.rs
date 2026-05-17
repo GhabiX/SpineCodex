@@ -626,10 +626,7 @@ impl SpineRuntime {
             &draft_scopes,
         );
 
-        Ok(PlanTreeDraft {
-            anchor,
-            root,
-        })
+        Ok(PlanTreeDraft { anchor, root })
     }
 
     fn normalize_task_projection_drafts(
@@ -1005,6 +1002,17 @@ impl SpineRuntime {
             summary.clone(),
             child_summary.clone(),
         )?;
+        if op == SpineOperation::Close {
+            let scope_node_id = self
+                .state
+                .node(&transition.from)
+                .and_then(|node| node.parent_id.clone())
+                .ok_or_else(|| SpineRuntimeError::MissingCloseScope {
+                    node_id: transition.from.clone(),
+                })?;
+            self.store
+                .validate_matching_open_for_scope(&scope_node_id, self.next_raw_ordinal)?;
+        }
 
         let call_start_ordinal = self.pending_spine_call_starts.remove(&call_id);
 

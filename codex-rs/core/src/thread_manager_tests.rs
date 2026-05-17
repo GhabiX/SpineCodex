@@ -1080,6 +1080,118 @@ async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn fork_inherited_close_precommit_rejects_without_open_evidence() -> anyhow::Result<()> {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("source start"))]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let source_session = &source.thread.codex.session;
+    let source_turn = source_session.new_default_turn().await;
+    source_session
+        .spine
+        .as_ref()
+        .expect("source spine")
+        .lock()
+        .await
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            crate::spine::store::SpineOperation::Open,
+            None,
+            /*compact_instruction*/ None,
+        )?;
+    source_session
+        .try_record_conversation_items(
+            source_turn.as_ref(),
+            &[
+                spine_transition_msg("open-1", crate::spine::SPINE_TOOL_OPEN, "source scope"),
+                function_call_output("open-1"),
+            ],
+        )
+        .await?;
+    source.thread.flush_rollout().await?;
+    let source_rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            source_rollout_path,
+            Some(ThreadSource::User),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let child_rollout_path = forked
+        .thread
+        .rollout_path()
+        .expect("child rollout path should exist");
+    let child_store = crate::spine::store::SpineSidecarStore::for_rollout(&child_rollout_path)?;
+    let tree_before = std::fs::read_to_string(child_store.tree_path())?;
+    let trajs_before = std::fs::read_to_string(child_store.trajs_index_path()).unwrap_or_default();
+    let child_session = &forked.thread.codex.session;
+    let child_runtime = child_session.spine.as_ref().expect("child spine");
+    let mut runtime = child_runtime.lock().await;
+    assert_eq!(runtime.cursor().to_string(), "1.1.1");
+
+    let err = runtime
+        .stage_transition_with_child_summary(
+            "close-inherited",
+            "turn-child",
+            crate::spine::store::SpineOperation::Close,
+            "source scope complete",
+            "child leaf complete",
+            /*compact_instruction*/ None,
+        )
+        .expect_err("inherited close should reject before staging");
+    assert!(err.to_string().contains("has no matching open transition"));
+    assert_eq!(runtime.cursor().to_string(), "1.1.1");
+    assert!(runtime.staged_transition().is_none());
+    drop(runtime);
+
+    assert_eq!(
+        std::fs::read_to_string(child_store.tree_path())?,
+        tree_before
+    );
+    assert_eq!(
+        std::fs::read_to_string(child_store.trajs_index_path()).unwrap_or_default(),
+        trajs_before
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
