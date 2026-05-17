@@ -232,29 +232,23 @@ fn update_plan_schema_exposes_task_projection() {
     }) else {
         panic!("expected function tool");
     };
-    assert!(tool.description.contains("use task_projection"));
-    assert!(tool.description.contains("spine_plantree"));
-    assert!(tool.description.contains("task_projection"));
+    for required in [
+        "task_projection.current.checklist",
+        "task_projection.draft_nodes",
+        "does not create, finish, close, compact, or move Spine nodes",
+        "never send spine_plantree as input",
+    ] {
+        assert!(
+            tool.description.contains(required),
+            "missing update_plan description contract anchor {required:?}"
+        );
+    }
+    assert!(!tool.description.contains("clear_spine_plantree"));
     assert!(
-        tool.description
-            .contains("current real Spine node's flat plan")
+        !tool
+            .description
+            .contains("use update_plan with spine_plantree")
     );
-    assert!(tool.description.contains("task_projection.draft_nodes"));
-    assert!(tool.description.contains("single model-authored Spine planning input"));
-    assert!(tool.description.contains("One call carries"));
-    assert!(
-        tool.description
-            .contains("parent real node ids or earlier ~draft_ids")
-    );
-    assert!(tool.description.contains("updated spine_tree"));
-    assert!(tool.description.contains("authoritative planning state"));
-    assert!(tool.description.contains("planning only"));
-    assert!(
-        tool.description
-            .contains("does not create, finish, close, compact, or move Spine nodes")
-    );
-    assert!(tool.description.contains("runtime output only"));
-    assert!(tool.description.contains("never send spine_plantree as input"));
 
     let properties = tool
         .parameters
