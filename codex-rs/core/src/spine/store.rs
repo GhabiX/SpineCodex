@@ -15,6 +15,7 @@ use super::plan_bridge::PlanSnapshot;
 use super::plan_bridge::PlanSnapshotItem;
 use super::plan_bridge::PlanTreeScope;
 use super::plan_bridge::PlanTreeSnapshot;
+use super::projection_epoch::ProjectionEpochMetadata;
 use super::state::NodeStatus;
 use super::state::SpineOperationName;
 use super::state::SpineState;
@@ -400,6 +401,7 @@ impl SpineSidecarStore {
         state: SpineState,
         reason: impl Into<String>,
         source_turn_id: Option<String>,
+        epoch: ProjectionEpochMetadata,
     ) -> Result<(), SpineStoreError> {
         for node_id in state.nodes().keys() {
             self.ensure_node_dir(node_id)?;
@@ -408,6 +410,13 @@ impl SpineSidecarStore {
             seq: self.next_tree_seq()?,
             reason: reason.into(),
             source_turn_id,
+            source_rollout_ref: Some(epoch.source_rollout_ref),
+            processed_rollout_len: Some(epoch.processed_rollout_len),
+            processed_rollout_hash: Some(epoch.processed_rollout_hash),
+            effective_raw_len: Some(epoch.effective_raw_len),
+            surviving_turn_ids_hash: Some(epoch.surviving_turn_ids_hash),
+            surviving_compact_ids: Some(epoch.surviving_compact_ids),
+            state_hash: Some(epoch.state_hash),
             state: StateSnapshot::from_state(&state),
         };
         self.append_tree_event(&event)?;
@@ -1237,8 +1246,25 @@ impl SpineSidecarStore {
                     state.set_raw_start_ordinal(&node_id, raw_start_ordinal)?;
                 }
                 TreeEvent::ProjectionReset {
-                    state: snapshot, ..
+                    source_rollout_ref,
+                    processed_rollout_len,
+                    processed_rollout_hash,
+                    effective_raw_len,
+                    surviving_turn_ids_hash,
+                    surviving_compact_ids,
+                    state_hash,
+                    state: snapshot,
+                    ..
                 } => {
+                    projection_epoch_metadata_from_event(
+                        source_rollout_ref,
+                        processed_rollout_len,
+                        processed_rollout_hash,
+                        effective_raw_len,
+                        surviving_turn_ids_hash,
+                        surviving_compact_ids,
+                        state_hash,
+                    )?;
                     state = Some(spine_state_from_snapshot(snapshot)?);
                 }
                 TreeEvent::SpineHintEmitted { node_id, .. } => {
@@ -1304,6 +1330,39 @@ impl SpineSidecarStore {
 
         self.set_cached_next_tree_seq(next_tree_seq_for_event_count(events.len())?)?;
         Ok(events)
+    }
+
+    // Step 13 wires resume admission to this metadata reader.
+    #[allow(dead_code)]
+    pub(crate) fn latest_projection_epoch(
+        &self,
+    ) -> Result<Option<ProjectionEpochMetadata>, SpineStoreError> {
+        let mut latest = None;
+        for event in self.read_tree_events()? {
+            let TreeEvent::ProjectionReset {
+                source_rollout_ref,
+                processed_rollout_len,
+                processed_rollout_hash,
+                effective_raw_len,
+                surviving_turn_ids_hash,
+                surviving_compact_ids,
+                state_hash,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            latest = Some(projection_epoch_metadata_from_event(
+                source_rollout_ref,
+                processed_rollout_len,
+                processed_rollout_hash,
+                effective_raw_len,
+                surviving_turn_ids_hash,
+                surviving_compact_ids,
+                state_hash,
+            )?);
+        }
+        Ok(latest.flatten())
     }
 
     fn read_trajs_index_events(&self) -> Result<Vec<TrajsIndexEvent>, SpineStoreError> {
@@ -2139,6 +2198,20 @@ enum TreeEvent {
         seq: u64,
         reason: String,
         source_turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_rollout_ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        processed_rollout_len: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        processed_rollout_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effective_raw_len: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surviving_turn_ids_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surviving_compact_ids: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state_hash: Option<String>,
         state: StateSnapshot,
     },
     SpineHintEmitted {
@@ -2434,6 +2507,43 @@ fn record_mem_install_committed(
     }
     attempt.mem_install_committed = true;
     Ok(())
+}
+
+fn projection_epoch_metadata_from_event(
+    source_rollout_ref: Option<String>,
+    processed_rollout_len: Option<u64>,
+    processed_rollout_hash: Option<String>,
+    effective_raw_len: Option<u64>,
+    surviving_turn_ids_hash: Option<String>,
+    surviving_compact_ids: Option<Vec<String>>,
+    state_hash: Option<String>,
+) -> Result<Option<ProjectionEpochMetadata>, SpineStoreError> {
+    let fields_present = [
+        source_rollout_ref.is_some(),
+        processed_rollout_len.is_some(),
+        processed_rollout_hash.is_some(),
+        effective_raw_len.is_some(),
+        surviving_turn_ids_hash.is_some(),
+        surviving_compact_ids.is_some(),
+        state_hash.is_some(),
+    ];
+    if fields_present.iter().all(|present| !present) {
+        return Ok(None);
+    }
+    if fields_present.iter().any(|present| !present) {
+        return Err(SpineStoreError::InvalidLedger(
+            "projection_reset has partial projection epoch metadata".to_string(),
+        ));
+    }
+    Ok(Some(ProjectionEpochMetadata {
+        source_rollout_ref: source_rollout_ref.expect("checked some"),
+        processed_rollout_len: processed_rollout_len.expect("checked some"),
+        processed_rollout_hash: processed_rollout_hash.expect("checked some"),
+        effective_raw_len: effective_raw_len.expect("checked some"),
+        surviving_turn_ids_hash: surviving_turn_ids_hash.expect("checked some"),
+        surviving_compact_ids: surviving_compact_ids.expect("checked some"),
+        state_hash: state_hash.expect("checked some"),
+    }))
 }
 
 #[cfg(test)]

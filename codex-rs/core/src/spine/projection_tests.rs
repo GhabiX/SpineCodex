@@ -1,4 +1,7 @@
 use super::*;
+use crate::spine::projection_epoch::ProjectionEpochClassification;
+use crate::spine::projection_epoch::classify_projection_epoch;
+use crate::spine::projection_epoch::projection_rollout_position;
 use crate::spine::state::NodeStatus;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
@@ -252,6 +255,67 @@ fn projection_keeps_only_surviving_compact_hashes_after_rollback() {
         !projection
             .surviving_compact_hashes
             .contains(&compact_message_hash(rolled_back_message))
+    );
+}
+
+#[test]
+fn projection_epoch_metadata_classifies_resume_position() {
+    let source_items = vec![
+        turn_started("turn-1"),
+        user_message("start"),
+        spine_call("open-1", SPINE_TOOL_OPEN, "scope"),
+        call_output("open-1"),
+        turn_complete("turn-1"),
+    ];
+    let projection = project_spine_state_from_rollout_with_source("rollout-a.jsonl", &source_items)
+        .expect("project");
+
+    assert_eq!(projection.epoch.source_rollout_ref, "rollout-a.jsonl");
+    assert_eq!(projection.epoch.processed_rollout_len, 5);
+    assert_eq!(
+        projection.epoch.effective_raw_len,
+        projection.response_item_count
+    );
+    assert!(
+        projection
+            .epoch
+            .processed_rollout_hash
+            .starts_with("sha256:")
+    );
+    assert!(
+        projection
+            .epoch
+            .surviving_turn_ids_hash
+            .starts_with("sha256:")
+    );
+    assert!(projection.epoch.state_hash.starts_with("sha256:"));
+
+    let current = projection_rollout_position("rollout-a.jsonl", &source_items)
+        .expect("current rollout position");
+    assert_eq!(
+        classify_projection_epoch(&projection.epoch, &current, 5),
+        ProjectionEpochClassification::Current
+    );
+
+    let mut longer_items = source_items.clone();
+    longer_items.push(user_message("new turn"));
+    let same_prefix = projection_rollout_position("rollout-a.jsonl", &longer_items[..5])
+        .expect("prefix rollout position");
+    assert_eq!(
+        classify_projection_epoch(&projection.epoch, &same_prefix, 6),
+        ProjectionEpochClassification::Behind
+    );
+    assert_eq!(
+        classify_projection_epoch(&projection.epoch, &current, 4),
+        ProjectionEpochClassification::Ahead
+    );
+
+    let divergent_items = vec![user_message("different")];
+    let divergent = projection_rollout_position("rollout-a.jsonl", &divergent_items)
+        .expect("divergent rollout position");
+    assert_eq!(
+        classify_projection_epoch(&projection.epoch, &divergent, 5),
+        ProjectionEpochClassification::Divergent
     );
 }
 

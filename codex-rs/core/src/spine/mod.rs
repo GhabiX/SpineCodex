@@ -5,6 +5,7 @@ pub(crate) mod instructions;
 pub(crate) mod mem_install;
 pub(crate) mod plan_bridge;
 pub(crate) mod projection;
+pub(crate) mod projection_epoch;
 pub(crate) mod runtime;
 pub(crate) mod segment;
 pub(crate) mod session_integration;

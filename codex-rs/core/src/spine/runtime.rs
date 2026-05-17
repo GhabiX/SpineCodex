@@ -9,6 +9,7 @@ use super::plan_bridge::PlanTreeCheckpointDraft;
 use super::plan_bridge::PlanTreeDraft;
 use super::plan_bridge::PlanTreeScopeDraft;
 use super::plan_bridge::PlanTreeSnapshot;
+use super::projection_epoch::ProjectionEpochMetadata;
 use super::state::SpineState;
 use super::state::SpineStateError;
 use super::store::SpineOperation;
@@ -505,11 +506,12 @@ impl SpineRuntime {
         next_raw_ordinal: u64,
         surviving_turn_ids: HashSet<String>,
         surviving_compact_hashes: HashSet<String>,
+        epoch: ProjectionEpochMetadata,
         reason: impl Into<String>,
         source_turn_id: Option<String>,
     ) -> Result<(), SpineRuntimeError> {
         self.store
-            .record_projection_reset(state.clone(), reason, source_turn_id)?;
+            .record_projection_reset(state.clone(), reason, source_turn_id, epoch)?;
         self.state = state;
         self.next_raw_ordinal = next_raw_ordinal;
         self.surviving_turn_ids = Some(surviving_turn_ids);

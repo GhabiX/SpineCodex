@@ -1349,8 +1349,11 @@ impl Session {
         let Some(spine) = self.spine.as_ref() else {
             return Ok(());
         };
-        let projection = crate::spine::projection::project_spine_state_from_rollout(rollout_items)
-            .map_err(|err| CodexErr::Fatal(format!("failed to project spine state: {err}")))?;
+        let projection = crate::spine::projection::project_spine_state_from_rollout_with_source(
+            "active_rollout",
+            rollout_items,
+        )
+        .map_err(|err| CodexErr::Fatal(format!("failed to project spine state: {err}")))?;
         let snapshot = {
             let mut runtime = spine.lock().await;
             runtime
@@ -1359,6 +1362,7 @@ impl Session {
                     projection.response_item_count,
                     projection.surviving_turn_ids,
                     projection.surviving_compact_hashes,
+                    projection.epoch,
                     reason,
                     source_turn_id,
                 )

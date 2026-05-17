@@ -3,6 +3,8 @@ use super::SPINE_TOOL_CLOSE;
 use super::SPINE_TOOL_NEXT;
 use super::SPINE_TOOL_OPEN;
 use super::ids::NodeId;
+use super::projection_epoch::ProjectionEpochMetadata;
+use super::projection_epoch::projection_epoch_metadata;
 use super::state::SpineState;
 use super::state::SpineStateError;
 use super::store::SpineOperation;
@@ -24,6 +26,7 @@ pub(crate) struct SpineProjection {
     pub(crate) response_item_count: u64,
     pub(crate) surviving_turn_ids: HashSet<String>,
     pub(crate) surviving_compact_hashes: HashSet<String>,
+    pub(crate) epoch: ProjectionEpochMetadata,
 }
 
 impl SpineProjection {
@@ -46,11 +49,21 @@ pub(crate) enum SpineProjectionError {
     RawOrdinalOverflow,
     #[error("spine projection saw duplicate pending transition {call_id}")]
     DuplicatePendingTransition { call_id: String },
+    #[error("failed to build projection epoch metadata: {0}")]
+    Metadata(#[from] serde_json::Error),
     #[error(transparent)]
     State(#[from] SpineStateError),
 }
 
+#[cfg(test)]
 pub(crate) fn project_spine_state_from_rollout(
+    rollout_items: &[RolloutItem],
+) -> Result<SpineProjection, SpineProjectionError> {
+    project_spine_state_from_rollout_with_source("in_memory_rollout", rollout_items)
+}
+
+pub(crate) fn project_spine_state_from_rollout_with_source(
+    source_rollout_ref: impl Into<String>,
     rollout_items: &[RolloutItem],
 ) -> Result<SpineProjection, SpineProjectionError> {
     let effective_items = effective_rollout_items(rollout_items);
@@ -102,11 +115,21 @@ pub(crate) fn project_spine_state_from_rollout(
         }
     }
 
+    let epoch = projection_epoch_metadata(
+        source_rollout_ref,
+        rollout_items,
+        &state,
+        raw_ordinal,
+        &surviving_turn_ids,
+        &surviving_compact_hashes,
+    )?;
+
     Ok(SpineProjection {
         state,
         response_item_count: raw_ordinal,
         surviving_turn_ids,
         surviving_compact_hashes,
+        epoch,
     })
 }
 

@@ -4,6 +4,7 @@ use crate::spine::mem_install::MemoryBodyError;
 use crate::spine::mem_install::MemoryBodyRef;
 use crate::spine::mem_install::MemorySectionId;
 use crate::spine::mem_install::memory_body_hash;
+use crate::spine::projection_epoch::projection_epoch_metadata;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -20,6 +21,20 @@ fn temp_store() -> (TempDir, SpineSidecarStore) {
     let rollout_path = temp.path().join("rollout-2026-05-10T15-38-00-thread.jsonl");
     let store = SpineSidecarStore::create_for_rollout(&rollout_path).expect("store path");
     (temp, store)
+}
+
+fn test_projection_epoch(
+    state: &SpineState,
+) -> crate::spine::projection_epoch::ProjectionEpochMetadata {
+    projection_epoch_metadata(
+        "test_rollout",
+        &[],
+        state,
+        0,
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .expect("projection epoch metadata")
 }
 
 fn read_json_lines(path: impl AsRef<Path>) -> Vec<Value> {
@@ -1564,8 +1579,31 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
     let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
     child_store.create().expect("create child");
     child_store
-        .record_projection_reset(source_state.clone(), "fork_seed", None)
+        .record_projection_reset(
+            source_state.clone(),
+            "fork_seed",
+            None,
+            test_projection_epoch(&source_state),
+        )
         .expect("record projection reset");
+    let projection_event = read_json_lines(child_store.tree_path())
+        .into_iter()
+        .find(|event| event["type"] == "projection_reset")
+        .expect("projection reset event");
+    assert_eq!(projection_event["source_rollout_ref"], "test_rollout");
+    assert_eq!(projection_event["processed_rollout_len"], 0);
+    assert_eq!(projection_event["effective_raw_len"], 0);
+    assert!(
+        projection_event["processed_rollout_hash"]
+            .as_str()
+            .expect("processed rollout hash")
+            .starts_with("sha256:")
+    );
+    let latest_epoch = child_store
+        .latest_projection_epoch()
+        .expect("latest projection epoch")
+        .expect("projection epoch metadata");
+    assert_eq!(latest_epoch.source_rollout_ref, "test_rollout");
     child_store
         .copy_node_artifacts_from(&source_store, source_state.nodes().keys())
         .expect("copy artifacts");
@@ -1580,6 +1618,67 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
             .contains("source memory")
     );
     assert_eq!(read_json_lines(child_store.tree_path()).len(), 2);
+}
+
+#[test]
+fn latest_projection_epoch_ignores_legacy_and_rejects_partial_metadata() {
+    let (_temp, store) = temp_store();
+    let state = store.create().expect("create sidecar");
+
+    store
+        .append_tree_event(&TreeEvent::ProjectionReset {
+            seq: store.next_tree_seq().expect("legacy projection seq"),
+            reason: "legacy_projection".to_string(),
+            source_turn_id: None,
+            source_rollout_ref: None,
+            processed_rollout_len: None,
+            processed_rollout_hash: None,
+            effective_raw_len: None,
+            surviving_turn_ids_hash: None,
+            surviving_compact_ids: None,
+            state_hash: None,
+            state: StateSnapshot::from_state(&state),
+        })
+        .expect("append legacy projection reset");
+    assert!(
+        store
+            .latest_projection_epoch()
+            .expect("legacy projection epoch")
+            .is_none()
+    );
+
+    store
+        .append_tree_event(&TreeEvent::ProjectionReset {
+            seq: store.next_tree_seq().expect("partial projection seq"),
+            reason: "partial_projection".to_string(),
+            source_turn_id: None,
+            source_rollout_ref: Some("rollout.jsonl".to_string()),
+            processed_rollout_len: None,
+            processed_rollout_hash: None,
+            effective_raw_len: None,
+            surviving_turn_ids_hash: None,
+            surviving_compact_ids: None,
+            state_hash: None,
+            state: StateSnapshot::from_state(&state),
+        })
+        .expect("append partial projection reset");
+
+    let error = store
+        .latest_projection_epoch()
+        .expect_err("partial projection epoch must fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("partial projection epoch metadata")
+    ));
+    let load_error = store
+        .load()
+        .expect_err("partial projection epoch must also fail replay");
+    assert!(matches!(
+        load_error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("partial projection epoch metadata")
+    ));
 }
 
 #[test]
@@ -1695,7 +1794,12 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
     let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
     child_store.create().expect("create child");
     child_store
-        .record_projection_reset(source_state.clone(), "fork_seed", None)
+        .record_projection_reset(
+            source_state.clone(),
+            "fork_seed",
+            None,
+            test_projection_epoch(&source_state),
+        )
         .expect("record projection reset");
     child_store
         .copy_projected_node_artifacts_from(

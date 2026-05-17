@@ -1,5 +1,6 @@
 use super::*;
 use crate::spine::ids::NodeId;
+use crate::spine::projection_epoch::projection_epoch_metadata;
 use crate::spine::state::NodeStatus;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::SpineSidecarStore;
@@ -389,12 +390,22 @@ fn projection_reset_filters_plan_from_non_surviving_turn() {
         .expect("record rolled back plan");
 
     let projected_state = runtime.state().clone();
+    let epoch = projection_epoch_metadata(
+        "test_rollout",
+        &[],
+        &projected_state,
+        0,
+        &HashSet::from(["surviving-turn".to_string()]),
+        &HashSet::new(),
+    )
+    .expect("projection epoch metadata");
     runtime
         .record_projection_reset(
             projected_state,
             0,
             HashSet::from(["surviving-turn".to_string()]),
             HashSet::new(),
+            epoch,
             "test_projection",
             None,
         )

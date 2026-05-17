@@ -1,5 +1,5 @@
 use super::projection::SpineProjection;
-use super::projection::project_spine_state_from_rollout;
+use super::projection::project_spine_state_from_rollout_with_source;
 use super::runtime::SpineRuntime;
 use super::runtime::SpineRuntimeError;
 use super::store::SpineSidecarStore;
@@ -44,17 +44,20 @@ pub(crate) async fn initial_spine_scan(
                 Ok(initial_spine_scan_items(
                     &items,
                     SpineProjectionPolicy::Resume,
+                    rollout_path.to_string_lossy(),
                 )?)
             } else {
                 Ok(initial_spine_scan_items(
                     &resumed.history,
                     SpineProjectionPolicy::Resume,
+                    "resumed_initial_history".into(),
                 )?)
             }
         }
         InitialHistory::Forked(items) => Ok(initial_spine_scan_items(
             items,
             SpineProjectionPolicy::Fork,
+            "forked_initial_history".into(),
         )?),
     }
 }
@@ -67,6 +70,7 @@ enum SpineProjectionPolicy {
 fn initial_spine_scan_items(
     items: &[RolloutItem],
     projection_policy: SpineProjectionPolicy,
+    source_rollout_ref: std::borrow::Cow<'_, str>,
 ) -> anyhow::Result<InitialSpineScan> {
     let has_spine_history = has_spine_history_items(items);
     let needs_projection = match projection_policy {
@@ -78,7 +82,7 @@ fn initial_spine_scan_items(
         has_spine_history,
         has_non_spine_compaction: latest_compaction_is_non_spine(items),
         projection: needs_projection
-            .then(|| project_spine_state_from_rollout(items))
+            .then(|| project_spine_state_from_rollout_with_source(source_rollout_ref, items))
             .transpose()?,
     })
 }
@@ -148,6 +152,7 @@ pub(crate) fn load_initial_spine_runtime(
             projection.response_item_count,
             projection.surviving_turn_ids.clone(),
             projection.surviving_compact_hashes.clone(),
+            projection.epoch.clone(),
             "resume_projection",
             None,
         )?;
@@ -241,7 +246,10 @@ pub(crate) async fn seed_forked_spine_sidecar(
         );
     }
 
-    let projection = project_spine_state_from_rollout(rollout_items)?;
+    let projection = project_spine_state_from_rollout_with_source(
+        parent_rollout_path.to_string_lossy(),
+        rollout_items,
+    )?;
     let projected_response_count = projection.response_item_count;
     let expected_response_count = response_item_count(rollout_items);
     if projected_response_count > expected_response_count {
@@ -251,7 +259,12 @@ pub(crate) async fn seed_forked_spine_sidecar(
     }
 
     child_store.create()?;
-    child_store.record_projection_reset(projection.state.clone(), "fork_seed", None)?;
+    child_store.record_projection_reset(
+        projection.state.clone(),
+        "fork_seed",
+        None,
+        projection.epoch.clone(),
+    )?;
     child_store
         .copy_projected_compact_index_from(&parent_store, &projection.surviving_compact_hashes)?;
     child_store.copy_projected_node_artifacts_from(
