@@ -1,4 +1,5 @@
 use super::*;
+use crate::spine::fast_fail::RuntimeFastFailError;
 use crate::spine::mem_install::MemoryBodyError;
 use crate::spine::mem_install::MemoryBodyRef;
 use crate::spine::mem_install::MemorySectionId;
@@ -1174,7 +1175,7 @@ fn appends_compact_index_and_raw_mirror_events() {
 }
 
 #[test]
-fn compact_index_mem_install_committed_writes_semantic_marker() {
+fn runtime_fast_fail_compact_index_mem_install_committed_writes_semantic_marker() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
@@ -1256,7 +1257,7 @@ fn compact_index_mem_install_committed_writes_semantic_marker() {
 }
 
 #[test]
-fn compact_index_legacy_compact_installed_is_not_mem_install_commit() {
+fn runtime_fast_fail_compact_index_legacy_compact_installed_is_not_mem_install_commit() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
@@ -1310,13 +1311,15 @@ fn compact_index_legacy_compact_installed_is_not_mem_install_commit() {
         .expect_err("mem install after checkpoint should fail closed");
     assert!(matches!(
         error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("after compact_installed")
+        SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallCheckpointBeforeCommit {
+            terminal: "compact_installed",
+            ..
+        })
     ));
 }
 
 #[test]
-fn compact_index_mem_install_missing_started_fails_closed() {
+fn runtime_fast_fail_compact_index_mem_install_missing_started_fails_closed() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
@@ -1341,13 +1344,12 @@ fn compact_index_mem_install_missing_started_fails_closed() {
         .expect_err("missing started should fail closed");
     assert!(matches!(
         error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("mem_install_committed without matching compact_started")
+        SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallMissingStarted { .. })
     ));
 }
 
 #[test]
-fn compact_index_mem_install_missing_body_fails_closed() {
+fn runtime_fast_fail_compact_index_mem_install_missing_body_fails_closed() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
@@ -1381,13 +1383,13 @@ fn compact_index_mem_install_missing_body_fails_closed() {
         .expect_err("missing body should fail closed");
     assert!(matches!(
         error,
-        SpineStoreError::MemoryBody(MemoryBodyError::MissingSection { .. })
+        SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallMissingBody { .. })
     ));
     assert_eq!(read_json_lines(store.compact_index_path()).len(), 1);
 }
 
 #[test]
-fn compact_index_mem_install_missing_projection_ref_fails_closed() {
+fn runtime_fast_fail_compact_index_mem_install_missing_projection_ref_fails_closed() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
@@ -1423,13 +1425,15 @@ fn compact_index_mem_install_missing_projection_ref_fails_closed() {
         .expect_err("missing projection ref should fail closed");
     assert!(matches!(
         error,
-        SpineStoreError::InvalidLedger(message) if message.contains("missing projection_ref")
+        SpineStoreError::RuntimeFastFail(
+            RuntimeFastFailError::MemInstallMissingProjectionRef { .. }
+        )
     ));
     assert_eq!(read_json_lines(store.compact_index_path()).len(), 1);
 }
 
 #[test]
-fn compact_index_mem_install_duplicate_compact_id_fails_closed() {
+fn runtime_fast_fail_compact_index_mem_install_duplicate_compact_id_fails_closed() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
@@ -1475,14 +1479,13 @@ fn compact_index_mem_install_duplicate_compact_id_fails_closed() {
         .expect_err("duplicate mem install should fail closed");
     assert!(matches!(
         error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("duplicate mem_install_committed")
+        SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallDuplicateCompactId { .. })
     ));
     assert_eq!(read_json_lines(store.compact_index_path()).len(), 2);
 }
 
 #[test]
-fn compact_index_mem_install_body_dependency_drift_fails_load() {
+fn runtime_fast_fail_compact_index_mem_install_body_dependency_drift_fails_load() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
@@ -1520,7 +1523,7 @@ fn compact_index_mem_install_body_dependency_drift_fails_load() {
         .expect_err("missing committed body should fail closed");
     assert!(matches!(
         error,
-        SpineStoreError::MemoryBody(MemoryBodyError::MissingSection { .. })
+        SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallMissingBody { .. })
     ));
 }
 

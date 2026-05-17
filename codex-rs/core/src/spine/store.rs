@@ -1,3 +1,7 @@
+use super::fast_fail::RuntimeFastFailError;
+use super::fast_fail::mem_install_body_error;
+use super::fast_fail::validate_mem_install_metadata;
+use super::fast_fail::validate_mem_install_pre_commit;
 use super::ids::NodeId;
 use super::ids::NodeIdParseError;
 use super::mem_install::GENERATED_MEMORY_SECTION_MARKER;
@@ -920,16 +924,6 @@ impl SpineSidecarStore {
             projection_ref,
             source_rollout_ref,
         } = record;
-        if projection_ref.trim().is_empty() {
-            return Err(SpineStoreError::InvalidLedger(
-                "compact.index.jsonl mem_install_committed missing projection_ref".into(),
-            ));
-        }
-        if source_rollout_ref.trim().is_empty() {
-            return Err(SpineStoreError::InvalidLedger(
-                "compact.index.jsonl mem_install_committed missing source_rollout_ref".into(),
-            ));
-        }
         let attempt = CompactAttemptRecord {
             compact_id,
             node_id,
@@ -1471,10 +1465,10 @@ impl SpineSidecarStore {
                         || cut_ordinal != attempt.cut_ordinal
                         || fold_end_ordinal != attempt.fold_end_ordinal
                     {
-                        return Err(SpineStoreError::InvalidLedger(format!(
-                            "compact.index.jsonl mem_install_committed does not match compact_started for {}",
-                            attempt.compact_id
-                        )));
+                        return Err(RuntimeFastFailError::MemInstallSpanMismatch {
+                            compact_id: attempt.compact_id.clone(),
+                        }
+                        .into());
                     }
                     if started_rollout.replace(rollout).is_some() {
                         return Err(SpineStoreError::InvalidLedger(format!(
@@ -1508,42 +1502,36 @@ impl SpineSidecarStore {
         }
 
         if duplicate_commit {
-            return Err(SpineStoreError::InvalidLedger(format!(
-                "compact.index.jsonl has duplicate mem_install_committed for {}",
-                attempt.compact_id
-            )));
+            return Err(RuntimeFastFailError::MemInstallDuplicateCompactId {
+                compact_id: attempt.compact_id.clone(),
+            }
+            .into());
         }
         if let Some(terminal) = terminal_before_commit {
-            return Err(SpineStoreError::InvalidLedger(format!(
-                "compact.index.jsonl cannot append mem_install_committed for {} after {terminal}",
-                attempt.compact_id
-            )));
+            return Err(RuntimeFastFailError::MemInstallCheckpointBeforeCommit {
+                compact_id: attempt.compact_id.clone(),
+                terminal,
+            }
+            .into());
         }
-        let Some(started_rollout) = started_rollout else {
-            return Err(SpineStoreError::InvalidLedger(format!(
-                "compact.index.jsonl has mem_install_committed without matching compact_started for {}",
-                attempt.compact_id
-            )));
-        };
-        if started_rollout != source_rollout_ref {
-            return Err(SpineStoreError::InvalidLedger(format!(
-                "compact.index.jsonl mem_install_committed source_rollout_ref does not match compact_started for {}",
-                attempt.compact_id
-            )));
+        validate_mem_install_pre_commit(
+            &attempt.compact_id,
+            started_rollout.is_some(),
+            false,
+            None,
+            projection_ref,
+            source_rollout_ref,
+            started_rollout
+                .as_deref()
+                .is_some_and(|rollout| rollout == source_rollout_ref),
+        )?;
+        match self.verify_memory_body_ref(&attempt.node_id, body_ref) {
+            Ok(_) => {}
+            Err(SpineStoreError::MemoryBody(err)) => {
+                return Err(mem_install_body_error(&attempt.compact_id, err).into());
+            }
+            Err(err) => return Err(err),
         }
-        if projection_ref.trim().is_empty() {
-            return Err(SpineStoreError::InvalidLedger(format!(
-                "compact.index.jsonl mem_install_committed for {} missing projection_ref",
-                attempt.compact_id
-            )));
-        }
-        if source_rollout_ref.trim().is_empty() {
-            return Err(SpineStoreError::InvalidLedger(format!(
-                "compact.index.jsonl mem_install_committed for {} missing source_rollout_ref",
-                attempt.compact_id
-            )));
-        }
-        self.verify_memory_body_ref(&attempt.node_id, body_ref)?;
         Ok(())
     }
 
@@ -2347,9 +2335,11 @@ fn record_compact_terminal(
         )));
     };
     if attempt.mem_install_committed && terminal != "compact_installed" {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl has {terminal} after mem_install_committed for {compact_id}"
-        )));
+        return Err(RuntimeFastFailError::MemInstallInvalidTerminalAfterCommit {
+            compact_id,
+            terminal,
+        }
+        .into());
     }
     if attempt.terminal.is_some() {
         return Err(SpineStoreError::InvalidLedger(format!(
@@ -2387,62 +2377,61 @@ fn record_mem_install_committed(
     committed_at_seq: u64,
 ) -> Result<(), SpineStoreError> {
     if schema_version != MEM_INSTALL_COMMITTED_SCHEMA_VERSION {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl mem_install_committed for {compact_id} has unsupported schema_version {schema_version}"
-        )));
+        return Err(RuntimeFastFailError::MemInstallUnsupportedSchema {
+            compact_id,
+            schema_version,
+        }
+        .into());
     }
     if committed_at_seq != seq {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl mem_install_committed for {compact_id} has committed_at_seq {committed_at_seq}, expected {seq}"
-        )));
-    }
-    if projection_ref.trim().is_empty() {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl mem_install_committed for {compact_id} missing projection_ref"
-        )));
-    }
-    if source_rollout_ref.trim().is_empty() {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl mem_install_committed for {compact_id} missing source_rollout_ref"
-        )));
+        return Err(RuntimeFastFailError::MemInstallCommittedSeqMismatch {
+            compact_id,
+            expected: seq,
+            actual: committed_at_seq,
+        }
+        .into());
     }
 
     let Some(attempt) = attempts.get_mut(&compact_id) else {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl has mem_install_committed without matching compact_started for {compact_id}"
-        )));
+        return Err(RuntimeFastFailError::MemInstallMissingStarted { compact_id }.into());
     };
     if attempt.mem_install_committed {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl has duplicate mem_install_committed for {compact_id}"
-        )));
+        return Err(RuntimeFastFailError::MemInstallDuplicateCompactId { compact_id }.into());
     }
     if let Some(terminal) = attempt.terminal {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl has mem_install_committed after {terminal} for {compact_id}"
-        )));
+        return Err(RuntimeFastFailError::MemInstallCheckpointBeforeCommit {
+            compact_id,
+            terminal,
+        }
+        .into());
     }
     if attempt.node_id != node_id
         || attempt.op != op
         || attempt.cut_ordinal != cut_ordinal
         || attempt.fold_end_ordinal != fold_end_ordinal
     {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl mem_install_committed does not match compact_started for {compact_id}"
-        )));
+        return Err(RuntimeFastFailError::MemInstallSpanMismatch { compact_id }.into());
     }
-    if attempt.rollout != source_rollout_ref {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl mem_install_committed source_rollout_ref does not match compact_started for {compact_id}"
-        )));
-    }
+    validate_mem_install_metadata(
+        &compact_id,
+        &projection_ref,
+        &source_rollout_ref,
+        attempt.rollout == source_rollout_ref,
+    )?;
 
     let node_id = NodeId::parse(&node_id)?;
     let body_ref = MemoryBodyRef {
-        section_id: MemorySectionId::parse(memory_section_id, storage_ref)?,
+        section_id: MemorySectionId::parse(memory_section_id, storage_ref)
+            .map_err(|err| mem_install_body_error(&compact_id, err))?,
         body_hash,
     };
-    store.verify_memory_body_ref(&node_id, &body_ref)?;
+    match store.verify_memory_body_ref(&node_id, &body_ref) {
+        Ok(_) => {}
+        Err(SpineStoreError::MemoryBody(err)) => {
+            return Err(mem_install_body_error(&compact_id, err).into());
+        }
+        Err(err) => return Err(err),
+    }
     attempt.mem_install_committed = true;
     Ok(())
 }
@@ -2575,6 +2564,8 @@ pub(crate) enum SpineStoreError {
     NodeId(#[from] NodeIdParseError),
     #[error(transparent)]
     MemoryBody(#[from] MemoryBodyError),
+    #[error(transparent)]
+    RuntimeFastFail(#[from] RuntimeFastFailError),
 }
 
 fn status_label(status: &NodeStatus) -> &'static str {
