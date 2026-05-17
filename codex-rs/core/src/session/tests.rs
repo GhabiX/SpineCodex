@@ -3533,7 +3533,8 @@ async fn reconstruct_history_rollback_preserves_older_raw_history_after_compact_
 }
 
 #[tokio::test]
-async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow::Result<()> {
+async fn spine_resume_projection_rollback_projection_epoch_repairs_missing_reset()
+-> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
     let next_call = ResponseItem::FunctionCall {
@@ -3617,6 +3618,147 @@ async fn spine_resume_projection_rebuilds_tree_after_rollback_marker() -> anyhow
             .contains("\"projection_reset\"")
     );
     Ok(())
+}
+
+struct FailingFlushThreadStore {
+    inner: Arc<codex_thread_store::InMemoryThreadStore>,
+    fail_after: usize,
+    flush_calls: std::sync::atomic::AtomicUsize,
+}
+
+impl FailingFlushThreadStore {
+    fn new(fail_after: usize) -> Self {
+        Self {
+            inner: Arc::new(codex_thread_store::InMemoryThreadStore::default()),
+            fail_after,
+            flush_calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl codex_thread_store::ThreadStore for FailingFlushThreadStore {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    async fn create_thread(
+        &self,
+        params: codex_thread_store::CreateThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.create_thread(params).await
+    }
+
+    async fn resume_thread(
+        &self,
+        params: codex_thread_store::ResumeThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.resume_thread(params).await
+    }
+
+    async fn append_items(
+        &self,
+        params: codex_thread_store::AppendThreadItemsParams,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.append_items(params).await
+    }
+
+    async fn persist_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.persist_thread(thread_id).await
+    }
+
+    async fn flush_thread(&self, thread_id: ThreadId) -> codex_thread_store::ThreadStoreResult<()> {
+        let calls = self
+            .flush_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if calls > self.fail_after {
+            return Err(codex_thread_store::ThreadStoreError::Internal {
+                message: "injected rollback flush failure".to_string(),
+            });
+        }
+        self.inner.flush_thread(thread_id).await
+    }
+
+    async fn shutdown_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.shutdown_thread(thread_id).await
+    }
+
+    async fn discard_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.discard_thread(thread_id).await
+    }
+
+    async fn load_history(
+        &self,
+        params: codex_thread_store::LoadThreadHistoryParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThreadHistory> {
+        self.inner.load_history(params).await
+    }
+
+    async fn read_thread(
+        &self,
+        params: codex_thread_store::ReadThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThread> {
+        self.inner.read_thread(params).await
+    }
+
+    async fn read_thread_by_rollout_path(
+        &self,
+        params: codex_thread_store::ReadThreadByRolloutPathParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThread> {
+        self.inner.read_thread_by_rollout_path(params).await
+    }
+
+    async fn list_threads(
+        &self,
+        params: codex_thread_store::ListThreadsParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::ThreadPage> {
+        self.inner.list_threads(params).await
+    }
+
+    async fn list_turns(
+        &self,
+        params: codex_thread_store::ListTurnsParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::TurnPage> {
+        self.inner.list_turns(params).await
+    }
+
+    async fn list_items(
+        &self,
+        params: codex_thread_store::ListItemsParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::ItemPage> {
+        self.inner.list_items(params).await
+    }
+
+    async fn update_thread_metadata(
+        &self,
+        params: codex_thread_store::UpdateThreadMetadataParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThread> {
+        self.inner.update_thread_metadata(params).await
+    }
+
+    async fn archive_thread(
+        &self,
+        params: codex_thread_store::ArchiveThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.archive_thread(params).await
+    }
+
+    async fn unarchive_thread(
+        &self,
+        params: codex_thread_store::ArchiveThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThread> {
+        self.inner.unarchive_thread(params).await
+    }
 }
 
 #[tokio::test]
@@ -4383,6 +4525,151 @@ async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
             .is_none()
     );
     assert!(std::fs::read_to_string(runtime.store().tree_path())?.contains("\"projection_reset\""));
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_rollback_projection_epoch_flush_failure_blocks_reset() -> anyhow::Result<()> {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let failing_store = Arc::new(FailingFlushThreadStore::new(/*fail_after*/ 1));
+    let thread_store: Arc<dyn codex_thread_store::ThreadStore> = failing_store.clone();
+    let config = sess.get_config().await;
+    let live_thread = LiveThread::create(
+        Arc::clone(&thread_store),
+        CreateThreadParams {
+            thread_id: sess.conversation_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(config.cwd.to_path_buf()),
+                model_provider: config.model_provider_id.clone(),
+                memory_mode: if config.memories.generate_memories {
+                    ThreadMemoryMode::Enabled
+                } else {
+                    ThreadMemoryMode::Disabled
+                },
+            },
+            event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        },
+    )
+    .await
+    .expect("create failing thread persistence");
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let spine =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    {
+        let session = Arc::get_mut(&mut sess).expect("session should not have additional refs");
+        session.services.thread_store = thread_store;
+        session.services.live_thread = Some(live_thread);
+        session.spine = Some(Arc::new(Mutex::new(spine)));
+    }
+
+    sess.try_record_conversation_items(tc.as_ref(), &[user_message("turn 1 user")])
+        .await?;
+    sess.spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            SpineOperation::Open,
+            None,
+            /*compact_instruction*/ None,
+        )?;
+    sess.try_record_conversation_items(
+        tc.as_ref(),
+        &[
+            spine_function_call("open-1"),
+            function_call_output("open-1"),
+        ],
+    )
+    .await?;
+    sess.try_record_conversation_items(tc.as_ref(), &[user_message("turn 2 user")])
+        .await?;
+    sess.spine
+        .as_ref()
+        .expect("spine")
+        .lock()
+        .await
+        .stage_transition(
+            "next-1",
+            "turn-2",
+            SpineOperation::Next,
+            "rolled back next",
+            /*compact_instruction*/ None,
+        )?;
+    sess.try_record_conversation_items(
+        tc.as_ref(),
+        &[
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "next".to_string(),
+                namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+                arguments: r#"{"summary":"rolled back next"}"#.to_string(),
+                call_id: "next-1".to_string(),
+            },
+            function_call_output("next-1"),
+        ],
+    )
+    .await?;
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
+
+    let mut saw_warning = false;
+    let mut saw_rollback = false;
+    let mut saw_spine_projection = false;
+    let deadline = StdDuration::from_secs(2);
+    let start = std::time::Instant::now();
+    while !(saw_warning && saw_rollback) {
+        let remaining = deadline.saturating_sub(start.elapsed());
+        let event = tokio::time::timeout(remaining, rx.recv())
+            .await
+            .expect("timeout waiting for rollback failure events")
+            .expect("event");
+        match event.msg {
+            EventMsg::Warning(warning) => {
+                saw_warning = true;
+                assert!(warning.message.contains("injected rollback flush failure"));
+            }
+            EventMsg::ThreadRolledBack(rollback) => {
+                saw_rollback = true;
+                assert_eq!(rollback.num_turns, 1);
+            }
+            EventMsg::SpineTreeUpdate(_) => saw_spine_projection = true,
+            _ => {}
+        }
+    }
+
+    let poison = sess
+        .ensure_spine_compact_not_poisoned()
+        .await
+        .expect_err("failed rollback durability barrier should poison Spine");
+    assert!(
+        poison
+            .to_string()
+            .contains("failed to flush Spine rollback marker")
+    );
+    let runtime = sess.spine.as_ref().expect("spine").lock().await;
+    assert_eq!(runtime.cursor().to_string(), "1.1.2");
+    let tree = std::fs::read_to_string(runtime.store().tree_path())?;
+    assert!(!tree.contains("\"projection_reset\""));
+    let raw_mirror_text = std::fs::read_to_string(runtime.store().raw_rollout_path())?;
+    let raw_mirror_items = raw_mirror_text
+        .lines()
+        .map(serde_json::from_str::<RolloutItem>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(
+        raw_mirror_items
+            .iter()
+            .all(|item| !matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))))
+    );
+    assert!(!saw_spine_projection);
     Ok(())
 }
 

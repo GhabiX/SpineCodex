@@ -564,18 +564,65 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .await;
     sess.recompute_token_usage(turn_context.as_ref()).await;
 
-    sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
+    let rollback_marker = RolloutItem::EventMsg(rollback_msg.clone());
+    if let Err(err) = live_thread.append_items(&[rollback_marker.clone()]).await {
+        if sess.spine.is_some() {
+            let _ = sess
+                .poison_spine_compact(format!("failed to persist Spine rollback marker: {err}"))
+                .await;
+        }
+        sess.send_event(
+            turn_context.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: format!(
+                    "rolled back thread history, but failed to save the rollback marker: {err}"
+                ),
+                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+            }),
+        )
         .await;
+        return;
+    }
     if let Err(err) = sess.flush_rollout().await {
+        if sess.spine.is_some() {
+            let _ = sess
+                .poison_spine_compact(format!("failed to flush Spine rollback marker: {err}"))
+                .await;
+        }
         sess.send_event(
             turn_context.as_ref(),
             EventMsg::Warning(WarningEvent {
                 message: format!(
-                    "Rolled the thread back, but failed to save the rollback marker. Codex will continue retrying. Error: {err}"
+                    "Rolled the thread back, but failed to save the rollback marker. Spine projection was not updated. Error: {err}"
                 ),
             }),
         )
         .await;
+        sess.deliver_event_raw(Event {
+            id: turn_context.sub_id.clone(),
+            msg: rollback_msg,
+        })
+        .await;
+        return;
+    }
+
+    if let Err(err) = sess.mirror_spine_rollout_items(&[rollback_marker]).await {
+        if sess.spine.is_some() {
+            let _ = sess
+                .poison_spine_compact(format!("failed to mirror Spine rollback marker: {err}"))
+                .await;
+        }
+        sess.send_event(
+            turn_context.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: format!(
+                    "rolled back thread history, but failed to mirror spine rollback marker: {err}"
+                ),
+                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+            }),
+        )
+        .await;
+        return;
     }
 
     if let Err(err) = sess
