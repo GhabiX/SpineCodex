@@ -127,10 +127,9 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
         r#"Updates the task plan.
 Provide an optional explanation and a list of plan items, each with a step and status.
 At most one step can be in_progress at a time.
-When Spine is enabled, use task_projection for model-authored planning. task_projection.current.checklist is normalized to the current real Spine node's flat plan, and task_projection.draft_nodes is normalized to the editable task tree draft. task_projection is a draft projection only: it does not create, finish, close, compact, or move Spine nodes. Do not combine task_projection with top-level plan.
+When Spine is enabled, use task_projection as the single model-authored Spine planning input. One call carries task_projection.current.checklist for the current real Spine node's flat plan and task_projection.draft_nodes for future scopes with their summaries, checklists, and parent real node ids or earlier ~draft_ids. task_projection is planning only: it does not create, finish, close, compact, or move Spine nodes. Do not combine task_projection with top-level plan.
 Successful writable Spine updates return JSON containing the updated spine_tree; treat that returned tree as the authoritative planning state.
-The returned tree may contain a normalized spine_plantree; that is runtime-normalized draft state, not a model-authored input path.
-Future draft scopes may display as ~<predicted-id> to distinguish them from real Spine nodes.
+A returned normalized spine_plantree is runtime output only; never send spine_plantree as input.
 "#
     } else {
         r#"Updates the task plan.
