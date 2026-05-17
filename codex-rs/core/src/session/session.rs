@@ -1,6 +1,10 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
 use crate::spine::compact::SpineCompactBoundary;
+use crate::spine::debug_audit::RuntimeDebugBoundary;
+use crate::spine::debug_audit::audit_feature_off_boundary;
+use crate::spine::debug_audit::audit_projection_epoch;
+use crate::spine::debug_audit::audit_projection_state_matches_runtime;
 use crate::spine::runtime::SpineRuntime;
 use crate::spine::session_integration::InitialSpineScan;
 use crate::spine::session_integration::initial_spine_scan;
@@ -349,8 +353,17 @@ struct InitialSpineState {
 
 async fn prepare_initial_spine_state(
     initial_history: &InitialHistory,
+    runtime_debug_checks: bool,
 ) -> anyhow::Result<Box<InitialSpineState>> {
     let scan = initial_spine_scan(initial_history).await?;
+    if runtime_debug_checks && let Some(projection) = scan.projection.as_ref() {
+        audit_projection_epoch(
+            RuntimeDebugBoundary::StartupResume,
+            projection.response_item_count,
+            &projection.epoch,
+            "initial spine scan",
+        )?;
+    }
     let ordinal = scan
         .projection
         .as_ref()
@@ -362,8 +375,9 @@ async fn prepare_initial_spine_state(
 fn load_spine_runtime_for_state(
     rollout_path: Option<&std::path::Path>,
     state: &InitialSpineState,
+    runtime_debug_checks: bool,
 ) -> anyhow::Result<Option<Arc<Mutex<SpineRuntime>>>> {
-    Ok(rollout_path
+    let runtime = rollout_path
         .map(|path| {
             load_initial_spine_runtime(
                 path,
@@ -373,8 +387,18 @@ fn load_spine_runtime_for_state(
                 state.scan.projection.as_ref(),
             )
         })
-        .transpose()
-        .map(|runtime| runtime.map(|runtime| Arc::new(Mutex::new(runtime))))?)
+        .transpose()?;
+    if runtime_debug_checks
+        && let (Some(runtime), Some(projection)) = (&runtime, state.scan.projection.as_ref())
+    {
+        audit_projection_state_matches_runtime(
+            RuntimeDebugBoundary::StartupResume,
+            runtime.state(),
+            &projection.state,
+            "initial spine runtime",
+        )?;
+    }
+    Ok(runtime.map(|runtime| Arc::new(Mutex::new(runtime))))
 }
 
 impl Session {
@@ -454,7 +478,13 @@ impl Session {
             provider_capabilities.namespace_tools,
         );
         let initial_spine_state = if spine_task_tree_enabled {
-            Some(Box::pin(prepare_initial_spine_state(&initial_history)).await?)
+            Some(
+                Box::pin(prepare_initial_spine_state(
+                    &initial_history,
+                    config.runtime_debug_checks,
+                ))
+                .await?,
+            )
         } else {
             None
         };
@@ -593,13 +623,26 @@ impl Session {
                 && matches!(initial_history, InitialHistory::Forked(_))
                 && let Some(path) = rollout_path.as_ref()
             {
-                seed_forked_spine_sidecar(&thread_store, &initial_history, path).await?;
+                seed_forked_spine_sidecar(
+                    &thread_store,
+                    &initial_history,
+                    path,
+                    config.runtime_debug_checks,
+                )
+                .await?;
             }
             let spine = if let Some(initial_spine_state) = initial_spine_state.as_ref() {
-                load_spine_runtime_for_state(rollout_path.as_deref(), initial_spine_state)?
+                load_spine_runtime_for_state(
+                    rollout_path.as_deref(),
+                    initial_spine_state,
+                    config.runtime_debug_checks,
+                )?
             } else {
                 None
             };
+            if config.runtime_debug_checks && !spine_task_tree_enabled {
+                audit_feature_off_boundary(spine.is_some(), "session init")?;
+            }
             let trace_agent_path = session_configuration
                 .session_source
                 .get_agent_path()

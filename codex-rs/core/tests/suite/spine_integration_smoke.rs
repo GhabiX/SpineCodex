@@ -644,6 +644,48 @@ async fn spine_feature_off_exposes_no_task_tree_tools_or_sidecar() -> anyhow::Re
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_debug_feature_off_boundary_remains_inert() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-debug-feature-off"),
+            ev_assistant_message("msg-debug-feature-off", "done"),
+            ev_completed("resp-debug-feature-off"),
+        ])],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| config.runtime_debug_checks = true);
+    let test = builder.build(&server).await?;
+    test.submit_turn("feature off debug smoke").await?;
+
+    let request = responses.single_request();
+    assert_eq!(
+        request.instructions_text().as_bytes(),
+        model_base_instructions(&test).await.as_bytes(),
+        "runtime debug checks must not activate Spine instructions when the feature is off"
+    );
+    let sidecar_dir = sidecar_dir_for_rollout_path(
+        test.session_configured
+            .rollout_path
+            .as_ref()
+            .expect("session should expose rollout path"),
+    );
+    assert!(
+        !sidecar_dir.exists(),
+        "feature-off runtime debug checks should not create spine sidecar at {}",
+        sidecar_dir.display()
+    );
+
+    Ok(())
+}
+
 async fn model_base_instructions(test: &core_test_support::test_codex::TestCodex) -> String {
     test.thread_manager
         .get_models_manager()

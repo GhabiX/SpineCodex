@@ -1,4 +1,5 @@
 pub(crate) mod compact;
+pub(crate) mod debug_audit;
 pub(crate) mod fast_fail;
 pub(crate) mod ids;
 pub(crate) mod instructions;

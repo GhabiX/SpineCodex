@@ -191,7 +191,9 @@ use crate::spine::compact::render_auto_compact_memory;
 use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_initial_context_item;
 use crate::spine::compact::render_spine_memory_item;
-use crate::spine::compact::validate_spine_replacement_history_admissible;
+use crate::spine::debug_audit::RuntimeDebugBoundary;
+use crate::spine::debug_audit::audit_compact_checkpoint;
+use crate::spine::debug_audit::audit_compact_plan_boundaries;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
 use crate::spine::session_integration::record_plan_update_snapshot;
@@ -3056,6 +3058,18 @@ impl Session {
             cut_ordinal: root_replacement.archive_cut_ordinal,
             ..prep.effective_boundary.clone()
         };
+        if turn_context.config.runtime_debug_checks {
+            audit_compact_plan_boundaries(
+                &history,
+                &prep.runtime_spans,
+                &root_boundary,
+                format!(
+                    "{} root archive node {}",
+                    store.root().display(),
+                    root_boundary.node_id
+                ),
+            )?;
+        }
         let mut memory_input = prep.plan.input.clone();
         memory_input.cut_ordinal = root_boundary.cut_ordinal;
         memory_input.suffix_items =
@@ -3092,10 +3106,12 @@ impl Session {
                 replacement_history.len(),
                 message_hash.clone(),
             );
-            validate_spine_replacement_history_admissible(
+            audit_compact_checkpoint(
+                RuntimeDebugBoundary::BeforeCheckpointInstall,
                 &replacement_history,
                 &spans_after_install,
                 &[root_boundary.cut_ordinal, root_boundary.fold_end_ordinal],
+                format!("{} compact_id={compact_id}", store.root().display()),
             )?;
         }
         store
@@ -3273,6 +3289,18 @@ impl Session {
             spine_tree,
             surviving_compact_hashes.as_ref(),
         )?;
+        if turn_context.config.runtime_debug_checks {
+            audit_compact_plan_boundaries(
+                &history,
+                &prep.runtime_spans,
+                &prep.effective_boundary,
+                format!(
+                    "{} suffix compact node {}",
+                    store.root().display(),
+                    prep.effective_boundary.node_id
+                ),
+            )?;
+        }
         let (compact_id, compact_attempt, compact_started) = spine_compact_attempt_records(
             &prep.effective_boundary,
             prep.compact_index_rollout_path,
@@ -3363,13 +3391,15 @@ impl Session {
                 replacement_history.len(),
                 message_hash.clone(),
             );
-            if let Err(err) = validate_spine_replacement_history_admissible(
+            if let Err(err) = audit_compact_checkpoint(
+                RuntimeDebugBoundary::BeforeCheckpointInstall,
                 &replacement_history,
                 &spans_after_install,
                 &[
                     prep.effective_boundary.cut_ordinal,
                     prep.effective_boundary.fold_end_ordinal,
                 ],
+                format!("{} compact_id={compact_id}", store.root().display()),
             ) {
                 store
                     .append_compact_failed(CompactTerminalRecord {
@@ -3382,7 +3412,7 @@ impl Session {
                             "failed to record spine compact install failure after invariant error {err}: {store_err}"
                         ))
                     })?;
-                return Err(err);
+                return Err(err.into());
             }
         }
         if let Err(err) = self

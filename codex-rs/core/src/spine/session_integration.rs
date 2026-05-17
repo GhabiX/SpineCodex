@@ -1,3 +1,5 @@
+use super::debug_audit::RuntimeDebugBoundary;
+use super::debug_audit::audit_projection_epoch;
 use super::projection::SpineProjection;
 use super::projection::project_spine_state_from_rollout_with_source;
 use super::runtime::SpineRuntime;
@@ -209,6 +211,7 @@ pub(crate) async fn seed_forked_spine_sidecar(
     thread_store: &Arc<dyn ThreadStore>,
     initial_history: &InitialHistory,
     child_rollout_path: &Path,
+    runtime_debug_checks: bool,
 ) -> anyhow::Result<()> {
     let InitialHistory::Forked(rollout_items) = initial_history else {
         return Ok(());
@@ -250,6 +253,14 @@ pub(crate) async fn seed_forked_spine_sidecar(
         parent_rollout_path.to_string_lossy(),
         rollout_items,
     )?;
+    if runtime_debug_checks {
+        audit_projection_epoch(
+            RuntimeDebugBoundary::ForkSeed,
+            projection.response_item_count,
+            &projection.epoch,
+            format!("fork seed {}", child_store.root().display()),
+        )?;
+    }
     let projected_response_count = projection.response_item_count;
     let expected_response_count = response_item_count(rollout_items);
     if projected_response_count > expected_response_count {
