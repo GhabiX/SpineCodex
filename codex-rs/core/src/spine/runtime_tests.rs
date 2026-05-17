@@ -51,18 +51,33 @@ fn plan_args(step: &str, status: StepStatus) -> SpineUpdatePlanArgs {
 }
 
 fn plan_args_many(items: &[(&str, StepStatus)]) -> SpineUpdatePlanArgs {
+    plan_args_many_for_node("1.1", items)
+}
+
+fn plan_args_for_node(current: &str, step: &str, status: StepStatus) -> SpineUpdatePlanArgs {
+    plan_args_many_for_node(current, &[(step, status)])
+}
+
+fn plan_args_many_for_node(current: &str, items: &[(&str, StepStatus)]) -> SpineUpdatePlanArgs {
+    let checklist = items
+        .iter()
+        .map(|(step, status)| PlanItemArg {
+            step: (*step).to_string(),
+            status: status.clone(),
+        })
+        .collect::<Vec<_>>();
     SpineUpdatePlanArgs {
         flat: UpdatePlanArgs {
             explanation: Some("PlanBridge test".to_string()),
-            plan: items
-                .iter()
-                .map(|(step, status)| PlanItemArg {
-                    step: (*step).to_string(),
-                    status: status.clone(),
-                })
-                .collect(),
+            plan: checklist.clone(),
         },
-        task_projection: None,
+        task_projection: TaskProjectionArg {
+            current: TaskProjectionCurrentArg {
+                node_id: current.to_string(),
+                checklist,
+            },
+            draft_nodes: Vec::new(),
+        },
     }
 }
 
@@ -82,7 +97,7 @@ fn plan_args_with_task_projection(
                 })
                 .collect(),
         },
-        task_projection: Some(TaskProjectionArg {
+        task_projection: TaskProjectionArg {
             current: TaskProjectionCurrentArg {
                 node_id: current.to_string(),
                 checklist: checklist
@@ -110,7 +125,7 @@ fn plan_args_with_task_projection(
                     },
                 )
                 .collect(),
-        }),
+        },
     }
 }
 
@@ -293,7 +308,7 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
 }
 
 #[test]
-fn record_plan_update_reuses_task_ids_after_insert_and_reorder() {
+fn record_plan_update_assigns_task_ids_by_snapshot_order() {
     let (_temp, mut runtime) = temp_runtime();
 
     let first = runtime
@@ -321,9 +336,9 @@ fn record_plan_update_reuses_task_ids_after_insert_and_reorder() {
 
     assert_eq!(second.revision, 2);
     assert_eq!(second.event_seq, 3);
-    assert_eq!(second.items[0].stable_task_id, "step-2");
-    assert_eq!(second.items[1].stable_task_id, "step-3");
-    assert_eq!(second.items[2].stable_task_id, "step-1");
+    assert_eq!(second.items[0].stable_task_id, "step-1");
+    assert_eq!(second.items[1].stable_task_id, "step-2");
+    assert_eq!(second.items[2].stable_task_id, "step-3");
     assert_eq!(runtime.cursor(), &id(&[1, 1]));
 }
 
@@ -482,43 +497,6 @@ fn task_projection_writes_normalized_plantree_without_moving_cursor() {
             .map(|checkpoint| checkpoint.task.as_str())
             .collect::<Vec<_>>(),
         vec!["run focused repro", "capture failing assertion"]
-    );
-}
-
-#[test]
-fn record_plan_update_preserves_plantree_when_omitted() {
-    let (_temp, mut runtime) = temp_runtime();
-    runtime
-        .record_plan_update(
-            "turn-plantree",
-            plan_args_with_task_projection(
-                "1.1",
-                vec!["Plan scope tree"],
-                vec![(None, "1.1", "Verify scope", vec!["run focused tests"])],
-            ),
-        )
-        .expect("record task_projection PlanTree");
-
-    let second = runtime
-        .record_plan_update(
-            "turn-progress",
-            plan_args("Run focused tests", StepStatus::InProgress),
-        )
-        .expect("record progress-only plan");
-
-    let spine_plantree = second
-        .spine_plantree
-        .as_ref()
-        .expect("omitted PlanTree should inherit previous snapshot");
-    assert_eq!(spine_plantree.anchor_node_id, "1.1");
-    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
-    assert_eq!(spine_plantree.root.children[0].summary, "Verify scope");
-
-    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
-    assert_eq!(plan["spine_plantree"]["root"]["existing_node_id"], "1.1");
-    assert_eq!(
-        plan["spine_plantree"]["root"]["children"][0]["summary"],
-        "Verify scope"
     );
 }
 
@@ -912,7 +890,7 @@ fn build_tree_snapshot_includes_only_current_node_plan() {
     runtime
         .record_plan_update(
             "turn-child",
-            plan_args("Inspect child", StepStatus::InProgress),
+            plan_args_for_node("1.1.1", "Inspect child", StepStatus::InProgress),
         )
         .expect("record child plan");
     runtime
@@ -937,7 +915,7 @@ fn build_tree_snapshot_includes_only_current_node_plan() {
     runtime
         .record_plan_update(
             "turn-sibling",
-            plan_args("Inspect sibling", StepStatus::InProgress),
+            plan_args_for_node("1.1.2", "Inspect sibling", StepStatus::InProgress),
         )
         .expect("record sibling plan");
     let snapshot = runtime.build_tree_snapshot().expect("build snapshot");

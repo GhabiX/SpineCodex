@@ -50,6 +50,8 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::TaskProjectionArg;
+use codex_protocol::plan_tool::TaskProjectionCurrentArg;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
@@ -318,9 +320,16 @@ fn update_plan_args_for_test(step: &str, status: StepStatus) -> UpdatePlanArgs {
 }
 
 fn spine_update_plan_args_for_test(step: &str, status: StepStatus) -> SpineUpdatePlanArgs {
+    let flat = update_plan_args_for_test(step, status);
     SpineUpdatePlanArgs {
-        flat: update_plan_args_for_test(step, status),
-        task_projection: None,
+        task_projection: TaskProjectionArg {
+            current: TaskProjectionCurrentArg {
+                node_id: "1.1".to_string(),
+                checklist: flat.plan.clone(),
+            },
+            draft_nodes: Vec::new(),
+        },
+        flat,
     }
 }
 

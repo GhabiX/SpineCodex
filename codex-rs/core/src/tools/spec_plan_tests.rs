@@ -220,6 +220,7 @@ fn update_plan_schema_includes_task_projection_when_spine_is_effectively_enabled
         .properties
         .as_ref()
         .expect("update_plan object properties");
+    assert!(!properties.contains_key("plan"));
     assert!(!properties.contains_key("spine_plantree"));
     assert!(!properties.contains_key("clear_spine_plantree"));
     assert!(properties.contains_key("task_projection"));
@@ -255,24 +256,29 @@ fn update_plan_schema_exposes_task_projection() {
         .properties
         .as_ref()
         .expect("update_plan object properties");
-    assert!(
-        properties
-            .get("plan")
-            .and_then(|schema| schema.description.as_deref())
-            .is_some_and(|description| description.contains("current real Spine node"))
-    );
+    assert!(!properties.contains_key("plan"));
     assert!(!properties.contains_key("spine_plantree"));
     assert!(!properties.contains_key("clear_spine_plantree"));
     assert!(properties.contains_key("task_projection"));
+    assert_eq!(tool.parameters.required, Some(vec!["task_projection".to_string()]));
     let task_projection = properties
         .get("task_projection")
         .expect("task_projection schema");
-    assert_eq!(task_projection.required, Some(vec!["current".to_string()]));
+    assert_eq!(
+        task_projection.required,
+        Some(vec!["current".to_string(), "draft_nodes".to_string()])
+    );
     let task_projection_properties = task_projection
         .properties
         .as_ref()
         .expect("task_projection object properties");
-    assert!(task_projection_properties.contains_key("current"));
+    let current = task_projection_properties
+        .get("current")
+        .expect("task_projection current schema");
+    assert_eq!(
+        current.required,
+        Some(vec!["node_id".to_string(), "checklist".to_string()])
+    );
     assert!(task_projection_properties.contains_key("draft_nodes"));
 }
 

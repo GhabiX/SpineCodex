@@ -2,7 +2,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
-use serde::de;
 use ts_rs::TS;
 
 // Types for the TODO tool arguments matching codex-vscode/todo-mcp/src/main.rs
@@ -36,8 +35,7 @@ pub struct SpineUpdatePlanArgs {
     /// Flat plan args shared with the normal upstream-compatible `update_plan` event.
     #[serde(flatten)]
     pub flat: UpdatePlanArgs,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_projection: Option<TaskProjectionArg>,
+    pub task_projection: TaskProjectionArg,
 }
 
 impl<'de> Deserialize<'de> for SpineUpdatePlanArgs {
@@ -50,28 +48,13 @@ impl<'de> Deserialize<'de> for SpineUpdatePlanArgs {
         struct RawSpineUpdatePlanArgs {
             #[serde(default)]
             explanation: Option<String>,
-            #[serde(default)]
-            plan: Option<Vec<PlanItemArg>>,
-            #[serde(default)]
-            task_projection: Option<TaskProjectionArg>,
+            task_projection: TaskProjectionArg,
         }
 
         let raw = RawSpineUpdatePlanArgs::deserialize(deserializer)?;
-        let flat = if let Some(task_projection) = &raw.task_projection {
-            if raw.plan.is_some() {
-                return Err(de::Error::custom(
-                    "task_projection cannot be combined with top-level plan",
-                ));
-            }
-            UpdatePlanArgs {
-                explanation: raw.explanation,
-                plan: task_projection.current.checklist.clone(),
-            }
-        } else {
-            UpdatePlanArgs {
-                explanation: raw.explanation,
-                plan: raw.plan.ok_or_else(|| de::Error::missing_field("plan"))?,
-            }
+        let flat = UpdatePlanArgs {
+            explanation: raw.explanation,
+            plan: raw.task_projection.current.checklist.clone(),
         };
 
         Ok(Self {
@@ -85,7 +68,6 @@ impl<'de> Deserialize<'de> for SpineUpdatePlanArgs {
 #[serde(deny_unknown_fields)]
 pub struct TaskProjectionArg {
     pub current: TaskProjectionCurrentArg,
-    #[serde(default)]
     pub draft_nodes: Vec<TaskProjectionDraftNodeArg>,
 }
 
@@ -93,7 +75,6 @@ pub struct TaskProjectionArg {
 #[serde(deny_unknown_fields)]
 pub struct TaskProjectionCurrentArg {
     pub node_id: String,
-    #[serde(default)]
     pub checklist: Vec<PlanItemArg>,
 }
 
@@ -104,7 +85,6 @@ pub struct TaskProjectionDraftNodeArg {
     pub draft_id: Option<String>,
     pub parent: String,
     pub summary: String,
-    #[serde(default)]
     pub checklist: Vec<PlanItemArg>,
 }
 
@@ -196,13 +176,50 @@ mod tests {
         assert_eq!(args.flat.explanation.as_deref(), Some("projection"));
         assert_eq!(args.flat.plan.len(), 1);
         assert_eq!(args.flat.plan[0].step, "inspect");
-        assert!(args.task_projection.is_some());
+        assert_eq!(args.task_projection.current.node_id, "1.1");
     }
 
     #[test]
-    fn spine_update_plan_args_reject_task_projection_with_top_level_plan() {
+    fn spine_update_plan_args_reject_top_level_plan() {
         let err = serde_json::from_value::<SpineUpdatePlanArgs>(json!({
             "plan": [],
+            "task_projection": {
+                "current": {
+                    "node_id": "1.1",
+                    "checklist": []
+                },
+                "draft_nodes": []
+            }
+        }))
+        .expect_err("spine update_plan should only accept task_projection");
+
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn spine_update_plan_args_require_task_projection() {
+        let err = serde_json::from_value::<SpineUpdatePlanArgs>(json!({
+            "explanation": "missing projection",
+        }))
+        .expect_err("spine update_plan should require task_projection");
+
+        assert!(err.to_string().contains("missing field `task_projection`"));
+    }
+
+    #[test]
+    fn spine_update_plan_args_require_explicit_projection_lists() {
+        let err = serde_json::from_value::<SpineUpdatePlanArgs>(json!({
+            "task_projection": {
+                "current": {
+                    "node_id": "1.1"
+                },
+                "draft_nodes": []
+            }
+        }))
+        .expect_err("current checklist should be explicit");
+        assert!(err.to_string().contains("missing field `checklist`"));
+
+        let err = serde_json::from_value::<SpineUpdatePlanArgs>(json!({
             "task_projection": {
                 "current": {
                     "node_id": "1.1",
@@ -210,18 +227,30 @@ mod tests {
                 }
             }
         }))
-        .expect_err("task_projection should replace top-level plan");
+        .expect_err("draft_nodes should be explicit");
+        assert!(err.to_string().contains("missing field `draft_nodes`"));
 
-        assert!(
-            err.to_string()
-                .contains("task_projection cannot be combined")
-        );
+        let err = serde_json::from_value::<SpineUpdatePlanArgs>(json!({
+            "task_projection": {
+                "current": {
+                    "node_id": "1.1",
+                    "checklist": []
+                },
+                "draft_nodes": [
+                    {
+                        "parent": "1.1",
+                        "summary": "future scope"
+                    }
+                ]
+            }
+        }))
+        .expect_err("draft checklist should be explicit");
+        assert!(err.to_string().contains("missing field `checklist`"));
     }
 
     #[test]
     fn spine_update_plan_args_reject_old_plantree_inputs() {
         let err = serde_json::from_value::<SpineUpdatePlanArgs>(json!({
-            "plan": [],
             "spine_plantree": {
                 "root": {
                     "summary": "duplicate"
@@ -233,7 +262,6 @@ mod tests {
         assert!(err.to_string().contains("unknown field"));
 
         let err = serde_json::from_value::<SpineUpdatePlanArgs>(json!({
-            "plan": [],
             "clear_spine_plantree": true
         }))
         .expect_err("clear_spine_plantree should no longer be an update_plan input");

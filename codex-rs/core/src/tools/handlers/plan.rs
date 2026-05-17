@@ -216,6 +216,7 @@ mod tests {
 
         assert!(!properties.contains_key("spine_plantree"));
         assert!(!properties.contains_key("clear_spine_plantree"));
+        assert!(!properties.contains_key("plan"));
         assert!(properties.contains_key("task_projection"));
     }
 

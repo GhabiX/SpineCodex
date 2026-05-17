@@ -24,9 +24,7 @@ impl PlanSnapshot {
         source_turn_id: impl Into<String>,
         args: UpdatePlanArgs,
         spine_plantree: Option<PlanTreeSnapshot>,
-        previous: Option<&PlanSnapshot>,
     ) -> Self {
-        let mut id_allocator = StableTaskIdAllocator::new(previous);
         Self {
             node_id: node_id.to_string(),
             revision,
@@ -34,8 +32,9 @@ impl PlanSnapshot {
             items: args
                 .plan
                 .into_iter()
-                .map(|item| PlanSnapshotItem {
-                    stable_task_id: id_allocator.id_for_step(&item.step),
+                .enumerate()
+                .map(|(index, item)| PlanSnapshotItem {
+                    stable_task_id: format!("step-{}", index + 1),
                     step: item.step,
                     status: step_status_label(&item.status).to_string(),
                 })
@@ -71,7 +70,7 @@ impl PlanTreeSnapshot {
 
 #[derive(Clone, Debug)]
 pub(crate) struct PlanTreeDraft {
-    pub(crate) anchor: Option<String>,
+    pub(crate) anchor: NodeId,
     pub(crate) root: PlanTreeScopeDraft,
 }
 
@@ -146,46 +145,5 @@ fn step_status_label(status: &StepStatus) -> &'static str {
         StepStatus::Pending => "pending",
         StepStatus::InProgress => "in_progress",
         StepStatus::Completed => "completed",
-    }
-}
-
-struct StableTaskIdAllocator<'a> {
-    previous_items: &'a [PlanSnapshotItem],
-    used_previous_items: Vec<bool>,
-    next_task_number: u64,
-}
-
-impl<'a> StableTaskIdAllocator<'a> {
-    fn new(previous: Option<&'a PlanSnapshot>) -> Self {
-        let previous_items = previous
-            .map(|snapshot| snapshot.items.as_slice())
-            .unwrap_or(&[]);
-        let max_task_number = previous_items
-            .iter()
-            .filter_map(|item| item.stable_task_id.strip_prefix("step-"))
-            .filter_map(|suffix| suffix.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0);
-        Self {
-            previous_items,
-            used_previous_items: vec![false; previous_items.len()],
-            next_task_number: max_task_number + 1,
-        }
-    }
-
-    fn id_for_step(&mut self, step: &str) -> String {
-        if let Some((index, item)) = self
-            .previous_items
-            .iter()
-            .enumerate()
-            .find(|(index, item)| !self.used_previous_items[*index] && item.step == step)
-        {
-            self.used_previous_items[index] = true;
-            return item.stable_task_id.clone();
-        }
-
-        let stable_task_id = format!("step-{}", self.next_task_number);
-        self.next_task_number += 1;
-        stable_task_id
     }
 }

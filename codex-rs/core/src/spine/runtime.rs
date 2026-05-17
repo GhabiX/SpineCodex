@@ -549,13 +549,8 @@ impl SpineRuntime {
             mut flat,
             task_projection,
         } = args;
-        let plantree = if let Some(task_projection) = task_projection {
-            flat.plan = task_projection.current.checklist.clone();
-            Some(self.task_projection_to_plantree(task_projection)?)
-        } else {
-            None
-        };
-        let previous = self.store.read_plan_snapshot(self.cursor())?;
+        flat.plan = task_projection.current.checklist.clone();
+        let mut plantree = self.task_projection_to_plantree(task_projection)?;
         let revision = self
             .store
             .read_plan_revision(self.cursor())?
@@ -563,20 +558,10 @@ impl SpineRuntime {
             .checked_add(1)
             .ok_or(SpineRuntimeError::PlanRevisionOverflow)?;
         let event_seq = self.store.next_tree_event_seq()?;
-        let spine_plantree = if let Some(plantree) = plantree {
-            let mut plantree = plantree;
-            let anchor_node_id = self.resolve_plantree_anchor(&plantree)?;
-            if plantree.root.node.is_none() {
-                plantree.root.node = Some(anchor_node_id.to_string());
-            }
-            self.validate_plantree(&anchor_node_id, &plantree)?;
-            normalize_plantree_node_ids(&mut plantree)?;
-            Some(PlanTreeSnapshot::from_update(&anchor_node_id, plantree))
-        } else {
-            previous
-                .as_ref()
-                .and_then(|snapshot| snapshot.spine_plantree.clone())
-        };
+        let anchor_node_id = plantree.anchor.clone();
+        self.validate_plantree(&anchor_node_id, &plantree)?;
+        normalize_plantree_node_ids(&mut plantree)?;
+        let spine_plantree = Some(PlanTreeSnapshot::from_update(&anchor_node_id, plantree));
         let snapshot = PlanSnapshot::from_update(
             self.cursor(),
             revision,
@@ -584,7 +569,6 @@ impl SpineRuntime {
             turn_id,
             flat,
             spine_plantree,
-            previous.as_ref(),
         );
         self.store.write_plan_snapshot(self.cursor(), &snapshot)?;
         Ok(snapshot)
@@ -641,7 +625,7 @@ impl SpineRuntime {
         );
 
         Ok(PlanTreeDraft {
-            anchor: Some(anchor.to_string()),
+            anchor,
             root,
         })
     }
@@ -815,45 +799,6 @@ impl SpineRuntime {
             active_node_id: display_node_id(self.cursor()),
             nodes,
         })
-    }
-
-    fn resolve_plantree_anchor(
-        &self,
-        plantree: &PlanTreeDraft,
-    ) -> Result<NodeId, SpineRuntimeError> {
-        let anchor = if let Some(anchor) = &plantree.anchor {
-            parse_display_node_id(anchor).map_err(|_| SpineRuntimeError::InvalidPlanTree {
-                message: format!("invalid plantree anchor node id {anchor}"),
-            })?
-        } else {
-            self.default_plantree_anchor()?
-        };
-        self.ensure_editable_plantree_node(&anchor, "anchor")?;
-        Ok(anchor)
-    }
-
-    fn default_plantree_anchor(&self) -> Result<NodeId, SpineRuntimeError> {
-        let cursor = self.cursor();
-        let cursor_node = self
-            .state
-            .node(cursor)
-            .ok_or_else(|| SpineRuntimeError::UnknownNode(cursor.clone()))?;
-        if let Some(parent_id) = &cursor_node.parent_id
-            && !self.is_root_epoch(parent_id)
-            && matches!(
-                self.state.node(parent_id).map(|node| &node.status),
-                Some(super::state::NodeStatus::Opened)
-            )
-        {
-            return Ok(parent_id.clone());
-        }
-        Ok(cursor.clone())
-    }
-
-    fn is_root_epoch(&self, node_id: &NodeId) -> bool {
-        self.state
-            .node(node_id)
-            .is_some_and(|node| node.parent_id.is_none())
     }
 
     fn validate_plantree(
@@ -1265,13 +1210,6 @@ fn next_child_on_path(parent: &NodeId, descendant: &NodeId) -> Option<NodeId> {
 }
 
 fn normalize_plantree_node_ids(plantree: &mut PlanTreeDraft) -> Result<(), SpineRuntimeError> {
-    if let Some(anchor) = &mut plantree.anchor {
-        *anchor = parse_display_node_id(anchor)
-            .map_err(|_| SpineRuntimeError::InvalidPlanTree {
-                message: format!("invalid plantree anchor node id {anchor}"),
-            })?
-            .to_string();
-    }
     normalize_plantree_scope_node_ids(&mut plantree.root)
 }
 

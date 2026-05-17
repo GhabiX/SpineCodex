@@ -27,22 +27,10 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
         Some(vec!["step".to_string(), "status".to_string()]),
         Some(false.into()),
     );
-    let mut properties = BTreeMap::from([
-        (
-            "explanation".to_string(),
-            JsonSchema::string(/*description*/ None),
-        ),
-        (
-            "plan".to_string(),
-            JsonSchema::array(
-                plan_item_schema.clone(),
-                Some(
-                    "The current checklist. When Spine is enabled, this is the current real Spine node's checklist."
-                        .to_string(),
-                ),
-            ),
-        ),
-    ]);
+    let mut properties = BTreeMap::from([(
+        "explanation".to_string(),
+        JsonSchema::string(/*description*/ None),
+    )]);
     if options.include_task_projection {
         let projection_current_properties = BTreeMap::from([
             (
@@ -65,7 +53,7 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
         ]);
         let projection_current_schema = JsonSchema::object(
             projection_current_properties,
-            Some(vec!["node_id".to_string()]),
+            Some(vec!["node_id".to_string(), "checklist".to_string()]),
             Some(false.into()),
         );
         let projection_draft_properties = BTreeMap::from([
@@ -97,7 +85,11 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
         ]);
         let projection_draft_schema = JsonSchema::object(
             projection_draft_properties,
-            Some(vec!["parent".to_string(), "summary".to_string()]),
+            Some(vec![
+                "parent".to_string(),
+                "summary".to_string(),
+                "checklist".to_string(),
+            ]),
             Some(false.into()),
         );
         let task_projection_properties = BTreeMap::from([
@@ -117,15 +109,20 @@ pub fn create_update_plan_tool_with_options(options: UpdatePlanToolOptions) -> T
             "task_projection".to_string(),
             JsonSchema::object(
                 task_projection_properties,
-                Some(vec!["current".to_string()]),
+                Some(vec!["current".to_string(), "draft_nodes".to_string()]),
                 Some(false.into()),
             ),
+        );
+    } else {
+        properties.insert(
+            "plan".to_string(),
+            JsonSchema::array(plan_item_schema, Some("The current checklist.".to_string())),
         );
     }
 
     let description = if options.include_task_projection {
         r#"Updates the task plan.
-Provide an optional explanation and a list of plan items, each with a step and status.
+Provide an optional explanation and task_projection.
 At most one step can be in_progress at a time.
 When Spine is enabled, use task_projection as the single model-authored Spine planning input. One call carries task_projection.current.checklist for the current real Spine node's flat plan and task_projection.draft_nodes for future scopes with their summaries, checklists, and parent real node ids or earlier ~draft_ids. task_projection is planning only: it does not create, finish, close, compact, or move Spine nodes. Do not combine task_projection with top-level plan.
 Successful writable Spine updates return JSON containing the updated spine_tree; treat that returned tree as the authoritative planning state.
@@ -146,7 +143,7 @@ At most one step can be in_progress at a time.
         parameters: JsonSchema::object(
             properties,
             if options.include_task_projection {
-                None
+                Some(vec!["task_projection".to_string()])
             } else {
                 Some(vec!["plan".to_string()])
             },
