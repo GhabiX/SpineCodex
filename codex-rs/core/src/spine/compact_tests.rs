@@ -549,7 +549,6 @@ fn suffix_fold_after_root_archive_reinjected_context_starts_at_next_live_item() 
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[2, 1]),
-        scope_node_id: None,
         cut_ordinal: 8,
         fold_end_ordinal: 12,
         spine_tree: "2.1: Current".to_string(),
@@ -611,7 +610,6 @@ fn suffix_fold_does_not_extend_past_handoff_shifted_boundary() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 2]),
-        scope_node_id: None,
         cut_ordinal: 106,
         fold_end_ordinal: 217,
         spine_tree: "1.1: finished\n1.2: Current".to_string(),
@@ -995,7 +993,6 @@ fn suffix_fold_maps_after_visible_stale_legacy_ir_text() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 4]),
-        scope_node_id: None,
         cut_ordinal: 1111,
         fold_end_ordinal: 1424,
         spine_tree: "1.4: finished\n1.5: Current".to_string(),
@@ -1128,7 +1125,6 @@ fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 1]),
-        scope_node_id: None,
         cut_ordinal: 3,
         fold_end_ordinal: 8,
         spine_tree: "1: finished leaf [memory already in context]\n2: Current".to_string(),
@@ -1196,7 +1192,6 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
     let input = SpineCompactInput {
         op: SpineOperation::Archive,
         node_id: id(&[1, 1]),
-        scope_node_id: None,
         cut_ordinal: 7,
         fold_end_ordinal: 9,
         spine_tree: "1: Current".to_string(),
@@ -1275,7 +1270,6 @@ fn suffix_fold_uses_runtime_span_for_slim_memory_item() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 2]),
-        scope_node_id: None,
         cut_ordinal: 5,
         fold_end_ordinal: 9,
         spine_tree: "1: finished previous [memory already in context]\n2: Current".to_string(),
@@ -1335,7 +1329,6 @@ fn close_parent_suffix_fold_can_cover_installed_child_memory_span() {
     let input = SpineCompactInput {
         op: SpineOperation::Close,
         node_id: id(&[1, 1, 1]),
-        scope_node_id: Some(id(&[1, 1, 1])),
         cut_ordinal: 2,
         fold_end_ordinal: 8,
         spine_tree: "1.1.1: closed scope [memory already in context]\n1.1.2: Current".to_string(),
@@ -1417,7 +1410,6 @@ fn suffix_fold_pulls_call_back_when_output_is_inside_range() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 1]),
-        scope_node_id: None,
         cut_ordinal: 2,
         fold_end_ordinal: 3,
         spine_tree: "1: finished leaf [memory already in context]\n2: Current".to_string(),
@@ -1451,7 +1443,6 @@ fn suffix_fold_pulls_custom_tool_call_back_when_output_is_inside_range() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 1]),
-        scope_node_id: None,
         cut_ordinal: 2,
         fold_end_ordinal: 3,
         spine_tree: "1: finished leaf [memory already in context]\n2: Current".to_string(),
@@ -1594,7 +1585,6 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 1]),
-        scope_node_id: None,
         cut_ordinal: 1,
         fold_end_ordinal: 3,
         spine_tree,
@@ -1660,7 +1650,6 @@ fn codex_builtin_prompt_includes_compact_instruction_when_present() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 1]),
-        scope_node_id: None,
         cut_ordinal: 1,
         fold_end_ordinal: 3,
         spine_tree: "1: finished leaf done [memory already in context]".to_string(),
@@ -1695,7 +1684,6 @@ fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
     let input = SpineCompactInput {
         op: SpineOperation::Next,
         node_id: id(&[1, 1]),
-        scope_node_id: None,
         cut_ordinal: 1,
         fold_end_ordinal: 3,
         spine_tree: "1: finished leaf done [memory already in context]".to_string(),

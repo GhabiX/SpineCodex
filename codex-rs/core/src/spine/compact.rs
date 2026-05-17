@@ -35,7 +35,6 @@ const SPINE_MEMORY_MARKER_SUFFIX: &str = " -->";
 pub(crate) struct SpineCompactInput {
     pub(crate) op: SpineOperation,
     pub(crate) node_id: NodeId,
-    pub(crate) scope_node_id: Option<NodeId>,
     pub(crate) cut_ordinal: u64,
     pub(crate) fold_end_ordinal: u64,
     pub(crate) spine_tree: String,
@@ -80,7 +79,6 @@ pub(crate) struct SpineCompactOutput {
     pub(crate) memory_markdown: String,
     pub(crate) compacted_body: String,
     pub(crate) compact_message: String,
-    pub(crate) strategy_name: &'static str,
 }
 
 pub(crate) const CODEX_BUILTIN_TEXT_STRATEGY: &str = "codex_builtin_fork_full_history";
@@ -132,7 +130,6 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
         ),
         memory_markdown,
         compacted_body: compacted_suffix,
-        strategy_name: CODEX_BUILTIN_TEXT_STRATEGY,
     })
 }
 
@@ -477,7 +474,6 @@ pub(crate) fn prepare_spine_compact_plan(
     let input = SpineCompactInput {
         op: boundary.op,
         node_id: boundary.node_id.clone(),
-        scope_node_id: boundary.scope_node_id.clone(),
         cut_ordinal: boundary.cut_ordinal,
         fold_end_ordinal: boundary.fold_end_ordinal,
         spine_tree,

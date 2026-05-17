@@ -1087,15 +1087,6 @@ impl SpineSidecarStore {
                         )?;
                     }
                 }
-                TreeEvent::RootEpochArchived {
-                    archived_root_id: _,
-                    next_root_id: _,
-                    ..
-                } => {
-                    return Err(SpineStoreError::InvalidLedger(
-                        "legacy root_epoch_archived event is not supported".to_string(),
-                    ));
-                }
                 TreeEvent::RootEpochReset {
                     root_id,
                     next_leaf_id,
@@ -1106,7 +1097,7 @@ impl SpineSidecarStore {
                 } => {
                     let state = state.as_mut().ok_or_else(|| {
                         SpineStoreError::InvalidLedger(
-                            "root_epoch_archived appeared before root node creation".to_string(),
+                            "root_epoch_reset appeared before root node creation".to_string(),
                         )
                     })?;
                     let root_id = NodeId::parse(&root_id)?;
@@ -1639,11 +1630,6 @@ impl SpineSidecarStore {
                     source_turn_id,
                     ..
                 } if from_node == node_id => Some(source_turn_id),
-                TreeEvent::RootEpochArchived {
-                    archived_root_id,
-                    source_turn_id,
-                    ..
-                } if archived_root_id == node_id => Some(source_turn_id),
                 TreeEvent::RootEpochReset {
                     root_id,
                     source_turn_id,
@@ -1836,16 +1822,6 @@ enum TreeEvent {
         spine_plantree: Option<PlanTreeSnapshot>,
         source_turn_id: String,
     },
-    RootEpochArchived {
-        seq: u64,
-        archived_root_id: String,
-        next_root_id: String,
-        next_parent_id: Option<String>,
-        summary: String,
-        raw_start_ordinal: u64,
-        compact_id: String,
-        source_turn_id: String,
-    },
     RootEpochReset {
         seq: u64,
         root_id: String,
@@ -1883,7 +1859,6 @@ impl TreeEvent {
             TreeEvent::SpineInitialized { seq, .. }
             | TreeEvent::TransitionApplied { seq, .. }
             | TreeEvent::TaskPlanUpdated { seq, .. }
-            | TreeEvent::RootEpochArchived { seq, .. }
             | TreeEvent::RootEpochReset { seq, .. }
             | TreeEvent::RawStartOrdinalUpdated { seq, .. }
             | TreeEvent::ProjectionReset { seq, .. }

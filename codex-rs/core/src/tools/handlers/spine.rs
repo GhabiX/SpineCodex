@@ -5,7 +5,6 @@ use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::spine::store::SpineOperation;
-use crate::spine::view::render_tool_output_with_base;
 use crate::spine::view::render_tree;
 use crate::spine::view::render_tree_tool_output_with_base;
 use crate::tools::context::ToolCallSource;
@@ -300,7 +299,7 @@ impl ToolHandler for SpineHandler {
                 staged.op,
                 staged.to_node.bracketed(),
                 render_tree(&preview_state, &staged.to_node),
-                render_tool_output_with_base(staged.op, &preview_state, &staged.to_node, &base),
+                render_tree_tool_output_with_base(&preview_state, &staged.to_node, &base),
             )
         };
 
