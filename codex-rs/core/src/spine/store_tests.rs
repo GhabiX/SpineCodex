@@ -2,6 +2,7 @@ use super::*;
 use crate::spine::mem_install::MemoryBodyError;
 use crate::spine::mem_install::MemoryBodyRef;
 use crate::spine::mem_install::MemorySectionId;
+use crate::spine::mem_install::memory_body_hash;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -84,6 +85,26 @@ fn compact_installed(
         replacement_history_len,
         memory_path,
         message_hash: message_hash.to_string(),
+    }
+}
+
+fn mem_install_committed(
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    replacement_history_len: usize,
+    message_hash: &str,
+    body_ref: MemoryBodyRef,
+) -> MemInstallCommittedRecord {
+    MemInstallCommittedRecord {
+        attempt: compact_attempt(compact_id, node_id, op, cut_ordinal, fold_end_ordinal),
+        body_ref,
+        replacement_history_len,
+        message_hash: message_hash.to_string(),
+        projection_ref: "projection:seq-1".to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
     }
 }
 
@@ -1150,6 +1171,357 @@ fn appends_compact_index_and_raw_mirror_events() {
             "replacement_history_len": 7,
         })
     );
+}
+
+#[test]
+fn compact_index_mem_install_committed_writes_semantic_marker() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    store
+        .append_memory_section(
+            &id(&[1]),
+            "\n\n## Auto Compact\n\nBase: /base\nFold: response ordinals [4, 9)\nNode trajs: nodes/1/trajs.jsonl\nRaw mirror: raw/rollout.raw.jsonl\nRollout: ../rollout.jsonl\n\nportable body\n\n## Node Summary\n\nsummary\n",
+        )
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+
+    store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+            body_ref.clone(),
+        ))
+        .expect("append mem install commit");
+
+    assert_eq!(
+        read_json_lines(store.compact_index_path()),
+        vec![
+            json!({
+                "type": "compact_started",
+                "seq": 1,
+                "compact_id": "compact-1",
+                "node_id": "1",
+                "op": "next",
+                "cut_ordinal": 4,
+                "fold_end_ordinal": 9,
+                "strategy": "codex_builtin_text",
+                "raw_trajs": "raw/rollout.raw.jsonl",
+                "rollout": "../rollout.jsonl",
+            }),
+            json!({
+                "type": "mem_install_committed",
+                "seq": 2,
+                "schema_version": 1,
+                "compact_id": "compact-1",
+                "node_id": "1",
+                "op": "next",
+                "cut_ordinal": 4,
+                "fold_end_ordinal": 9,
+                "memory_section_id": "nodes/1/memory.md#section-0",
+                "body_hash": memory_body_hash("portable body"),
+                "storage_ref": "nodes/1/memory.md",
+                "message_hash": "sha1:message",
+                "replacement_history_len": 7,
+                "projection_ref": "projection:seq-1",
+                "source_rollout_ref": "../rollout.jsonl",
+                "committed_at_seq": 2,
+            }),
+        ]
+    );
+
+    let installs = store
+        .committed_mem_installs()
+        .expect("committed mem installs");
+    assert_eq!(installs.len(), 1);
+    assert_eq!(installs[0].compact_id, "compact-1");
+    assert_eq!(installs[0].body_ref, body_ref);
+    store.load().expect("mem install commit is terminal");
+}
+
+#[test]
+fn compact_index_legacy_compact_installed_is_not_mem_install_commit() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-legacy",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    store
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nlegacy body\n")
+        .expect("append legacy memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+    store
+        .append_compact_installed(compact_installed(
+            "compact-legacy",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:legacy",
+        ))
+        .expect("append compact installed");
+
+    store
+        .load()
+        .expect("legacy compact installed remains valid");
+    assert!(
+        store
+            .committed_mem_installs()
+            .expect("committed mem installs")
+            .is_empty()
+    );
+    let error = store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-legacy",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:legacy",
+            body_ref,
+        ))
+        .expect_err("mem install after checkpoint should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("after compact_installed")
+    ));
+}
+
+#[test]
+fn compact_index_mem_install_missing_started_fails_closed() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nbody\n")
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+
+    let error = store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-missing-start",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+            body_ref,
+        ))
+        .expect_err("missing started should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("mem_install_committed without matching compact_started")
+    ));
+}
+
+#[test]
+fn compact_index_mem_install_missing_body_fails_closed() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    store
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nbody\n")
+        .expect("append memory section");
+    let missing_body_ref = MemoryBodyRef {
+        section_id: MemorySectionId::new("nodes/1/memory.md", 1),
+        body_hash: memory_body_hash("body"),
+    };
+
+    let error = store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+            missing_body_ref,
+        ))
+        .expect_err("missing body should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::MemoryBody(MemoryBodyError::MissingSection { .. })
+    ));
+    assert_eq!(read_json_lines(store.compact_index_path()).len(), 1);
+}
+
+#[test]
+fn compact_index_mem_install_missing_projection_ref_fails_closed() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    store
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nbody\n")
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+    let mut record = mem_install_committed(
+        "compact-1",
+        id(&[1]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:message",
+        body_ref,
+    );
+    record.projection_ref.clear();
+
+    let error = store
+        .append_mem_install_committed(record)
+        .expect_err("missing projection ref should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message) if message.contains("missing projection_ref")
+    ));
+    assert_eq!(read_json_lines(store.compact_index_path()).len(), 1);
+}
+
+#[test]
+fn compact_index_mem_install_duplicate_compact_id_fails_closed() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    store
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nbody\n")
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+    store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+            body_ref.clone(),
+        ))
+        .expect("append first mem install commit");
+
+    let error = store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+            body_ref,
+        ))
+        .expect_err("duplicate mem install should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("duplicate mem_install_committed")
+    ));
+    assert_eq!(read_json_lines(store.compact_index_path()).len(), 2);
+}
+
+#[test]
+fn compact_index_mem_install_body_dependency_drift_fails_load() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    store
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nbody\n")
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+    store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+            body_ref,
+        ))
+        .expect("append mem install commit");
+    std::fs::write(store.memory_path(&id(&[1])), "changed body").expect("rewrite memory");
+
+    let error = store
+        .load()
+        .expect_err("missing committed body should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::MemoryBody(MemoryBodyError::MissingSection { .. })
+    ));
 }
 
 #[test]

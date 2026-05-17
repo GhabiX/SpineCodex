@@ -71,6 +71,19 @@ fn mem_install_verifies_body_ref_by_section_index() {
 }
 
 #[test]
+fn mem_install_parses_display_section_id_with_storage_ref() {
+    assert_eq!(
+        MemorySectionId::parse("nodes/1/memory.md#section-3", "nodes/1/memory.md")
+            .expect("parse section id"),
+        MemorySectionId::new("nodes/1/memory.md", 3)
+    );
+    assert!(matches!(
+        MemorySectionId::parse("nodes/2/memory.md#section-3", "nodes/1/memory.md"),
+        Err(MemoryBodyError::MalformedSectionId { .. })
+    ));
+}
+
+#[test]
 fn mem_install_hash_ignores_auto_compact_audit_path_drift() {
     let source = format!(
         "{GENERATED_MEMORY_SECTION_MARKER}{}",

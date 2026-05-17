@@ -20,6 +20,29 @@ impl MemorySectionId {
             section_index,
         }
     }
+
+    pub(crate) fn parse(
+        memory_section_id: impl AsRef<str>,
+        storage_ref: impl Into<String>,
+    ) -> Result<Self, MemoryBodyError> {
+        let memory_section_id = memory_section_id.as_ref();
+        let storage_ref = storage_ref.into();
+        let prefix = format!("{storage_ref}#section-");
+        let Some(section_index) = memory_section_id.strip_prefix(&prefix) else {
+            return Err(MemoryBodyError::MalformedSectionId {
+                memory_section_id: memory_section_id.to_string(),
+                storage_ref,
+            });
+        };
+        let section_index =
+            section_index
+                .parse::<usize>()
+                .map_err(|_| MemoryBodyError::MalformedSectionId {
+                    memory_section_id: memory_section_id.to_string(),
+                    storage_ref: storage_ref.clone(),
+                })?;
+        Ok(Self::new(storage_ref, section_index))
+    }
 }
 
 impl fmt::Display for MemorySectionId {
@@ -53,6 +76,11 @@ impl GeneratedMemorySection {
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub(crate) enum MemoryBodyError {
+    #[error("memory body section id {memory_section_id:?} is malformed for storage {storage_ref}")]
+    MalformedSectionId {
+        memory_section_id: String,
+        storage_ref: String,
+    },
     #[error("memory body section {section_id} is missing")]
     MissingSection { section_id: MemorySectionId },
     #[error(
