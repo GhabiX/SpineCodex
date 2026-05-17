@@ -1,4 +1,9 @@
 use super::ids::NodeId;
+use super::segment::RawSpan;
+use super::segment::Segment;
+use super::segment::SegmentArtifacts;
+use super::segment::canonical_cover;
+use super::segment::span;
 use super::store::InstalledCompactSpan;
 use super::store::SpineOperation;
 use super::store::SpineSidecarStore;
@@ -20,6 +25,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -279,6 +285,7 @@ pub(crate) fn render_auto_compact_memory(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_suffix_replacement_history(
     old_history: &[ResponseItem],
     cut_index: usize,
@@ -294,16 +301,60 @@ pub(crate) fn build_suffix_replacement_history(
     replacement_history
 }
 
+pub(crate) fn build_suffix_replacement_history_from_pi(
+    old_history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+    compact_id: &str,
+    boundary: &SpineCompactBoundary,
+    memory_item: ResponseItem,
+    note_items: Vec<ResponseItem>,
+) -> CodexResult<Vec<ResponseItem>> {
+    let raw_len =
+        raw_ordinal_for_effective_index_with_spans(old_history, old_history.len(), runtime_spans)
+            .ok_or_else(|| {
+            CodexErr::Fatal("spine suffix render(Pi) could not map history end".to_string())
+        })?;
+    let new_span = RawSpan {
+        start: boundary.cut_ordinal,
+        end: boundary.fold_end_ordinal,
+    };
+    let mut artifacts = artifacts_from_runtime_spans(runtime_spans);
+    artifacts.insert(compact_id.to_string(), new_span);
+    let mut compact_ids = runtime_spans
+        .iter()
+        .map(|span| span.compact_id.as_str())
+        .collect::<Vec<_>>();
+    compact_ids.push(compact_id);
+    let mut pi = canonical_cover(raw_len, compact_ids, &artifacts).map_err(pi_render_error)?;
+    let note_items = note_items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| (format!("suffix_note_{index}"), vec![item]))
+        .collect::<BTreeMap<_, _>>();
+    if !note_items.is_empty() {
+        pi = insert_notes_after_mem(pi, compact_id, note_items.keys().cloned().collect())?;
+    }
+    let mut mem_items = memory_items_from_runtime_spans(old_history, runtime_spans)?;
+    mem_items.insert(compact_id.to_string(), memory_item);
+    render_pi_bridge_replacement_history(
+        old_history,
+        runtime_spans,
+        &pi,
+        &artifacts,
+        &mem_items,
+        &note_items,
+    )
+}
+
 pub(crate) fn build_root_archive_replacement_history(
-    prefix_history: &[ResponseItem],
+    history: &[ResponseItem],
+    planned_cut_index: usize,
+    fold_end_ordinal: u64,
     initial_context_items: Vec<ResponseItem>,
-    ir_items: Vec<ResponseItem>,
-    live_tail: &[ResponseItem],
+    root_memory_item: ResponseItem,
     runtime_spans: &[InstalledCompactSpan],
 ) -> CodexResult<RootArchiveReplacementHistory> {
-    let mut replacement_history = Vec::with_capacity(
-        prefix_history.len() + initial_context_items.len() + ir_items.len() + live_tail.len(),
-    );
+    let prefix_history = &history[..planned_cut_index];
     let mut raw_cursor = 0_u64;
     let mut span_cursor = 0_usize;
     let mut archive_cut_ordinal = None;
@@ -319,20 +370,13 @@ pub(crate) fn build_root_archive_replacement_history(
                 ))
             })? {
             EffectiveItemSemantics::Raw1 => {
-                if archive_cut_ordinal.is_none() {
-                    replacement_history.push(item.clone());
-                }
                 raw_cursor = raw_cursor.checked_add(1).ok_or_else(|| {
                     CodexErr::Fatal(
                         "spine root archive prefix raw cursor overflowed".to_string(),
                     )
                 })?;
             }
-            EffectiveItemSemantics::Zero => {
-                if archive_cut_ordinal.is_none() {
-                    replacement_history.push(item.clone());
-                }
-            }
+            EffectiveItemSemantics::Zero => {}
             EffectiveItemSemantics::Span { cut, fold_end } => {
                 if cut != raw_cursor {
                     return Err(CodexErr::Fatal(format!(
@@ -351,13 +395,54 @@ pub(crate) fn build_root_archive_replacement_history(
             EffectiveItemSemantics::Stop => break,
         }
     }
-    replacement_history.extend(initial_context_items);
-    replacement_history.extend(ir_items);
-    replacement_history.extend_from_slice(live_tail);
+    let archive_cut_ordinal = archive_cut_ordinal.unwrap_or(raw_cursor);
+    let archive_cut_index = archive_cut_index.unwrap_or(prefix_history.len());
+    if fold_end_ordinal < archive_cut_ordinal {
+        return Err(CodexErr::Fatal(format!(
+            "spine root archive render(Pi) fold_end ordinal {fold_end_ordinal} is before archive cut ordinal {archive_cut_ordinal}"
+        )));
+    }
+    let raw_len = raw_ordinal_for_effective_index_with_spans(history, history.len(), runtime_spans)
+        .ok_or_else(|| {
+            CodexErr::Fatal("spine root archive render(Pi) could not map history end".to_string())
+        })?;
+    let root_compact_id = "__spine_root_archive_render_pi__";
+    let mut artifacts = artifacts_from_runtime_spans(runtime_spans);
+    artifacts.insert(
+        root_compact_id.to_string(),
+        RawSpan {
+            start: archive_cut_ordinal,
+            end: fold_end_ordinal,
+        },
+    );
+    let mut compact_ids = runtime_spans
+        .iter()
+        .map(|span| span.compact_id.as_str())
+        .collect::<Vec<_>>();
+    compact_ids.push(root_compact_id);
+    let mut pi = canonical_cover(raw_len, compact_ids, &artifacts).map_err(pi_render_error)?;
+    let note_items = initial_context_items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| (format!("initial_context_{index}"), vec![item]))
+        .collect::<BTreeMap<_, _>>();
+    if !note_items.is_empty() {
+        pi = insert_notes_before_mem(pi, root_compact_id, note_items.keys().cloned().collect())?;
+    }
+    let mut mem_items = memory_items_from_runtime_spans(history, runtime_spans)?;
+    mem_items.insert(root_compact_id.to_string(), root_memory_item);
+    let replacement_history = render_pi_bridge_replacement_history(
+        history,
+        runtime_spans,
+        &pi,
+        &artifacts,
+        &mem_items,
+        &note_items,
+    )?;
     Ok(RootArchiveReplacementHistory {
         replacement_history,
-        archive_cut_ordinal: archive_cut_ordinal.unwrap_or(raw_cursor),
-        archive_cut_index: archive_cut_index.unwrap_or(prefix_history.len()),
+        archive_cut_ordinal,
+        archive_cut_index,
     })
 }
 
@@ -366,6 +451,197 @@ pub(crate) struct RootArchiveReplacementHistory {
     pub(crate) replacement_history: Vec<ResponseItem>,
     pub(crate) archive_cut_ordinal: u64,
     pub(crate) archive_cut_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RenderPiOrigin {
+    Raw(RawSpan),
+    Mem(String),
+    Note(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RenderedPiItem {
+    pub(crate) origin: RenderPiOrigin,
+    pub(crate) item: ResponseItem,
+}
+
+pub(crate) fn render_pi_bridge_replacement_history(
+    history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+    pi: &[Segment],
+    artifacts: &SegmentArtifacts,
+    mem_items: &BTreeMap<String, ResponseItem>,
+    note_items: &BTreeMap<String, Vec<ResponseItem>>,
+) -> CodexResult<Vec<ResponseItem>> {
+    Ok(
+        render_pi_bridge_items(history, runtime_spans, pi, artifacts, mem_items, note_items)?
+            .into_iter()
+            .map(|rendered| rendered.item)
+            .collect(),
+    )
+}
+
+pub(crate) fn render_pi_bridge_items(
+    history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+    pi: &[Segment],
+    artifacts: &SegmentArtifacts,
+    mem_items: &BTreeMap<String, ResponseItem>,
+    note_items: &BTreeMap<String, Vec<ResponseItem>>,
+) -> CodexResult<Vec<RenderedPiItem>> {
+    let mut rendered = Vec::new();
+    for segment in pi {
+        match segment {
+            Segment::Raw(raw_span) => {
+                let start_index = effective_index_for_raw_ordinal_with_spans(
+                    history,
+                    raw_span.start,
+                    runtime_spans,
+                )
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "render(Pi) Raw {} start does not map to an effective index",
+                        raw_span
+                    ))
+                })?;
+                let end_index = effective_index_for_raw_ordinal_with_spans(
+                    history,
+                    raw_span.end,
+                    runtime_spans,
+                )
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "render(Pi) Raw {} end does not map to an effective index",
+                        raw_span
+                    ))
+                })?;
+                if start_index > end_index {
+                    return Err(CodexErr::Fatal(format!(
+                        "render(Pi) Raw {} maps to inverted effective range [{start_index}, {end_index})",
+                        raw_span
+                    )));
+                }
+                rendered.extend(history[start_index..end_index].iter().cloned().map(|item| {
+                    RenderedPiItem {
+                        origin: RenderPiOrigin::Raw(*raw_span),
+                        item,
+                    }
+                }));
+            }
+            Segment::Mem { compact_id } => {
+                span(segment, artifacts).map_err(pi_render_error)?;
+                let item = mem_items.get(compact_id).ok_or_else(|| {
+                    CodexErr::Fatal(format!("render(Pi) missing Mem item for {compact_id}"))
+                })?;
+                rendered.push(RenderedPiItem {
+                    origin: RenderPiOrigin::Mem(compact_id.clone()),
+                    item: item.clone(),
+                });
+            }
+            Segment::Note { kind } => {
+                let items = note_items.get(kind).ok_or_else(|| {
+                    CodexErr::Fatal(format!("render(Pi) missing Note item for {kind}"))
+                })?;
+                rendered.extend(items.iter().cloned().map(|item| RenderedPiItem {
+                    origin: RenderPiOrigin::Note(kind.clone()),
+                    item,
+                }));
+            }
+        }
+    }
+    Ok(rendered)
+}
+
+fn artifacts_from_runtime_spans(runtime_spans: &[InstalledCompactSpan]) -> SegmentArtifacts {
+    runtime_spans
+        .iter()
+        .map(|span| {
+            (
+                span.compact_id.clone(),
+                RawSpan {
+                    start: span.cut_ordinal,
+                    end: span.fold_end_ordinal,
+                },
+            )
+        })
+        .collect()
+}
+
+fn memory_items_from_runtime_spans(
+    history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+) -> CodexResult<BTreeMap<String, ResponseItem>> {
+    let mut items = BTreeMap::new();
+    for span in runtime_spans {
+        let index =
+            effective_index_for_raw_ordinal_with_spans(history, span.cut_ordinal, runtime_spans)
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "render(Pi) could not map existing Mem {} at raw {}",
+                        span.compact_id, span.cut_ordinal
+                    ))
+                })?;
+        let item = history.get(index).ok_or_else(|| {
+            CodexErr::Fatal(format!(
+                "render(Pi) existing Mem {} mapped past history at index {}",
+                span.compact_id, index
+            ))
+        })?;
+        items.insert(span.compact_id.clone(), item.clone());
+    }
+    Ok(items)
+}
+
+fn insert_notes_after_mem(
+    pi: Vec<Segment>,
+    compact_id: &str,
+    note_kinds: Vec<String>,
+) -> CodexResult<Vec<Segment>> {
+    let mut inserted = false;
+    let mut result = Vec::with_capacity(pi.len() + note_kinds.len());
+    for segment in pi {
+        let is_target = matches!(&segment, Segment::Mem { compact_id: id } if id == compact_id);
+        result.push(segment);
+        if is_target {
+            inserted = true;
+            result.extend(note_kinds.iter().cloned().map(Segment::note));
+        }
+    }
+    if !inserted {
+        return Err(CodexErr::Fatal(format!(
+            "render(Pi) could not place notes after Mem {compact_id}"
+        )));
+    }
+    Ok(result)
+}
+
+fn insert_notes_before_mem(
+    pi: Vec<Segment>,
+    compact_id: &str,
+    note_kinds: Vec<String>,
+) -> CodexResult<Vec<Segment>> {
+    let mut inserted = false;
+    let mut result = Vec::with_capacity(pi.len() + note_kinds.len());
+    for segment in pi {
+        if matches!(&segment, Segment::Mem { compact_id: id } if id == compact_id) {
+            inserted = true;
+            result.extend(note_kinds.iter().cloned().map(Segment::note));
+        }
+        result.push(segment);
+    }
+    if !inserted {
+        return Err(CodexErr::Fatal(format!(
+            "render(Pi) could not place notes before Mem {compact_id}"
+        )));
+    }
+    Ok(result)
+}
+
+fn pi_render_error(error: impl std::fmt::Display) -> CodexErr {
+    CodexErr::Fatal(format!(
+        "render(Pi) failed to build canonical cover: {error}"
+    ))
 }
 
 pub(crate) fn validate_spine_replacement_history_admissible(

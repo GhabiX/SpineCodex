@@ -184,7 +184,7 @@ use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
 use crate::spine::compact::SpineCompactBoundary;
 use crate::spine::compact::build_root_archive_replacement_history;
-use crate::spine::compact::build_suffix_replacement_history;
+use crate::spine::compact::build_suffix_replacement_history_from_pi;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
 use crate::spine::compact::prepare_spine_compact_plan;
 use crate::spine::compact::render_auto_compact_memory;
@@ -3031,12 +3031,12 @@ impl Session {
             .map(str::trim)
             .filter(|body| !body.is_empty())
             .unwrap_or(compact_summary.as_str());
-        let rendered_memory_items = vec![render_spine_memory_item(
+        let rendered_memory_item = render_spine_memory_item(
             &boundary.node_id,
             boundary.op,
             &boundary.transition_summary,
             compacted_body,
-        )];
+        );
         let initial_context_items = if reference_context_item.is_some() {
             vec![render_spine_initial_context_item(
                 self.build_initial_context(turn_context).await,
@@ -3045,10 +3045,11 @@ impl Session {
             Vec::new()
         };
         let root_replacement = build_root_archive_replacement_history(
-            &history[..prep.plan.cut_index],
+            &history,
+            prep.plan.cut_index,
+            prep.effective_boundary.fold_end_ordinal,
             initial_context_items,
-            rendered_memory_items,
-            &prep.plan.replacement_tail,
+            rendered_memory_item,
             &prep.runtime_spans,
         )?;
         let root_boundary = SpineCompactBoundary {
@@ -3335,21 +3336,20 @@ impl Session {
             .unwrap_or(prep.plan.memory_path.as_path())
             .to_path_buf();
         let to_node = spine.lock().await.cursor().clone();
-        let rendered_memory_items = vec![
-            render_spine_memory_item(
-                &boundary.node_id,
-                boundary.op,
-                &boundary.transition_summary,
-                &model_memory_body,
-            ),
-            render_spine_handoff_item(&boundary.node_id, &to_node),
-        ];
-        let replacement_history = build_suffix_replacement_history(
-            &history,
-            prep.plan.cut_index,
-            prep.plan.fold_end_index,
-            rendered_memory_items,
+        let rendered_memory_item = render_spine_memory_item(
+            &boundary.node_id,
+            boundary.op,
+            &boundary.transition_summary,
+            &model_memory_body,
         );
+        let replacement_history = build_suffix_replacement_history_from_pi(
+            &history,
+            &prep.runtime_spans,
+            &compact_id,
+            &prep.effective_boundary,
+            rendered_memory_item,
+            vec![render_spine_handoff_item(&boundary.node_id, &to_node)],
+        )?;
         let compacted_item = CompactedItem {
             message: compact_output.compact_message.clone(),
             replacement_history: Some(replacement_history.clone()),

@@ -2592,9 +2592,9 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     assert!(followup_request.body_contains_text(
         "Continue following preserved system, developer, and project instructions."
     ));
-    assert!(followup_request.body_contains_text(
-        "Treat raw folded conversation as historical evidence"
-    ));
+    assert!(
+        followup_request.body_contains_text("Treat raw folded conversation as historical evidence")
+    );
     assert!(followup_request.body_contains_text(
         "unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated memory as current obligations"
     ));

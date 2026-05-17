@@ -1079,20 +1079,19 @@ fn root_archive_replacement_folds_prior_spine_memory_into_archive_span() {
     let prefix_history = vec![
         fixed_prelude.clone(),
         prior_memory.clone(),
-        text_item("native compact should not keep ordinary assistant prefix"),
-        user_item("recent user message kept by native compact"),
-        user_item(&format!(
-            "{}\nnative compact summary",
-            crate::compact::SUMMARY_PREFIX
-        )),
+        text_item("ordinary assistant prefix should be folded"),
+        user_item("recent user message should be folded"),
     ];
     let live_tail = vec![user_item("live tail after fold")];
+    let mut history = prefix_history.clone();
+    history.extend(live_tail.clone());
 
     let replacement = build_root_archive_replacement_history(
-        &prefix_history,
+        &history,
+        prefix_history.len(),
+        5,
         vec![wrapped_initial_context.clone()],
-        vec![root_memory],
-        &live_tail,
+        root_memory,
         &[installed_span(
             "compact-1",
             id(&[1]),
@@ -1114,14 +1113,25 @@ fn root_archive_replacement_folds_prior_spine_memory_into_archive_span() {
     assert!(!rendered.contains("Node: 1"));
     assert!(rendered.contains("live tail after fold"));
     assert!(rendered.contains("spine_initial_context"));
-    assert!(!rendered.contains("native compact summary"));
-    assert!(!rendered.contains("recent user message kept by native compact"));
+    assert!(!rendered.contains("recent user message should be folded"));
     assert!(!rendered.contains("ordinary assistant prefix"));
+    validate_spine_replacement_history_admissible(
+        &replacement.replacement_history,
+        &[installed_span(
+            "compact-root",
+            id(&[2]),
+            SpineOperation::Archive,
+            1,
+            5,
+        )],
+        &[1, 5],
+    )
+    .expect("root archive replacement should be mappable");
 }
 
 #[test]
 fn root_archive_replacement_must_not_emit_discontinuous_memory_spans() {
-    let prefix_history = vec![
+    let mut prefix_history = vec![
         text_item("raw 0"),
         text_item("raw 1"),
         render_spine_memory_item(
@@ -1137,15 +1147,21 @@ fn root_archive_replacement_must_not_emit_discontinuous_memory_spans() {
             "second",
             "second facts",
         ),
-        text_item("raw gap 25"),
     ];
+    for raw in 25..50 {
+        prefix_history.push(text_item(&format!("raw gap {raw}")));
+    }
     let root_memory =
         render_spine_memory_item(&id(&[1]), SpineOperation::Archive, "root", "root facts");
+    let live_tail = vec![text_item("future live raw 50")];
+    let mut history = prefix_history.clone();
+    history.extend(live_tail.clone());
     let replacement = build_root_archive_replacement_history(
-        &prefix_history,
+        &history,
+        prefix_history.len(),
+        50,
         Vec::new(),
-        vec![root_memory],
-        &[text_item("future live raw 50")],
+        root_memory,
         &[
             installed_span("compact-1", id(&[1, 1, 1]), SpineOperation::Next, 2, 10),
             installed_span("compact-2", id(&[1, 1, 2]), SpineOperation::Next, 11, 25),
@@ -1181,6 +1197,92 @@ fn root_archive_replacement_must_not_emit_discontinuous_memory_spans() {
             &spans_after_install,
         ),
         Some(replacement.replacement_history.len() - 1)
+    );
+}
+
+#[test]
+fn render_pi_bridge_suffix_matches_legacy_splice() {
+    let old_history = vec![
+        text_item("a"),
+        text_item("b"),
+        text_item("c"),
+        text_item("d"),
+    ];
+    let boundary = SpineCompactBoundary {
+        op: SpineOperation::Next,
+        node_id: id(&[1, 1]),
+        scope_node_id: Some(id(&[1])),
+        cut_ordinal: 1,
+        fold_end_ordinal: 3,
+        transition_summary: "leaf done".to_string(),
+        compact_instruction: None,
+    };
+    let memory_item = render_spine_memory_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "leaf done",
+        "memory body",
+    );
+    let handoff_item = render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2]));
+    let legacy = build_suffix_replacement_history(
+        &old_history,
+        1,
+        3,
+        vec![memory_item.clone(), handoff_item.clone()],
+    );
+
+    let rendered = build_suffix_replacement_history_from_pi(
+        &old_history,
+        &[],
+        "compact-new",
+        &boundary,
+        memory_item,
+        vec![handoff_item],
+    )
+    .expect("render pi suffix");
+
+    assert_eq!(rendered, legacy);
+}
+
+#[test]
+fn render_pi_bridge_records_origin_for_every_item() {
+    let history = vec![text_item("a"), text_item("b"), text_item("c")];
+    let mut artifacts = SegmentArtifacts::new();
+    artifacts.insert("compact-new".to_string(), RawSpan { start: 1, end: 2 });
+    let pi = vec![
+        Segment::raw(0, 1).expect("raw"),
+        Segment::mem("compact-new"),
+        Segment::note("handoff"),
+        Segment::raw(2, 3).expect("raw"),
+    ];
+    let memory_item = render_spine_memory_item(
+        &id(&[1, 1]),
+        SpineOperation::Next,
+        "leaf done",
+        "memory body",
+    );
+    let handoff_item = render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2]));
+    let rendered = render_pi_bridge_items(
+        &history,
+        &[],
+        &pi,
+        &artifacts,
+        &BTreeMap::from([("compact-new".to_string(), memory_item)]),
+        &BTreeMap::from([("handoff".to_string(), vec![handoff_item])]),
+    )
+    .expect("render pi bridge");
+
+    assert_eq!(
+        rendered
+            .iter()
+            .map(|item| item.origin.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            RenderPiOrigin::Raw(RawSpan { start: 0, end: 1 }),
+            RenderPiOrigin::Mem("compact-new".to_string()),
+            RenderPiOrigin::Note("handoff".to_string()),
+            RenderPiOrigin::Raw(RawSpan { start: 2, end: 3 }),
+        ]
     );
 }
 
