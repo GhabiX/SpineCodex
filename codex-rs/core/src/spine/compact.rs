@@ -471,9 +471,11 @@ pub(crate) fn prepare_spine_compact_plan(
         sidecar_root: store.root().to_path_buf(),
     };
     let runtime_spans = store
-        .installed_compact_spans_matching_hashes(surviving_compact_hashes)
+        .bridge_checkpoint_committed_spans_matching_hashes(surviving_compact_hashes)
         .map_err(|err| {
-            CodexErr::Fatal(format!("failed to load spine compact span ledger: {err}"))
+            CodexErr::Fatal(format!(
+                "failed to load spine bridge checkpoint span ledger: {err}"
+            ))
         })?;
     let plan = plan_suffix_fold_with_spans(
         history,

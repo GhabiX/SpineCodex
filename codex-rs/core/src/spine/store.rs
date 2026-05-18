@@ -1626,7 +1626,6 @@ impl SpineSidecarStore {
         Ok(spans)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn bridge_checkpoint_committed_spans_matching_hashes(
         &self,
         surviving_message_hashes: Option<&HashSet<String>>,
