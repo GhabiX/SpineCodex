@@ -15,9 +15,7 @@ use super::segment::SegmentError;
 use super::segment::validate_future_live_boundaries;
 use super::state::SpineState;
 use super::store::InstalledCompactSpan;
-use super::store::RuntimeSpanAuthorityAdmission;
 use super::store::SpineSidecarStore;
-use super::store::classify_runtime_span_authority;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashSet;
@@ -250,20 +248,20 @@ pub(crate) fn audit_render_pi_equivalence(
     ))
 }
 
-pub(crate) fn audit_meminstall_span_source_equivalence(
+pub(crate) fn audit_bridge_checkpoint_span_source(
     store: &SpineSidecarStore,
     surviving_message_hashes: Option<&HashSet<String>>,
     locator: impl Into<String>,
 ) -> Result<(), RuntimeDebugAuditError> {
     let locator = locator.into();
-    let installed = store
-        .installed_compact_spans_matching_hashes(surviving_message_hashes)
+    let bridge = store
+        .bridge_checkpoint_committed_spans_matching_hashes(surviving_message_hashes)
         .map_err(|err| {
             RuntimeDebugAuditError::failed(
                 RuntimeDebugBoundary::AfterCompactInstall,
                 INV_MEM_EVIDENCE,
                 locator.clone(),
-                format!("CompactInstalled span source failed: {err}"),
+                format!("BridgeCheckpointCommitted span source failed: {err}"),
             )
         })?;
     let committed = store
@@ -276,92 +274,7 @@ pub(crate) fn audit_meminstall_span_source_equivalence(
                 format!("MemInstallCommitted span source failed: {err}"),
             )
         })?;
-    if installed == committed {
-        return Ok(());
-    }
-    // The shadow audit has no independent durable host-checkpoint marker yet.
-    // For diagnostics only, CompactInstalled presence is the current proxy for
-    // both host checkpoint materialization and bridge-terminal publication.
-    let admission = classify_runtime_span_authority(
-        !committed.is_empty(),
-        !installed.is_empty(),
-        !installed.is_empty(),
-    );
-    Err(RuntimeDebugAuditError::failed(
-        RuntimeDebugBoundary::AfterCompactInstall,
-        INV_MEM_EVIDENCE,
-        locator,
-        format!(
-            "CompactInstalled span source did not match MemInstallCommitted span source: admission={admission:?}; CompactInstalled={installed:?}; MemInstallCommitted={committed:?}"
-        ),
-    ))
-}
-
-pub(crate) fn audit_runtime_span_authority_admission_equivalence(
-    store: &SpineSidecarStore,
-    surviving_message_hashes: Option<&HashSet<String>>,
-    locator: impl Into<String>,
-) -> Result<(), RuntimeDebugAuditError> {
-    let locator = locator.into();
-    let installed = store
-        .installed_compact_spans_matching_hashes(surviving_message_hashes)
-        .map_err(|err| {
-            RuntimeDebugAuditError::failed(
-                RuntimeDebugBoundary::AfterCompactInstall,
-                INV_MEM_EVIDENCE,
-                locator.clone(),
-                format!("CompactInstalled span source failed: {err}"),
-            )
-        })?;
-    let records = store
-        .runtime_span_authority_admissions_matching_hashes(surviving_message_hashes)
-        .map_err(|err| {
-            RuntimeDebugAuditError::failed(
-                RuntimeDebugBoundary::AfterCompactInstall,
-                INV_MEM_EVIDENCE,
-                locator.clone(),
-                format!("runtime span authority admission source failed: {err}"),
-            )
-        })?;
-
-    let mut admitted = Vec::new();
-    let mut blocked = Vec::new();
-    for record in records {
-        match record.admission {
-            RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan
-            | RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan => {
-                admitted.push(record.span);
-            }
-            RuntimeSpanAuthorityAdmission::DeferCommittedSpanUntilHostCheckpoint
-            | RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal => {
-                blocked.push((record.span.compact_id, record.admission));
-            }
-            RuntimeSpanAuthorityAdmission::NoSpan
-            | RuntimeSpanAuthorityAdmission::InvalidHostCheckpointWithoutMemInstall
-            | RuntimeSpanAuthorityAdmission::InvalidCompactInstalledWithoutHostCheckpoint => {
-                return Err(RuntimeDebugAuditError::failed(
-                    RuntimeDebugBoundary::AfterCompactInstall,
-                    INV_MEM_EVIDENCE,
-                    locator,
-                    format!(
-                        "runtime span authority admission returned non-runtime state {:?} for {}",
-                        record.admission, record.span.compact_id
-                    ),
-                ));
-            }
-        }
-    }
-
-    if !blocked.is_empty() {
-        return Err(RuntimeDebugAuditError::failed(
-            RuntimeDebugBoundary::AfterCompactInstall,
-            INV_MEM_EVIDENCE,
-            locator,
-            format!("runtime span authority contains non-admitted rows: {blocked:?}"),
-        ));
-    }
-
-    if installed == admitted {
+    if bridge == committed {
         return Ok(());
     }
     Err(RuntimeDebugAuditError::failed(
@@ -369,7 +282,7 @@ pub(crate) fn audit_runtime_span_authority_admission_equivalence(
         INV_MEM_EVIDENCE,
         locator,
         format!(
-            "CompactInstalled span source did not match admitted runtime span source: CompactInstalled={installed:?}; admitted={admitted:?}"
+            "BridgeCheckpointCommitted span source did not match MemInstallCommitted span source: BridgeCheckpointCommitted={bridge:?}; MemInstallCommitted={committed:?}"
         ),
     ))
 }

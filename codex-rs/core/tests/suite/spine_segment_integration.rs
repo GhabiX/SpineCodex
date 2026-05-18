@@ -60,7 +60,7 @@ async fn spine_segment_integration_next_compact_resume_reads_real_sidecar() -> a
     assert_sidecar_core_files(&sidecar_dir)?;
     assert_state_cursor(&sidecar_dir, "1.2")?;
     assert_tree_transition(&sidecar_dir, "next", "1.1", "1.2")?;
-    assert_compact_installed(&sidecar_dir, "1.1", "next")?;
+    assert_bridge_checkpoint_committed(&sidecar_dir, "1.1", "next")?;
     assert_memory_contains(
         &sidecar_dir.join("nodes/1/1/memory.md"),
         "Segment next memory.",
@@ -147,8 +147,8 @@ async fn spine_segment_integration_close_compact_resume_preserves_child_and_pare
     assert_state_cursor(&sidecar_dir, "1.2")?;
     assert_tree_transition(&sidecar_dir, "open", "1.1", "1.1.1")?;
     assert_tree_transition(&sidecar_dir, "close", "1.1.1", "1.2")?;
-    assert_compact_installed(&sidecar_dir, "1.1.1", "close")?;
-    assert_compact_installed(&sidecar_dir, "1.1", "close")?;
+    assert_bridge_checkpoint_committed(&sidecar_dir, "1.1.1", "close")?;
+    assert_bridge_checkpoint_committed(&sidecar_dir, "1.1", "close")?;
     assert_memory_contains(
         &sidecar_dir.join("nodes/1/1/1/memory.md"),
         "Segment close child memory.",
@@ -263,7 +263,11 @@ fn assert_tree_transition(
     Ok(())
 }
 
-fn assert_compact_installed(sidecar_dir: &Path, node_id: &str, op: &str) -> anyhow::Result<()> {
+fn assert_bridge_checkpoint_committed(
+    sidecar_dir: &Path,
+    node_id: &str,
+    op: &str,
+) -> anyhow::Result<()> {
     let index = read_json_lines(sidecar_dir.join("compact.index.jsonl"))?;
     assert!(
         index.iter().any(|event| {
@@ -275,7 +279,7 @@ fn assert_compact_installed(sidecar_dir: &Path, node_id: &str, op: &str) -> anyh
     );
     assert!(
         index.iter().any(|event| {
-            event.get("type").and_then(Value::as_str) == Some("compact_installed")
+            event.get("type").and_then(Value::as_str) == Some("bridge_checkpoint_committed")
                 && event.get("node_id").and_then(Value::as_str) == Some(node_id)
                 && event.get("op").and_then(Value::as_str) == Some(op)
                 && event
@@ -283,7 +287,7 @@ fn assert_compact_installed(sidecar_dir: &Path, node_id: &str, op: &str) -> anyh
                     .and_then(Value::as_u64)
                     .is_some_and(|len| len > 0)
         }),
-        "missing compact install for {node_id} {op}: {index:?}"
+        "missing bridge checkpoint for {node_id} {op}: {index:?}"
     );
     Ok(())
 }

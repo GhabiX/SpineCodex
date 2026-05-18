@@ -200,17 +200,15 @@ use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_initial_context_item;
 use crate::spine::compact::render_spine_memory_item;
 use crate::spine::debug_audit::RuntimeDebugBoundary;
+use crate::spine::debug_audit::audit_bridge_checkpoint_span_source;
 use crate::spine::debug_audit::audit_compact_checkpoint;
 use crate::spine::debug_audit::audit_compact_plan_boundaries;
-use crate::spine::debug_audit::audit_meminstall_span_source_equivalence;
-use crate::spine::debug_audit::audit_runtime_span_authority_admission_equivalence;
 use crate::spine::segment::RawSpan;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
 use crate::spine::session_integration::record_plan_update_snapshot;
 use crate::spine::store::BridgeCheckpointCommittedRecord;
 use crate::spine::store::CompactAttemptRecord;
-use crate::spine::store::CompactInstalledRecord;
 use crate::spine::store::CompactStartedRecord;
 use crate::spine::store::CompactTerminalRecord;
 use crate::spine::store::InstalledCompactSpan;
@@ -3089,12 +3087,6 @@ impl Session {
         memory_input.suffix_items =
             history[root_replacement.archive_cut_index..prep.plan.fold_end_index].to_vec();
         let memory_markdown = render_auto_compact_memory(&memory_input, compacted_body);
-        let memory_rel_path = prep
-            .plan
-            .memory_path
-            .strip_prefix(store.root())
-            .unwrap_or(prep.plan.memory_path.as_path())
-            .to_path_buf();
         let compact_message = format!(
             "Spine compacted root epoch {} [{}, {})",
             boundary.node_id, root_boundary.cut_ordinal, root_boundary.fold_end_ordinal
@@ -3263,9 +3255,17 @@ impl Session {
                 ))
                 .await);
         }
+        #[cfg(test)]
+        if compacted_body.contains("__spine_fail_root_archive_after_rollout_checkpoint__") {
+            return Err(self
+                .poison_spine_compact(
+                    "injected spine root archive failure after rollout checkpoint",
+                )
+                .await);
+        }
         if let Err(err) =
             store.append_bridge_checkpoint_committed(BridgeCheckpointCommittedRecord {
-                attempt: compact_attempt.clone(),
+                attempt: compact_attempt,
                 replacement_history_len: replacement_history.len(),
                 message_hash: message_hash.clone(),
                 source_rollout_ref: prep.compact_index_rollout_path.clone(),
@@ -3277,53 +3277,22 @@ impl Session {
                 ))
                 .await);
         }
-        #[cfg(test)]
-        if compacted_body.contains("__spine_fail_root_archive_after_rollout_checkpoint__") {
-            return Err(self
-                .poison_spine_compact(
-                    "injected spine root archive failure after rollout checkpoint",
-                )
-                .await);
-        }
-        if let Err(err) = store.append_compact_installed(CompactInstalledRecord {
-            attempt: compact_attempt,
-            replacement_history_len: replacement_history.len(),
-            memory_path: memory_rel_path.to_string_lossy().into_owned(),
-            message_hash: message_hash.clone(),
-        }) {
-            return Err(self
-                .poison_spine_compact(format!(
-                    "failed to record installed spine root archive after rollout checkpoint: {err}"
-                ))
-                .await);
-        }
         if turn_context.config.runtime_debug_checks {
             let current_message_hashes = HashSet::from([message_hash.clone()]);
-            if let Err(err) = audit_meminstall_span_source_equivalence(
+            if let Err(err) = audit_bridge_checkpoint_span_source(
                 &store,
                 Some(&current_message_hashes),
                 format!("{} compact_id={compact_id}", store.root().display()),
             ) {
                 return Err(self
                     .poison_spine_compact(format!(
-                        "spine root archive MemInstall shadow span source mismatch after CompactInstalled: {err}"
-                    ))
-                    .await);
-            }
-            if let Err(err) = audit_runtime_span_authority_admission_equivalence(
-                &store,
-                Some(&current_message_hashes),
-                format!("{} compact_id={compact_id}", store.root().display()),
-            ) {
-                return Err(self
-                    .poison_spine_compact(format!(
-                        "spine root archive admitted runtime span source mismatch after CompactInstalled: {err}"
+                        "spine root archive bridge checkpoint span source mismatch: {err}"
                     ))
                     .await);
             }
         }
-        // Only emit the reset snapshot after compact_installed is durable; otherwise the UI could
-        // display a root archive that reload validation may still reject.
+        // Only emit the reset snapshot after BridgeCheckpointCommitted is durable; otherwise the UI
+        // could display a root archive that reload validation may still reject.
         let snapshot = {
             let mut runtime = spine.lock().await;
             runtime.record_surviving_compact_hash(message_hash);
@@ -3332,7 +3301,7 @@ impl Session {
                 Err(err) => {
                     return Err(self
                         .poison_spine_compact(format!(
-                            "failed to build spine tree snapshot after installed root archive: {err}"
+                            "failed to build spine tree snapshot after bridge checkpoint root archive: {err}"
                         ))
                         .await);
                 }
@@ -3466,12 +3435,6 @@ impl Session {
             model_memory_body.push_str("\n\n");
             model_memory_body.push_str(&model_outline);
         }
-        let memory_rel_path = prep
-            .plan
-            .memory_path
-            .strip_prefix(store.root())
-            .unwrap_or(prep.plan.memory_path.as_path())
-            .to_path_buf();
         let to_node = spine.lock().await.cursor().clone();
         let rendered_memory_item = render_spine_memory_item(
             &boundary.node_id,
@@ -3621,20 +3584,6 @@ impl Session {
                 ))
                 .await);
         }
-        if let Err(err) =
-            store.append_bridge_checkpoint_committed(BridgeCheckpointCommittedRecord {
-                attempt: compact_attempt.clone(),
-                replacement_history_len: replacement_history.len(),
-                message_hash: message_hash.clone(),
-                source_rollout_ref: prep.compact_index_rollout_path.clone(),
-            })
-        {
-            return Err(self
-                .poison_spine_compact(format!(
-                    "failed to record spine bridge checkpoint after host checkpoint: {err}"
-                ))
-                .await);
-        }
         #[cfg(test)]
         if compact_output
             .compacted_body
@@ -3646,39 +3595,30 @@ impl Session {
                 )
                 .await);
         }
-        if let Err(err) = store.append_compact_installed(CompactInstalledRecord {
-            attempt: compact_attempt,
-            replacement_history_len: replacement_history.len(),
-            memory_path: memory_rel_path.to_string_lossy().into_owned(),
-            message_hash: message_hash.clone(),
-        }) {
+        if let Err(err) =
+            store.append_bridge_checkpoint_committed(BridgeCheckpointCommittedRecord {
+                attempt: compact_attempt,
+                replacement_history_len: replacement_history.len(),
+                message_hash: message_hash.clone(),
+                source_rollout_ref: prep.compact_index_rollout_path.clone(),
+            })
+        {
             return Err(self
                 .poison_spine_compact(format!(
-                    "failed to record installed spine compact after rollout checkpoint: {err}"
+                    "failed to record spine bridge checkpoint after host checkpoint: {err}"
                 ))
                 .await);
         }
         if turn_context.config.runtime_debug_checks {
             let current_message_hashes = HashSet::from([message_hash.clone()]);
-            if let Err(err) = audit_meminstall_span_source_equivalence(
+            if let Err(err) = audit_bridge_checkpoint_span_source(
                 &store,
                 Some(&current_message_hashes),
                 format!("{} compact_id={compact_id}", store.root().display()),
             ) {
                 return Err(self
                     .poison_spine_compact(format!(
-                        "spine suffix MemInstall shadow span source mismatch after CompactInstalled: {err}"
-                    ))
-                    .await);
-            }
-            if let Err(err) = audit_runtime_span_authority_admission_equivalence(
-                &store,
-                Some(&current_message_hashes),
-                format!("{} compact_id={compact_id}", store.root().display()),
-            ) {
-                return Err(self
-                    .poison_spine_compact(format!(
-                        "spine suffix admitted runtime span source mismatch after CompactInstalled: {err}"
+                        "spine suffix bridge checkpoint span source mismatch: {err}"
                     ))
                     .await);
             }

@@ -946,6 +946,7 @@ impl SpineSidecarStore {
         self.append_json_line(&path, &event)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn append_compact_installed(
         &self,
         record: CompactInstalledRecord,
@@ -2138,6 +2139,7 @@ impl SpineSidecarStore {
         self.installed_compact_spans_matching_hashes(None)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn installed_compact_spans_matching_hashes(
         &self,
         surviving_message_hashes: Option<&HashSet<String>>,
@@ -2452,6 +2454,7 @@ pub(crate) struct CompactStartedRecord {
     pub(crate) rollout: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct CompactInstalledRecord {
     pub(crate) attempt: CompactAttemptRecord,

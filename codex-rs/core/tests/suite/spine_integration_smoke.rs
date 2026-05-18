@@ -227,9 +227,9 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert!(closing_leaf_memory.contains("spine:auto-compact-generated"));
     assert!(closing_leaf_memory.contains(&base_line));
     assert!(closing_leaf_memory.contains("Compacted sibling leaf findings."));
-    assert_compact_installed(&compact_index, "1.1.1.1", "next");
-    assert_compact_installed_before(&compact_index, "1.1.1.2", "close", "1.1.1", "close");
-    assert_compact_installed(&compact_index, "1.1.1", "close");
+    assert_bridge_checkpoint_committed(&compact_index, "1.1.1.1", "next");
+    assert_bridge_checkpoint_committed_before(&compact_index, "1.1.1.2", "close", "1.1.1", "close");
+    assert_bridge_checkpoint_committed(&compact_index, "1.1.1", "close");
     let plan_snapshot = read_json(sidecar_dir.join("nodes/1/1/1/1/plan.json"))?;
     assert_eq!(plan_snapshot["node_id"], "1.1.1.1");
     assert_eq!(plan_snapshot["revision"], 1);
@@ -1147,7 +1147,7 @@ fn assert_raw_range_for_node_after_transition(index: &[Value], call_id: &str, no
     );
 }
 
-fn assert_compact_installed(index: &[Value], node_id: &str, op: &str) {
+fn assert_bridge_checkpoint_committed(index: &[Value], node_id: &str, op: &str) {
     assert!(
         index.iter().any(|event| {
             event.get("type").and_then(Value::as_str) == Some("compact_started")
@@ -1158,7 +1158,7 @@ fn assert_compact_installed(index: &[Value], node_id: &str, op: &str) {
     );
     assert!(
         index.iter().any(|event| {
-            event.get("type").and_then(Value::as_str) == Some("compact_installed")
+            event.get("type").and_then(Value::as_str) == Some("bridge_checkpoint_committed")
                 && event.get("node_id").and_then(Value::as_str) == Some(node_id)
                 && event.get("op").and_then(Value::as_str) == Some(op)
                 && event
@@ -1166,34 +1166,34 @@ fn assert_compact_installed(index: &[Value], node_id: &str, op: &str) {
                     .and_then(Value::as_u64)
                     .is_some_and(|len| len > 0)
         }),
-        "compact index should contain install for {node_id} {op}: {index:?}"
+        "compact index should contain bridge checkpoint for {node_id} {op}: {index:?}"
     );
 }
 
-fn assert_compact_installed_before(
+fn assert_bridge_checkpoint_committed_before(
     index: &[Value],
     first_node_id: &str,
     first_op: &str,
     second_node_id: &str,
     second_op: &str,
 ) {
-    let first_index = compact_installed_index(index, first_node_id, first_op);
-    let second_index = compact_installed_index(index, second_node_id, second_op);
+    let first_index = bridge_checkpoint_committed_index(index, first_node_id, first_op);
+    let second_index = bridge_checkpoint_committed_index(index, second_node_id, second_op);
     assert!(
         first_index < second_index,
-        "expected compact install {first_node_id} {first_op} before {second_node_id} {second_op}: {index:?}"
+        "expected bridge checkpoint {first_node_id} {first_op} before {second_node_id} {second_op}: {index:?}"
     );
 }
 
-fn compact_installed_index(index: &[Value], node_id: &str, op: &str) -> usize {
+fn bridge_checkpoint_committed_index(index: &[Value], node_id: &str, op: &str) -> usize {
     index
         .iter()
         .position(|event| {
-            event.get("type").and_then(Value::as_str) == Some("compact_installed")
+            event.get("type").and_then(Value::as_str) == Some("bridge_checkpoint_committed")
                 && event.get("node_id").and_then(Value::as_str) == Some(node_id)
                 && event.get("op").and_then(Value::as_str) == Some(op)
         })
-        .unwrap_or_else(|| panic!("missing compact install for {node_id} {op}: {index:?}"))
+        .unwrap_or_else(|| panic!("missing bridge checkpoint for {node_id} {op}: {index:?}"))
 }
 
 fn assert_compact_failed(index: &[Value], node_id: &str, op: &str) {

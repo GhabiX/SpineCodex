@@ -2238,12 +2238,12 @@ async fn spine_root_epoch_compaction_installs_slim_native_history() -> anyhow::R
         &crate::spine::ids::NodeId::from_segments(vec![2, 1])
     );
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    let installed = compact_events
+    let bridge_checkpoint = compact_events
         .iter()
-        .find(|event| event["type"] == "compact_installed")
-        .expect("compact installed event");
+        .find(|event| event["type"] == "bridge_checkpoint_committed")
+        .expect("bridge checkpoint event");
     assert_eq!(
-        installed["replacement_history_len"],
+        bridge_checkpoint["replacement_history_len"],
         json!(replacement.len())
     );
     Ok(())
@@ -2320,8 +2320,8 @@ async fn spine_root_archive_rejects_fold_end_beyond_recorded_raw_ordinal() -> an
     assert!(
         !compact_events
             .iter()
-            .any(|event| event["type"] == "compact_installed"),
-        "admissibility failure must happen before compact_installed"
+            .any(|event| event["type"] == "bridge_checkpoint_committed"),
+        "admissibility failure must happen before bridge_checkpoint_committed"
     );
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(!tree.contains("\"type\":\"root_epoch_reset\""));
@@ -2396,11 +2396,10 @@ async fn root_archive_meminstall_order_recovers_checkpoint_after_commit() -> any
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 4);
+    assert_eq!(compact_events.len(), 3);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
     assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
-    assert_eq!(compact_events[3]["type"], "compact_installed");
     let committed = runtime.store().committed_mem_installs()?;
     assert_eq!(committed.len(), 1);
     assert_eq!(
@@ -2496,10 +2495,9 @@ async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tre
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 3);
+    assert_eq!(compact_events.len(), 2);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
-    assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
     let storage_ref = compact_events[1]["storage_ref"]
         .as_str()
         .expect("MemInstall storage ref");
@@ -2884,11 +2882,10 @@ async fn suffix_meminstall_order_recovers_checkpoint_after_commit() -> anyhow::R
 
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 4);
+    assert_eq!(compact_events.len(), 3);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
     assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
-    assert_eq!(compact_events[3]["type"], "compact_installed");
     let committed = runtime.store().committed_mem_installs()?;
     assert_eq!(committed.len(), 1);
     assert_eq!(
@@ -2936,10 +2933,9 @@ async fn spine_suffix_compaction_post_checkpoint_failure_poisons() -> anyhow::Re
 
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 3);
+    assert_eq!(compact_events.len(), 2);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
-    assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
     let storage_ref = compact_events[1]["storage_ref"]
         .as_str()
         .expect("MemInstall storage ref");

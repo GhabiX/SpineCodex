@@ -1,7 +1,6 @@
 use super::*;
 use crate::spine::debug_audit::INV_MEM_EVIDENCE;
-use crate::spine::debug_audit::audit_meminstall_span_source_equivalence;
-use crate::spine::debug_audit::audit_runtime_span_authority_admission_equivalence;
+use crate::spine::debug_audit::audit_bridge_checkpoint_span_source;
 use crate::spine::fast_fail::RuntimeFastFailError;
 use crate::spine::mem_install::MemoryBodyError;
 use crate::spine::mem_install::MemoryBodyRef;
@@ -3001,7 +3000,7 @@ fn committed_mem_install_spans_match_compact_installed_for_root_archive() {
 }
 
 #[test]
-fn meminstall_span_source_shadow_audit_accepts_matching_sources() {
+fn bridge_checkpoint_span_source_audit_accepts_matching_sources() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     append_meminstall_evidence(
@@ -3024,24 +3023,13 @@ fn meminstall_span_source_shadow_audit_accepts_matching_sources() {
         7,
         "sha1:message",
     );
-    store
-        .append_compact_installed(compact_installed(
-            "compact-1",
-            id(&[1, 2]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-        ))
-        .expect("append compact installed");
 
-    audit_meminstall_span_source_equivalence(&store, None, "compact index")
+    audit_bridge_checkpoint_span_source(&store, None, "compact index")
         .expect("matching span sources should pass shadow audit");
 }
 
 #[test]
-fn meminstall_span_source_shadow_audit_reports_committed_only_span() {
+fn bridge_checkpoint_span_source_audit_reports_committed_only_span() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     append_meminstall_evidence(
@@ -3055,7 +3043,7 @@ fn meminstall_span_source_shadow_audit_reports_committed_only_span() {
         "sha1:message",
     );
 
-    let error = audit_meminstall_span_source_equivalence(&store, None, "compact index")
+    let error = audit_bridge_checkpoint_span_source(&store, None, "compact index")
         .expect_err("committed-only source mismatch should be reported");
 
     assert_eq!(error.invariant(), INV_MEM_EVIDENCE);
@@ -3063,12 +3051,12 @@ fn meminstall_span_source_shadow_audit_reports_committed_only_span() {
     assert!(
         error
             .to_string()
-            .contains("DeferCommittedSpanUntilHostCheckpoint")
+            .contains("BridgeCheckpointCommitted span source did not match")
     );
 }
 
 #[test]
-fn meminstall_span_source_shadow_audit_ignores_legacy_installed_outside_current_hash() {
+fn bridge_checkpoint_span_source_audit_ignores_legacy_installed_outside_current_hash() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     store
@@ -3111,162 +3099,10 @@ fn meminstall_span_source_shadow_audit_ignores_legacy_installed_outside_current_
         7,
         "sha1:current",
     );
-    store
-        .append_compact_installed(compact_installed(
-            "compact-current",
-            id(&[1, 2]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:current",
-        ))
-        .expect("append current compact installed");
 
     let current_hashes = HashSet::from(["sha1:current".to_string()]);
-    audit_meminstall_span_source_equivalence(&store, Some(&current_hashes), "compact index")
+    audit_bridge_checkpoint_span_source(&store, Some(&current_hashes), "compact index")
         .expect("current-hash shadow audit should ignore legacy installed-only spans");
-}
-
-#[test]
-fn admitted_runtime_span_shadow_audit_accepts_matching_sources() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-1",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-    append_bridge_checkpoint(
-        &store,
-        "compact-1",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-    store
-        .append_compact_installed(compact_installed(
-            "compact-1",
-            id(&[1, 2]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-        ))
-        .expect("append compact installed");
-
-    audit_runtime_span_authority_admission_equivalence(&store, None, "compact index")
-        .expect("matching admitted runtime source should pass shadow audit");
-}
-
-#[test]
-fn admitted_runtime_span_shadow_audit_reports_deferred_span() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-deferred",
-        id(&[1]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-
-    let error = audit_runtime_span_authority_admission_equivalence(&store, None, "compact index")
-        .expect_err("deferred source should be reported");
-
-    assert_eq!(error.invariant(), INV_MEM_EVIDENCE);
-    assert!(error.to_string().contains("compact-deferred"));
-    assert!(
-        error
-            .to_string()
-            .contains("DeferCommittedSpanUntilHostCheckpoint")
-    );
-}
-
-#[test]
-fn admitted_runtime_span_shadow_audit_reports_poison_span() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-poison",
-        id(&[1]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-    append_bridge_checkpoint(
-        &store,
-        "compact-poison",
-        id(&[1]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-
-    let error = audit_runtime_span_authority_admission_equivalence(&store, None, "compact index")
-        .expect_err("poison source should be reported");
-
-    assert_eq!(error.invariant(), INV_MEM_EVIDENCE);
-    assert!(error.to_string().contains("compact-poison"));
-    assert!(
-        error
-            .to_string()
-            .contains("PoisonCommittedSpanWithoutBridgeTerminal")
-    );
-}
-
-#[test]
-fn admitted_runtime_span_shadow_audit_keeps_transitional_rows_legacy() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-transitional",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:transitional",
-    );
-
-    let mut events = store
-        .read_compact_index_events()
-        .expect("read compact index events");
-    events.push(CompactIndexEvent::CompactInstalled {
-        seq: 0,
-        compact_id: "compact-transitional".to_string(),
-        node_id: "1.2".to_string(),
-        op: SpineOperation::Next,
-        cut_ordinal: 4,
-        fold_end_ordinal: 9,
-        replacement_history_len: 7,
-        memory_path: "nodes/1/2/memory.md".to_string(),
-        message_hash: "sha1:transitional".to_string(),
-    });
-    store
-        .write_compact_index_events(events)
-        .expect("write transitional compact index");
-
-    audit_runtime_span_authority_admission_equivalence(&store, None, "compact index")
-        .expect("transitional row should remain legacy-compatible");
 }
 
 #[test]
