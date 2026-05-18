@@ -22,6 +22,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use thiserror::Error;
 
+#[cfg(test)]
 pub(crate) use super::size_hint::size_hint_threshold;
 
 pub(crate) const NON_SPINE_COMPACT_STOP_REASON: &str = "non-Spine compact Stop boundary";
