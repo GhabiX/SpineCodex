@@ -32,6 +32,16 @@ fn segment_random_expected_failures_are_classified() {
     }
 }
 
+#[test]
+#[should_panic(expected = "I16 auto compact must reduce Cost(Pi)")]
+fn auto_compact_rejects_non_reducing_mem() {
+    let mut trace = DeterministicTrace::new(1616);
+    let span = RawSpan::new(0, 4).expect("span");
+    let raw_cost = trace.raw_cost(span);
+
+    trace.install_auto_compact_with_cost("non-reducing-auto", span, raw_cost);
+}
+
 struct DeterministicTrace {
     seed: u64,
     rng: u64,
@@ -166,13 +176,25 @@ impl DeterministicTrace {
             CompactKind::Boundary => raw_cost + 3,
         };
         if matches!(kind, CompactKind::Auto) {
-            assert!(
-                memory_cost < raw_cost,
-                "seed {}\nops:\n{}\nauto compact did not reduce cost",
-                self.seed,
-                self.ops.join("\n")
-            );
+            return self.install_auto_compact_with_cost(compact_id, span, memory_cost);
         }
+        self.install_named_mem(compact_id, span, memory_cost);
+        self.replace(span, Segment::mem(compact_id));
+    }
+
+    fn install_auto_compact_with_cost(
+        &mut self,
+        compact_id: &str,
+        span: RawSpan,
+        memory_cost: u64,
+    ) {
+        let raw_cost = self.raw_cost(span);
+        assert!(
+            memory_cost < raw_cost,
+            "I16 auto compact must reduce Cost(Pi): seed {}\nops:\n{}\nraw_cost={raw_cost} memory_cost={memory_cost}",
+            self.seed,
+            self.ops.join("\n")
+        );
         self.install_named_mem(compact_id, span, memory_cost);
         self.replace(span, Segment::mem(compact_id));
     }
