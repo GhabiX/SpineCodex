@@ -1539,6 +1539,45 @@ impl SpineSidecarStore {
         Ok(installs)
     }
 
+    #[cfg(test)]
+    pub(crate) fn committed_mem_install_spans(
+        &self,
+    ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
+        self.committed_mem_install_spans_matching_hashes(None)
+    }
+
+    pub(crate) fn committed_mem_install_spans_matching_hashes(
+        &self,
+        surviving_message_hashes: Option<&HashSet<String>>,
+    ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
+        let mut spans = Vec::new();
+
+        for install in self.committed_mem_installs()? {
+            if surviving_message_hashes
+                .is_some_and(|hashes| !hashes.contains(&install.message_hash))
+            {
+                continue;
+            }
+            if install.cut_ordinal >= install.fold_end_ordinal {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "compact.index.jsonl committed span for {} is empty or inverted: [{}, {})",
+                    install.compact_id, install.cut_ordinal, install.fold_end_ordinal
+                )));
+            }
+            spans.push(InstalledCompactSpan {
+                compact_id: install.compact_id,
+                node_id: install.node_id,
+                op: install.op,
+                cut_ordinal: install.cut_ordinal,
+                fold_end_ordinal: install.fold_end_ordinal,
+                replacement_history_len: install.replacement_history_len,
+                message_hash: install.message_hash,
+            });
+        }
+
+        Ok(spans)
+    }
+
     fn validate_mem_install_commit_preconditions(
         &self,
         attempt: &CompactAttemptRecord,

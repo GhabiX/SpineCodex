@@ -1,4 +1,6 @@
 use super::*;
+use crate::spine::debug_audit::INV_MEM_EVIDENCE;
+use crate::spine::debug_audit::audit_meminstall_span_source_equivalence;
 use crate::spine::fast_fail::RuntimeFastFailError;
 use crate::spine::mem_install::MemoryBodyError;
 use crate::spine::mem_install::MemoryBodyRef;
@@ -160,6 +162,61 @@ fn append_root_meminstall_evidence(
             body_ref,
         ))
         .expect("append root mem install");
+}
+
+fn append_meminstall_evidence(
+    store: &SpineSidecarStore,
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    replacement_history_len: usize,
+    message_hash: &str,
+) -> MemoryBodyRef {
+    store
+        .append_compact_started(compact_started(
+            compact_id,
+            node_id.clone(),
+            op,
+            cut_ordinal,
+            fold_end_ordinal,
+        ))
+        .expect("append compact started");
+    let body = format!("{compact_id} body");
+    store
+        .append_memory_section(
+            &node_id,
+            &format!(
+                "\n\n## Auto Compact\n\nBase: /base\nFold: response ordinals [{cut_ordinal}, {fold_end_ordinal})\nNode trajs: nodes/{}/trajs.jsonl\nRaw mirror: raw/rollout.raw.jsonl\nRollout: ../rollout.jsonl\n\n{body}\n\n## Node Summary\n\nsummary\n",
+                node_id
+                    .segments()
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join("/")
+            ),
+        )
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&node_id)
+        .expect("generated sections")
+        .last()
+        .expect("generated section")
+        .body_ref();
+    store
+        .append_mem_install_committed(mem_install_committed(
+            compact_id,
+            node_id,
+            op,
+            cut_ordinal,
+            fold_end_ordinal,
+            replacement_history_len,
+            message_hash,
+            body_ref.clone(),
+        ))
+        .expect("append mem install");
+    body_ref
 }
 
 fn compact_terminal(
@@ -342,26 +399,22 @@ fn default_sidecar_without_locator_is_not_auto_migrated() {
         .expect("default sidecar dir");
     std::fs::create_dir_all(&root).expect("create unsupported sidecar root");
 
+    assert!(!SpineSidecarStore::has_sidecar_for_rollout(&rollout_path).expect("check sidecar"));
+    assert!(matches!(
+        SpineSidecarStore::for_rollout(&rollout_path),
+        Err(SpineStoreError::Io { path, .. })
+            if path.ends_with("rollout-test.spine.json")
+    ));
+    assert!(matches!(
+        SpineSidecarStore::create_for_rollout(&rollout_path),
+        Err(SpineStoreError::AlreadyInitialized { path })
+            if path == root
+    ));
     assert!(
-        !SpineSidecarStore::has_sidecar_for_rollout(&rollout_path).expect("check sidecar")
+        !SpineSidecarStore::locator_path_for_rollout(&rollout_path)
+            .expect("locator")
+            .exists()
     );
-    assert!(
-        matches!(
-            SpineSidecarStore::for_rollout(&rollout_path),
-            Err(SpineStoreError::Io { path, .. })
-                if path.ends_with("rollout-test.spine.json")
-        )
-    );
-    assert!(
-        matches!(
-            SpineSidecarStore::create_for_rollout(&rollout_path),
-            Err(SpineStoreError::AlreadyInitialized { path })
-                if path == root
-        )
-    );
-    assert!(!SpineSidecarStore::locator_path_for_rollout(&rollout_path)
-        .expect("locator")
-        .exists());
 }
 
 #[test]
@@ -2113,6 +2166,282 @@ fn projected_compact_spans_filter_stale_duplicate_boundaries() {
     assert_eq!(copied_events[1]["seq"], 2);
     assert_eq!(copied_events[0]["compact_id"], "compact-new");
     assert_eq!(copied_events[1]["compact_id"], "compact-new");
+}
+
+#[test]
+fn committed_mem_install_spans_match_compact_installed_for_suffix() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-1",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:message",
+    );
+    store
+        .append_compact_installed(compact_installed(
+            "compact-1",
+            id(&[1, 2]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+        ))
+        .expect("append compact installed");
+
+    assert_eq!(
+        store
+            .committed_mem_install_spans()
+            .expect("read committed spans"),
+        store
+            .installed_compact_spans()
+            .expect("read installed spans")
+    );
+}
+
+#[test]
+fn committed_mem_install_spans_match_compact_installed_for_root_archive() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-root",
+        id(&[1]),
+        SpineOperation::Archive,
+        0,
+        7,
+        3,
+        "sha1:root",
+    );
+    store
+        .append_compact_installed(compact_installed(
+            "compact-root",
+            id(&[1]),
+            SpineOperation::Archive,
+            0,
+            7,
+            3,
+            "sha1:root",
+        ))
+        .expect("append compact installed");
+
+    assert_eq!(
+        store
+            .committed_mem_install_spans()
+            .expect("read committed spans"),
+        store
+            .installed_compact_spans()
+            .expect("read installed spans")
+    );
+}
+
+#[test]
+fn meminstall_span_source_shadow_audit_accepts_matching_sources() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-1",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:message",
+    );
+    store
+        .append_compact_installed(compact_installed(
+            "compact-1",
+            id(&[1, 2]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+        ))
+        .expect("append compact installed");
+
+    audit_meminstall_span_source_equivalence(&store, None, "compact index")
+        .expect("matching span sources should pass shadow audit");
+}
+
+#[test]
+fn meminstall_span_source_shadow_audit_reports_committed_only_span() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-committed-only",
+        id(&[1]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:message",
+    );
+
+    let error = audit_meminstall_span_source_equivalence(&store, None, "compact index")
+        .expect_err("committed-only source mismatch should be reported");
+
+    assert_eq!(error.invariant(), INV_MEM_EVIDENCE);
+    assert!(error.to_string().contains("compact-committed-only"));
+}
+
+#[test]
+fn committed_mem_install_spans_filter_by_surviving_hashes() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-old",
+        id(&[1, 1]),
+        SpineOperation::Next,
+        1,
+        4,
+        3,
+        "sha1:old",
+    );
+    append_meminstall_evidence(
+        &store,
+        "compact-new",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        8,
+        5,
+        "sha1:new",
+    );
+
+    let surviving_hashes = HashSet::from(["sha1:new".to_string()]);
+    let spans = store
+        .committed_mem_install_spans_matching_hashes(Some(&surviving_hashes))
+        .expect("read filtered committed spans");
+
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].compact_id, "compact-new");
+    assert_eq!(spans[0].message_hash, "sha1:new");
+}
+
+#[test]
+fn committed_mem_install_spans_reject_missing_body() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-1",
+        id(&[1]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:message",
+    );
+    std::fs::write(store.memory_path(&id(&[1])), "changed body").expect("rewrite memory");
+
+    let error = store
+        .committed_mem_install_spans()
+        .expect_err("missing committed body should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallMissingBody { .. })
+    ));
+}
+
+#[test]
+fn committed_mem_install_spans_reject_duplicate_compact_id() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-1",
+        id(&[1]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:message",
+    );
+    let mut events = store
+        .read_compact_index_events()
+        .expect("read compact index events");
+    let duplicate = events[1].clone();
+    events.push(duplicate);
+    store
+        .write_compact_index_events(events)
+        .expect("write duplicate compact index");
+
+    let error = store
+        .committed_mem_install_spans()
+        .expect_err("duplicate committed span should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallDuplicateCompactId { .. })
+    ));
+}
+
+#[test]
+fn committed_mem_install_spans_skip_failed_or_interrupted_attempts() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-failed",
+            id(&[1]),
+            SpineOperation::Next,
+            1,
+            3,
+        ))
+        .expect("append failed compact started");
+    store
+        .append_compact_failed(compact_terminal(
+            "compact-failed",
+            id(&[1]),
+            SpineOperation::Next,
+            1,
+            3,
+            "failed",
+        ))
+        .expect("append compact failed");
+    store
+        .append_compact_started(compact_started(
+            "compact-interrupted",
+            id(&[1, 1]),
+            SpineOperation::Next,
+            3,
+            5,
+        ))
+        .expect("append interrupted compact started");
+    store
+        .append_compact_interrupted(compact_terminal(
+            "compact-interrupted",
+            id(&[1, 1]),
+            SpineOperation::Next,
+            3,
+            5,
+            "interrupted",
+        ))
+        .expect("append compact interrupted");
+    append_meminstall_evidence(
+        &store,
+        "compact-ok",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        5,
+        8,
+        4,
+        "sha1:ok",
+    );
+
+    let spans = store
+        .committed_mem_install_spans()
+        .expect("read committed spans");
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].compact_id, "compact-ok");
 }
 
 #[test]

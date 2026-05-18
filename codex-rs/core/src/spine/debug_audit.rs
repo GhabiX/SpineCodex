@@ -15,8 +15,10 @@ use super::segment::SegmentError;
 use super::segment::validate_future_live_boundaries;
 use super::state::SpineState;
 use super::store::InstalledCompactSpan;
+use super::store::SpineSidecarStore;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseItem;
+use std::collections::HashSet;
 use std::fmt;
 
 pub(crate) const INV_SEGMENT_COVER: &str = "I1 cover(Pi) ordered/gap-free/non-overlap";
@@ -242,6 +244,45 @@ pub(crate) fn audit_render_pi_equivalence(
             "render(Pi) output length {} did not match expected bridge length {}",
             actual.len(),
             expected.len()
+        ),
+    ))
+}
+
+pub(crate) fn audit_meminstall_span_source_equivalence(
+    store: &SpineSidecarStore,
+    surviving_message_hashes: Option<&HashSet<String>>,
+    locator: impl Into<String>,
+) -> Result<(), RuntimeDebugAuditError> {
+    let locator = locator.into();
+    let installed = store
+        .installed_compact_spans_matching_hashes(surviving_message_hashes)
+        .map_err(|err| {
+            RuntimeDebugAuditError::failed(
+                RuntimeDebugBoundary::AfterCompactInstall,
+                INV_MEM_EVIDENCE,
+                locator.clone(),
+                format!("CompactInstalled span source failed: {err}"),
+            )
+        })?;
+    let committed = store
+        .committed_mem_install_spans_matching_hashes(surviving_message_hashes)
+        .map_err(|err| {
+            RuntimeDebugAuditError::failed(
+                RuntimeDebugBoundary::AfterCompactInstall,
+                INV_MEM_EVIDENCE,
+                locator.clone(),
+                format!("MemInstallCommitted span source failed: {err}"),
+            )
+        })?;
+    if installed == committed {
+        return Ok(());
+    }
+    Err(RuntimeDebugAuditError::failed(
+        RuntimeDebugBoundary::AfterCompactInstall,
+        INV_MEM_EVIDENCE,
+        locator,
+        format!(
+            "CompactInstalled span source did not match MemInstallCommitted span source: CompactInstalled={installed:?}; MemInstallCommitted={committed:?}"
         ),
     ))
 }
