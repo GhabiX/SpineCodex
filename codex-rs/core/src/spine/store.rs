@@ -87,12 +87,6 @@ impl SpineSidecarStore {
     pub(crate) fn for_rollout(rollout_path: impl AsRef<Path>) -> Result<Self, SpineStoreError> {
         let rollout_path = rollout_path.as_ref();
         let locator_path = Self::locator_path_for_rollout(rollout_path)?;
-        if !locator_path.exists() {
-            let root = Self::default_sidecar_dir_for_rollout(rollout_path)?;
-            if root.exists() {
-                Self::write_base_locator(rollout_path, &locator_path, &root)?;
-            }
-        }
         let locator = read_base_locator(&locator_path)?;
         let parent = rollout_parent(rollout_path)?;
         let base = PathBuf::from(locator.base);
@@ -109,6 +103,9 @@ impl SpineSidecarStore {
             return Err(SpineStoreError::AlreadyInitialized { path: locator_path });
         }
         let root = Self::default_sidecar_dir_for_rollout(rollout_path)?;
+        if root.exists() {
+            return Err(SpineStoreError::AlreadyInitialized { path: root });
+        }
         Self::write_base_locator(rollout_path, &locator_path, &root)?;
         Ok(Self::new(root))
     }
@@ -121,8 +118,7 @@ impl SpineSidecarStore {
     }
 
     pub(crate) fn has_sidecar_for_rollout(rollout_path: &Path) -> Result<bool, SpineStoreError> {
-        Ok(Self::locator_path_for_rollout(rollout_path)?.exists()
-            || Self::default_sidecar_dir_for_rollout(rollout_path)?.exists())
+        Ok(Self::locator_path_for_rollout(rollout_path)?.exists())
     }
 
     fn write_base_locator(

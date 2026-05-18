@@ -335,57 +335,33 @@ fn for_rollout_requires_base_locator() {
 }
 
 #[test]
-fn for_rollout_migrates_default_sidecar_without_locator() {
+fn default_sidecar_without_locator_is_not_auto_migrated() {
     let temp = tempfile::tempdir().expect("tempdir");
     let rollout_path = temp.path().join("rollout-test.jsonl");
     let root = SpineSidecarStore::default_sidecar_dir_for_rollout(&rollout_path)
         .expect("default sidecar dir");
-    std::fs::create_dir_all(&root).expect("create legacy sidecar root");
-    std::fs::write(
-        root.join("tree.jsonl"),
-        serde_json::to_string(&json!({
-            "type": "spine_initialized",
-            "seq": 1,
-            "state": {
-                "cursor": "1.1",
-                "nodes": [
-                    {
-                        "node_id": "1",
-                        "parent_id": null,
-                        "raw_start_ordinal": 0,
-                        "status": "opened",
-                        "summary": null,
-                    },
-                    {
-                        "node_id": "1.1",
-                        "parent_id": "1",
-                        "raw_start_ordinal": 0,
-                        "status": "live",
-                        "summary": null,
-                    },
-                ],
-            },
-        }))
-        .expect("serialize root event")
-            + "\n",
-    )
-    .expect("write legacy tree");
-    std::fs::write(root.join("compact.index.jsonl"), "").expect("write compact index");
+    std::fs::create_dir_all(&root).expect("create unsupported sidecar root");
 
-    let store = SpineSidecarStore::for_rollout(&rollout_path).expect("load legacy sidecar");
-
-    assert_eq!(store.root(), root.as_path());
-    assert_eq!(
-        store.load().expect("load migrated sidecar").cursor(),
-        &id(&[1, 1])
+    assert!(
+        !SpineSidecarStore::has_sidecar_for_rollout(&rollout_path).expect("check sidecar")
     );
-    assert_eq!(
-        read_json(SpineSidecarStore::locator_path_for_rollout(&rollout_path).expect("locator")),
-        json!({
-            "version": 1,
-            "base": "spine-rollout-test",
-        })
+    assert!(
+        matches!(
+            SpineSidecarStore::for_rollout(&rollout_path),
+            Err(SpineStoreError::Io { path, .. })
+                if path.ends_with("rollout-test.spine.json")
+        )
     );
+    assert!(
+        matches!(
+            SpineSidecarStore::create_for_rollout(&rollout_path),
+            Err(SpineStoreError::AlreadyInitialized { path })
+                if path == root
+        )
+    );
+    assert!(!SpineSidecarStore::locator_path_for_rollout(&rollout_path)
+        .expect("locator")
+        .exists());
 }
 
 #[test]
