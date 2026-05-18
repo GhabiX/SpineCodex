@@ -239,4 +239,5 @@ fn host_bridge_projection_stops_at_non_spine_compact() {
     assert_eq!(projection.effective_index_for_raw_boundary(2), None);
     assert_eq!(projection.raw_for_effective_index(1), Some(1));
     assert_eq!(projection.raw_for_effective_index(2), None);
+    assert_eq!(projection.raw_for_effective_index(history.len()), None);
 }

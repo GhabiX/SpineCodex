@@ -1,8 +1,6 @@
-use super::host_bridge::EffectiveItemSemantics;
+use super::host_bridge::HostBridgeProjection;
 use super::host_bridge::SPINE_INITIAL_CONTEXT_CLOSE_TAG;
 use super::host_bridge::SPINE_INITIAL_CONTEXT_OPEN_TAG;
-use super::host_bridge::classify_effective_item;
-use super::host_bridge::is_non_spine_compact_item;
 use super::host_bridge::parse_spine_initial_context_item;
 use super::host_bridge::spine_memory_synthetic_id;
 use super::host_bridge::spine_memory_text_marker;
@@ -312,9 +310,10 @@ pub(crate) fn build_suffix_replacement_history_from_pi(
     memory_item: ResponseItem,
     note_items: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ResponseItem>> {
-    let raw_len =
-        raw_ordinal_for_effective_index_with_spans(old_history, old_history.len(), runtime_spans)
-            .ok_or_else(|| {
+    let projection = HostBridgeProjection::build(old_history, runtime_spans)?;
+    let raw_len = projection
+        .raw_for_effective_index(old_history.len())
+        .ok_or_else(|| {
             CodexErr::Fatal("spine suffix render(Pi) could not map history end".to_string())
         })?;
     let new_span = RawSpan {
@@ -377,55 +376,29 @@ pub(crate) fn build_root_archive_replacement_history_for_compact_id(
     runtime_spans: &[InstalledCompactSpan],
     root_compact_id: &str,
 ) -> CodexResult<RootArchiveReplacementHistory> {
-    let prefix_history = &history[..planned_cut_index];
-    let mut raw_cursor = 0_u64;
-    let mut span_cursor = 0_usize;
-    let mut archive_cut_ordinal = None;
-    let mut archive_cut_index = None;
-    for (index, item) in prefix_history.iter().enumerate() {
-        if is_non_spine_compact_item(item) || parse_spine_initial_context_item(item).is_some() {
-            continue;
-        }
-        match classify_effective_item(item, raw_cursor, runtime_spans, &mut span_cursor)
-            .ok_or_else(|| {
-                CodexErr::Fatal(format!(
-                    "spine root archive prefix is not admissible: item {index} does not match raw cursor {raw_cursor} in the compact span ledger"
-                ))
-            })? {
-            EffectiveItemSemantics::Raw1 => {
-                raw_cursor = raw_cursor.checked_add(1).ok_or_else(|| {
-                    CodexErr::Fatal(
-                        "spine root archive prefix raw cursor overflowed".to_string(),
-                    )
-                })?;
-            }
-            EffectiveItemSemantics::Zero => {}
-            EffectiveItemSemantics::Span { cut, fold_end } => {
-                if cut != raw_cursor {
-                    return Err(CodexErr::Fatal(format!(
-                        "spine root archive prefix is not admissible: span at item {index} starts at raw ordinal {cut}, expected {raw_cursor}"
-                    )));
-                }
-                if cut >= fold_end {
-                    return Err(CodexErr::Fatal(format!(
-                        "spine root archive prefix is not admissible: span at item {index} is empty or inverted [{cut}, {fold_end})"
-                    )));
-                }
-                archive_cut_ordinal = Some(raw_cursor);
-                archive_cut_index = Some(index);
-                break;
-            }
-            EffectiveItemSemantics::Stop => break,
-        }
-    }
-    let archive_cut_ordinal = archive_cut_ordinal.unwrap_or(raw_cursor);
-    let archive_cut_index = archive_cut_index.unwrap_or(prefix_history.len());
+    let projection = HostBridgeProjection::build(history, runtime_spans)?;
+    let (archive_cut_ordinal, archive_cut_index) = projection
+        .first_span_in_prefix(planned_cut_index)
+        .map_or_else(
+            || {
+                projection
+                    .raw_for_effective_index(planned_cut_index)
+                    .map(|raw| (raw, planned_cut_index))
+                    .ok_or_else(|| {
+                        CodexErr::Fatal(format!(
+                            "spine root archive render(Pi) planned cut index {planned_cut_index} does not map to a raw ordinal"
+                        ))
+                    })
+            },
+            Ok,
+        )?;
     if fold_end_ordinal < archive_cut_ordinal {
         return Err(CodexErr::Fatal(format!(
             "spine root archive render(Pi) fold_end ordinal {fold_end_ordinal} is before archive cut ordinal {archive_cut_ordinal}"
         )));
     }
-    let raw_len = raw_ordinal_for_effective_index_with_spans(history, history.len(), runtime_spans)
+    let raw_len = projection
+        .raw_for_effective_index(history.len())
         .ok_or_else(|| {
             CodexErr::Fatal("spine root archive render(Pi) could not map history end".to_string())
         })?;
@@ -512,32 +485,27 @@ pub(crate) fn render_pi_bridge_items(
     mem_items: &BTreeMap<String, ResponseItem>,
     note_items: &BTreeMap<String, Vec<ResponseItem>>,
 ) -> CodexResult<Vec<RenderedPiItem>> {
+    let projection = HostBridgeProjection::build(history, runtime_spans)?;
     let mut rendered = Vec::new();
     for segment in pi {
         match segment {
             Segment::Raw(raw_span) => {
-                let start_index = effective_index_for_raw_ordinal_with_spans(
-                    history,
-                    raw_span.start,
-                    runtime_spans,
-                )
-                .ok_or_else(|| {
-                    CodexErr::Fatal(format!(
-                        "render(Pi) Raw {} start does not map to an effective index",
-                        raw_span
-                    ))
-                })?;
-                let end_index = effective_index_for_raw_ordinal_with_spans(
-                    history,
-                    raw_span.end,
-                    runtime_spans,
-                )
-                .ok_or_else(|| {
-                    CodexErr::Fatal(format!(
-                        "render(Pi) Raw {} end does not map to an effective index",
-                        raw_span
-                    ))
-                })?;
+                let start_index = projection
+                    .effective_index_for_raw_boundary(raw_span.start)
+                    .ok_or_else(|| {
+                        CodexErr::Fatal(format!(
+                            "render(Pi) Raw {} start does not map to an effective index",
+                            raw_span
+                        ))
+                    })?;
+                let end_index = projection
+                    .effective_index_for_raw_boundary(raw_span.end)
+                    .ok_or_else(|| {
+                        CodexErr::Fatal(format!(
+                            "render(Pi) Raw {} end does not map to an effective index",
+                            raw_span
+                        ))
+                    })?;
                 if start_index > end_index {
                     return Err(CodexErr::Fatal(format!(
                         "render(Pi) Raw {} maps to inverted effective range [{start_index}, {end_index})",
@@ -595,22 +563,10 @@ fn memory_items_from_runtime_spans(
     runtime_spans: &[InstalledCompactSpan],
 ) -> CodexResult<BTreeMap<String, ResponseItem>> {
     let mut items = BTreeMap::new();
+    let projection = HostBridgeProjection::build(history, runtime_spans)?;
     for span in runtime_spans {
-        let index =
-            effective_index_for_raw_ordinal_with_spans(history, span.cut_ordinal, runtime_spans)
-                .ok_or_else(|| {
-                    CodexErr::Fatal(format!(
-                        "render(Pi) could not map existing Mem {} at raw {}",
-                        span.compact_id, span.cut_ordinal
-                    ))
-                })?;
-        let item = history.get(index).ok_or_else(|| {
-            CodexErr::Fatal(format!(
-                "render(Pi) existing Mem {} mapped past history at index {}",
-                span.compact_id, index
-            ))
-        })?;
-        items.insert(span.compact_id.clone(), item.clone());
+        let item = projection.memory_item_for_span(&span.compact_id)?;
+        items.insert(span.compact_id.clone(), item);
     }
     Ok(items)
 }

@@ -176,7 +176,6 @@ impl<'a> HostBridgeProjection<'a> {
         None
     }
 
-    #[allow(dead_code)]
     pub(crate) fn validate_required_boundaries(&self, required: &[u64]) -> CodexResult<()> {
         for raw_ordinal in required {
             let index = self
@@ -200,7 +199,6 @@ impl<'a> HostBridgeProjection<'a> {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn first_span_in_prefix(&self, prefix_index: usize) -> Option<(u64, usize)> {
         self.entries.iter().find_map(|entry| {
             if entry.index >= prefix_index {
@@ -213,7 +211,6 @@ impl<'a> HostBridgeProjection<'a> {
         })
     }
 
-    #[allow(dead_code)]
     pub(crate) fn memory_item_for_span(&self, compact_id: &str) -> CodexResult<ResponseItem> {
         let mut found_index = None;
         for entry in &self.entries {
@@ -264,62 +261,8 @@ pub(crate) fn validate_spine_replacement_history_admissible(
     runtime_spans: &[InstalledCompactSpan],
     required_raw_ordinals: &[u64],
 ) -> CodexResult<()> {
-    let mut raw_cursor = 0_u64;
-    let mut span_cursor = 0_usize;
-    for (index, item) in history.iter().enumerate() {
-        match classify_effective_item(item, raw_cursor, runtime_spans, &mut span_cursor)
-            .ok_or_else(|| {
-                CodexErr::Fatal(format!(
-                    "spine compact replacement history is not admissible: item {index} does not match raw cursor {raw_cursor} in the compact span ledger"
-                ))
-            })? {
-            EffectiveItemSemantics::Raw1 => {
-                raw_cursor = raw_cursor.checked_add(1).ok_or_else(|| {
-                    CodexErr::Fatal(
-                        "spine compact replacement history raw cursor overflowed".to_string(),
-                    )
-                })?;
-            }
-            EffectiveItemSemantics::Zero => {}
-            EffectiveItemSemantics::Span { cut, fold_end } => {
-                if cut != raw_cursor {
-                    return Err(CodexErr::Fatal(format!(
-                        "spine compact replacement history is not admissible: span at item {index} starts at raw ordinal {cut}, expected {raw_cursor}"
-                    )));
-                }
-                if cut >= fold_end {
-                    return Err(CodexErr::Fatal(format!(
-                        "spine compact replacement history is not admissible: span at item {index} is empty or inverted [{cut}, {fold_end})"
-                    )));
-                }
-                raw_cursor = fold_end;
-            }
-            EffectiveItemSemantics::Stop => break,
-        }
-    }
-
-    for raw_ordinal in required_raw_ordinals {
-        let index =
-            effective_index_for_raw_ordinal_with_spans(history, *raw_ordinal, runtime_spans)
-                .ok_or_else(|| {
-                    CodexErr::Fatal(format!(
-                        "spine compact replacement history is not admissible: required raw ordinal {raw_ordinal} does not map to an effective history index"
-                    ))
-                })?;
-        let round_trip = raw_ordinal_for_effective_index_with_spans(history, index, runtime_spans)
-            .ok_or_else(|| {
-                CodexErr::Fatal(format!(
-                    "spine compact replacement history is not admissible: effective index {index} for raw ordinal {raw_ordinal} does not map back to a raw ordinal"
-                ))
-            })?;
-        if round_trip != *raw_ordinal {
-            return Err(CodexErr::Fatal(format!(
-                "spine compact replacement history is not admissible: raw ordinal {raw_ordinal} maps to effective index {index}, which maps back to {round_trip}"
-            )));
-        }
-    }
-
-    Ok(())
+    HostBridgeProjection::build(history, runtime_spans)?
+        .validate_required_boundaries(required_raw_ordinals)
 }
 
 pub(crate) fn classify_effective_item(
