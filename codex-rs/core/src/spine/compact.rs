@@ -1,21 +1,32 @@
+#[cfg(test)]
 use super::candidate_mem_plan::CandidateMem;
+#[cfg(test)]
 use super::candidate_mem_plan::CandidateMemCover;
+#[cfg(test)]
 use super::candidate_mem_plan::CandidateMemPlan;
+#[cfg(test)]
 use super::candidate_mem_plan::plan_candidate_mem_cover;
 #[cfg(test)]
 pub(crate) use super::checkpoint_render::RenderPiOrigin;
+pub(crate) use super::checkpoint_render::build_root_archive_replacement_history;
+pub(crate) use super::checkpoint_render::build_root_archive_replacement_history_from_candidate_plan;
+#[cfg(test)]
+pub(crate) use super::checkpoint_render::build_suffix_replacement_history;
+pub(crate) use super::checkpoint_render::build_suffix_replacement_history_from_candidate_plan;
 pub(crate) use super::checkpoint_render::expand_spine_initial_context_items;
 pub(crate) use super::checkpoint_render::render_context_compacted_outline;
 #[cfg(test)]
 pub(crate) use super::checkpoint_render::render_pi_bridge_items;
-use super::checkpoint_render::render_pi_bridge_replacement_history;
 pub(crate) use super::checkpoint_render::render_slim_context_compacted_outline;
 pub(crate) use super::checkpoint_render::render_spine_handoff_item;
 pub(crate) use super::checkpoint_render::render_spine_initial_context_item;
 pub(crate) use super::checkpoint_render::render_spine_memory_item;
+#[cfg(test)]
 use super::host_bridge::HostBridgeProjection;
 use super::ids::NodeId;
+#[cfg(test)]
 use super::segment::RawSpan;
+#[cfg(test)]
 use super::segment::Segment;
 #[cfg(test)]
 use super::segment::SegmentArtifacts;
@@ -40,7 +51,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -295,22 +305,6 @@ pub(crate) fn render_auto_compact_memory(
 }
 
 #[cfg(test)]
-pub(crate) fn build_suffix_replacement_history(
-    old_history: &[ResponseItem],
-    cut_index: usize,
-    fold_end_index: usize,
-    ir_items: Vec<ResponseItem>,
-) -> Vec<ResponseItem> {
-    let mut replacement_history = Vec::with_capacity(
-        cut_index + ir_items.len() + old_history.len().saturating_sub(fold_end_index),
-    );
-    replacement_history.extend_from_slice(&old_history[..cut_index]);
-    replacement_history.extend(ir_items);
-    replacement_history.extend_from_slice(&old_history[fold_end_index..]);
-    replacement_history
-}
-
-#[cfg(test)]
 pub(crate) fn build_suffix_replacement_history_from_pi(
     old_history: &[ResponseItem],
     runtime_spans: &[InstalledCompactSpan],
@@ -353,219 +347,7 @@ pub(crate) fn build_suffix_replacement_history_from_pi(
     )
 }
 
-pub(crate) fn build_suffix_replacement_history_from_candidate_plan(
-    old_history: &[ResponseItem],
-    runtime_spans: &[InstalledCompactSpan],
-    compact_id: &str,
-    candidate_plan: &CandidateMemPlan,
-    memory_item: ResponseItem,
-    note_items: Vec<ResponseItem>,
-) -> CodexResult<Vec<ResponseItem>> {
-    let mut pi = candidate_plan.pi.clone();
-    let artifacts = &candidate_plan.artifacts;
-    let note_items = note_items
-        .into_iter()
-        .enumerate()
-        .map(|(index, item)| (format!("suffix_note_{index}"), vec![item]))
-        .collect::<BTreeMap<_, _>>();
-    if !note_items.is_empty() {
-        pi = insert_notes_after_mem(pi, compact_id, note_items.keys().cloned().collect())?;
-    }
-    let mut mem_items = memory_items_from_runtime_spans(old_history, runtime_spans)?;
-    mem_items.insert(compact_id.to_string(), memory_item);
-    render_pi_bridge_replacement_history(
-        old_history,
-        runtime_spans,
-        &pi,
-        &artifacts,
-        &mem_items,
-        &note_items,
-    )
-}
-
-pub(crate) fn build_root_archive_replacement_history(
-    history: &[ResponseItem],
-    planned_cut_index: usize,
-    fold_end_ordinal: u64,
-    initial_context_items: Vec<ResponseItem>,
-    root_memory_item: ResponseItem,
-    runtime_spans: &[InstalledCompactSpan],
-) -> CodexResult<RootArchiveReplacementHistory> {
-    build_root_archive_replacement_history_for_compact_id(
-        history,
-        planned_cut_index,
-        fold_end_ordinal,
-        initial_context_items,
-        root_memory_item,
-        runtime_spans,
-        "__spine_root_archive_render_pi__",
-    )
-}
-
-pub(crate) fn build_root_archive_replacement_history_for_compact_id(
-    history: &[ResponseItem],
-    planned_cut_index: usize,
-    fold_end_ordinal: u64,
-    initial_context_items: Vec<ResponseItem>,
-    root_memory_item: ResponseItem,
-    runtime_spans: &[InstalledCompactSpan],
-    root_compact_id: &str,
-) -> CodexResult<RootArchiveReplacementHistory> {
-    let projection = HostBridgeProjection::build(history, runtime_spans)?;
-    let (archive_cut_ordinal, archive_cut_index) = projection
-        .first_span_in_prefix(planned_cut_index)
-        .map_or_else(
-            || {
-                projection
-                    .raw_for_effective_index(planned_cut_index)
-                    .map(|raw| (raw, planned_cut_index))
-                    .ok_or_else(|| {
-                        CodexErr::Fatal(format!(
-                            "spine root archive render(Pi) planned cut index {planned_cut_index} does not map to a raw ordinal"
-                        ))
-                    })
-            },
-            Ok,
-        )?;
-    if fold_end_ordinal < archive_cut_ordinal {
-        return Err(CodexErr::Fatal(format!(
-            "spine root archive render(Pi) fold_end ordinal {fold_end_ordinal} is before archive cut ordinal {archive_cut_ordinal}"
-        )));
-    }
-    let raw_len = projection
-        .raw_for_effective_index(history.len())
-        .ok_or_else(|| {
-            CodexErr::Fatal("spine root archive render(Pi) could not map history end".to_string())
-        })?;
-    let candidate = CandidateMem::anonymous(
-        root_compact_id.to_string(),
-        RawSpan {
-            start: archive_cut_ordinal,
-            end: fold_end_ordinal,
-        },
-    );
-    let CandidateMemCover { pi, artifacts } =
-        plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(pi_render_error)?;
-    let candidate_plan = CandidateMemPlan {
-        pi,
-        artifacts,
-        admitted_candidate: true,
-        rejected_candidate_reason: None,
-    };
-    build_root_archive_replacement_history_from_candidate_plan(
-        history,
-        runtime_spans,
-        root_compact_id,
-        archive_cut_ordinal,
-        archive_cut_index,
-        initial_context_items,
-        root_memory_item,
-        &candidate_plan,
-    )
-}
-
-pub(crate) fn build_root_archive_replacement_history_from_candidate_plan(
-    history: &[ResponseItem],
-    runtime_spans: &[InstalledCompactSpan],
-    root_compact_id: &str,
-    archive_cut_ordinal: u64,
-    archive_cut_index: usize,
-    initial_context_items: Vec<ResponseItem>,
-    root_memory_item: ResponseItem,
-    candidate_plan: &CandidateMemPlan,
-) -> CodexResult<RootArchiveReplacementHistory> {
-    let mut pi = candidate_plan.pi.clone();
-    let artifacts = &candidate_plan.artifacts;
-    let note_items = initial_context_items
-        .into_iter()
-        .enumerate()
-        .map(|(index, item)| (format!("initial_context_{index}"), vec![item]))
-        .collect::<BTreeMap<_, _>>();
-    if !note_items.is_empty() {
-        pi = insert_notes_before_mem(pi, root_compact_id, note_items.keys().cloned().collect())?;
-    }
-    let mut mem_items = memory_items_from_runtime_spans(history, runtime_spans)?;
-    mem_items.insert(root_compact_id.to_string(), root_memory_item);
-    let replacement_history = render_pi_bridge_replacement_history(
-        history,
-        runtime_spans,
-        &pi,
-        &artifacts,
-        &mem_items,
-        &note_items,
-    )?;
-    Ok(RootArchiveReplacementHistory {
-        replacement_history,
-        archive_cut_ordinal,
-        archive_cut_index,
-    })
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct RootArchiveReplacementHistory {
-    pub(crate) replacement_history: Vec<ResponseItem>,
-    pub(crate) archive_cut_ordinal: u64,
-    pub(crate) archive_cut_index: usize,
-}
-
-fn memory_items_from_runtime_spans(
-    history: &[ResponseItem],
-    runtime_spans: &[InstalledCompactSpan],
-) -> CodexResult<BTreeMap<String, ResponseItem>> {
-    let mut items = BTreeMap::new();
-    let projection = HostBridgeProjection::build(history, runtime_spans)?;
-    for span in runtime_spans {
-        let item = projection.memory_item_for_span(&span.compact_id)?;
-        items.insert(span.compact_id.clone(), item);
-    }
-    Ok(items)
-}
-
-fn insert_notes_after_mem(
-    pi: Vec<Segment>,
-    compact_id: &str,
-    note_kinds: Vec<String>,
-) -> CodexResult<Vec<Segment>> {
-    let mut inserted = false;
-    let mut result = Vec::with_capacity(pi.len() + note_kinds.len());
-    for segment in pi {
-        let is_target = matches!(&segment, Segment::Mem { compact_id: id } if id == compact_id);
-        result.push(segment);
-        if is_target {
-            inserted = true;
-            result.extend(note_kinds.iter().cloned().map(Segment::note));
-        }
-    }
-    if !inserted {
-        return Err(CodexErr::Fatal(format!(
-            "render(Pi) could not place notes after Mem {compact_id}"
-        )));
-    }
-    Ok(result)
-}
-
-fn insert_notes_before_mem(
-    pi: Vec<Segment>,
-    compact_id: &str,
-    note_kinds: Vec<String>,
-) -> CodexResult<Vec<Segment>> {
-    let mut inserted = false;
-    let mut result = Vec::with_capacity(pi.len() + note_kinds.len());
-    for segment in pi {
-        if matches!(&segment, Segment::Mem { compact_id: id } if id == compact_id) {
-            inserted = true;
-            result.extend(note_kinds.iter().cloned().map(Segment::note));
-        }
-        result.push(segment);
-    }
-    if !inserted {
-        return Err(CodexErr::Fatal(format!(
-            "render(Pi) could not place notes before Mem {compact_id}"
-        )));
-    }
-    Ok(result)
-}
-
+#[cfg(test)]
 fn pi_render_error(error: impl std::fmt::Display) -> CodexErr {
     CodexErr::Fatal(format!(
         "render(Pi) failed to build canonical cover: {error}"
