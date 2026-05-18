@@ -28,6 +28,237 @@ enum RenderedSpineCarrierClassification {
     Semantics(EffectiveItemSemantics),
 }
 
+#[derive(Debug)]
+pub(crate) struct HostBridgeProjection<'a> {
+    history: &'a [ResponseItem],
+    entries: Vec<BridgeEntry>,
+    raw_len: u64,
+    stopped: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BridgeEntry {
+    pub(crate) index: usize,
+    pub(crate) raw_before: u64,
+    pub(crate) width: BridgeWidth,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BridgeWidth {
+    Raw1,
+    Zero,
+    Span {
+        compact_id: String,
+        start: u64,
+        end: u64,
+    },
+    Stop,
+}
+
+impl<'a> HostBridgeProjection<'a> {
+    pub(crate) fn build(
+        history: &'a [ResponseItem],
+        runtime_spans: &[InstalledCompactSpan],
+    ) -> CodexResult<Self> {
+        let mut raw_cursor = 0_u64;
+        let mut span_cursor = 0_usize;
+        let mut entries = Vec::with_capacity(history.len());
+        let mut stopped = false;
+
+        for (index, item) in history.iter().enumerate() {
+            let raw_before = raw_cursor;
+            let previous_span_cursor = span_cursor;
+            let semantics =
+                classify_effective_item(item, raw_cursor, runtime_spans, &mut span_cursor)
+                    .ok_or_else(|| {
+                        CodexErr::Fatal(format!(
+                            "spine host bridge projection is not admissible: item {index} does not match raw cursor {raw_cursor} in the compact span ledger"
+                        ))
+                    })?;
+            let width = match semantics {
+                EffectiveItemSemantics::Raw1 => {
+                    raw_cursor = raw_cursor.checked_add(1).ok_or_else(|| {
+                        CodexErr::Fatal(
+                            "spine host bridge projection raw cursor overflowed".to_string(),
+                        )
+                    })?;
+                    BridgeWidth::Raw1
+                }
+                EffectiveItemSemantics::Zero => BridgeWidth::Zero,
+                EffectiveItemSemantics::Span { cut, fold_end } => {
+                    if cut != raw_cursor {
+                        return Err(CodexErr::Fatal(format!(
+                            "spine host bridge projection is not admissible: span at item {index} starts at raw ordinal {cut}, expected {raw_cursor}"
+                        )));
+                    }
+                    if cut >= fold_end {
+                        return Err(CodexErr::Fatal(format!(
+                            "spine host bridge projection is not admissible: span at item {index} is empty or inverted [{cut}, {fold_end})"
+                        )));
+                    }
+                    let compact_id =
+                        consumed_span_compact_id(runtime_spans, previous_span_cursor, span_cursor)
+                            .ok_or_else(|| {
+                                CodexErr::Fatal(format!(
+                                    "spine host bridge projection is not admissible: span at item {index} did not consume a compact span"
+                                ))
+                            })?;
+                    raw_cursor = fold_end;
+                    BridgeWidth::Span {
+                        compact_id,
+                        start: cut,
+                        end: fold_end,
+                    }
+                }
+                EffectiveItemSemantics::Stop => {
+                    stopped = true;
+                    BridgeWidth::Stop
+                }
+            };
+            entries.push(BridgeEntry {
+                index,
+                raw_before,
+                width,
+            });
+            if stopped {
+                break;
+            }
+        }
+
+        Ok(Self {
+            history,
+            entries,
+            raw_len: raw_cursor,
+            stopped,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn raw_len(&self) -> u64 {
+        self.raw_len
+    }
+
+    pub(crate) fn raw_for_effective_index(&self, index: usize) -> Option<u64> {
+        if let Some(entry) = self.entries.iter().find(|entry| entry.index == index) {
+            return Some(entry.raw_before);
+        }
+        if !self.stopped && index == self.history.len() {
+            return Some(self.raw_len);
+        }
+        None
+    }
+
+    pub(crate) fn effective_index_for_raw_boundary(&self, raw: u64) -> Option<usize> {
+        for entry in &self.entries {
+            match &entry.width {
+                BridgeWidth::Raw1 => {
+                    if entry.raw_before == raw {
+                        return Some(entry.index);
+                    }
+                }
+                BridgeWidth::Zero => {}
+                BridgeWidth::Span { start, end, .. } => {
+                    if raw == *start {
+                        return Some(entry.index);
+                    }
+                    if raw > *start && raw < *end {
+                        return None;
+                    }
+                }
+                BridgeWidth::Stop => {
+                    return (raw == entry.raw_before).then_some(entry.index);
+                }
+            }
+        }
+        if !self.stopped && raw == self.raw_len {
+            return Some(self.history.len());
+        }
+        None
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn validate_required_boundaries(&self, required: &[u64]) -> CodexResult<()> {
+        for raw_ordinal in required {
+            let index = self
+                .effective_index_for_raw_boundary(*raw_ordinal)
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "spine host bridge projection is not admissible: required raw ordinal {raw_ordinal} does not map to an effective history index"
+                    ))
+                })?;
+            let round_trip = self.raw_for_effective_index(index).ok_or_else(|| {
+                CodexErr::Fatal(format!(
+                    "spine host bridge projection is not admissible: effective index {index} for raw ordinal {raw_ordinal} does not map back to a raw ordinal"
+                ))
+            })?;
+            if round_trip != *raw_ordinal {
+                return Err(CodexErr::Fatal(format!(
+                    "spine host bridge projection is not admissible: raw ordinal {raw_ordinal} maps to effective index {index}, which maps back to {round_trip}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn first_span_in_prefix(&self, prefix_index: usize) -> Option<(u64, usize)> {
+        self.entries.iter().find_map(|entry| {
+            if entry.index >= prefix_index {
+                return None;
+            }
+            match entry.width {
+                BridgeWidth::Span { start, .. } => Some((start, entry.index)),
+                BridgeWidth::Raw1 | BridgeWidth::Zero | BridgeWidth::Stop => None,
+            }
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn memory_item_for_span(&self, compact_id: &str) -> CodexResult<ResponseItem> {
+        let mut found_index = None;
+        for entry in &self.entries {
+            let BridgeWidth::Span {
+                compact_id: entry_compact_id,
+                ..
+            } = &entry.width
+            else {
+                continue;
+            };
+            if entry_compact_id == compact_id {
+                if found_index.is_some() {
+                    return Err(CodexErr::Fatal(format!(
+                        "spine host bridge projection found duplicate Mem item for {compact_id}"
+                    )));
+                }
+                found_index = Some(entry.index);
+            }
+        }
+        let index = found_index.ok_or_else(|| {
+            CodexErr::Fatal(format!(
+                "spine host bridge projection missing Mem item for {compact_id}"
+            ))
+        })?;
+        self.history.get(index).cloned().ok_or_else(|| {
+            CodexErr::Fatal(format!(
+                "spine host bridge projection Mem {compact_id} mapped past history at index {index}"
+            ))
+        })
+    }
+}
+
+fn consumed_span_compact_id(
+    runtime_spans: &[InstalledCompactSpan],
+    previous_span_cursor: usize,
+    span_cursor: usize,
+) -> Option<String> {
+    if span_cursor <= previous_span_cursor {
+        return None;
+    }
+    runtime_spans
+        .get(span_cursor.checked_sub(1)?)
+        .map(|span| span.compact_id.clone())
+}
+
 pub(crate) fn validate_spine_replacement_history_admissible(
     history: &[ResponseItem],
     runtime_spans: &[InstalledCompactSpan],
@@ -139,24 +370,9 @@ pub(crate) fn raw_ordinal_for_effective_index_with_spans(
     target_index: usize,
     runtime_spans: &[InstalledCompactSpan],
 ) -> Option<u64> {
-    let mut raw_cursor = 0_u64;
-    let mut span_cursor = 0_usize;
-    for (index, item) in history.iter().enumerate() {
-        if index == target_index {
-            return Some(raw_cursor);
-        }
-        match classify_effective_item(item, raw_cursor, runtime_spans, &mut span_cursor)? {
-            EffectiveItemSemantics::Raw1 => {
-                raw_cursor = raw_cursor.checked_add(1)?;
-            }
-            EffectiveItemSemantics::Zero => {}
-            EffectiveItemSemantics::Span { cut: _, fold_end } => {
-                raw_cursor = fold_end;
-            }
-            EffectiveItemSemantics::Stop => return None,
-        }
-    }
-    (target_index == history.len()).then_some(raw_cursor)
+    HostBridgeProjection::build(history, runtime_spans)
+        .ok()?
+        .raw_for_effective_index(target_index)
 }
 
 pub(crate) fn effective_index_for_raw_ordinal_with_spans(
@@ -164,32 +380,9 @@ pub(crate) fn effective_index_for_raw_ordinal_with_spans(
     target_raw_ordinal: u64,
     runtime_spans: &[InstalledCompactSpan],
 ) -> Option<usize> {
-    let mut raw_cursor = 0_u64;
-    let mut span_cursor = 0_usize;
-    for (index, item) in history.iter().enumerate() {
-        match classify_effective_item(item, raw_cursor, runtime_spans, &mut span_cursor)? {
-            EffectiveItemSemantics::Raw1 => {
-                if raw_cursor == target_raw_ordinal {
-                    return Some(index);
-                }
-                raw_cursor = raw_cursor.checked_add(1)?;
-            }
-            EffectiveItemSemantics::Zero => {}
-            EffectiveItemSemantics::Span { cut, fold_end } => {
-                if target_raw_ordinal == cut {
-                    return Some(index);
-                }
-                if target_raw_ordinal > cut && target_raw_ordinal < fold_end {
-                    return None;
-                }
-                raw_cursor = fold_end;
-            }
-            EffectiveItemSemantics::Stop => {
-                return (target_raw_ordinal == raw_cursor).then_some(index);
-            }
-        }
-    }
-    (target_raw_ordinal == raw_cursor).then_some(history.len())
+    HostBridgeProjection::build(history, runtime_spans)
+        .ok()?
+        .effective_index_for_raw_boundary(target_raw_ordinal)
 }
 
 pub(crate) fn is_spine_internal_render_item(item: &ResponseItem) -> bool {
@@ -377,3 +570,7 @@ fn parse_spine_operation_label(value: &str) -> Option<SpineOperation> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "host_bridge_tests.rs"]
+mod tests;
