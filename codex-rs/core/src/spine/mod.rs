@@ -1,4 +1,5 @@
 pub(crate) mod candidate_mem_plan;
+pub(crate) mod checkpoint_render;
 pub(crate) mod compact;
 pub(crate) mod debug_audit;
 pub(crate) mod fast_fail;
