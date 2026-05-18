@@ -14,6 +14,7 @@ pub(crate) mod session_integration;
 pub(crate) mod state;
 pub(crate) mod store;
 pub(crate) mod trajs;
+pub(crate) mod tree_snapshot;
 pub(crate) mod view;
 
 pub(crate) const SPINE_NAMESPACE: &str = "spine";

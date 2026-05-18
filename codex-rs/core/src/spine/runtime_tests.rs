@@ -15,6 +15,8 @@ use codex_protocol::plan_tool::TaskProjectionArg;
 use codex_protocol::plan_tool::TaskProjectionCurrentArg;
 use codex_protocol::plan_tool::TaskProjectionDraftNodeArg;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::spine_tree::SpineTreeNodeStatus;
+use codex_protocol::spine_tree::SpineTreePlanItemStatus;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
