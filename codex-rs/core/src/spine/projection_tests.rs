@@ -215,6 +215,27 @@ fn projection_rolls_back_namespaced_close_with_child_summary() {
 }
 
 #[test]
+fn non_spine_compact_stop_projection_ignores_later_spine_transitions() {
+    let projection = project_spine_state_from_rollout(&[
+        user_message("start"),
+        spine_call("open-1", SPINE_TOOL_OPEN, "scope"),
+        call_output("open-1"),
+        compacted("native compact summary"),
+        user_message("after native compact"),
+        spine_call("next-after-stop", SPINE_TOOL_NEXT, "must not project"),
+        call_output("next-after-stop"),
+    ])
+    .expect("project");
+
+    assert_eq!(projection.response_item_count, 3);
+    assert_eq!(projection.state.cursor(), &id(&[1, 1, 1]));
+    assert!(
+        projection.state.node(&id(&[1, 2])).is_none(),
+        "native compact Stop boundary must not admit later Spine transitions"
+    );
+}
+
+#[test]
 fn projection_keeps_only_surviving_turn_ids_after_rollback() {
     let projection = project_spine_state_from_rollout(&[
         turn_started("turn-1"),

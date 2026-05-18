@@ -114,6 +114,11 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
                 root_epoch_compact_hashes.insert(compact_message_hash(&compacted.message));
                 state.reset_root_epoch("Context compacted", raw_ordinal)?;
             }
+            RolloutItem::Compacted(compacted)
+                if is_non_spine_compact_message(&compacted.message) =>
+            {
+                break;
+            }
             _ => {}
         }
     }
@@ -207,6 +212,10 @@ fn surviving_compact_hashes(items: &[&RolloutItem]) -> HashSet<String> {
             _ => None,
         })
         .collect()
+}
+
+fn is_non_spine_compact_message(message: &str) -> bool {
+    !message.starts_with(SPINE_COMPACT_MESSAGE_PREFIX)
 }
 
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {

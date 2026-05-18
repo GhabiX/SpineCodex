@@ -1835,6 +1835,18 @@ fn initial_spine_runtime_loads_existing_sidecar_without_transition_history() -> 
 }
 
 #[test]
+fn non_spine_compact_stop_initial_runtime_is_read_only() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+
+    let runtime =
+        session_integration::load_initial_spine_runtime(&rollout_path, 0, false, true, None)?;
+
+    assert!(!runtime.is_mutable());
+    Ok(())
+}
+
+#[test]
 fn initial_spine_runtime_rejects_missing_sidecar_for_existing_spine_history() -> anyhow::Result<()>
 {
     let temp = tempfile::tempdir()?;

@@ -41,6 +41,7 @@ use thiserror::Error;
 
 const SPINE_HINT_FIRST_THRESHOLD_TOKENS: u64 = 50_000;
 const SPINE_HINT_STEP_TOKENS: u64 = 30_000;
+pub(crate) const NON_SPINE_COMPACT_STOP_REASON: &str = "non-Spine compact Stop boundary";
 
 #[derive(Debug)]
 pub(crate) struct SpineRuntime {
@@ -165,7 +166,7 @@ impl SpineRuntime {
     }
 
     pub(crate) fn mark_non_spine_compacted_history(&mut self) {
-        self.mark_archived_read_only("latest surviving compact checkpoint is not spine-readable");
+        self.mark_archived_read_only(NON_SPINE_COMPACT_STOP_REASON);
     }
 
     pub(crate) fn raw_start_ordinal(&self, node_id: &NodeId) -> Option<u64> {

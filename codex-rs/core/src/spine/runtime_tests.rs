@@ -1303,7 +1303,7 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
 }
 
 #[test]
-fn transition_stage_fails_after_non_spine_compacted_history() {
+fn non_spine_compact_stop_transition_stage_fails_after_non_spine_compacted_history() {
     let (_temp, mut runtime) = temp_runtime();
     runtime.mark_non_spine_compacted_history();
 
@@ -1317,7 +1317,10 @@ fn transition_stage_fails_after_non_spine_compacted_history() {
                 "spine-1", "turn-1", op, "summary", /*compact_instruction*/ None,
             )
             .expect_err("non-spine compacted history should fail fast");
-        assert!(matches!(error, SpineRuntimeError::ArchivedReadOnly { .. }));
+        let SpineRuntimeError::ArchivedReadOnly { reason } = error else {
+            panic!("expected ArchivedReadOnly");
+        };
+        assert_eq!(reason, NON_SPINE_COMPACT_STOP_REASON);
     }
 }
 
