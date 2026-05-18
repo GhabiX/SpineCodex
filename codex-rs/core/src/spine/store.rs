@@ -1626,6 +1626,27 @@ impl SpineSidecarStore {
         Ok(spans)
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn bridge_checkpoint_committed_spans_matching_hashes(
+        &self,
+        surviving_message_hashes: Option<&HashSet<String>>,
+    ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
+        let spans = self
+            .runtime_span_authority_admissions_matching_hashes(surviving_message_hashes)?
+            .into_iter()
+            .filter_map(|record| match record.admission {
+                RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan
+                | RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal => {
+                    // No-legacy source: BridgeCheckpointCommitted is the terminal
+                    // proof. The current admission name is transitional until R4.
+                    Some(record.span)
+                }
+                _ => None,
+            })
+            .collect();
+        Ok(spans)
+    }
+
     pub(crate) fn runtime_span_authority_admissions_matching_hashes(
         &self,
         surviving_message_hashes: Option<&HashSet<String>>,

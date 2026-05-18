@@ -617,6 +617,195 @@ fn runtime_span_authority_admissions_filter_by_surviving_hashes() {
 }
 
 #[test]
+fn bridge_checkpoint_committed_spans_admit_meminstall_bridge_terminal() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-current",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:current",
+    );
+    append_bridge_checkpoint(
+        &store,
+        "compact-current",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:current",
+    );
+
+    let spans = store
+        .bridge_checkpoint_committed_spans_matching_hashes(None)
+        .expect("read bridge checkpoint spans");
+
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].compact_id, "compact-current");
+    assert_eq!(spans[0].node_id, id(&[1, 2]));
+    assert_eq!(spans[0].op, SpineOperation::Next);
+    assert_eq!(spans[0].cut_ordinal, 4);
+    assert_eq!(spans[0].fold_end_ordinal, 9);
+    assert_eq!(spans[0].replacement_history_len, 7);
+    assert_eq!(spans[0].message_hash, "sha1:current");
+}
+
+#[test]
+fn bridge_checkpoint_committed_spans_filter_by_surviving_hashes() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    for (compact_id, node_id, start, end, len, hash) in [
+        ("compact-old", id(&[1, 1]), 1, 4, 3, "sha1:old"),
+        ("compact-current", id(&[1, 2]), 4, 9, 7, "sha1:current"),
+    ] {
+        append_meminstall_evidence(
+            &store,
+            compact_id,
+            node_id.clone(),
+            SpineOperation::Next,
+            start,
+            end,
+            len,
+            hash,
+        );
+        append_bridge_checkpoint(
+            &store,
+            compact_id,
+            node_id.clone(),
+            SpineOperation::Next,
+            start,
+            end,
+            len,
+            hash,
+        );
+    }
+
+    let surviving_hashes = HashSet::from(["sha1:current".to_string()]);
+    let spans = store
+        .bridge_checkpoint_committed_spans_matching_hashes(Some(&surviving_hashes))
+        .expect("read filtered bridge checkpoint spans");
+
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].compact_id, "compact-current");
+    assert_eq!(spans[0].message_hash, "sha1:current");
+}
+
+#[test]
+fn bridge_checkpoint_committed_spans_skip_meminstall_only() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-deferred",
+        id(&[1]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:deferred",
+    );
+
+    let spans = store
+        .bridge_checkpoint_committed_spans_matching_hashes(None)
+        .expect("read bridge checkpoint spans");
+
+    assert!(
+        spans.is_empty(),
+        "MemInstall-only rows are not terminal runtime spans"
+    );
+}
+
+#[test]
+fn bridge_checkpoint_committed_spans_reject_bridge_without_meminstall() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-invalid",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    let mut events = store
+        .read_compact_index_events()
+        .expect("read compact index events");
+    events.push(CompactIndexEvent::BridgeCheckpointCommitted {
+        seq: 0,
+        compact_id: "compact-invalid".to_string(),
+        node_id: "1".to_string(),
+        op: SpineOperation::Next,
+        cut_ordinal: 4,
+        fold_end_ordinal: 9,
+        replacement_history_len: 7,
+        message_hash: "sha1:invalid".to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    });
+    store
+        .write_compact_index_events(events)
+        .expect("write invalid compact index");
+
+    let err = store
+        .bridge_checkpoint_committed_spans_matching_hashes(None)
+        .expect_err("bridge checkpoint without MemInstall should fail closed");
+
+    assert!(matches!(
+        err,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("bridge_checkpoint_committed")
+                && message.contains("precedes mem_install_committed")
+    ));
+}
+
+#[test]
+fn bridge_checkpoint_committed_spans_ignore_transitional_compact_installed_presence() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-transitional",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:transitional",
+    );
+    let mut events = store
+        .read_compact_index_events()
+        .expect("read compact index events");
+    events.push(CompactIndexEvent::CompactInstalled {
+        seq: 0,
+        compact_id: "compact-transitional".to_string(),
+        node_id: "1.2".to_string(),
+        op: SpineOperation::Next,
+        cut_ordinal: 4,
+        fold_end_ordinal: 9,
+        replacement_history_len: 7,
+        memory_path: "nodes/1/2/memory.md".to_string(),
+        message_hash: "sha1:transitional".to_string(),
+    });
+    store
+        .write_compact_index_events(events)
+        .expect("write transitional compact index");
+
+    let spans = store
+        .bridge_checkpoint_committed_spans_matching_hashes(None)
+        .expect("read bridge checkpoint spans");
+
+    assert!(
+        spans.is_empty(),
+        "CompactInstalled without BridgeCheckpointCommitted is not terminal source"
+    );
+}
+
+#[test]
 fn root_meminstall_survivor_matrix_validates_store_evidence() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
