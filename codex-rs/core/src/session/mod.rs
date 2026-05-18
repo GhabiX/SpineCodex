@@ -202,6 +202,7 @@ use crate::spine::compact::render_spine_memory_item;
 use crate::spine::debug_audit::RuntimeDebugBoundary;
 use crate::spine::debug_audit::audit_compact_checkpoint;
 use crate::spine::debug_audit::audit_compact_plan_boundaries;
+use crate::spine::debug_audit::audit_meminstall_span_source_equivalence;
 use crate::spine::segment::RawSpan;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
@@ -3280,6 +3281,20 @@ impl Session {
                 ))
                 .await);
         }
+        if turn_context.config.runtime_debug_checks {
+            let current_message_hashes = HashSet::from([message_hash.clone()]);
+            if let Err(err) = audit_meminstall_span_source_equivalence(
+                &store,
+                Some(&current_message_hashes),
+                format!("{} compact_id={compact_id}", store.root().display()),
+            ) {
+                return Err(self
+                    .poison_spine_compact(format!(
+                        "spine root archive MemInstall shadow span source mismatch after CompactInstalled: {err}"
+                    ))
+                    .await);
+            }
+        }
         // Only emit the reset snapshot after compact_installed is durable; otherwise the UI could
         // display a root archive that reload validation may still reject.
         let snapshot = {
@@ -3601,6 +3616,20 @@ impl Session {
                     "failed to record installed spine compact after rollout checkpoint: {err}"
                 ))
                 .await);
+        }
+        if turn_context.config.runtime_debug_checks {
+            let current_message_hashes = HashSet::from([message_hash.clone()]);
+            if let Err(err) = audit_meminstall_span_source_equivalence(
+                &store,
+                Some(&current_message_hashes),
+                format!("{} compact_id={compact_id}", store.root().display()),
+            ) {
+                return Err(self
+                    .poison_spine_compact(format!(
+                        "spine suffix MemInstall shadow span source mismatch after CompactInstalled: {err}"
+                    ))
+                    .await);
+            }
         }
         spine
             .lock()

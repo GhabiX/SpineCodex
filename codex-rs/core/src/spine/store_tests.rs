@@ -2293,6 +2293,57 @@ fn meminstall_span_source_shadow_audit_reports_committed_only_span() {
 }
 
 #[test]
+fn meminstall_span_source_shadow_audit_ignores_legacy_installed_outside_current_hash() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-legacy",
+            id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+        ))
+        .expect("append legacy compact started");
+    store
+        .append_compact_installed(compact_installed(
+            "compact-legacy",
+            id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+            3,
+            "sha1:legacy",
+        ))
+        .expect("append legacy compact installed");
+    append_meminstall_evidence(
+        &store,
+        "compact-current",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:current",
+    );
+    store
+        .append_compact_installed(compact_installed(
+            "compact-current",
+            id(&[1, 2]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:current",
+        ))
+        .expect("append current compact installed");
+
+    let current_hashes = HashSet::from(["sha1:current".to_string()]);
+    audit_meminstall_span_source_equivalence(&store, Some(&current_hashes), "compact index")
+        .expect("current-hash shadow audit should ignore legacy installed-only spans");
+}
+
+#[test]
 fn committed_mem_install_spans_filter_by_surviving_hashes() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");

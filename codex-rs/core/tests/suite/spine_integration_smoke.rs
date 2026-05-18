@@ -132,6 +132,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     .await;
 
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.runtime_debug_checks = true;
         config
             .features
             .enable(Feature::SpineTaskTree)
