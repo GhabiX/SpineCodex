@@ -14,7 +14,9 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+use codex_rollout::SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
+use codex_rollout::rollout_date_parts;
 use codex_state::ThreadMetadata;
 use serde::Deserialize;
 
@@ -95,6 +97,12 @@ pub(super) struct SpineArtifactsMove {
     source_sidecar: PathBuf,
     destination_sidecar: PathBuf,
 }
+
+const SPINE_RELOCATION_MISSING_SIDECAR: &str = "SpineRelocationMissingSidecar";
+const SPINE_RELOCATION_AMBIGUOUS_CANDIDATE: &str = "SpineRelocationAmbiguousCandidate";
+const SPINE_RELOCATION_DESTINATION_CONFLICT: &str = "SpineRelocationDestinationConflict";
+const SPINE_RELOCATION_LOCATOR_DRIFT: &str = "SpineRelocationLocatorDrift";
+const SPINE_RELOCATION_INVALID_SIDECAR: &str = "SpineRelocationInvalidSidecar";
 
 impl SpineArtifactsMove {
     pub(super) fn prepare(
@@ -197,6 +205,29 @@ fn spine_locator_path_for_rollout(rollout_path: &Path) -> ThreadStoreResult<Path
     Ok(parent.join(format!("{stem}.spine.json")))
 }
 
+fn spine_default_sidecar_path_for_rollout(rollout_path: &Path) -> ThreadStoreResult<PathBuf> {
+    let parent = rollout_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| ThreadStoreError::InvalidRequest {
+            message: format!(
+                "rollout path `{}` missing parent directory",
+                rollout_path.display()
+            ),
+        })?;
+    let stem = rollout_path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| ThreadStoreError::InvalidRequest {
+            message: format!(
+                "rollout path `{}` missing valid UTF-8 file stem",
+                rollout_path.display()
+            ),
+        })?;
+    Ok(parent.join(format!("spine-{stem}")))
+}
+
 #[derive(Deserialize)]
 struct SpineBaseLocator {
     version: u32,
@@ -230,6 +261,36 @@ fn read_spine_base_locator(path: &Path) -> ThreadStoreResult<PathBuf> {
     Ok(locator.base)
 }
 
+fn write_spine_base_locator(locator_path: &Path, sidecar_path: &Path) -> ThreadStoreResult<()> {
+    let base = sidecar_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .filter(|base| !base.is_empty())
+        .ok_or_else(|| ThreadStoreError::Internal {
+            message: format!(
+                "{SPINE_RELOCATION_LOCATOR_DRIFT}: spine sidecar path {} has no valid relative base",
+                sidecar_path.display()
+            ),
+        })?;
+    if let Some(parent) = locator_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "{SPINE_RELOCATION_INVALID_SIDECAR}: failed to create spine locator directory: {err}"
+            ),
+        })?;
+    }
+    std::fs::write(
+        locator_path,
+        format!("{{\n  \"version\": 1,\n  \"base\": \"{base}\"\n}}\n"),
+    )
+    .map_err(|err| ThreadStoreError::Internal {
+        message: format!(
+            "{SPINE_RELOCATION_INVALID_SIDECAR}: failed to write spine base locator {}: {err}",
+            locator_path.display()
+        ),
+    })
+}
+
 fn validate_spine_base(base: &Path, locator_path: &Path) -> ThreadStoreResult<()> {
     if base.as_os_str().is_empty() || base.is_absolute() {
         return Err(ThreadStoreError::Internal {
@@ -255,6 +316,252 @@ fn validate_spine_base(base: &Path, locator_path: &Path) -> ThreadStoreResult<()
         });
     }
     Ok(())
+}
+
+fn validate_spine_sidecar(sidecar_path: &Path) -> ThreadStoreResult<()> {
+    if !sidecar_path.is_dir() {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "{SPINE_RELOCATION_MISSING_SIDECAR}: spine sidecar directory is missing: {}",
+                sidecar_path.display()
+            ),
+        });
+    }
+    let tree_path = sidecar_path.join("tree.jsonl");
+    if !tree_path.is_file() {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "{SPINE_RELOCATION_INVALID_SIDECAR}: spine sidecar is missing tree.jsonl: {}",
+                tree_path.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn move_path(source: &Path, destination: &Path, label: &str) -> ThreadStoreResult<()> {
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "{SPINE_RELOCATION_INVALID_SIDECAR}: failed to create spine {label} target directory: {err}"
+            ),
+        })?;
+    }
+    std::fs::rename(source, destination).map_err(|err| ThreadStoreError::Internal {
+        message: format!(
+            "{SPINE_RELOCATION_INVALID_SIDECAR}: failed to move spine {label} from {} to {}: {err}",
+            source.display(),
+            destination.display()
+        ),
+    })
+}
+
+fn counterpart_rollout_path(codex_home: &Path, rollout_path: &Path) -> Option<PathBuf> {
+    let file_name = rollout_path.file_name()?;
+    if rollout_path_is_archived(codex_home, rollout_path) {
+        let (year, month, day) = rollout_date_parts(file_name)?;
+        Some(
+            codex_home
+                .join(SESSIONS_SUBDIR)
+                .join(year)
+                .join(month)
+                .join(day)
+                .join(file_name),
+        )
+    } else {
+        Some(codex_home.join(ARCHIVED_SESSIONS_SUBDIR).join(file_name))
+    }
+}
+
+pub(super) fn repair_spine_artifacts_after_relocation(
+    codex_home: &Path,
+    rollout_path: &Path,
+) -> ThreadStoreResult<()> {
+    let destination_locator = spine_locator_path_for_rollout(rollout_path)?;
+    let destination_default_sidecar = spine_default_sidecar_path_for_rollout(rollout_path)?;
+    if destination_locator.exists() {
+        let base = read_spine_base_locator(&destination_locator)?;
+        let destination_sidecar = destination_locator
+            .parent()
+            .expect("locator has parent")
+            .join(&base);
+        if destination_default_sidecar.exists()
+            && destination_default_sidecar != destination_sidecar
+        {
+            return Err(ThreadStoreError::Internal {
+                message: format!(
+                    "{SPINE_RELOCATION_DESTINATION_CONFLICT}: destination contains locator sidecar {} and default sidecar {}",
+                    destination_sidecar.display(),
+                    destination_default_sidecar.display()
+                ),
+            });
+        }
+        if destination_sidecar.exists() {
+            validate_spine_sidecar(&destination_sidecar)?;
+            return fail_if_counterpart_sidecar_exists(
+                codex_home,
+                rollout_path,
+                &destination_sidecar,
+            );
+        }
+        return repair_missing_destination_sidecar(
+            codex_home,
+            rollout_path,
+            &base,
+            &destination_sidecar,
+        );
+    }
+
+    if destination_default_sidecar.exists() {
+        validate_spine_sidecar(&destination_default_sidecar)?;
+        if let Some(counterpart) = counterpart_rollout_path(codex_home, rollout_path) {
+            let source_locator = spine_locator_path_for_rollout(&counterpart)?;
+            let source_default_sidecar = spine_default_sidecar_path_for_rollout(&counterpart)?;
+            if source_locator.exists() {
+                let base = read_spine_base_locator(&source_locator)?;
+                let destination_from_locator = destination_locator
+                    .parent()
+                    .expect("locator has parent")
+                    .join(&base);
+                if destination_from_locator != destination_default_sidecar {
+                    return Err(ThreadStoreError::Internal {
+                        message: format!(
+                            "{SPINE_RELOCATION_LOCATOR_DRIFT}: counterpart locator {} points to {}, not {}",
+                            source_locator.display(),
+                            destination_from_locator.display(),
+                            destination_default_sidecar.display()
+                        ),
+                    });
+                }
+                let source_sidecar = source_locator
+                    .parent()
+                    .expect("locator has parent")
+                    .join(&base);
+                if source_sidecar.exists() {
+                    return Err(ThreadStoreError::Internal {
+                        message: format!(
+                            "{SPINE_RELOCATION_DESTINATION_CONFLICT}: source and destination both contain spine sidecars: {} and {}",
+                            source_sidecar.display(),
+                            destination_default_sidecar.display()
+                        ),
+                    });
+                }
+                move_path(&source_locator, &destination_locator, "base locator")?;
+                return Ok(());
+            }
+            if source_default_sidecar.exists() {
+                return Err(ThreadStoreError::Internal {
+                    message: format!(
+                        "{SPINE_RELOCATION_DESTINATION_CONFLICT}: source and destination both contain spine sidecars: {} and {}",
+                        source_default_sidecar.display(),
+                        destination_default_sidecar.display()
+                    ),
+                });
+            }
+        }
+        write_spine_base_locator(&destination_locator, &destination_default_sidecar)?;
+        return Ok(());
+    }
+
+    let Some(counterpart) = counterpart_rollout_path(codex_home, rollout_path) else {
+        return Ok(());
+    };
+    let source_locator = spine_locator_path_for_rollout(&counterpart)?;
+    let source_default_sidecar = spine_default_sidecar_path_for_rollout(&counterpart)?;
+    if source_locator.exists() {
+        let base = read_spine_base_locator(&source_locator)?;
+        let source_sidecar = source_locator
+            .parent()
+            .expect("locator has parent")
+            .join(&base);
+        if source_default_sidecar.exists() && source_default_sidecar != source_sidecar {
+            return Err(ThreadStoreError::Internal {
+                message: format!(
+                    "{SPINE_RELOCATION_AMBIGUOUS_CANDIDATE}: counterpart contains locator sidecar {} and default sidecar {}",
+                    source_sidecar.display(),
+                    source_default_sidecar.display()
+                ),
+            });
+        }
+        validate_spine_sidecar(&source_sidecar)?;
+        let destination_sidecar = destination_locator
+            .parent()
+            .expect("locator has parent")
+            .join(&base);
+        move_path(&source_sidecar, &destination_sidecar, "sidecar")?;
+        move_path(&source_locator, &destination_locator, "base locator")?;
+        return Ok(());
+    }
+    if source_default_sidecar.exists() {
+        validate_spine_sidecar(&source_default_sidecar)?;
+        move_path(
+            &source_default_sidecar,
+            &destination_default_sidecar,
+            "sidecar",
+        )?;
+        write_spine_base_locator(&destination_locator, &destination_default_sidecar)?;
+    }
+    Ok(())
+}
+
+fn fail_if_counterpart_sidecar_exists(
+    codex_home: &Path,
+    rollout_path: &Path,
+    destination_sidecar: &Path,
+) -> ThreadStoreResult<()> {
+    let Some(counterpart) = counterpart_rollout_path(codex_home, rollout_path) else {
+        return Ok(());
+    };
+    let source_locator = spine_locator_path_for_rollout(&counterpart)?;
+    let source_default_sidecar = spine_default_sidecar_path_for_rollout(&counterpart)?;
+    if source_locator.exists() {
+        let base = read_spine_base_locator(&source_locator)?;
+        let source_sidecar = source_locator
+            .parent()
+            .expect("locator has parent")
+            .join(base);
+        if source_sidecar.exists() {
+            return Err(ThreadStoreError::Internal {
+                message: format!(
+                    "{SPINE_RELOCATION_DESTINATION_CONFLICT}: source and destination both contain spine sidecars: {} and {}",
+                    source_sidecar.display(),
+                    destination_sidecar.display()
+                ),
+            });
+        }
+    }
+    if source_default_sidecar.exists() {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "{SPINE_RELOCATION_DESTINATION_CONFLICT}: source and destination both contain spine sidecars: {} and {}",
+                source_default_sidecar.display(),
+                destination_sidecar.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn repair_missing_destination_sidecar(
+    codex_home: &Path,
+    rollout_path: &Path,
+    base: &Path,
+    destination_sidecar: &Path,
+) -> ThreadStoreResult<()> {
+    let Some(counterpart) = counterpart_rollout_path(codex_home, rollout_path) else {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "{SPINE_RELOCATION_MISSING_SIDECAR}: no counterpart rollout path for {}",
+                rollout_path.display()
+            ),
+        });
+    };
+    let source_sidecar = counterpart
+        .parent()
+        .expect("counterpart has parent")
+        .join(base);
+    validate_spine_sidecar(&source_sidecar)?;
+    move_path(&source_sidecar, destination_sidecar, "sidecar")
 }
 
 pub(super) fn touch_modified_time(path: &Path) -> std::io::Result<()> {
