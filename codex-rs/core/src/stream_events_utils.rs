@@ -438,7 +438,7 @@ pub(crate) fn last_assistant_message_from_item(
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<String> {
-    if crate::spine::compact::is_spine_ir_item(item) {
+    if crate::spine::compact::is_spine_internal_render_item(item) {
         return None;
     }
 

@@ -312,7 +312,7 @@ fn raw_ordinals_map_serialized_slim_spine_memory_with_runtime_span() {
     let history = vec![text_item("prefix"), memory_item, text_item("tail")];
 
     assert!(
-        is_spine_ir_item(&history[1]),
+        is_spine_internal_render_item(&history[1]),
         "serialized slim memories need a durable runtime marker because message ids are not serialized"
     );
     assert_eq!(
@@ -358,7 +358,7 @@ fn raw_ordinals_treat_plain_final_answer_markdown_memory_as_raw1() {
     ];
 
     assert!(
-        !is_spine_ir_item(&history[3]),
+        !is_spine_internal_render_item(&history[3]),
         "plain final answers must not become synthetic memory items by markdown shape alone"
     );
     assert_eq!(
@@ -386,7 +386,7 @@ fn raw_ordinals_treat_unmarked_markdown_memory_without_span_as_raw1() {
     ];
 
     assert!(
-        !is_spine_ir_item(&history[1]),
+        !is_spine_internal_render_item(&history[1]),
         "bare markdown is not a durable synthetic marker"
     );
     assert_eq!(
@@ -826,8 +826,8 @@ fn legacy_spine_read_only_parser_only_memory_carriers_are_raw1() {
         text_item("tail"),
     ];
 
-    assert!(is_spine_ir_item(&history[1]));
-    assert!(!is_spine_ir_item(&history[2]));
+    assert!(is_spine_internal_render_item(&history[1]));
+    assert!(!is_spine_internal_render_item(&history[2]));
     assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
     assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
     assert_eq!(effective_index_for_raw_ordinal(&history, 2), Some(2));

@@ -990,55 +990,23 @@ enum EffectiveItemSemantics {
     Stop,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderedSpineCarrierClassification {
+    NotCarrier,
+    Invalid,
+    Semantics(EffectiveItemSemantics),
+}
+
 fn classify_effective_item(
     item: &ResponseItem,
     raw_cursor: u64,
     runtime_spans: &[InstalledCompactSpan],
     span_cursor: &mut usize,
 ) -> Option<EffectiveItemSemantics> {
-    if let Some(meta) = parse_spine_ir_metadata(item)
-        && consume_runtime_span_for_legacy(runtime_spans, span_cursor, &meta, raw_cursor)
-    {
-        return Some(EffectiveItemSemantics::Span {
-            cut: meta.fold_start,
-            fold_end: meta.fold_end,
-        });
-    }
-    if let Some(meta) = parse_current_spine_memory_metadata(item) {
-        let span = consume_runtime_span_for_memory(runtime_spans, span_cursor, &meta, raw_cursor)?;
-        return Some(EffectiveItemSemantics::Span {
-            cut: span.cut_ordinal,
-            fold_end: span.fold_end_ordinal,
-        });
-    }
-    if let Some(meta) = parse_legacy_xml_spine_memory_metadata(item) {
-        return match lookup_runtime_span_for_memory(runtime_spans, *span_cursor, &meta, raw_cursor)
-        {
-            RuntimeMemorySpanMatch::Unique { index, span } => {
-                let cut = span.cut_ordinal;
-                let fold_end = span.fold_end_ordinal;
-                *span_cursor = index + 1;
-                Some(EffectiveItemSemantics::Span { cut, fold_end })
-            }
-            RuntimeMemorySpanMatch::Ambiguous => None,
-            RuntimeMemorySpanMatch::NoMatch => Some(EffectiveItemSemantics::Raw1),
-        };
-    }
-    if let Some(meta) = parse_legacy_markdown_spine_memory_metadata(item) {
-        // Bare markdown memories were emitted before the durable marker existed. They are
-        // synthetic only when the compact ledger validates the exact boundary; otherwise
-        // they are ordinary assistant text.
-        return match lookup_runtime_span_for_memory(runtime_spans, *span_cursor, &meta, raw_cursor)
-        {
-            RuntimeMemorySpanMatch::Unique { index, span } => {
-                let cut = span.cut_ordinal;
-                let fold_end = span.fold_end_ordinal;
-                *span_cursor = index + 1;
-                Some(EffectiveItemSemantics::Span { cut, fold_end })
-            }
-            RuntimeMemorySpanMatch::Ambiguous => None,
-            RuntimeMemorySpanMatch::NoMatch => Some(EffectiveItemSemantics::Raw1),
-        };
+    match classify_runtime_span_backed_spine_carrier(item, raw_cursor, runtime_spans, span_cursor) {
+        RenderedSpineCarrierClassification::Semantics(semantics) => return Some(semantics),
+        RenderedSpineCarrierClassification::Invalid => return None,
+        RenderedSpineCarrierClassification::NotCarrier => {}
     }
     if is_spine_handoff_item(item) || parse_spine_initial_context_item(item).is_some() {
         return Some(EffectiveItemSemantics::Zero);
@@ -1047,6 +1015,69 @@ fn classify_effective_item(
         return Some(EffectiveItemSemantics::Stop);
     }
     Some(EffectiveItemSemantics::Raw1)
+}
+
+fn classify_runtime_span_backed_spine_carrier(
+    item: &ResponseItem,
+    raw_cursor: u64,
+    runtime_spans: &[InstalledCompactSpan],
+    span_cursor: &mut usize,
+) -> RenderedSpineCarrierClassification {
+    // Rendered Spine memory is a bridge carrier. It may collapse raw ordinals
+    // only when the runtime compact ledger supplies and validates the span.
+    if let Some(meta) = parse_current_spine_memory_metadata(item) {
+        return match consume_runtime_span_for_memory(runtime_spans, span_cursor, &meta, raw_cursor)
+        {
+            Some(span) => {
+                RenderedSpineCarrierClassification::Semantics(EffectiveItemSemantics::Span {
+                    cut: span.cut_ordinal,
+                    fold_end: span.fold_end_ordinal,
+                })
+            }
+            None => RenderedSpineCarrierClassification::Invalid,
+        };
+    }
+    if let Some(meta) = parse_spine_ir_metadata(item) {
+        if consume_runtime_span_for_legacy(runtime_spans, span_cursor, &meta, raw_cursor) {
+            return RenderedSpineCarrierClassification::Semantics(EffectiveItemSemantics::Span {
+                cut: meta.fold_start,
+                fold_end: meta.fold_end,
+            });
+        }
+        return RenderedSpineCarrierClassification::Semantics(EffectiveItemSemantics::Raw1);
+    }
+    if let Some(meta) = parse_legacy_xml_spine_memory_metadata(item) {
+        return classify_legacy_memory_carrier(runtime_spans, span_cursor, &meta, raw_cursor);
+    }
+    if let Some(meta) = parse_legacy_markdown_spine_memory_metadata(item) {
+        return classify_legacy_memory_carrier(runtime_spans, span_cursor, &meta, raw_cursor);
+    }
+    RenderedSpineCarrierClassification::NotCarrier
+}
+
+fn classify_legacy_memory_carrier(
+    runtime_spans: &[InstalledCompactSpan],
+    span_cursor: &mut usize,
+    meta: &SpineMemoryMetadata,
+    raw_cursor: u64,
+) -> RenderedSpineCarrierClassification {
+    // Legacy XML and bare markdown memories predate the durable marker. Without
+    // matching runtime span evidence they remain ordinary visible text.
+    match lookup_runtime_span_for_memory(runtime_spans, *span_cursor, meta, raw_cursor) {
+        RuntimeMemorySpanMatch::Unique { index, span } => {
+            let cut = span.cut_ordinal;
+            let fold_end = span.fold_end_ordinal;
+            *span_cursor = index + 1;
+            RenderedSpineCarrierClassification::Semantics(EffectiveItemSemantics::Span {
+                cut,
+                fold_end,
+            })
+        }
+        RuntimeMemorySpanMatch::Ambiguous => RenderedSpineCarrierClassification::Invalid,
+        RuntimeMemorySpanMatch::NoMatch => {
+            RenderedSpineCarrierClassification::Semantics(EffectiveItemSemantics::Raw1)
+        }
+    }
 }
 
 pub(crate) fn raw_ordinal_for_effective_index_with_spans(
@@ -1300,7 +1331,9 @@ pub(crate) fn effective_index_for_raw_ordinal_with_spans(
     (target_raw_ordinal == raw_cursor).then_some(history.len())
 }
 
-pub(crate) fn is_spine_ir_item(item: &ResponseItem) -> bool {
+pub(crate) fn is_spine_internal_render_item(item: &ResponseItem) -> bool {
+    // Host/UI filtering only. This is not an admissibility check for mutable
+    // compact planning; raw/effective mapping still requires runtime span data.
     parse_spine_ir_metadata(item).is_some() || parse_spine_memory_metadata(item).is_some()
 }
 
