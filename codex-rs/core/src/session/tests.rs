@@ -214,9 +214,9 @@ fn assistant_message(text: &str) -> ResponseItem {
 fn spine_function_call(call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
-        name: "spine".to_string(),
-        namespace: None,
-        arguments: r#"{"op":"open"}"#.to_string(),
+        name: crate::spine::SPINE_TOOL_OPEN.to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
         call_id: call_id.to_string(),
     }
 }
@@ -224,9 +224,9 @@ fn spine_function_call(call_id: &str) -> ResponseItem {
 fn spine_next_function_call(call_id: &str, summary: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
-        name: "spine".to_string(),
-        namespace: None,
-        arguments: format!(r#"{{"op":"next","summary":"{summary}"}}"#),
+        name: crate::spine::SPINE_TOOL_NEXT.to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: format!(r#"{{"summary":"{summary}"}}"#),
         call_id: call_id.to_string(),
     }
 }
@@ -1688,24 +1688,15 @@ async fn spine_resume_detects_latest_non_spine_compaction() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn spine_resume_detects_existing_spine_history_from_rollout() -> anyhow::Result<()> {
+async fn spine_resume_detects_existing_spine_compaction_from_rollout() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
     write_rollout_items_for_test(
         &rollout_path,
-        &[
-            RolloutItem::ResponseItem(ResponseItem::FunctionCall {
-                id: None,
-                name: "spine".to_string(),
-                namespace: None,
-                arguments: "{}".to_string(),
-                call_id: "call-spine".to_string(),
-            }),
-            RolloutItem::Compacted(CompactedItem {
-                message: "Spine compacted 1 [0, 1)".to_string(),
-                replacement_history: Some(vec![user_message("spine ir")]),
-            }),
-        ],
+        &[RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted 1 [0, 1)".to_string(),
+            replacement_history: Some(vec![user_message("spine memory")]),
+        })],
     )?;
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
@@ -1748,13 +1739,7 @@ async fn spine_resume_detects_existing_namespaced_spine_history_from_rollout() -
 async fn initial_spine_scan_derives_resume_state_from_one_rollout() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    let next_call = ResponseItem::FunctionCall {
-        id: None,
-        name: "spine".to_string(),
-        namespace: None,
-        arguments: r#"{"op":"next","summary":"rolled back next"}"#.to_string(),
-        call_id: "next-1".to_string(),
-    };
+    let next_call = spine_next_function_call("next-1", "rolled back next");
     write_rollout_items_for_test(
         &rollout_path,
         &[
@@ -3549,13 +3534,7 @@ async fn spine_resume_projection_rollback_projection_epoch_repairs_missing_reset
 -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    let next_call = ResponseItem::FunctionCall {
-        id: None,
-        name: "spine".to_string(),
-        namespace: None,
-        arguments: r#"{"op":"next","summary":"rolled back next"}"#.to_string(),
-        call_id: "next-1".to_string(),
-    };
+    let next_call = spine_next_function_call("next-1", "rolled back next");
     let rollout_items = vec![
         RolloutItem::ResponseItem(user_message("turn 1 user")),
         RolloutItem::ResponseItem(spine_function_call("open-1")),

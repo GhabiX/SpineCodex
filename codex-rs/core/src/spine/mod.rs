@@ -31,12 +31,6 @@ pub(crate) fn is_spine_tree_tool(name: &str, namespace: Option<&str>) -> bool {
     namespace == Some(SPINE_NAMESPACE) && name == SPINE_TOOL_TREE
 }
 
-pub(crate) fn is_legacy_spine_transition_tool(name: &str, namespace: Option<&str>) -> bool {
-    namespace.is_none() && name == "spine"
-}
-
 pub(crate) fn is_spine_history_tool(name: &str, namespace: Option<&str>) -> bool {
-    is_legacy_spine_transition_tool(name, namespace)
-        || is_spine_transition_tool(name, namespace)
-        || is_spine_tree_tool(name, namespace)
+    is_spine_transition_tool(name, namespace) || is_spine_tree_tool(name, namespace)
 }

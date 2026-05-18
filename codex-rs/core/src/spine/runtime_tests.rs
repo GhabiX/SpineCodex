@@ -133,9 +133,9 @@ fn plan_args_with_task_projection(
 fn spine_call(call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
-        name: "spine".to_string(),
-        namespace: None,
-        arguments: r#"{"op":"open"}"#.to_string(),
+        name: crate::spine::SPINE_TOOL_OPEN.to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
         call_id: call_id.to_string(),
     }
 }

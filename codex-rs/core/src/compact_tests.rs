@@ -234,9 +234,9 @@ async fn spine_native_text_outcome_installs_root_epoch_memory() {
     let raw_items = vec![
         ResponseItem::FunctionCall {
             id: None,
-            name: "spine".to_string(),
-            namespace: None,
-            arguments: r#"{"op":"open"}"#.to_string(),
+            name: crate::spine::SPINE_TOOL_OPEN.to_string(),
+            namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+            arguments: "{}".to_string(),
             call_id: "open-1".to_string(),
         },
         ResponseItem::FunctionCallOutput {

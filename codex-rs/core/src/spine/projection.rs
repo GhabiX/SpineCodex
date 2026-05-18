@@ -44,8 +44,6 @@ pub(crate) enum SpineProjectionError {
         #[source]
         source: serde_json::Error,
     },
-    #[error("unknown legacy spine operation {op:?} for {call_id}")]
-    UnknownLegacyOp { call_id: String, op: String },
     #[error("spine projection raw ordinal overflow")]
     RawOrdinalOverflow,
     #[error("spine projection saw duplicate pending transition {call_id}")]
@@ -281,13 +279,6 @@ struct NamespacedCloseArgs {
     _instruction: (),
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacySpineArgs {
-    op: String,
-    summary: Option<String>,
-}
-
 fn spine_transition_from_response_item(
     item: &ResponseItem,
 ) -> Result<Option<PendingTransition>, SpineProjectionError> {
@@ -348,32 +339,6 @@ fn spine_transition_from_response_item(
             op,
             summary,
             child_summary,
-        }));
-    }
-
-    if namespace.is_none() && name == "spine" {
-        let args = serde_json::from_str::<LegacySpineArgs>(arguments).map_err(|source| {
-            SpineProjectionError::ArgsJson {
-                call_id: call_id.clone(),
-                source,
-            }
-        })?;
-        let op = match args.op.as_str() {
-            "open" => SpineOperation::Open,
-            "next" => SpineOperation::Next,
-            "close" => SpineOperation::Close,
-            _ => {
-                return Err(SpineProjectionError::UnknownLegacyOp {
-                    call_id: call_id.clone(),
-                    op: args.op,
-                });
-            }
-        };
-        return Ok(Some(PendingTransition {
-            call_id: call_id.clone(),
-            op,
-            summary: args.summary,
-            child_summary: None,
         }));
     }
 

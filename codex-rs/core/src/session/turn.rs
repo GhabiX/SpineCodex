@@ -2072,8 +2072,7 @@ impl SpineToolOrderGuard {
                 namespace,
                 call_id,
                 ..
-            } if crate::spine::is_spine_transition_tool(name, namespace.as_deref())
-                || crate::spine::is_legacy_spine_transition_tool(name, namespace.as_deref()) =>
+            } if crate::spine::is_spine_transition_tool(name, namespace.as_deref()) =>
             {
                 SpineToolKind::Spine {
                     call_id: call_id.clone(),
@@ -2764,13 +2763,20 @@ mod spine_tool_order_tests {
     }
 
     #[test]
-    fn legacy_spine_transition_is_still_guarded_for_resume_compatibility() {
+    fn unnamespaced_spine_call_is_ordered_as_other_tool() {
         let mut guard = SpineToolOrderGuard::new(true);
 
         assert_eq!(
-            guard.observe(&function_call("spine", "call-spine")),
+            guard.observe(&function_call("spine", "call-plain-spine")),
             SpineToolOrderOutcome::Allow {
-                drain_after_dispatch: true,
+                drain_after_dispatch: false,
+            }
+        );
+        assert_eq!(
+            guard.observe(&spine_function_call("open", "call-spine")),
+            SpineToolOrderOutcome::Reject {
+                call_id: "call-spine".to_string(),
+                message: "spine must be the first tool call in a model response".to_string(),
             }
         );
     }

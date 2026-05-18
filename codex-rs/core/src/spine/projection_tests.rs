@@ -54,7 +54,7 @@ fn spine_call_with_args(call_id: &str, op: &str, arguments: &str) -> RolloutItem
     })
 }
 
-fn legacy_spine_call(call_id: &str, arguments: &str) -> RolloutItem {
+fn unnamespaced_spine_call(call_id: &str, arguments: &str) -> RolloutItem {
     RolloutItem::ResponseItem(ResponseItem::FunctionCall {
         id: None,
         name: "spine".to_string(),
@@ -399,20 +399,14 @@ fn projection_root_epoch_compact_seals_archived_subtree() {
 }
 
 #[test]
-fn legacy_spine_transition_is_still_guarded_for_resume_compatibility() {
+fn unnamespaced_spine_call_is_ignored_by_projection() {
     let projection = project_spine_state_from_rollout(&[
         user_message("start"),
-        legacy_spine_call("legacy-open", r#"{"op":"open"}"#),
-        call_output("legacy-open"),
+        unnamespaced_spine_call("plain-spine", r#"{"op":"open"}"#),
+        call_output("plain-spine"),
     ])
-    .expect("legacy transition should project for resume compatibility");
+    .expect("project");
 
-    assert_eq!(projection.state.cursor(), &id(&[1, 1, 1]));
-
-    let err = project_spine_state_from_rollout(&[
-        user_message("start"),
-        legacy_spine_call("legacy-bad", r#"{"op":"tree","summary":"bad"}"#),
-    ])
-    .expect_err("unknown legacy transition op must remain guarded");
-    assert!(matches!(err, SpineProjectionError::UnknownLegacyOp { .. }));
+    assert_eq!(projection.state.cursor(), &id(&[1, 1]));
+    assert_eq!(projection.response_item_count, 3);
 }
