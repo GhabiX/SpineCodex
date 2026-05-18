@@ -290,6 +290,57 @@ fn root_meminstall_survivor_matrix() {
 }
 
 #[test]
+fn runtime_span_authority_policy_table() {
+    use RuntimeSpanAuthorityAdmission::*;
+
+    let cases = [
+        (false, false, false, NoSpan),
+        (false, true, false, InvalidHostCheckpointWithoutMemInstall),
+        (false, true, true, UseLegacyCompactInstalledSpan),
+        (
+            false,
+            false,
+            true,
+            InvalidCompactInstalledWithoutHostCheckpoint,
+        ),
+        (true, false, false, DeferCommittedSpanUntilHostCheckpoint),
+        (true, true, false, PoisonCommittedSpanWithoutBridgeTerminal),
+        (true, true, true, UseCommittedInstalledSpan),
+        (
+            true,
+            false,
+            true,
+            InvalidCompactInstalledWithoutHostCheckpoint,
+        ),
+    ];
+
+    for (mem_install_committed, host_checkpoint_materialized, compact_installed, expected) in cases
+    {
+        assert_eq!(
+            classify_runtime_span_authority(
+                mem_install_committed,
+                host_checkpoint_materialized,
+                compact_installed,
+            ),
+            expected,
+            "mem_install_committed={mem_install_committed} host_checkpoint_materialized={host_checkpoint_materialized} compact_installed={compact_installed}"
+        );
+    }
+}
+
+#[test]
+fn runtime_span_authority_policy_blocks_direct_p5_switch_for_committed_only() {
+    assert_eq!(
+        classify_runtime_span_authority(true, false, false,),
+        RuntimeSpanAuthorityAdmission::DeferCommittedSpanUntilHostCheckpoint
+    );
+    assert_eq!(
+        classify_runtime_span_authority(true, true, false,),
+        RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal
+    );
+}
+
+#[test]
 fn root_meminstall_survivor_matrix_validates_store_evidence() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
@@ -2290,6 +2341,11 @@ fn meminstall_span_source_shadow_audit_reports_committed_only_span() {
 
     assert_eq!(error.invariant(), INV_MEM_EVIDENCE);
     assert!(error.to_string().contains("compact-committed-only"));
+    assert!(
+        error
+            .to_string()
+            .contains("DeferCommittedSpanUntilHostCheckpoint")
+    );
 }
 
 #[test]

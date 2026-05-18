@@ -2908,6 +2908,50 @@ fn classify_root_meminstall_survivor(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeSpanAuthorityAdmission {
+    NoSpan,
+    UseLegacyCompactInstalledSpan,
+    UseCommittedInstalledSpan,
+    DeferCommittedSpanUntilHostCheckpoint,
+    PoisonCommittedSpanWithoutBridgeTerminal,
+    InvalidHostCheckpointWithoutMemInstall,
+    InvalidCompactInstalledWithoutHostCheckpoint,
+}
+
+/// Presence-only gate for a future runtime span authority switch.
+///
+/// This does not prove that two concrete span sources are equal. Callers still
+/// need verified body/span evidence before admitting a concrete `Mem` span into
+/// runtime bridge mapping.
+pub(crate) fn classify_runtime_span_authority(
+    mem_install_committed: bool,
+    host_checkpoint_materialized: bool,
+    compact_installed: bool,
+) -> RuntimeSpanAuthorityAdmission {
+    match (
+        mem_install_committed,
+        host_checkpoint_materialized,
+        compact_installed,
+    ) {
+        (false, false, false) => RuntimeSpanAuthorityAdmission::NoSpan,
+        (false, true, false) => {
+            RuntimeSpanAuthorityAdmission::InvalidHostCheckpointWithoutMemInstall
+        }
+        (false, true, true) => RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan,
+        (false, false, true) | (true, false, true) => {
+            RuntimeSpanAuthorityAdmission::InvalidCompactInstalledWithoutHostCheckpoint
+        }
+        (true, false, false) => {
+            RuntimeSpanAuthorityAdmission::DeferCommittedSpanUntilHostCheckpoint
+        }
+        (true, true, false) => {
+            RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal
+        }
+        (true, true, true) => RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan,
+    }
+}
+
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;

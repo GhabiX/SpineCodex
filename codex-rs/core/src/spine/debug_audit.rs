@@ -16,6 +16,7 @@ use super::segment::validate_future_live_boundaries;
 use super::state::SpineState;
 use super::store::InstalledCompactSpan;
 use super::store::SpineSidecarStore;
+use super::store::classify_runtime_span_authority;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashSet;
@@ -277,12 +278,20 @@ pub(crate) fn audit_meminstall_span_source_equivalence(
     if installed == committed {
         return Ok(());
     }
+    // The shadow audit has no independent durable host-checkpoint marker yet.
+    // For diagnostics only, CompactInstalled presence is the current proxy for
+    // both host checkpoint materialization and bridge-terminal publication.
+    let admission = classify_runtime_span_authority(
+        !committed.is_empty(),
+        !installed.is_empty(),
+        !installed.is_empty(),
+    );
     Err(RuntimeDebugAuditError::failed(
         RuntimeDebugBoundary::AfterCompactInstall,
         INV_MEM_EVIDENCE,
         locator,
         format!(
-            "CompactInstalled span source did not match MemInstallCommitted span source: CompactInstalled={installed:?}; MemInstallCommitted={committed:?}"
+            "CompactInstalled span source did not match MemInstallCommitted span source: admission={admission:?}; CompactInstalled={installed:?}; MemInstallCommitted={committed:?}"
         ),
     ))
 }
