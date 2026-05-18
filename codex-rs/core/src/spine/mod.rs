@@ -5,6 +5,7 @@ pub(crate) mod ids;
 pub(crate) mod instructions;
 pub(crate) mod mem_install;
 pub(crate) mod plan_bridge;
+pub(crate) mod plan_overlay;
 pub(crate) mod project_pi;
 pub(crate) mod projection;
 pub(crate) mod projection_epoch;
