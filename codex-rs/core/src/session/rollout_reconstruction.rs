@@ -239,7 +239,6 @@ impl Session {
         }
 
         let mut history = ContextManager::new();
-        let mut saw_legacy_compaction_without_replacement_history = false;
         let rollout_suffix_start = if let Some(base) = base {
             history.replace(base.replacement_history.to_vec());
             base.suffix_start
@@ -263,22 +262,10 @@ impl Session {
                         // should stop before any compaction that has Some replacement_history
                         history.replace(replacement_history.clone());
                     } else {
-                        saw_legacy_compaction_without_replacement_history = true;
-                        // Legacy rollouts without `replacement_history` should rebuild the
-                        // historical TurnContext at the correct insertion point from persisted
-                        // `TurnContextItem`s. These are rare enough that we currently just clear
-                        // `reference_context_item`, reinject canonical context at the end of the
-                        // resumed conversation, and accept the temporary out-of-distribution
-                        // prompt shape.
-                        // TODO(ccunningham): if we drop support for None replacement_history compaction items,
-                        // we can get rid of this second loop entirely and just build `history` directly in the first loop.
-                        let user_messages = collect_user_messages(history.raw_items());
-                        let rebuilt = compact::build_compacted_history(
-                            Vec::new(),
-                            &user_messages,
-                            &compacted.message,
-                        );
-                        history.replace(rebuilt);
+                        // Old compaction checkpoints without replacement_history are unsupported.
+                        // Fail closed: do not revive folded raw items and do not synthesize a
+                        // guessed summary-shaped prompt.
+                        history.replace(Vec::new());
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -296,12 +283,6 @@ impl Session {
                 Some(*turn_reference_context_item)
             }
         };
-        let reference_context_item = if saw_legacy_compaction_without_replacement_history {
-            None
-        } else {
-            reference_context_item
-        };
-
         RolloutReconstruction {
             history: history.raw_items().to_vec(),
             previous_turn_settings,
