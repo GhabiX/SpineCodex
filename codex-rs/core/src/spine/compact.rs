@@ -1,3 +1,6 @@
+use super::candidate_mem_plan::CandidateMem;
+use super::candidate_mem_plan::CandidateMemCover;
+use super::candidate_mem_plan::plan_candidate_mem_cover;
 use super::host_bridge::HostBridgeProjection;
 use super::host_bridge::SPINE_INITIAL_CONTEXT_CLOSE_TAG;
 use super::host_bridge::SPINE_INITIAL_CONTEXT_OPEN_TAG;
@@ -8,7 +11,6 @@ use super::ids::NodeId;
 use super::segment::RawSpan;
 use super::segment::Segment;
 use super::segment::SegmentArtifacts;
-use super::segment::canonical_cover;
 use super::segment::span;
 use super::store::InstalledCompactSpan;
 use super::store::SpineOperation;
@@ -320,14 +322,14 @@ pub(crate) fn build_suffix_replacement_history_from_pi(
         start: boundary.cut_ordinal,
         end: boundary.fold_end_ordinal,
     };
-    let mut artifacts = artifacts_from_runtime_spans(runtime_spans);
-    artifacts.insert(compact_id.to_string(), new_span);
-    let mut compact_ids = runtime_spans
-        .iter()
-        .map(|span| span.compact_id.as_str())
-        .collect::<Vec<_>>();
-    compact_ids.push(compact_id);
-    let mut pi = canonical_cover(raw_len, compact_ids, &artifacts).map_err(pi_render_error)?;
+    let candidate = CandidateMem::new(
+        compact_id.to_string(),
+        boundary.node_id.clone(),
+        boundary.op,
+        new_span,
+    );
+    let CandidateMemCover { mut pi, artifacts } =
+        plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(pi_render_error)?;
     let note_items = note_items
         .into_iter()
         .enumerate()
@@ -402,20 +404,15 @@ pub(crate) fn build_root_archive_replacement_history_for_compact_id(
         .ok_or_else(|| {
             CodexErr::Fatal("spine root archive render(Pi) could not map history end".to_string())
         })?;
-    let mut artifacts = artifacts_from_runtime_spans(runtime_spans);
-    artifacts.insert(
+    let candidate = CandidateMem::anonymous(
         root_compact_id.to_string(),
         RawSpan {
             start: archive_cut_ordinal,
             end: fold_end_ordinal,
         },
     );
-    let mut compact_ids = runtime_spans
-        .iter()
-        .map(|span| span.compact_id.as_str())
-        .collect::<Vec<_>>();
-    compact_ids.push(root_compact_id);
-    let mut pi = canonical_cover(raw_len, compact_ids, &artifacts).map_err(pi_render_error)?;
+    let CandidateMemCover { mut pi, artifacts } =
+        plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(pi_render_error)?;
     let note_items = initial_context_items
         .into_iter()
         .enumerate()
@@ -541,21 +538,6 @@ pub(crate) fn render_pi_bridge_items(
         }
     }
     Ok(rendered)
-}
-
-fn artifacts_from_runtime_spans(runtime_spans: &[InstalledCompactSpan]) -> SegmentArtifacts {
-    runtime_spans
-        .iter()
-        .map(|span| {
-            (
-                span.compact_id.clone(),
-                RawSpan {
-                    start: span.cut_ordinal,
-                    end: span.fold_end_ordinal,
-                },
-            )
-        })
-        .collect()
 }
 
 fn memory_items_from_runtime_spans(

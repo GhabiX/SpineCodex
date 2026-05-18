@@ -182,6 +182,9 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::spine::candidate_mem_plan::CandidateMem;
+use crate::spine::candidate_mem_plan::CandidateMemCover;
+use crate::spine::candidate_mem_plan::plan_candidate_mem_cover;
 use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
 use crate::spine::compact::SpineCompactBoundary;
 use crate::spine::compact::build_root_archive_replacement_history;
@@ -201,6 +204,7 @@ use crate::spine::project_pi::ProjectInput;
 use crate::spine::project_pi::ProjectMemInstall;
 use crate::spine::project_pi::ProjectMemRejectionReason;
 use crate::spine::project_pi::project_pi;
+use crate::spine::segment::RawSpan;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
 use crate::spine::session_integration::record_plan_update_snapshot;
@@ -4583,37 +4587,21 @@ fn validate_suffix_candidate_segment_cover(
     compact_id: &str,
     state: &crate::spine::state::SpineState,
 ) -> CodexResult<()> {
-    let mut artifacts = runtime_spans
-        .iter()
-        .map(|span| {
-            (
-                span.compact_id.clone(),
-                crate::spine::segment::RawSpan {
-                    start: span.cut_ordinal,
-                    end: span.fold_end_ordinal,
-                },
-            )
-        })
-        .collect::<crate::spine::segment::SegmentArtifacts>();
-    artifacts.insert(
+    let candidate = CandidateMem::new(
         compact_id.to_string(),
-        crate::spine::segment::RawSpan {
+        boundary.node_id.clone(),
+        boundary.op,
+        RawSpan {
             start: boundary.cut_ordinal,
             end: boundary.fold_end_ordinal,
         },
     );
-    let mut compact_ids = runtime_spans
-        .iter()
-        .map(|span| span.compact_id.as_str())
-        .collect::<Vec<_>>();
-    compact_ids.push(compact_id);
-    let pi = crate::spine::segment::canonical_cover(raw_len, compact_ids, &artifacts).map_err(
-        |err| {
+    let CandidateMemCover { pi, artifacts } =
+        plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(|err| {
             CodexErr::Fatal(format!(
                 "suffix MemInstall segment cover rejected candidate Mem {compact_id}: {err}"
             ))
-        },
-    )?;
+        })?;
     let live_starts = visible_live_starts_for_segment_plan(state)?;
     crate::spine::segment::validate_future_live_boundaries(&pi, &artifacts, &live_starts).map_err(
         |err| {
@@ -4656,37 +4644,21 @@ fn validate_root_mem_install_segment_plan(
         .ok_or_else(|| {
             CodexErr::Fatal("root MemInstall segment plan could not map history end".to_string())
         })?;
-    let mut artifacts = runtime_spans
-        .iter()
-        .map(|span| {
-            (
-                span.compact_id.clone(),
-                crate::spine::segment::RawSpan {
-                    start: span.cut_ordinal,
-                    end: span.fold_end_ordinal,
-                },
-            )
-        })
-        .collect::<crate::spine::segment::SegmentArtifacts>();
-    artifacts.insert(
+    let candidate = CandidateMem::new(
         compact_id.to_string(),
-        crate::spine::segment::RawSpan {
+        boundary.node_id.clone(),
+        boundary.op,
+        RawSpan {
             start: boundary.cut_ordinal,
             end: boundary.fold_end_ordinal,
         },
     );
-    let mut compact_ids = runtime_spans
-        .iter()
-        .map(|span| span.compact_id.as_str())
-        .collect::<Vec<_>>();
-    compact_ids.push(compact_id);
-    let pi = crate::spine::segment::canonical_cover(raw_len, compact_ids, &artifacts).map_err(
-        |err| {
+    let CandidateMemCover { pi, artifacts } =
+        plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(|err| {
             CodexErr::Fatal(format!(
                 "root MemInstall segment cover rejected candidate Mem {compact_id}: {err}"
             ))
-        },
-    )?;
+        })?;
     crate::spine::segment::validate_future_live_boundaries(
         &pi,
         &artifacts,
