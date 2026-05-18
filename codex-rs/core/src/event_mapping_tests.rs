@@ -328,7 +328,7 @@ fn parses_agent_message() {
 }
 
 #[test]
-fn skips_generated_spine_ir_assistant_message() {
+fn parses_legacy_spine_ir_assistant_message_as_plain_text() {
     let item = ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
@@ -338,7 +338,15 @@ fn skips_generated_spine_ir_assistant_message() {
         phase: None,
     };
 
-    assert!(parse_turn_item(&item).is_none());
+    let turn_item = parse_turn_item(&item).expect("expected plain assistant message");
+
+    let TurnItem::AgentMessage(message) = turn_item else {
+        panic!("expected agent message");
+    };
+    let Some(AgentMessageContent::Text { text }) = message.content.first() else {
+        panic!("expected text content");
+    };
+    assert!(text.starts_with("<spine_ir "));
 }
 
 #[test]
@@ -347,8 +355,7 @@ fn skips_generated_spine_memory_assistant_message() {
         id: Some("spine-memory:1:next".to_string()),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: "## Spine Memory\n\nNode: 1\nOperation: next\nSummary: leaf\n\nfacts"
-                .to_string(),
+            text: "## Spine Memory\n\nNode: 1\nOperation: next\nSummary: leaf\n\nfacts".to_string(),
         }],
         phase: None,
     };
@@ -388,19 +395,26 @@ fn parses_plain_final_answer_markdown_spine_memory_assistant_message() {
 }
 
 #[test]
-fn skips_legacy_generated_spine_memory_assistant_message() {
+fn parses_legacy_xml_spine_memory_assistant_message_as_plain_text() {
     let item = ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text:
-                "<spine_memory node=\"1\" op=\"next\">\nSummary: leaf\n\nfacts\n</spine_memory>"
-                    .to_string(),
+            text: "<spine_memory node=\"1\" op=\"next\">\nSummary: leaf\n\nfacts\n</spine_memory>"
+                .to_string(),
         }],
         phase: None,
     };
 
-    assert!(parse_turn_item(&item).is_none());
+    let turn_item = parse_turn_item(&item).expect("expected plain assistant message");
+
+    let TurnItem::AgentMessage(message) = turn_item else {
+        panic!("expected agent message");
+    };
+    let Some(AgentMessageContent::Text { text }) = message.content.first() else {
+        panic!("expected text content");
+    };
+    assert!(text.starts_with("<spine_memory "));
 }
 
 #[test]

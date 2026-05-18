@@ -1037,47 +1037,7 @@ fn classify_runtime_span_backed_spine_carrier(
             None => RenderedSpineCarrierClassification::Invalid,
         };
     }
-    if let Some(meta) = parse_spine_ir_metadata(item) {
-        if consume_runtime_span_for_legacy(runtime_spans, span_cursor, &meta, raw_cursor) {
-            return RenderedSpineCarrierClassification::Semantics(EffectiveItemSemantics::Span {
-                cut: meta.fold_start,
-                fold_end: meta.fold_end,
-            });
-        }
-        return RenderedSpineCarrierClassification::Semantics(EffectiveItemSemantics::Raw1);
-    }
-    if let Some(meta) = parse_legacy_xml_spine_memory_metadata(item) {
-        return classify_legacy_memory_carrier(runtime_spans, span_cursor, &meta, raw_cursor);
-    }
-    if let Some(meta) = parse_legacy_markdown_spine_memory_metadata(item) {
-        return classify_legacy_memory_carrier(runtime_spans, span_cursor, &meta, raw_cursor);
-    }
     RenderedSpineCarrierClassification::NotCarrier
-}
-
-fn classify_legacy_memory_carrier(
-    runtime_spans: &[InstalledCompactSpan],
-    span_cursor: &mut usize,
-    meta: &SpineMemoryMetadata,
-    raw_cursor: u64,
-) -> RenderedSpineCarrierClassification {
-    // Legacy XML and bare markdown memories predate the durable marker. Without
-    // matching runtime span evidence they remain ordinary visible text.
-    match lookup_runtime_span_for_memory(runtime_spans, *span_cursor, meta, raw_cursor) {
-        RuntimeMemorySpanMatch::Unique { index, span } => {
-            let cut = span.cut_ordinal;
-            let fold_end = span.fold_end_ordinal;
-            *span_cursor = index + 1;
-            RenderedSpineCarrierClassification::Semantics(EffectiveItemSemantics::Span {
-                cut,
-                fold_end,
-            })
-        }
-        RuntimeMemorySpanMatch::Ambiguous => RenderedSpineCarrierClassification::Invalid,
-        RuntimeMemorySpanMatch::NoMatch => {
-            RenderedSpineCarrierClassification::Semantics(EffectiveItemSemantics::Raw1)
-        }
-    }
 }
 
 pub(crate) fn raw_ordinal_for_effective_index_with_spans(
@@ -1205,55 +1165,6 @@ fn parse_spine_initial_context_item(item: &ResponseItem) -> Option<Vec<ResponseI
     serde_json::from_str(body).ok()
 }
 
-#[cfg(test)]
-pub(crate) fn render_spine_ir_item(
-    node_id: &NodeId,
-    op: SpineOperation,
-    summary: &str,
-    base_path: &Path,
-    memory_path: &Path,
-    memory_body: &str,
-    fold_start: u64,
-    fold_end: u64,
-) -> ResponseItem {
-    let synthetic_id = spine_ir_synthetic_id(node_id, op, fold_start, fold_end);
-    ResponseItem::Message {
-        id: Some(synthetic_id.clone()),
-        role: "assistant".to_string(),
-        content: vec![ContentItem::OutputText {
-            text: format!(
-                "<spine_ir id=\"{}\" node=\"{}\" op=\"{}\" runtime_generated=\"true\" fold_start=\"{}\" fold_end=\"{}\">\nSummary: {}\nBase: {}\nMemory path: {}\n\n<memory>\n{}\n</memory>\n</spine_ir>",
-                synthetic_id,
-                node_id,
-                op_label(op),
-                fold_start,
-                fold_end,
-                summary,
-                base_path.display(),
-                memory_path.display(),
-                memory_body
-            ),
-        }],
-        phase: None,
-    }
-}
-
-#[cfg(test)]
-fn spine_ir_synthetic_id(
-    node_id: &NodeId,
-    op: SpineOperation,
-    fold_start: u64,
-    fold_end: u64,
-) -> String {
-    format!(
-        "spine-ir:{}:{}-{}:{}",
-        node_id,
-        fold_start,
-        fold_end,
-        op_label(op)
-    )
-}
-
 pub(crate) fn render_context_compacted_outline(
     scope_node_id: &NodeId,
     scope_summary: &str,
@@ -1334,43 +1245,13 @@ pub(crate) fn effective_index_for_raw_ordinal_with_spans(
 pub(crate) fn is_spine_internal_render_item(item: &ResponseItem) -> bool {
     // Host/UI filtering only. This is not an admissibility check for mutable
     // compact planning; raw/effective mapping still requires runtime span data.
-    parse_spine_ir_metadata(item).is_some() || parse_spine_memory_metadata(item).is_some()
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SpineIrMetadata {
-    fold_start: u64,
-    fold_end: u64,
+    parse_current_spine_memory_metadata(item).is_some()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SpineMemoryMetadata {
     node_id: NodeId,
     op: SpineOperation,
-}
-
-fn consume_runtime_span_for_legacy(
-    runtime_spans: &[InstalledCompactSpan],
-    span_cursor: &mut usize,
-    meta: &SpineIrMetadata,
-    raw_cursor: u64,
-) -> bool {
-    if meta.fold_start != raw_cursor {
-        return false;
-    }
-    if let Some((index, _)) =
-        runtime_spans
-            .iter()
-            .enumerate()
-            .skip(*span_cursor)
-            .find(|(_, span)| {
-                span.cut_ordinal == meta.fold_start && span.fold_end_ordinal == meta.fold_end
-            })
-    {
-        *span_cursor = index + 1;
-        return true;
-    }
-    false
 }
 
 fn runtime_span_matches_memory(span: &InstalledCompactSpan, meta: &SpineMemoryMetadata) -> bool {
@@ -1422,46 +1303,6 @@ fn consume_runtime_span_for_memory<'a>(
     }
 }
 
-fn parse_spine_ir_metadata(item: &ResponseItem) -> Option<SpineIrMetadata> {
-    let (item_id, text) = match item {
-        ResponseItem::Message {
-            id, role, content, ..
-        } if matches!(role.as_str(), "assistant" | "user") => (
-            id.as_deref(),
-            content.iter().find_map(|content_item| match content_item {
-                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                    Some(text.as_str())
-                }
-                _ => None,
-            })?,
-        ),
-        _ => return None,
-    };
-
-    let header = text.strip_prefix("<spine_ir ")?;
-    let header = header.split_once('>')?.0;
-    let text_id = parse_tag_string(header, "id")?;
-    if !text_id.starts_with("spine-ir:") {
-        return None;
-    }
-    if let Some(item_id) = item_id
-        && item_id != text_id
-    {
-        return None;
-    }
-    let fold_start = parse_tag_value(header, "fold_start")?;
-    let fold_end = parse_tag_value(header, "fold_end")?;
-    Some(SpineIrMetadata {
-        fold_start,
-        fold_end,
-    })
-}
-
-fn parse_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadata> {
-    parse_current_spine_memory_metadata(item)
-        .or_else(|| parse_legacy_xml_spine_memory_metadata(item))
-}
-
 fn parse_current_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadata> {
     let (id, text) = match item {
         ResponseItem::Message {
@@ -1484,68 +1325,6 @@ fn parse_current_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemor
     }
 
     None
-}
-
-fn parse_legacy_xml_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadata> {
-    let text = match item {
-        ResponseItem::Message { role, content, .. } if role == "assistant" => {
-            content.iter().find_map(|content_item| match content_item {
-                ContentItem::OutputText { text } => Some(text.as_str()),
-                _ => None,
-            })?
-        }
-        _ => return None,
-    };
-
-    let header = text.strip_prefix("<spine_memory ")?;
-    let header = header.split_once('>')?.0;
-    let node_id = NodeId::parse(parse_tag_string(header, "node")?).ok()?;
-    let op = parse_spine_operation_label(parse_tag_string(header, "op")?)?;
-    Some(SpineMemoryMetadata { node_id, op })
-}
-
-fn parse_legacy_markdown_spine_memory_metadata(item: &ResponseItem) -> Option<SpineMemoryMetadata> {
-    let text = match item {
-        ResponseItem::Message {
-            id,
-            role,
-            content,
-            phase,
-            ..
-        } if id.is_none() && role == "assistant" && phase.is_none() => {
-            content.iter().find_map(|content_item| match content_item {
-                ContentItem::OutputText { text } => Some(text.as_str()),
-                _ => None,
-            })?
-        }
-        _ => return None,
-    };
-    parse_markdown_spine_memory_metadata(text)
-}
-
-fn parse_markdown_spine_memory_metadata(text: &str) -> Option<SpineMemoryMetadata> {
-    let mut lines = text.lines();
-    if lines.next()? != "## Spine Memory" {
-        return None;
-    }
-
-    let mut node_id = None;
-    let mut op = None;
-    for line in lines.take(8) {
-        if let Some(value) = line.strip_prefix("Node: ") {
-            node_id = Some(NodeId::parse(value).ok()?);
-        } else if let Some(value) = line.strip_prefix("Operation: ") {
-            op = Some(parse_spine_operation_label(value)?);
-        }
-        if node_id.is_some() && op.is_some() {
-            break;
-        }
-    }
-
-    Some(SpineMemoryMetadata {
-        node_id: node_id?,
-        op: op?,
-    })
 }
 
 fn spine_memory_text_marker(node_id: &NodeId, op: SpineOperation) -> String {
@@ -1616,16 +1395,6 @@ fn is_non_spine_compact_item(item: &ResponseItem) -> bool {
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Other => false,
     }
-}
-
-fn parse_tag_value(header: &str, key: &str) -> Option<u64> {
-    parse_tag_string(header, key)?.parse().ok()
-}
-
-fn parse_tag_string<'a>(header: &'a str, key: &str) -> Option<&'a str> {
-    let needle = format!("{key}=\"");
-    let value = header.split_once(&needle)?.1;
-    Some(value.split_once('"')?.0)
 }
 
 #[cfg(test)]

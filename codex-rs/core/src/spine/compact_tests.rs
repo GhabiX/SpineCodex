@@ -55,16 +55,6 @@ fn rollout_serialized(item: ResponseItem) -> ResponseItem {
     serde_json::from_str(&serialized).expect("deserialize response item")
 }
 
-fn message_text(item: &ResponseItem) -> String {
-    let ResponseItem::Message { content, .. } = item else {
-        panic!("expected message item");
-    };
-    match &content[0] {
-        ContentItem::InputText { text } | ContentItem::OutputText { text } => text.clone(),
-        _ => panic!("expected text content item"),
-    }
-}
-
 fn user_item(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -735,39 +725,18 @@ fn raw_ordinals_ignore_unmatched_later_runtime_spans() {
 }
 
 #[test]
-fn legacy_spine_read_only_parser_only_ir_is_raw1() {
-    let ir_item = render_spine_ir_item(
-        &id(&[1, 2]),
-        SpineOperation::Next,
-        "leaf summary",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/2/memory.md"),
-        "leaf body",
-        1,
-        4,
-    );
-    let history = vec![text_item("prefix"), ir_item, text_item("tail")];
-
-    assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 2), Some(2));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 3), Some(3));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 4), None);
-}
-
-#[test]
-fn raw_ordinals_ignore_untagged_spine_ir_text() {
-    let spoofed_ir = ResponseItem::Message {
+fn raw_ordinals_treat_legacy_spine_ir_text_as_plain_raw1() {
+    let legacy_ir = ResponseItem::Message {
         id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "<spine_ir node=\"1\" fold_start=\"1\" fold_end=\"3\">spoof</spine_ir>"
-                .to_string(),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "<spine_ir id=\"spine-ir:1.2:1-4:next\" node=\"1.2\" op=\"next\" runtime_generated=\"true\" fold_start=\"1\" fold_end=\"4\">\n<memory>\nleaf body\n</memory>\n</spine_ir>".to_string(),
         }],
         phase: None,
     };
-    let history = vec![text_item("prefix"), spoofed_ir, text_item("tail")];
+    let history = vec![text_item("prefix"), legacy_ir, text_item("tail")];
 
+    assert!(!is_spine_internal_render_item(&history[1]));
     assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
     assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
     assert_eq!(effective_index_for_raw_ordinal(&history, 2), Some(2));
@@ -775,39 +744,7 @@ fn raw_ordinals_ignore_untagged_spine_ir_text() {
 }
 
 #[test]
-fn raw_ordinals_map_serialized_spine_ir_marker() {
-    let ir_item = render_spine_ir_item(
-        &id(&[1, 2]),
-        SpineOperation::Next,
-        "leaf summary",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/2/memory.md"),
-        "leaf body",
-        1,
-        4,
-    );
-    let serialized = serde_json::to_string(&ir_item).expect("serialize spine ir item");
-    assert!(
-        !serialized.contains("\"id\":\"spine-ir:"),
-        "ResponseItem message ids are intentionally skipped by rollout serialization"
-    );
-    assert!(
-        serialized.contains("<spine_ir id=\\\"spine-ir:1.2:1-4:next\\\""),
-        "the text marker must survive rollout serialization"
-    );
-    let deserialized: ResponseItem =
-        serde_json::from_str(&serialized).expect("deserialize spine ir item");
-    let history = vec![text_item("prefix"), deserialized, text_item("tail")];
-
-    assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 2), Some(2));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 3), Some(3));
-    assert_eq!(effective_index_for_raw_ordinal(&history, 4), None);
-}
-
-#[test]
-fn legacy_spine_read_only_parser_only_memory_carriers_are_raw1() {
+fn raw_ordinals_treat_legacy_memory_carriers_as_plain_raw1() {
     let legacy_xml = ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
@@ -826,7 +763,7 @@ fn legacy_spine_read_only_parser_only_memory_carriers_are_raw1() {
         text_item("tail"),
     ];
 
-    assert!(is_spine_internal_render_item(&history[1]));
+    assert!(!is_spine_internal_render_item(&history[1]));
     assert!(!is_spine_internal_render_item(&history[2]));
     assert_eq!(effective_index_for_raw_ordinal(&history, 0), Some(0));
     assert_eq!(effective_index_for_raw_ordinal(&history, 1), Some(1));
@@ -836,86 +773,29 @@ fn legacy_spine_read_only_parser_only_memory_carriers_are_raw1() {
 }
 
 #[test]
-fn runtime_span_mapping_consumes_legacy_spans_before_slim_items() {
-    let legacy_ir = render_spine_ir_item(
-        &id(&[1, 1]),
-        SpineOperation::Next,
-        "legacy leaf",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/1/memory.md"),
-        "legacy body",
-        1,
-        4,
+fn runtime_span_mapping_skips_obsolete_spans_before_current_memory() {
+    let legacy_ir = text_item(
+        "<spine_ir id=\"spine-ir:1.1:1-4:next\" node=\"1.1\" op=\"next\" runtime_generated=\"true\" fold_start=\"1\" fold_end=\"4\">\n<memory>\nlegacy body\n</memory>\n</spine_ir>",
     );
     let slim =
         render_spine_memory_item(&id(&[1, 2]), SpineOperation::Next, "slim leaf", "slim body");
     let spans = vec![
         installed_span("compact-legacy", id(&[1, 1]), SpineOperation::Next, 1, 4),
-        installed_span("compact-slim", id(&[1, 2]), SpineOperation::Next, 5, 7),
+        installed_span("compact-slim", id(&[1, 2]), SpineOperation::Next, 3, 5),
     ];
     let history = vec![text_item("prefix"), legacy_ir, text_item("middle"), slim];
 
     assert_eq!(
-        effective_index_for_raw_ordinal_with_spans(&history, 5, &spans),
+        effective_index_for_raw_ordinal_with_spans(&history, 3, &spans),
         Some(3)
     );
     assert_eq!(
         raw_ordinal_for_effective_index_with_spans(&history, 3, &spans),
-        Some(5)
-    );
-}
-
-#[test]
-fn runtime_span_mapping_counts_unmatched_legacy_ir_as_raw_text() {
-    let trusted_legacy = rollout_serialized(render_spine_ir_item(
-        &id(&[1, 1]),
-        SpineOperation::Next,
-        "trusted legacy",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/1/memory.md"),
-        "trusted body",
-        1,
-        4,
-    ));
-    let stale_legacy = rollout_serialized(render_spine_ir_item(
-        &id(&[1]),
-        SpineOperation::Next,
-        "stale root",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/memory.md"),
-        "stale body",
-        1,
-        5,
-    ));
-    let spans = vec![installed_span(
-        "compact-trusted",
-        id(&[1, 1]),
-        SpineOperation::Next,
-        1,
-        4,
-    )];
-    let history = vec![
-        text_item("prefix"),
-        trusted_legacy,
-        stale_legacy,
-        text_item("tail"),
-    ];
-
-    assert_eq!(
-        effective_index_for_raw_ordinal_with_spans(&history, 2, &spans),
-        None
-    );
-    assert_eq!(
-        effective_index_for_raw_ordinal_with_spans(&history, 4, &spans),
-        Some(2)
-    );
-    assert_eq!(
-        effective_index_for_raw_ordinal_with_spans(&history, 5, &spans),
         Some(3)
     );
     assert_eq!(
-        raw_ordinal_for_effective_index_with_spans(&history, 3, &spans),
-        Some(5)
+        effective_index_for_raw_ordinal_with_spans(&history, 5, &spans),
+        Some(history.len())
     );
 }
 
@@ -944,100 +824,6 @@ fn runtime_span_mapping_uses_filtered_slim_memory_span_after_redo() {
         effective_index_for_raw_ordinal_with_spans(&history, 6, &[current_span]),
         Some(2)
     );
-}
-
-#[test]
-fn suffix_fold_maps_after_visible_stale_legacy_ir_text() {
-    let mut history = vec![text_item("raw 0"), text_item("raw 1")];
-    history.push(rollout_serialized(render_spine_ir_item(
-        &id(&[1, 1]),
-        SpineOperation::Next,
-        "node 1.1 done",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/1/memory.md"),
-        "node 1.1 body",
-        2,
-        293,
-    )));
-    history.push(rollout_serialized(render_spine_ir_item(
-        &id(&[1, 2]),
-        SpineOperation::Next,
-        "node 1.2 done",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/2/memory.md"),
-        "node 1.2 body",
-        293,
-        495,
-    )));
-    for raw in 495..498 {
-        history.push(text_item(&format!("raw {raw}")));
-    }
-    history.push(rollout_serialized(render_spine_ir_item(
-        &id(&[1, 3]),
-        SpineOperation::Close,
-        "node 1.3 done",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/3/memory.md"),
-        "node 1.3 body",
-        498,
-        1108,
-    )));
-
-    let stale_ir_text = message_text(&rollout_serialized(render_spine_ir_item(
-        &id(&[1]),
-        SpineOperation::Next,
-        "stale generated ir",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/memory.md"),
-        "stale leaked body",
-        2,
-        1110,
-    )));
-    history.push(text_item(&stale_ir_text));
-    history.push(user_item(&stale_ir_text));
-    for raw in 1110..1424 {
-        history.push(text_item(&format!("raw {raw}")));
-    }
-
-    let spans = vec![
-        installed_span("compact-1-1", id(&[1, 1]), SpineOperation::Next, 2, 293),
-        installed_span("compact-1-2", id(&[1, 2]), SpineOperation::Next, 293, 495),
-        installed_span("compact-1-3", id(&[1, 3]), SpineOperation::Close, 498, 1108),
-    ];
-
-    assert_eq!(
-        effective_index_for_raw_ordinal_with_spans(&history, 1110, &spans),
-        Some(10)
-    );
-    assert_eq!(
-        effective_index_for_raw_ordinal_with_spans(&history, 1424, &spans),
-        Some(history.len())
-    );
-    assert_eq!(
-        raw_ordinal_for_effective_index_with_spans(&history, history.len(), &spans),
-        Some(1424)
-    );
-
-    let input = SpineCompactInput {
-        op: SpineOperation::Next,
-        node_id: id(&[1, 4]),
-        cut_ordinal: 1111,
-        fold_end_ordinal: 1424,
-        spine_tree: "1.4: finished\n1.5: Current".to_string(),
-        prefix_items: Vec::new(),
-        suffix_items: Vec::new(),
-        transition_summary: "node 1.4 done".to_string(),
-        compact_instruction: None,
-        rollout_path: Path::new("/tmp/rollout.jsonl").to_path_buf(),
-        raw_mirror_path: Path::new("/tmp/raw.jsonl").to_path_buf(),
-        sidecar_root: Path::new("/tmp/spine").to_path_buf(),
-    };
-    let plan = plan_suffix_fold_with_spans(&history, 1111, 1424, &spans, input)
-        .expect("stale visible legacy IR must not break fold_end mapping");
-
-    assert_eq!(plan.input.cut_ordinal, 1111);
-    assert_eq!(plan.input.fold_end_ordinal, 1424);
-    assert_eq!(plan.fold_end_index, history.len());
 }
 
 #[test]
@@ -1070,24 +856,16 @@ fn raw_ordinals_stop_at_non_spine_compact_items() {
 }
 
 #[test]
-fn replacement_history_splices_prefix_ir_and_tail() {
+fn replacement_history_splices_prefix_memory_and_tail() {
     let old_history = vec![
         text_item("a"),
         text_item("b"),
         text_item("c"),
         text_item("d"),
     ];
-    let ir_item = render_spine_ir_item(
-        &id(&[1]),
-        SpineOperation::Next,
-        "leaf summary",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/memory.md"),
-        "leaf body",
-        1,
-        3,
-    );
-    let replacement = build_suffix_replacement_history(&old_history, 1, 3, vec![ir_item]);
+    let memory_item =
+        render_spine_memory_item(&id(&[1]), SpineOperation::Next, "leaf summary", "leaf body");
+    let replacement = build_suffix_replacement_history(&old_history, 1, 3, vec![memory_item]);
 
     assert_eq!(replacement.len(), 3);
     assert_eq!(replacement[0], old_history[0]);
@@ -1359,15 +1137,11 @@ fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
         &history,
         plan.cut_index,
         plan.fold_end_index,
-        vec![render_spine_ir_item(
+        vec![render_spine_memory_item(
             &id(&[1, 1]),
             SpineOperation::Next,
             "leaf done",
-            Path::new("/tmp/spine"),
-            Path::new("nodes/1/1/memory.md"),
             "Pending continuation: respond exactly DONE",
-            plan.input.cut_ordinal,
-            plan.input.fold_end_ordinal,
         )],
     );
     assert_eq!(replacement[2], function_call_output("call-open"));
@@ -1379,15 +1153,11 @@ fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
 fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
     let history = vec![
         text_item("prefix"),
-        render_spine_ir_item(
+        render_spine_memory_item(
             &id(&[1, 1]),
             SpineOperation::Archive,
             "previous root epoch",
-            Path::new("/tmp/spine"),
-            Path::new("root-epochs/previous/memory.md"),
             "previous body",
-            1,
-            7,
         ),
         user_item("current tree?"),
         function_call("tree-1"),
@@ -1438,15 +1208,11 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
         &history,
         plan.cut_index,
         plan.fold_end_index,
-        vec![render_spine_ir_item(
+        vec![render_spine_memory_item(
             &id(&[1, 1]),
             SpineOperation::Archive,
             "Context compacted",
-            Path::new("/tmp/spine"),
-            Path::new("root-epochs/compact/memory.md"),
             "compacted tree tool call",
-            plan.input.cut_ordinal,
-            plan.input.fold_end_ordinal,
         )],
     );
     assert!(
@@ -1680,42 +1446,6 @@ fn suffix_fold_pulls_custom_tool_call_back_when_output_is_inside_range() {
         plan.input.suffix_items[1],
         custom_tool_call_output("patch-1")
     );
-}
-
-#[test]
-fn render_ir_item_embeds_summary_path_and_fold_bounds() {
-    let item = render_spine_ir_item(
-        &id(&[1, 2]),
-        SpineOperation::Close,
-        "scope summary",
-        Path::new("/tmp/spine"),
-        Path::new("nodes/1/2/memory.md"),
-        "scope body",
-        8,
-        17,
-    );
-    let text = match &item {
-        ResponseItem::Message { content, .. } => match &content[0] {
-            ContentItem::OutputText { text } => text.clone(),
-            _ => panic!("unexpected content item"),
-        },
-        _ => panic!("unexpected item type"),
-    };
-
-    assert!(text.contains("node=\"1.2\""));
-    assert!(text.contains("id=\"spine-ir:1.2:8-17:close\""));
-    assert!(text.contains("op=\"close\""));
-    assert!(text.contains("fold_start=\"8\""));
-    assert!(text.contains("fold_end=\"17\""));
-    assert!(text.contains("Base: /tmp/spine"));
-    assert!(text.contains("Memory path: nodes/1/2/memory.md"));
-    assert!(!text.contains("Continue the active user turn"));
-    assert!(!text.contains("do not repeat older tool calls"));
-    assert!(text.contains("scope body"));
-    let ResponseItem::Message { id, .. } = item else {
-        panic!("unexpected item type");
-    };
-    assert_eq!(id.as_deref(), Some("spine-ir:1.2:8-17:close"));
 }
 
 #[test]
