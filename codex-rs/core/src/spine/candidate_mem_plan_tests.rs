@@ -1,6 +1,8 @@
 use super::*;
 use crate::spine::ids::NodeId;
+use crate::spine::project_pi::ProjectMemRejectionReason;
 use crate::spine::segment::Segment;
+use crate::spine::state::SpineState;
 use crate::spine::store::SpineOperation;
 use pretty_assertions::assert_eq;
 
@@ -83,5 +85,79 @@ fn candidate_mem_cover_rejects_candidate_past_raw_len() {
         err.to_string()
             .contains("compact-b node 2 op Next span [5,8)"),
         "error should identify the candidate: {err}"
+    );
+}
+
+#[test]
+fn candidate_mem_plan_cover_only_rejects_live_boundary_inside_candidate() {
+    let candidate = CandidateMem::anonymous("root-archive", RawSpan { start: 0, end: 8 });
+
+    let err = plan_candidate_mem(
+        10,
+        &[],
+        &candidate,
+        CandidateMemPlanMode::CoverOnly {
+            live_boundaries: &[4],
+            admission: CandidateAdmissionPolicy::MustAdmit,
+        },
+    )
+    .expect_err("live boundary inside candidate");
+
+    assert!(
+        err.to_string()
+            .contains("live-boundary validation failed for root-archive"),
+        "error should name root candidate: {err}"
+    );
+}
+
+#[test]
+fn candidate_mem_plan_projection_backed_allows_node_not_visible_rejection() {
+    let state = SpineState::new();
+    let candidate = CandidateMem::new(
+        "hidden-candidate",
+        id(&[9]),
+        SpineOperation::Next,
+        RawSpan { start: 0, end: 4 },
+    );
+
+    let plan = plan_candidate_mem(
+        6,
+        &[],
+        &candidate,
+        CandidateMemPlanMode::ProjectionBacked {
+            state: &state,
+            admission: CandidateAdmissionPolicy::AdmitOrRejectNodeNotVisible,
+        },
+    )
+    .expect("node-not-visible rejection is allowed for suffix");
+
+    assert!(!plan.admitted_candidate);
+    assert_eq!(
+        plan.rejected_candidate_reason,
+        Some(ProjectMemRejectionReason::NodeNotVisible)
+    );
+}
+
+#[test]
+fn candidate_mem_plan_projection_backed_requires_candidate_when_policy_must_admit() {
+    let state = SpineState::new();
+    let candidate = CandidateMem::new(
+        "hidden-candidate",
+        id(&[9]),
+        SpineOperation::Next,
+        RawSpan { start: 0, end: 4 },
+    );
+
+    assert!(
+        plan_candidate_mem(
+            6,
+            &[],
+            &candidate,
+            CandidateMemPlanMode::ProjectionBacked {
+                state: &state,
+                admission: CandidateAdmissionPolicy::MustAdmit,
+            },
+        )
+        .is_err()
     );
 }

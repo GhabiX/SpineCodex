@@ -182,9 +182,10 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::spine::candidate_mem_plan::CandidateAdmissionPolicy;
 use crate::spine::candidate_mem_plan::CandidateMem;
-use crate::spine::candidate_mem_plan::CandidateMemCover;
-use crate::spine::candidate_mem_plan::plan_candidate_mem_cover;
+use crate::spine::candidate_mem_plan::CandidateMemPlanMode;
+use crate::spine::candidate_mem_plan::plan_candidate_mem;
 use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
 use crate::spine::compact::SpineCompactBoundary;
 use crate::spine::compact::build_root_archive_replacement_history;
@@ -200,15 +201,10 @@ use crate::spine::compact::render_spine_memory_item;
 use crate::spine::debug_audit::RuntimeDebugBoundary;
 use crate::spine::debug_audit::audit_compact_checkpoint;
 use crate::spine::debug_audit::audit_compact_plan_boundaries;
-use crate::spine::project_pi::ProjectInput;
-use crate::spine::project_pi::ProjectMemInstall;
-use crate::spine::project_pi::ProjectMemRejectionReason;
-use crate::spine::project_pi::project_pi;
 use crate::spine::segment::RawSpan;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
 use crate::spine::session_integration::record_plan_update_snapshot;
-use crate::spine::state::NodeStatus;
 use crate::spine::store::CompactAttemptRecord;
 use crate::spine::store::CompactInstalledRecord;
 use crate::spine::store::CompactStartedRecord;
@@ -4526,67 +4522,6 @@ fn validate_suffix_mem_install_segment_plan(
         .ok_or_else(|| {
             CodexErr::Fatal("suffix MemInstall segment plan could not map history end".to_string())
         })?;
-    let mut input = ProjectInput::new(raw_len, state.clone());
-    for span in runtime_spans {
-        input.mem_installs.push(
-            ProjectMemInstall::new(
-                span.compact_id.clone(),
-                span.node_id.clone(),
-                span.cut_ordinal,
-                span.fold_end_ordinal,
-            )
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "suffix MemInstall segment plan rejected installed span {}: {err}",
-                    span.compact_id
-                ))
-            })?,
-        );
-    }
-    input.mem_installs.push(
-        ProjectMemInstall::new(
-            compact_id.to_string(),
-            boundary.node_id.clone(),
-            boundary.cut_ordinal,
-            boundary.fold_end_ordinal,
-        )
-        .map_err(|err| {
-            CodexErr::Fatal(format!(
-                "suffix MemInstall segment plan rejected candidate span {compact_id}: {err}"
-            ))
-        })?,
-    );
-    validate_suffix_candidate_segment_cover(raw_len, runtime_spans, boundary, compact_id, state)?;
-    let result = project_pi(input).map_err(|err| {
-        CodexErr::Fatal(format!(
-            "suffix MemInstall segment plan failed Project(Pi) validation: {err}"
-        ))
-    })?;
-    if result
-        .admitted_mem_ids
-        .iter()
-        .any(|admitted_id| admitted_id == compact_id)
-    {
-        return Ok(());
-    }
-    if result.rejected_mem_ids.iter().any(|rejection| {
-        rejection.compact_id == compact_id
-            && rejection.reason == ProjectMemRejectionReason::NodeNotVisible
-    }) {
-        return Ok(());
-    }
-    Err(CodexErr::Fatal(format!(
-        "suffix MemInstall segment plan did not admit candidate Mem {compact_id}"
-    )))
-}
-
-fn validate_suffix_candidate_segment_cover(
-    raw_len: u64,
-    runtime_spans: &[InstalledCompactSpan],
-    boundary: &SpineCompactBoundary,
-    compact_id: &str,
-    state: &crate::spine::state::SpineState,
-) -> CodexResult<()> {
     let candidate = CandidateMem::new(
         compact_id.to_string(),
         boundary.node_id.clone(),
@@ -4596,42 +4531,16 @@ fn validate_suffix_candidate_segment_cover(
             end: boundary.fold_end_ordinal,
         },
     );
-    let CandidateMemCover { pi, artifacts } =
-        plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(|err| {
-            CodexErr::Fatal(format!(
-                "suffix MemInstall segment cover rejected candidate Mem {compact_id}: {err}"
-            ))
-        })?;
-    let live_starts = visible_live_starts_for_segment_plan(state)?;
-    crate::spine::segment::validate_future_live_boundaries(&pi, &artifacts, &live_starts).map_err(
-        |err| {
-            CodexErr::Fatal(format!(
-                "suffix MemInstall segment live-boundary validation failed for {compact_id}: {err}"
-            ))
+    plan_candidate_mem(
+        raw_len,
+        runtime_spans,
+        &candidate,
+        CandidateMemPlanMode::ProjectionBacked {
+            state,
+            admission: CandidateAdmissionPolicy::AdmitOrRejectNodeNotVisible,
         },
-    )
-}
-
-fn visible_live_starts_for_segment_plan(
-    state: &crate::spine::state::SpineState,
-) -> CodexResult<Vec<u64>> {
-    let mut live_starts = Vec::new();
-    for node_id in state.visible_spine() {
-        let Some(node) = state.node(&node_id) else {
-            return Err(CodexErr::Fatal(format!(
-                "suffix MemInstall segment plan visible node {node_id} is missing"
-            )));
-        };
-        if matches!(node.status, NodeStatus::Live | NodeStatus::Opened) {
-            let Some(raw_start) = node.raw_start_ordinal else {
-                return Err(CodexErr::Fatal(format!(
-                    "suffix MemInstall segment plan mutable node {node_id} is missing raw_start_ordinal"
-                )));
-            };
-            live_starts.push(raw_start);
-        }
-    }
-    Ok(live_starts)
+    )?;
+    Ok(())
 }
 
 fn validate_root_mem_install_segment_plan(
@@ -4653,22 +4562,16 @@ fn validate_root_mem_install_segment_plan(
             end: boundary.fold_end_ordinal,
         },
     );
-    let CandidateMemCover { pi, artifacts } =
-        plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(|err| {
-            CodexErr::Fatal(format!(
-                "root MemInstall segment cover rejected candidate Mem {compact_id}: {err}"
-            ))
-        })?;
-    crate::spine::segment::validate_future_live_boundaries(
-        &pi,
-        &artifacts,
-        &[boundary.fold_end_ordinal],
-    )
-    .map_err(|err| {
-        CodexErr::Fatal(format!(
-            "root MemInstall segment live-boundary validation failed for {compact_id}: {err}"
-        ))
-    })
+    plan_candidate_mem(
+        raw_len,
+        runtime_spans,
+        &candidate,
+        CandidateMemPlanMode::CoverOnly {
+            live_boundaries: &[boundary.fold_end_ordinal],
+            admission: CandidateAdmissionPolicy::MustAdmit,
+        },
+    )?;
+    Ok(())
 }
 
 fn suffix_mem_install_projection_ref(compact_id: &str, boundary: &SpineCompactBoundary) -> String {
