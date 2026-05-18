@@ -12,6 +12,7 @@ pub(crate) mod projection_epoch;
 pub(crate) mod runtime;
 pub(crate) mod segment;
 pub(crate) mod session_integration;
+pub(crate) mod size_hint;
 pub(crate) mod state;
 pub(crate) mod store;
 pub(crate) mod trajs;
