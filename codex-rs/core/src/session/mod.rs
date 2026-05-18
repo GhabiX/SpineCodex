@@ -203,6 +203,7 @@ use crate::spine::debug_audit::RuntimeDebugBoundary;
 use crate::spine::debug_audit::audit_compact_checkpoint;
 use crate::spine::debug_audit::audit_compact_plan_boundaries;
 use crate::spine::debug_audit::audit_meminstall_span_source_equivalence;
+use crate::spine::debug_audit::audit_runtime_span_authority_admission_equivalence;
 use crate::spine::segment::RawSpan;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
@@ -3309,6 +3310,17 @@ impl Session {
                     ))
                     .await);
             }
+            if let Err(err) = audit_runtime_span_authority_admission_equivalence(
+                &store,
+                Some(&current_message_hashes),
+                format!("{} compact_id={compact_id}", store.root().display()),
+            ) {
+                return Err(self
+                    .poison_spine_compact(format!(
+                        "spine root archive admitted runtime span source mismatch after CompactInstalled: {err}"
+                    ))
+                    .await);
+            }
         }
         // Only emit the reset snapshot after compact_installed is durable; otherwise the UI could
         // display a root archive that reload validation may still reject.
@@ -3656,6 +3668,17 @@ impl Session {
                 return Err(self
                     .poison_spine_compact(format!(
                         "spine suffix MemInstall shadow span source mismatch after CompactInstalled: {err}"
+                    ))
+                    .await);
+            }
+            if let Err(err) = audit_runtime_span_authority_admission_equivalence(
+                &store,
+                Some(&current_message_hashes),
+                format!("{} compact_id={compact_id}", store.root().display()),
+            ) {
+                return Err(self
+                    .poison_spine_compact(format!(
+                        "spine suffix admitted runtime span source mismatch after CompactInstalled: {err}"
                     ))
                     .await);
             }

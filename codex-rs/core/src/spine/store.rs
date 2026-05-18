@@ -1626,7 +1626,6 @@ impl SpineSidecarStore {
         Ok(spans)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn runtime_span_authority_admissions_matching_hashes(
         &self,
         surviving_message_hashes: Option<&HashSet<String>>,
@@ -2682,14 +2681,12 @@ pub(crate) struct InstalledCompactSpan {
     pub(crate) message_hash: String,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeSpanAuthorityRecord {
     pub(crate) span: InstalledCompactSpan,
     pub(crate) admission: RuntimeSpanAuthorityAdmission,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct RuntimeSpanAuthorityAttempt {
     compact_id: String,
@@ -2998,7 +2995,6 @@ fn record_mem_install_committed(
     Ok(())
 }
 
-#[allow(dead_code)]
 fn runtime_span_authority_record_for_attempt(
     attempt: RuntimeSpanAuthorityAttempt,
 ) -> Result<Option<RuntimeSpanAuthorityRecord>, SpineStoreError> {
@@ -3080,7 +3076,6 @@ fn runtime_span_authority_record_for_attempt(
     }
 }
 
-#[allow(dead_code)]
 fn validate_runtime_span_matches_attempt(
     attempt: &RuntimeSpanAuthorityAttempt,
     span: &InstalledCompactSpan,
