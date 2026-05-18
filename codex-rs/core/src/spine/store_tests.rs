@@ -381,6 +381,241 @@ fn runtime_span_authority_policy_blocks_direct_p5_switch_for_committed_only() {
 }
 
 #[test]
+fn runtime_span_authority_admissions_classify_actual_compact_ids() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-legacy",
+            id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+        ))
+        .expect("append legacy compact started");
+    store
+        .append_compact_installed(compact_installed(
+            "compact-legacy",
+            id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+            3,
+            "sha1:legacy",
+        ))
+        .expect("append legacy compact installed");
+
+    append_meminstall_evidence(
+        &store,
+        "compact-defer",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        8,
+        5,
+        "sha1:defer",
+    );
+
+    append_meminstall_evidence(
+        &store,
+        "compact-poison",
+        id(&[1, 3]),
+        SpineOperation::Next,
+        8,
+        12,
+        6,
+        "sha1:poison",
+    );
+    append_bridge_checkpoint(
+        &store,
+        "compact-poison",
+        id(&[1, 3]),
+        SpineOperation::Next,
+        8,
+        12,
+        6,
+        "sha1:poison",
+    );
+
+    append_meminstall_evidence(
+        &store,
+        "compact-current",
+        id(&[1, 4]),
+        SpineOperation::Next,
+        12,
+        16,
+        7,
+        "sha1:current",
+    );
+    append_bridge_checkpoint(
+        &store,
+        "compact-current",
+        id(&[1, 4]),
+        SpineOperation::Next,
+        12,
+        16,
+        7,
+        "sha1:current",
+    );
+    store
+        .append_compact_installed(compact_installed(
+            "compact-current",
+            id(&[1, 4]),
+            SpineOperation::Next,
+            12,
+            16,
+            7,
+            "sha1:current",
+        ))
+        .expect("append current compact installed");
+
+    let admissions = store
+        .runtime_span_authority_admissions_matching_hashes(None)
+        .expect("classify runtime span authority");
+
+    assert_eq!(
+        admissions
+            .iter()
+            .map(|record| (record.span.compact_id.as_str(), record.admission))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "compact-legacy",
+                RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan,
+            ),
+            (
+                "compact-defer",
+                RuntimeSpanAuthorityAdmission::DeferCommittedSpanUntilHostCheckpoint,
+            ),
+            (
+                "compact-poison",
+                RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal,
+            ),
+            (
+                "compact-current",
+                RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan,
+            ),
+        ]
+    );
+    assert_eq!(admissions[3].span.cut_ordinal, 12);
+    assert_eq!(admissions[3].span.fold_end_ordinal, 16);
+}
+
+#[test]
+fn runtime_span_authority_admissions_keep_transitional_rows_legacy() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_meminstall_evidence(
+        &store,
+        "compact-transitional",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:transitional",
+    );
+
+    let mut events = store
+        .read_compact_index_events()
+        .expect("read compact index events");
+    events.push(CompactIndexEvent::CompactInstalled {
+        seq: 0,
+        compact_id: "compact-transitional".to_string(),
+        node_id: "1.2".to_string(),
+        op: SpineOperation::Next,
+        cut_ordinal: 4,
+        fold_end_ordinal: 9,
+        replacement_history_len: 7,
+        memory_path: "nodes/1/2/memory.md".to_string(),
+        message_hash: "sha1:transitional".to_string(),
+    });
+    store
+        .write_compact_index_events(events)
+        .expect("write transitional compact index");
+
+    let admissions = store
+        .runtime_span_authority_admissions_matching_hashes(None)
+        .expect("classify transitional row");
+
+    assert_eq!(admissions.len(), 1);
+    assert_eq!(admissions[0].span.compact_id, "compact-transitional");
+    assert_eq!(
+        admissions[0].admission,
+        RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan
+    );
+}
+
+#[test]
+fn runtime_span_authority_admissions_filter_by_surviving_hashes() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-old",
+            id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+        ))
+        .expect("append old compact started");
+    store
+        .append_compact_installed(compact_installed(
+            "compact-old",
+            id(&[1, 1]),
+            SpineOperation::Next,
+            1,
+            4,
+            3,
+            "sha1:old",
+        ))
+        .expect("append old compact installed");
+    append_meminstall_evidence(
+        &store,
+        "compact-current",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:current",
+    );
+    append_bridge_checkpoint(
+        &store,
+        "compact-current",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:current",
+    );
+    store
+        .append_compact_installed(compact_installed(
+            "compact-current",
+            id(&[1, 2]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:current",
+        ))
+        .expect("append current compact installed");
+
+    let surviving_hashes = HashSet::from(["sha1:current".to_string()]);
+    let admissions = store
+        .runtime_span_authority_admissions_matching_hashes(Some(&surviving_hashes))
+        .expect("classify filtered runtime span authority");
+
+    assert_eq!(admissions.len(), 1);
+    assert_eq!(admissions[0].span.compact_id, "compact-current");
+    assert_eq!(
+        admissions[0].admission,
+        RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan
+    );
+}
+
+#[test]
 fn root_meminstall_survivor_matrix_validates_store_evidence() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");

@@ -1626,6 +1626,122 @@ impl SpineSidecarStore {
         Ok(spans)
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn runtime_span_authority_admissions_matching_hashes(
+        &self,
+        surviving_message_hashes: Option<&HashSet<String>>,
+    ) -> Result<Vec<RuntimeSpanAuthorityRecord>, SpineStoreError> {
+        self.validate_compact_index()?;
+
+        let mut attempts = HashMap::new();
+        let mut order = Vec::new();
+        for event in self.read_compact_index_events()? {
+            match event {
+                CompactIndexEvent::CompactStarted {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    ..
+                } => {
+                    order.push(compact_id.clone());
+                    attempts.insert(
+                        compact_id.clone(),
+                        RuntimeSpanAuthorityAttempt {
+                            compact_id,
+                            node_id: NodeId::parse(&node_id)?,
+                            op,
+                            cut_ordinal,
+                            fold_end_ordinal,
+                            mem_install: None,
+                            bridge_checkpoint_committed: false,
+                            installed: None,
+                        },
+                    );
+                }
+                CompactIndexEvent::MemInstallCommitted {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    replacement_history_len,
+                    message_hash,
+                    ..
+                } => {
+                    let Some(attempt) = attempts.get_mut(&compact_id) else {
+                        return Err(
+                            RuntimeFastFailError::MemInstallMissingStarted { compact_id }.into(),
+                        );
+                    };
+                    attempt.mem_install = Some(InstalledCompactSpan {
+                        compact_id,
+                        node_id: NodeId::parse(&node_id)?,
+                        op,
+                        cut_ordinal,
+                        fold_end_ordinal,
+                        replacement_history_len,
+                        message_hash,
+                    });
+                }
+                CompactIndexEvent::BridgeCheckpointCommitted { compact_id, .. } => {
+                    let Some(attempt) = attempts.get_mut(&compact_id) else {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "compact.index.jsonl has bridge_checkpoint_committed without matching compact_started for {compact_id}"
+                        )));
+                    };
+                    attempt.bridge_checkpoint_committed = true;
+                }
+                CompactIndexEvent::CompactInstalled {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    replacement_history_len,
+                    message_hash,
+                    ..
+                } => {
+                    let Some(attempt) = attempts.get_mut(&compact_id) else {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "compact.index.jsonl has compact_installed without matching compact_started for {compact_id}"
+                        )));
+                    };
+                    attempt.installed = Some(InstalledCompactSpan {
+                        compact_id,
+                        node_id: NodeId::parse(&node_id)?,
+                        op,
+                        cut_ordinal,
+                        fold_end_ordinal,
+                        replacement_history_len,
+                        message_hash,
+                    });
+                }
+                CompactIndexEvent::CompactFailed { .. }
+                | CompactIndexEvent::CompactInterrupted { .. } => {}
+            }
+        }
+
+        let mut records = Vec::new();
+        for compact_id in order {
+            let Some(attempt) = attempts.remove(&compact_id) else {
+                continue;
+            };
+            let Some(record) = runtime_span_authority_record_for_attempt(attempt)? else {
+                continue;
+            };
+            if surviving_message_hashes
+                .is_some_and(|hashes| !hashes.contains(&record.span.message_hash))
+            {
+                continue;
+            }
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+
     fn validate_mem_install_commit_preconditions(
         &self,
         attempt: &CompactAttemptRecord,
@@ -2566,6 +2682,26 @@ pub(crate) struct InstalledCompactSpan {
     pub(crate) message_hash: String,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeSpanAuthorityRecord {
+    pub(crate) span: InstalledCompactSpan,
+    pub(crate) admission: RuntimeSpanAuthorityAdmission,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+struct RuntimeSpanAuthorityAttempt {
+    compact_id: String,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    mem_install: Option<InstalledCompactSpan>,
+    bridge_checkpoint_committed: bool,
+    installed: Option<InstalledCompactSpan>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum CompactIndexEvent {
@@ -2859,6 +2995,114 @@ fn record_mem_install_committed(
     attempt.mem_install_committed = true;
     attempt.mem_install_message_hash = Some(message_hash);
     attempt.mem_install_replacement_history_len = Some(replacement_history_len);
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn runtime_span_authority_record_for_attempt(
+    attempt: RuntimeSpanAuthorityAttempt,
+) -> Result<Option<RuntimeSpanAuthorityRecord>, SpineStoreError> {
+    let mem_install_committed = attempt.mem_install.is_some();
+    let compact_installed = attempt.installed.is_some();
+    let admission =
+        if mem_install_committed && compact_installed && !attempt.bridge_checkpoint_committed {
+            RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan
+        } else {
+            let host_checkpoint_materialized = attempt.bridge_checkpoint_committed
+                || (compact_installed && !mem_install_committed);
+            classify_runtime_span_authority(
+                mem_install_committed,
+                host_checkpoint_materialized,
+                compact_installed,
+            )
+        };
+
+    match admission {
+        RuntimeSpanAuthorityAdmission::NoSpan => Ok(None),
+        RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan => {
+            let span = attempt.installed.as_ref().ok_or_else(|| {
+                SpineStoreError::InvalidLedger(format!(
+                    "compact.index.jsonl legacy runtime span admission for {} has no compact_installed span",
+                    attempt.compact_id
+                ))
+            })?;
+            validate_runtime_span_matches_attempt(&attempt, span, "compact_installed")?;
+            let span = attempt.installed.expect("checked compact_installed span");
+            Ok(Some(RuntimeSpanAuthorityRecord { span, admission }))
+        }
+        RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan => {
+            let span = attempt.mem_install.as_ref().ok_or_else(|| {
+                SpineStoreError::InvalidLedger(format!(
+                    "compact.index.jsonl committed runtime span admission for {} has no mem_install_committed span",
+                    attempt.compact_id
+                ))
+            })?;
+            let installed = attempt.installed.as_ref().ok_or_else(|| {
+                SpineStoreError::InvalidLedger(format!(
+                    "compact.index.jsonl committed runtime span admission for {} has no compact_installed span",
+                    attempt.compact_id
+                ))
+            })?;
+            validate_runtime_span_matches_attempt(&attempt, span, "mem_install_committed")?;
+            validate_runtime_span_matches_attempt(&attempt, installed, "compact_installed")?;
+            if span != installed {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "compact.index.jsonl committed runtime span admission for {} has mismatched mem_install_committed and compact_installed spans",
+                    attempt.compact_id
+                )));
+            }
+            let span = attempt
+                .mem_install
+                .expect("checked mem_install_committed span");
+            Ok(Some(RuntimeSpanAuthorityRecord { span, admission }))
+        }
+        RuntimeSpanAuthorityAdmission::DeferCommittedSpanUntilHostCheckpoint
+        | RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal => {
+            let span = attempt.mem_install.as_ref().ok_or_else(|| {
+                SpineStoreError::InvalidLedger(format!(
+                    "compact.index.jsonl runtime span admission for {} has no mem_install_committed span",
+                    attempt.compact_id
+                ))
+            })?;
+            validate_runtime_span_matches_attempt(&attempt, span, "mem_install_committed")?;
+            let span = attempt
+                .mem_install
+                .expect("checked mem_install_committed span");
+            Ok(Some(RuntimeSpanAuthorityRecord { span, admission }))
+        }
+        RuntimeSpanAuthorityAdmission::InvalidHostCheckpointWithoutMemInstall
+        | RuntimeSpanAuthorityAdmission::InvalidCompactInstalledWithoutHostCheckpoint => {
+            Err(SpineStoreError::InvalidLedger(format!(
+                "compact.index.jsonl invalid runtime span authority state for {}: {admission:?}",
+                attempt.compact_id
+            )))
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn validate_runtime_span_matches_attempt(
+    attempt: &RuntimeSpanAuthorityAttempt,
+    span: &InstalledCompactSpan,
+    source: &str,
+) -> Result<(), SpineStoreError> {
+    if span.compact_id != attempt.compact_id
+        || span.node_id != attempt.node_id
+        || span.op != attempt.op
+        || span.cut_ordinal != attempt.cut_ordinal
+        || span.fold_end_ordinal != attempt.fold_end_ordinal
+    {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl {source} span does not match compact_started for {}",
+            attempt.compact_id
+        )));
+    }
+    if span.cut_ordinal >= span.fold_end_ordinal {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl {source} span for {} is empty or inverted: [{}, {})",
+            attempt.compact_id, span.cut_ordinal, span.fold_end_ordinal
+        )));
+    }
     Ok(())
 }
 
