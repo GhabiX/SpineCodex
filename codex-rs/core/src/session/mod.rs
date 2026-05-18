@@ -207,6 +207,7 @@ use crate::spine::segment::RawSpan;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
 use crate::spine::session_integration::record_plan_update_snapshot;
+use crate::spine::store::BridgeCheckpointCommittedRecord;
 use crate::spine::store::CompactAttemptRecord;
 use crate::spine::store::CompactInstalledRecord;
 use crate::spine::store::CompactStartedRecord;
@@ -3261,6 +3262,20 @@ impl Session {
                 ))
                 .await);
         }
+        if let Err(err) =
+            store.append_bridge_checkpoint_committed(BridgeCheckpointCommittedRecord {
+                attempt: compact_attempt.clone(),
+                replacement_history_len: replacement_history.len(),
+                message_hash: message_hash.clone(),
+                source_rollout_ref: prep.compact_index_rollout_path.clone(),
+            })
+        {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to record spine root archive bridge checkpoint after host checkpoint: {err}"
+                ))
+                .await);
+        }
         #[cfg(test)]
         if compacted_body.contains("__spine_fail_root_archive_after_rollout_checkpoint__") {
             return Err(self
@@ -3591,6 +3606,20 @@ impl Session {
             return Err(self
                 .poison_spine_compact(format!(
                     "failed to install spine compact host checkpoint after MemInstall commit: {err}"
+                ))
+                .await);
+        }
+        if let Err(err) =
+            store.append_bridge_checkpoint_committed(BridgeCheckpointCommittedRecord {
+                attempt: compact_attempt.clone(),
+                replacement_history_len: replacement_history.len(),
+                message_hash: message_hash.clone(),
+                source_rollout_ref: prep.compact_index_rollout_path.clone(),
+            })
+        {
+            return Err(self
+                .poison_spine_compact(format!(
+                    "failed to record spine bridge checkpoint after host checkpoint: {err}"
                 ))
                 .await);
         }

@@ -106,6 +106,23 @@ fn compact_installed(
     }
 }
 
+fn bridge_checkpoint_committed(
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    replacement_history_len: usize,
+    message_hash: &str,
+) -> BridgeCheckpointCommittedRecord {
+    BridgeCheckpointCommittedRecord {
+        attempt: compact_attempt(compact_id, node_id, op, cut_ordinal, fold_end_ordinal),
+        replacement_history_len,
+        message_hash: message_hash.to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    }
+}
+
 fn mem_install_committed(
     compact_id: &str,
     node_id: NodeId,
@@ -217,6 +234,29 @@ fn append_meminstall_evidence(
         ))
         .expect("append mem install");
     body_ref
+}
+
+fn append_bridge_checkpoint(
+    store: &SpineSidecarStore,
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    replacement_history_len: usize,
+    message_hash: &str,
+) {
+    store
+        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
+            compact_id,
+            node_id,
+            op,
+            cut_ordinal,
+            fold_end_ordinal,
+            replacement_history_len,
+            message_hash,
+        ))
+        .expect("append bridge checkpoint");
 }
 
 fn compact_terminal(
@@ -1399,6 +1439,156 @@ fn appends_compact_index_and_raw_mirror_events() {
 }
 
 #[test]
+fn bridge_checkpoint_committed_writes_host_checkpoint_phase_marker() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    store
+        .append_memory_section(
+            &id(&[1]),
+            "\n\n## Auto Compact\n\nBase: /base\nFold: response ordinals [4, 9)\nNode trajs: nodes/1/trajs.jsonl\nRaw mirror: raw/rollout.raw.jsonl\nRollout: ../rollout.jsonl\n\nportable body\n\n## Node Summary\n\nsummary\n",
+        )
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+    store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+            body_ref,
+        ))
+        .expect("append mem install commit");
+    store
+        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+        ))
+        .expect("append bridge checkpoint");
+
+    assert_eq!(
+        read_json_lines(store.compact_index_path())[2],
+        json!({
+            "type": "bridge_checkpoint_committed",
+            "seq": 3,
+            "compact_id": "compact-1",
+            "node_id": "1",
+            "op": "next",
+            "cut_ordinal": 4,
+            "fold_end_ordinal": 9,
+            "replacement_history_len": 7,
+            "message_hash": "sha1:message",
+            "source_rollout_ref": "../rollout.jsonl",
+        })
+    );
+    store
+        .load()
+        .expect("bridge checkpoint without terminal is a replayable poison boundary");
+}
+
+#[test]
+fn bridge_checkpoint_committed_requires_meminstall() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+
+    let error = store
+        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+        ))
+        .expect_err("bridge checkpoint before MemInstall should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("precedes mem_install_committed")
+    ));
+}
+
+#[test]
+fn bridge_checkpoint_committed_rejects_meminstall_mismatch() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    store
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nbody\n")
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+    store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+            body_ref,
+        ))
+        .expect("append mem install commit");
+
+    let error = store
+        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            8,
+            "sha1:message",
+        ))
+        .expect_err("replacement_history_len mismatch should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("replacement_history_len does not match mem_install_committed")
+    ));
+}
+
+#[test]
 fn runtime_fast_fail_compact_index_mem_install_committed_writes_semantic_marker() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
@@ -1434,6 +1624,17 @@ fn runtime_fast_fail_compact_index_mem_install_committed_writes_semantic_marker(
             body_ref.clone(),
         ))
         .expect("append mem install commit");
+    store
+        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+        ))
+        .expect("append bridge checkpoint");
 
     assert_eq!(
         read_json_lines(store.compact_index_path()),
@@ -1468,6 +1669,18 @@ fn runtime_fast_fail_compact_index_mem_install_committed_writes_semantic_marker(
                 "source_rollout_ref": "../rollout.jsonl",
                 "committed_at_seq": 2,
             }),
+            json!({
+                "type": "bridge_checkpoint_committed",
+                "seq": 3,
+                "compact_id": "compact-1",
+                "node_id": "1",
+                "op": "next",
+                "cut_ordinal": 4,
+                "fold_end_ordinal": 9,
+                "replacement_history_len": 7,
+                "message_hash": "sha1:message",
+                "source_rollout_ref": "../rollout.jsonl",
+            }),
         ]
     );
 
@@ -1478,6 +1691,57 @@ fn runtime_fast_fail_compact_index_mem_install_committed_writes_semantic_marker(
     assert_eq!(installs[0].compact_id, "compact-1");
     assert_eq!(installs[0].body_ref, body_ref);
     store.load().expect("mem install commit is terminal");
+}
+
+#[test]
+fn compact_installed_after_meminstall_requires_bridge_checkpoint() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+        ))
+        .expect("append compact started");
+    store
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nbody\n")
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+    store
+        .append_mem_install_committed(mem_install_committed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+            body_ref,
+        ))
+        .expect("append mem install commit");
+
+    let error = store
+        .append_compact_installed(compact_installed(
+            "compact-1",
+            id(&[1]),
+            SpineOperation::Next,
+            4,
+            9,
+            7,
+            "sha1:message",
+        ))
+        .expect_err("new compact installed must have bridge checkpoint marker");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("without bridge_checkpoint_committed")
+    ));
 }
 
 #[test]
@@ -2233,6 +2497,16 @@ fn committed_mem_install_spans_match_compact_installed_for_suffix() {
         7,
         "sha1:message",
     );
+    append_bridge_checkpoint(
+        &store,
+        "compact-1",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:message",
+    );
     store
         .append_compact_installed(compact_installed(
             "compact-1",
@@ -2269,6 +2543,16 @@ fn committed_mem_install_spans_match_compact_installed_for_root_archive() {
         3,
         "sha1:root",
     );
+    append_bridge_checkpoint(
+        &store,
+        "compact-root",
+        id(&[1]),
+        SpineOperation::Archive,
+        0,
+        7,
+        3,
+        "sha1:root",
+    );
     store
         .append_compact_installed(compact_installed(
             "compact-root",
@@ -2296,6 +2580,16 @@ fn meminstall_span_source_shadow_audit_accepts_matching_sources() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     append_meminstall_evidence(
+        &store,
+        "compact-1",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:message",
+    );
+    append_bridge_checkpoint(
         &store,
         "compact-1",
         id(&[1, 2]),
@@ -2373,6 +2667,16 @@ fn meminstall_span_source_shadow_audit_ignores_legacy_installed_outside_current_
         ))
         .expect("append legacy compact installed");
     append_meminstall_evidence(
+        &store,
+        "compact-current",
+        id(&[1, 2]),
+        SpineOperation::Next,
+        4,
+        9,
+        7,
+        "sha1:current",
+    );
+    append_bridge_checkpoint(
         &store,
         "compact-current",
         id(&[1, 2]),

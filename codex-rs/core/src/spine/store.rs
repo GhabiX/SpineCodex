@@ -476,6 +476,11 @@ impl SpineSidecarStore {
                     message_hash,
                     ..
                 }
+                | CompactIndexEvent::BridgeCheckpointCommitted {
+                    compact_id,
+                    message_hash,
+                    ..
+                }
                 | CompactIndexEvent::MemInstallCommitted {
                     compact_id,
                     message_hash,
@@ -489,6 +494,7 @@ impl SpineSidecarStore {
             .filter(|event| match event {
                 CompactIndexEvent::CompactStarted { compact_id, .. }
                 | CompactIndexEvent::CompactInstalled { compact_id, .. }
+                | CompactIndexEvent::BridgeCheckpointCommitted { compact_id, .. }
                 | CompactIndexEvent::MemInstallCommitted { compact_id, .. } => {
                     surviving_compact_ids.contains(compact_id)
                 }
@@ -958,6 +964,15 @@ impl SpineSidecarStore {
             message_hash,
         } = record;
         let path = self.compact_index_path();
+        let existing_attempts = self.compact_attempt_state_for_bridge_checkpoint_validation()?;
+        if let Some(attempt) = existing_attempts.get(&compact_id)
+            && attempt.mem_install_committed
+            && !attempt.bridge_checkpoint_committed
+        {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "compact.index.jsonl compact_installed for {compact_id} follows mem_install_committed without bridge_checkpoint_committed"
+            )));
+        }
         let event = CompactIndexEvent::CompactInstalled {
             seq: self.next_jsonl_seq(&path)?,
             compact_id,
@@ -1027,6 +1042,39 @@ impl SpineSidecarStore {
             source_rollout_ref,
             committed_at_seq: seq,
         };
+        self.append_json_line(&path, &event)
+    }
+
+    pub(crate) fn append_bridge_checkpoint_committed(
+        &self,
+        record: BridgeCheckpointCommittedRecord,
+    ) -> Result<(), SpineStoreError> {
+        let BridgeCheckpointCommittedRecord {
+            attempt:
+                CompactAttemptRecord {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                },
+            replacement_history_len,
+            message_hash,
+            source_rollout_ref,
+        } = record;
+        let path = self.compact_index_path();
+        let event = CompactIndexEvent::BridgeCheckpointCommitted {
+            seq: self.next_jsonl_seq(&path)?,
+            compact_id,
+            node_id: node_id.to_string(),
+            op,
+            cut_ordinal,
+            fold_end_ordinal,
+            replacement_history_len,
+            message_hash,
+            source_rollout_ref,
+        };
+        self.validate_bridge_checkpoint_commit_preconditions(&event)?;
         self.append_json_line(&path, &event)
     }
 
@@ -1627,6 +1675,11 @@ impl SpineSidecarStore {
                 {
                     terminal_before_commit = Some("compact_installed");
                 }
+                CompactIndexEvent::BridgeCheckpointCommitted { compact_id, .. }
+                    if compact_id == attempt.compact_id =>
+                {
+                    terminal_before_commit = Some("bridge_checkpoint_committed");
+                }
                 CompactIndexEvent::CompactFailed { compact_id, .. }
                     if compact_id == attempt.compact_id =>
                 {
@@ -1675,6 +1728,109 @@ impl SpineSidecarStore {
         Ok(())
     }
 
+    fn compact_attempt_state_for_bridge_checkpoint_validation(
+        &self,
+    ) -> Result<HashMap<String, CompactAttemptState>, SpineStoreError> {
+        let mut attempts = HashMap::new();
+        for existing in self.read_compact_index_events()? {
+            match existing {
+                CompactIndexEvent::CompactStarted {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    rollout,
+                    ..
+                } => {
+                    attempts.insert(
+                        compact_id,
+                        CompactAttemptState {
+                            node_id,
+                            op,
+                            cut_ordinal,
+                            fold_end_ordinal,
+                            rollout,
+                            terminal: None,
+                            mem_install_committed: false,
+                            mem_install_message_hash: None,
+                            mem_install_replacement_history_len: None,
+                            bridge_checkpoint_committed: false,
+                        },
+                    );
+                }
+                CompactIndexEvent::MemInstallCommitted {
+                    compact_id,
+                    message_hash,
+                    replacement_history_len,
+                    ..
+                } => {
+                    if let Some(attempt) = attempts.get_mut(&compact_id) {
+                        attempt.mem_install_committed = true;
+                        attempt.mem_install_message_hash = Some(message_hash);
+                        attempt.mem_install_replacement_history_len = Some(replacement_history_len);
+                    }
+                }
+                CompactIndexEvent::BridgeCheckpointCommitted { compact_id, .. } => {
+                    if let Some(attempt) = attempts.get_mut(&compact_id) {
+                        attempt.bridge_checkpoint_committed = true;
+                    }
+                }
+                CompactIndexEvent::CompactInstalled { compact_id, .. } => {
+                    if let Some(attempt) = attempts.get_mut(&compact_id) {
+                        attempt.terminal = Some("compact_installed");
+                    }
+                }
+                CompactIndexEvent::CompactFailed { compact_id, .. } => {
+                    if let Some(attempt) = attempts.get_mut(&compact_id) {
+                        attempt.terminal = Some("compact_failed");
+                    }
+                }
+                CompactIndexEvent::CompactInterrupted { compact_id, .. } => {
+                    if let Some(attempt) = attempts.get_mut(&compact_id) {
+                        attempt.terminal = Some("compact_interrupted");
+                    }
+                }
+            }
+        }
+        Ok(attempts)
+    }
+
+    fn validate_bridge_checkpoint_commit_preconditions(
+        &self,
+        event: &CompactIndexEvent,
+    ) -> Result<(), SpineStoreError> {
+        let CompactIndexEvent::BridgeCheckpointCommitted {
+            compact_id,
+            node_id,
+            op,
+            cut_ordinal,
+            fold_end_ordinal,
+            replacement_history_len,
+            message_hash,
+            source_rollout_ref,
+            ..
+        } = event
+        else {
+            return Err(SpineStoreError::InvalidLedger(
+                "bridge checkpoint precondition requires bridge_checkpoint_committed event"
+                    .to_string(),
+            ));
+        };
+        let mut attempts = self.compact_attempt_state_for_bridge_checkpoint_validation()?;
+        record_bridge_checkpoint_committed(
+            &mut attempts,
+            compact_id.clone(),
+            node_id.clone(),
+            *op,
+            *cut_ordinal,
+            *fold_end_ordinal,
+            *replacement_history_len,
+            message_hash.clone(),
+            source_rollout_ref.clone(),
+        )
+    }
+
     fn validate_compact_index(&self) -> Result<(), SpineStoreError> {
         let mut attempts: HashMap<String, CompactAttemptState> = HashMap::new();
 
@@ -1700,6 +1856,9 @@ impl SpineSidecarStore {
                                 rollout,
                                 terminal: None,
                                 mem_install_committed: false,
+                                mem_install_message_hash: None,
+                                mem_install_replacement_history_len: None,
+                                bridge_checkpoint_committed: false,
                             },
                         )
                         .is_some()
@@ -1720,10 +1879,11 @@ impl SpineSidecarStore {
                     memory_section_id,
                     body_hash,
                     storage_ref,
+                    message_hash,
+                    replacement_history_len,
                     projection_ref,
                     source_rollout_ref,
                     committed_at_seq,
-                    ..
                 } => {
                     record_mem_install_committed(
                         self,
@@ -1738,9 +1898,34 @@ impl SpineSidecarStore {
                         memory_section_id,
                         body_hash,
                         storage_ref,
+                        message_hash,
+                        replacement_history_len,
                         projection_ref,
                         source_rollout_ref,
                         committed_at_seq,
+                    )?;
+                }
+                CompactIndexEvent::BridgeCheckpointCommitted {
+                    compact_id,
+                    node_id,
+                    op,
+                    cut_ordinal,
+                    fold_end_ordinal,
+                    replacement_history_len,
+                    message_hash,
+                    source_rollout_ref,
+                    ..
+                } => {
+                    record_bridge_checkpoint_committed(
+                        &mut attempts,
+                        compact_id,
+                        node_id,
+                        op,
+                        cut_ordinal,
+                        fold_end_ordinal,
+                        replacement_history_len,
+                        message_hash,
+                        source_rollout_ref,
                     )?;
                 }
                 CompactIndexEvent::CompactInstalled {
@@ -2151,6 +2336,14 @@ pub(crate) struct MemInstallCommittedRecord {
     pub(crate) source_rollout_ref: String,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct BridgeCheckpointCommittedRecord {
+    pub(crate) attempt: CompactAttemptRecord,
+    pub(crate) replacement_history_len: usize,
+    pub(crate) message_hash: String,
+    pub(crate) source_rollout_ref: String,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CommittedMemInstall {
@@ -2357,6 +2550,9 @@ struct CompactAttemptState {
     rollout: String,
     terminal: Option<&'static str>,
     mem_install_committed: bool,
+    mem_install_message_hash: Option<String>,
+    mem_install_replacement_history_len: Option<usize>,
+    bridge_checkpoint_committed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2394,6 +2590,17 @@ enum CompactIndexEvent {
         replacement_history_len: usize,
         memory_path: String,
         message_hash: String,
+    },
+    BridgeCheckpointCommitted {
+        seq: u64,
+        compact_id: String,
+        node_id: String,
+        op: SpineOperation,
+        cut_ordinal: u64,
+        fold_end_ordinal: u64,
+        replacement_history_len: usize,
+        message_hash: String,
+        source_rollout_ref: String,
     },
     MemInstallCommitted {
         seq: u64,
@@ -2439,6 +2646,7 @@ impl CompactIndexEvent {
         match self {
             CompactIndexEvent::CompactStarted { seq, .. }
             | CompactIndexEvent::CompactInstalled { seq, .. }
+            | CompactIndexEvent::BridgeCheckpointCommitted { seq, .. }
             | CompactIndexEvent::MemInstallCommitted { seq, .. }
             | CompactIndexEvent::CompactFailed { seq, .. }
             | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq,
@@ -2449,6 +2657,7 @@ impl CompactIndexEvent {
         match self {
             CompactIndexEvent::CompactStarted { seq, .. }
             | CompactIndexEvent::CompactInstalled { seq, .. }
+            | CompactIndexEvent::BridgeCheckpointCommitted { seq, .. }
             | CompactIndexEvent::CompactFailed { seq, .. }
             | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq = next_seq,
             CompactIndexEvent::MemInstallCommitted {
@@ -2513,6 +2722,65 @@ fn record_compact_terminal(
     Ok(())
 }
 
+fn record_bridge_checkpoint_committed(
+    attempts: &mut HashMap<String, CompactAttemptState>,
+    compact_id: String,
+    node_id: String,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    replacement_history_len: usize,
+    message_hash: String,
+    source_rollout_ref: String,
+) -> Result<(), SpineStoreError> {
+    let Some(attempt) = attempts.get_mut(&compact_id) else {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl has bridge_checkpoint_committed without matching compact_started for {compact_id}"
+        )));
+    };
+    if !attempt.mem_install_committed {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl bridge_checkpoint_committed for {compact_id} precedes mem_install_committed"
+        )));
+    }
+    if attempt.bridge_checkpoint_committed {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl has duplicate bridge_checkpoint_committed for {compact_id}"
+        )));
+    }
+    if attempt.terminal.is_some() {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl bridge_checkpoint_committed for {compact_id} follows terminal event"
+        )));
+    }
+    if attempt.node_id != node_id
+        || attempt.op != op
+        || attempt.cut_ordinal != cut_ordinal
+        || attempt.fold_end_ordinal != fold_end_ordinal
+    {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl bridge_checkpoint_committed does not match compact_started for {compact_id}"
+        )));
+    }
+    if attempt.rollout != source_rollout_ref {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl bridge_checkpoint_committed source_rollout_ref does not match compact_started for {compact_id}"
+        )));
+    }
+    if attempt.mem_install_message_hash.as_deref() != Some(message_hash.as_str()) {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl bridge_checkpoint_committed message_hash does not match mem_install_committed for {compact_id}"
+        )));
+    }
+    if attempt.mem_install_replacement_history_len != Some(replacement_history_len) {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl bridge_checkpoint_committed replacement_history_len does not match mem_install_committed for {compact_id}"
+        )));
+    }
+    attempt.bridge_checkpoint_committed = true;
+    Ok(())
+}
+
 fn record_mem_install_committed(
     store: &SpineSidecarStore,
     attempts: &mut HashMap<String, CompactAttemptState>,
@@ -2526,6 +2794,8 @@ fn record_mem_install_committed(
     memory_section_id: String,
     body_hash: String,
     storage_ref: String,
+    message_hash: String,
+    replacement_history_len: usize,
     projection_ref: String,
     source_rollout_ref: String,
     committed_at_seq: u64,
@@ -2587,6 +2857,8 @@ fn record_mem_install_committed(
         Err(err) => return Err(err),
     }
     attempt.mem_install_committed = true;
+    attempt.mem_install_message_hash = Some(message_hash);
+    attempt.mem_install_replacement_history_len = Some(replacement_history_len);
     Ok(())
 }
 

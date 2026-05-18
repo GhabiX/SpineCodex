@@ -2396,10 +2396,11 @@ async fn root_archive_meminstall_order_recovers_checkpoint_after_commit() -> any
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 3);
+    assert_eq!(compact_events.len(), 4);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
-    assert_eq!(compact_events[2]["type"], "compact_installed");
+    assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
+    assert_eq!(compact_events[3]["type"], "compact_installed");
     let committed = runtime.store().committed_mem_installs()?;
     assert_eq!(committed.len(), 1);
     assert_eq!(
@@ -2495,9 +2496,10 @@ async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tre
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 2);
+    assert_eq!(compact_events.len(), 3);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
+    assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
     let storage_ref = compact_events[1]["storage_ref"]
         .as_str()
         .expect("MemInstall storage ref");
@@ -2882,10 +2884,11 @@ async fn suffix_meminstall_order_recovers_checkpoint_after_commit() -> anyhow::R
 
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 3);
+    assert_eq!(compact_events.len(), 4);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
-    assert_eq!(compact_events[2]["type"], "compact_installed");
+    assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
+    assert_eq!(compact_events[3]["type"], "compact_installed");
     let committed = runtime.store().committed_mem_installs()?;
     assert_eq!(committed.len(), 1);
     assert_eq!(
@@ -2933,9 +2936,10 @@ async fn spine_suffix_compaction_post_checkpoint_failure_poisons() -> anyhow::Re
 
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 2);
+    assert_eq!(compact_events.len(), 3);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
+    assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
     let storage_ref = compact_events[1]["storage_ref"]
         .as_str()
         .expect("MemInstall storage ref");
