@@ -1,5 +1,6 @@
 use super::candidate_mem_plan::CandidateMem;
 use super::candidate_mem_plan::CandidateMemCover;
+use super::candidate_mem_plan::CandidateMemPlan;
 use super::candidate_mem_plan::plan_candidate_mem_cover;
 use super::host_bridge::HostBridgeProjection;
 use super::host_bridge::SPINE_INITIAL_CONTEXT_CLOSE_TAG;
@@ -304,6 +305,7 @@ pub(crate) fn build_suffix_replacement_history(
     replacement_history
 }
 
+#[cfg(test)]
 pub(crate) fn build_suffix_replacement_history_from_pi(
     old_history: &[ResponseItem],
     runtime_spans: &[InstalledCompactSpan],
@@ -328,8 +330,34 @@ pub(crate) fn build_suffix_replacement_history_from_pi(
         boundary.op,
         new_span,
     );
-    let CandidateMemCover { mut pi, artifacts } =
+    let CandidateMemCover { pi, artifacts } =
         plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(pi_render_error)?;
+    let candidate_plan = CandidateMemPlan {
+        pi,
+        artifacts,
+        admitted_candidate: true,
+        rejected_candidate_reason: None,
+    };
+    build_suffix_replacement_history_from_candidate_plan(
+        old_history,
+        runtime_spans,
+        compact_id,
+        &candidate_plan,
+        memory_item,
+        note_items,
+    )
+}
+
+pub(crate) fn build_suffix_replacement_history_from_candidate_plan(
+    old_history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+    compact_id: &str,
+    candidate_plan: &CandidateMemPlan,
+    memory_item: ResponseItem,
+    note_items: Vec<ResponseItem>,
+) -> CodexResult<Vec<ResponseItem>> {
+    let mut pi = candidate_plan.pi.clone();
+    let artifacts = &candidate_plan.artifacts;
     let note_items = note_items
         .into_iter()
         .enumerate()
@@ -411,8 +439,38 @@ pub(crate) fn build_root_archive_replacement_history_for_compact_id(
             end: fold_end_ordinal,
         },
     );
-    let CandidateMemCover { mut pi, artifacts } =
+    let CandidateMemCover { pi, artifacts } =
         plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(pi_render_error)?;
+    let candidate_plan = CandidateMemPlan {
+        pi,
+        artifacts,
+        admitted_candidate: true,
+        rejected_candidate_reason: None,
+    };
+    build_root_archive_replacement_history_from_candidate_plan(
+        history,
+        runtime_spans,
+        root_compact_id,
+        archive_cut_ordinal,
+        archive_cut_index,
+        initial_context_items,
+        root_memory_item,
+        &candidate_plan,
+    )
+}
+
+pub(crate) fn build_root_archive_replacement_history_from_candidate_plan(
+    history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+    root_compact_id: &str,
+    archive_cut_ordinal: u64,
+    archive_cut_index: usize,
+    initial_context_items: Vec<ResponseItem>,
+    root_memory_item: ResponseItem,
+    candidate_plan: &CandidateMemPlan,
+) -> CodexResult<RootArchiveReplacementHistory> {
+    let mut pi = candidate_plan.pi.clone();
+    let artifacts = &candidate_plan.artifacts;
     let note_items = initial_context_items
         .into_iter()
         .enumerate()

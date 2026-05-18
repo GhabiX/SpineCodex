@@ -184,13 +184,14 @@ use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::spine::candidate_mem_plan::CandidateAdmissionPolicy;
 use crate::spine::candidate_mem_plan::CandidateMem;
+use crate::spine::candidate_mem_plan::CandidateMemPlan;
 use crate::spine::candidate_mem_plan::CandidateMemPlanMode;
 use crate::spine::candidate_mem_plan::plan_candidate_mem;
 use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
 use crate::spine::compact::SpineCompactBoundary;
 use crate::spine::compact::build_root_archive_replacement_history;
-use crate::spine::compact::build_root_archive_replacement_history_for_compact_id;
-use crate::spine::compact::build_suffix_replacement_history_from_pi;
+use crate::spine::compact::build_root_archive_replacement_history_from_candidate_plan;
+use crate::spine::compact::build_suffix_replacement_history_from_candidate_plan;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
 use crate::spine::compact::prepare_spine_compact_plan;
 use crate::spine::compact::raw_ordinal_for_effective_index_with_spans;
@@ -3102,14 +3103,27 @@ impl Session {
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to record spine root archive start: {err}"))
             })?;
-        let root_replacement = match build_root_archive_replacement_history_for_compact_id(
+        let candidate_plan = match validate_root_mem_install_segment_plan(
             &history,
-            prep.plan.cut_index,
-            root_boundary.fold_end_ordinal,
-            initial_context_items.clone(),
-            rendered_memory_item.clone(),
+            &prep.runtime_spans,
+            &root_boundary,
+            &compact_id,
+        ) {
+            Ok(candidate_plan) => candidate_plan,
+            Err(err) => {
+                record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
+                return Err(err);
+            }
+        };
+        let root_replacement = match build_root_archive_replacement_history_from_candidate_plan(
+            &history,
             &prep.runtime_spans,
             &compact_id,
+            root_boundary.cut_ordinal,
+            root_replacement.archive_cut_index,
+            initial_context_items.clone(),
+            rendered_memory_item.clone(),
+            &candidate_plan,
         ) {
             Ok(root_replacement) => root_replacement,
             Err(err) => {
@@ -3119,15 +3133,6 @@ impl Session {
         };
         let replacement_history = root_replacement.replacement_history;
         let message_hash = compact_message_hash(&compact_message);
-        if let Err(err) = validate_root_mem_install_segment_plan(
-            &history,
-            &prep.runtime_spans,
-            &root_boundary,
-            &compact_id,
-        ) {
-            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-            return Err(err);
-        }
         if turn_context.config.runtime_debug_checks {
             let spans_after_install = spine_compact_spans_after_install(
                 &prep.runtime_spans,
@@ -3226,14 +3231,15 @@ impl Session {
             }
         }
         ensure_meminstall_committed(&store, &compact_id, "root checkpoint render")?;
-        let root_replacement = build_root_archive_replacement_history_for_compact_id(
+        let root_replacement = build_root_archive_replacement_history_from_candidate_plan(
             &history,
-            prep.plan.cut_index,
-            root_boundary.fold_end_ordinal,
-            initial_context_items,
-            rendered_memory_item,
             &prep.runtime_spans,
             &compact_id,
+            root_boundary.cut_ordinal,
+            root_replacement.archive_cut_index,
+            initial_context_items,
+            rendered_memory_item,
+            &candidate_plan,
         )?;
         let replacement_history = root_replacement.replacement_history;
         let compacted_item = CompactedItem {
@@ -3431,26 +3437,26 @@ impl Session {
             &boundary.transition_summary,
             &model_memory_body,
         );
-        let replacement_history = build_suffix_replacement_history_from_pi(
-            &history,
-            &prep.runtime_spans,
-            &compact_id,
-            &prep.effective_boundary,
-            rendered_memory_item.clone(),
-            vec![render_spine_handoff_item(&boundary.node_id, &to_node)],
-        )?;
-        let message_hash = compact_message_hash(&compact_output.compact_message);
         let projected_state = {
             let runtime = spine.lock().await;
             runtime.state().clone()
         };
-        validate_suffix_mem_install_segment_plan(
+        let candidate_plan = validate_suffix_mem_install_segment_plan(
             &history,
             &prep.runtime_spans,
             &prep.effective_boundary,
             &compact_id,
             &projected_state,
         )?;
+        let replacement_history = build_suffix_replacement_history_from_candidate_plan(
+            &history,
+            &prep.runtime_spans,
+            &compact_id,
+            &candidate_plan,
+            rendered_memory_item.clone(),
+            vec![render_spine_handoff_item(&boundary.node_id, &to_node)],
+        )?;
+        let message_hash = compact_message_hash(&compact_output.compact_message);
         if turn_context.config.runtime_debug_checks {
             let spans_after_install = spine_compact_spans_after_install(
                 &prep.runtime_spans,
@@ -3551,11 +3557,11 @@ impl Session {
             )));
         }
         ensure_meminstall_committed(&store, &compact_id, "checkpoint render")?;
-        let replacement_history = build_suffix_replacement_history_from_pi(
+        let replacement_history = build_suffix_replacement_history_from_candidate_plan(
             &history,
             &prep.runtime_spans,
             &compact_id,
-            &prep.effective_boundary,
+            &candidate_plan,
             rendered_memory_item.clone(),
             vec![render_spine_handoff_item(&boundary.node_id, &to_node)],
         )?;
@@ -4517,7 +4523,7 @@ fn validate_suffix_mem_install_segment_plan(
     boundary: &SpineCompactBoundary,
     compact_id: &str,
     state: &crate::spine::state::SpineState,
-) -> CodexResult<()> {
+) -> CodexResult<CandidateMemPlan> {
     let raw_len = raw_ordinal_for_effective_index_with_spans(history, history.len(), runtime_spans)
         .ok_or_else(|| {
             CodexErr::Fatal("suffix MemInstall segment plan could not map history end".to_string())
@@ -4539,8 +4545,7 @@ fn validate_suffix_mem_install_segment_plan(
             state,
             admission: CandidateAdmissionPolicy::AdmitOrRejectNodeNotVisible,
         },
-    )?;
-    Ok(())
+    )
 }
 
 fn validate_root_mem_install_segment_plan(
@@ -4548,7 +4553,7 @@ fn validate_root_mem_install_segment_plan(
     runtime_spans: &[InstalledCompactSpan],
     boundary: &SpineCompactBoundary,
     compact_id: &str,
-) -> CodexResult<()> {
+) -> CodexResult<CandidateMemPlan> {
     let raw_len = raw_ordinal_for_effective_index_with_spans(history, history.len(), runtime_spans)
         .ok_or_else(|| {
             CodexErr::Fatal("root MemInstall segment plan could not map history end".to_string())
@@ -4570,8 +4575,7 @@ fn validate_root_mem_install_segment_plan(
             live_boundaries: &[boundary.fold_end_ordinal],
             admission: CandidateAdmissionPolicy::MustAdmit,
         },
-    )?;
-    Ok(())
+    )
 }
 
 fn suffix_mem_install_projection_ref(compact_id: &str, boundary: &SpineCompactBoundary) -> String {
