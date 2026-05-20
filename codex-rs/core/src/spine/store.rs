@@ -12,10 +12,11 @@ use super::mem_install::MemorySectionId;
 use super::mem_install::parse_generated_memory_sections;
 use super::mem_install::verify_memory_body_ref as verify_memory_body_ref_in_memory;
 use super::projection_epoch::ProjectionEpochMetadata;
-use super::state::NodeStatus;
 use super::state::SpineOperationName;
 use super::state::SpineState;
 use super::state::SpineStateError;
+use super::state::StateCheckpoint;
+use super::state::StateCheckpointError;
 use super::state::Transition;
 use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
@@ -222,10 +223,11 @@ impl SpineSidecarStore {
         self.create_compact_index_file()?;
         self.create_raw_rollout_file()?;
 
-        let state = SpineState::new();
+        let initial_raw_start_ordinal = 0;
+        let state = SpineState::new_with_initial_leaf_raw_start(initial_raw_start_ordinal);
         let event = TreeEvent::SpineInitialized {
             seq: 1,
-            state: StateSnapshot::from_state(&state),
+            initial_raw_start_ordinal,
         };
         self.append_json_line(&tree_path, &event)?;
         self.set_cached_next_tree_seq(2)?;
@@ -321,11 +323,18 @@ impl SpineSidecarStore {
 
     pub(crate) fn record_projection_reset(
         &self,
-        state: SpineState,
+        state: &SpineState,
+        checkpoint: StateCheckpoint,
         reason: impl Into<String>,
         source_turn_id: Option<String>,
         epoch: ProjectionEpochMetadata,
     ) -> Result<(), SpineStoreError> {
+        let replayed = checkpoint.replay()?;
+        if &replayed != state {
+            return Err(SpineStoreError::InvalidLedger(
+                "projection reset checkpoint does not replay to projected spine state".to_string(),
+            ));
+        }
         for node_id in state.nodes().keys() {
             self.ensure_node_dir(node_id)?;
         }
@@ -339,8 +348,8 @@ impl SpineSidecarStore {
             effective_raw_len: epoch.effective_raw_len,
             surviving_turn_ids_hash: epoch.surviving_turn_ids_hash,
             surviving_compact_ids: epoch.surviving_compact_ids,
-            state_hash: epoch.state_hash,
-            state: StateSnapshot::from_state(&state),
+            checkpoint_hash: epoch.checkpoint_hash,
+            checkpoint,
         };
         self.append_tree_event(&event)?;
         Ok(())
@@ -867,14 +876,17 @@ impl SpineSidecarStore {
         for event in events {
             match event {
                 TreeEvent::SpineInitialized {
-                    state: snapshot, ..
+                    initial_raw_start_ordinal,
+                    ..
                 } => {
                     if state.is_some() {
                         return Err(SpineStoreError::InvalidLedger(
                             "spine was initialized more than once".to_string(),
                         ));
                     }
-                    state = Some(spine_state_from_snapshot(snapshot)?);
+                    state = Some(SpineState::new_with_initial_leaf_raw_start(
+                        initial_raw_start_ordinal,
+                    ));
                 }
                 TreeEvent::TransitionApplied {
                     op,
@@ -942,10 +954,8 @@ impl SpineSidecarStore {
                     let node_id = NodeId::parse(&node_id)?;
                     state.set_raw_start_ordinal(&node_id, raw_start_ordinal)?;
                 }
-                TreeEvent::ProjectionReset {
-                    state: snapshot, ..
-                } => {
-                    state = Some(spine_state_from_snapshot(snapshot)?);
+                TreeEvent::ProjectionReset { checkpoint, .. } => {
+                    state = Some(checkpoint.replay()?);
                 }
                 TreeEvent::SpineHintEmitted { node_id, .. } => {
                     let state = state.as_ref().ok_or_else(|| {
@@ -1024,7 +1034,7 @@ impl SpineSidecarStore {
                 effective_raw_len,
                 surviving_turn_ids_hash,
                 surviving_compact_ids,
-                state_hash,
+                checkpoint_hash,
                 ..
             } = event
             else {
@@ -1037,7 +1047,7 @@ impl SpineSidecarStore {
                 effective_raw_len,
                 surviving_turn_ids_hash,
                 surviving_compact_ids,
-                state_hash,
+                checkpoint_hash,
             });
         }
         Ok(latest)
@@ -1689,7 +1699,7 @@ impl SpineOperation {
 enum TreeEvent {
     SpineInitialized {
         seq: u64,
-        state: StateSnapshot,
+        initial_raw_start_ordinal: u64,
     },
     TransitionApplied {
         seq: u64,
@@ -1725,8 +1735,8 @@ enum TreeEvent {
         effective_raw_len: u64,
         surviving_turn_ids_hash: String,
         surviving_compact_ids: Vec<String>,
-        state_hash: String,
-        state: StateSnapshot,
+        checkpoint_hash: String,
+        checkpoint: StateCheckpoint,
     },
     SpineHintEmitted {
         seq: u64,
@@ -2001,66 +2011,6 @@ fn is_raw_mirror_failure_test_item(item: &RolloutItem) -> bool {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct StateSnapshot {
-    cursor: String,
-    nodes: Vec<NodeSnapshot>,
-}
-
-impl StateSnapshot {
-    fn from_state(state: &SpineState) -> Self {
-        Self {
-            cursor: state.cursor().to_string(),
-            nodes: state
-                .nodes()
-                .values()
-                .map(|node| NodeSnapshot {
-                    node_id: node.node_id.to_string(),
-                    parent_id: node.parent_id.as_ref().map(ToString::to_string),
-                    raw_start_ordinal: node.raw_start_ordinal,
-                    status: status_label(&node.status).to_string(),
-                    summary: node.summary.clone(),
-                })
-                .collect(),
-        }
-    }
-}
-
-fn spine_state_from_snapshot(snapshot: StateSnapshot) -> Result<SpineState, SpineStoreError> {
-    let cursor = NodeId::parse(&snapshot.cursor)?;
-    let mut nodes = Vec::with_capacity(snapshot.nodes.len());
-    for node in snapshot.nodes {
-        nodes.push(super::state::NodeRecord {
-            node_id: NodeId::parse(&node.node_id)?,
-            parent_id: node.parent_id.as_deref().map(NodeId::parse).transpose()?,
-            raw_start_ordinal: node.raw_start_ordinal,
-            status: match node.status.as_str() {
-                "live" => NodeStatus::Live,
-                "suspended" => NodeStatus::Suspended,
-                "closed" => NodeStatus::Closed,
-                other => {
-                    return Err(SpineStoreError::InvalidLedger(format!(
-                        "unknown spine node status in projection reset: {other}"
-                    )));
-                }
-            },
-            summary: node.summary,
-        });
-    }
-    SpineState::from_records(cursor, nodes).map_err(Into::into)
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct NodeSnapshot {
-    node_id: String,
-    parent_id: Option<String>,
-    raw_start_ordinal: Option<u64>,
-    status: String,
-    summary: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
 struct SpineBaseLocator {
     version: u32,
     base: String,
@@ -2089,19 +2039,13 @@ pub(crate) enum SpineStoreError {
     #[error(transparent)]
     State(#[from] SpineStateError),
     #[error(transparent)]
+    StateCheckpoint(#[from] StateCheckpointError),
+    #[error(transparent)]
     NodeId(#[from] NodeIdParseError),
     #[error(transparent)]
     MemoryBody(#[from] MemoryBodyError),
     #[error(transparent)]
     RuntimeFastFail(#[from] RuntimeFastFailError),
-}
-
-fn status_label(status: &NodeStatus) -> &'static str {
-    match status {
-        NodeStatus::Live => "live",
-        NodeStatus::Suspended => "suspended",
-        NodeStatus::Closed => "closed",
-    }
 }
 
 fn rollout_parent(rollout_path: &Path) -> Result<&Path, SpineStoreError> {

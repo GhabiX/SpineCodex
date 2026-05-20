@@ -966,33 +966,15 @@ fn assert_spine_initialized(tree: &[Value]) {
         .iter()
         .find(|event| event.get("type").and_then(Value::as_str) == Some("spine_initialized"))
         .unwrap_or_else(|| panic!("tree should contain spine_initialized event: {tree:?}"));
-    let state = event
-        .get("state")
-        .unwrap_or_else(|| panic!("spine_initialized should contain state: {event:?}"));
-    assert_eq!(state.get("cursor").and_then(Value::as_str), Some("1.1"));
-    let nodes = state
-        .get("nodes")
-        .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("spine_initialized state should contain nodes: {state:?}"));
-    assert!(
-        nodes.iter().any(|node| {
-            node.get("node_id").and_then(Value::as_str) == Some("1")
-                && node.get("parent_id").is_some_and(Value::is_null)
-                && node.get("raw_start_ordinal").and_then(Value::as_u64) == Some(0)
-                && node.get("status").and_then(Value::as_str) == Some("suspended")
-                && node.get("summary").is_some_and(Value::is_null)
-        }),
-        "state should contain root epoch 1: {state:?}"
+    assert_eq!(
+        event
+            .get("initial_raw_start_ordinal")
+            .and_then(Value::as_u64),
+        Some(0)
     );
     assert!(
-        nodes.iter().any(|node| {
-            node.get("node_id").and_then(Value::as_str) == Some("1.1")
-                && node.get("parent_id").and_then(Value::as_str) == Some("1")
-                && node.get("raw_start_ordinal").and_then(Value::as_u64) == Some(0)
-                && node.get("status").and_then(Value::as_str) == Some("live")
-                && node.get("summary").is_some_and(Value::is_null)
-        }),
-        "state should contain initial live leaf 1.1: {state:?}"
+        event.get("state").is_none(),
+        "spine_initialized must not persist derived node state: {event:?}"
     );
 }
 

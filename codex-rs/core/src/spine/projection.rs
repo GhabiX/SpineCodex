@@ -7,6 +7,7 @@ use super::projection_epoch::ProjectionEpochMetadata;
 use super::projection_epoch::projection_epoch_metadata;
 use super::state::SpineState;
 use super::state::SpineStateError;
+use super::state::StateCheckpoint;
 use super::store::SpineOperation;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -20,6 +21,7 @@ use thiserror::Error;
 #[derive(Debug)]
 pub(crate) struct SpineProjection {
     pub(crate) state: SpineState,
+    pub(crate) checkpoint: StateCheckpoint,
     pub(crate) response_item_count: u64,
     pub(crate) surviving_turn_ids: HashSet<String>,
     pub(crate) surviving_compact_ids: HashSet<String>,
@@ -67,7 +69,9 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
     rollout_items: &[RolloutItem],
 ) -> Result<SpineProjection, SpineProjectionError> {
     let effective_items = effective_rollout_items(rollout_items)?;
-    let mut state = SpineState::new();
+    let initial_raw_start_ordinal = initial_context_prelude_len(&effective_items)?;
+    let mut state = SpineState::new_with_initial_leaf_raw_start(initial_raw_start_ordinal);
+    let mut checkpoint = StateCheckpoint::new(initial_raw_start_ordinal);
     let mut raw_ordinal = 0_u64;
     let mut pending_transition: Option<PendingTransition> = None;
     let surviving_turn_ids = surviving_turn_ids(&effective_items);
@@ -96,15 +100,41 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
                     let transition = pending_transition
                         .take()
                         .expect("pending transition checked above");
-                    let applied = transition.op.apply(&mut state, transition.summary)?;
+                    let applied = transition
+                        .op
+                        .apply(&mut state, transition.summary.clone())?;
                     state.set_raw_start_ordinal(&applied.to, item_end)?;
+                    match transition.op {
+                        SpineOperation::Open => {
+                            checkpoint.record_open(&applied.from, &applied.to, item_end);
+                        }
+                        SpineOperation::Close => {
+                            checkpoint.record_close(
+                                &applied.from,
+                                &applied.to,
+                                transition
+                                    .summary
+                                    .expect("close transition retains summary after apply"),
+                                item_end,
+                            );
+                        }
+                        SpineOperation::Archive => {
+                            unreachable!("projection never creates archive transition")
+                        }
+                    }
                 }
                 raw_ordinal = item_end;
             }
             RolloutItem::Compacted(compacted) => match compacted.spine.as_ref() {
                 Some(spine) if spine.kind == SpineCompactedCheckpointKind::RootEpoch => {
                     root_epoch_compact_ids.insert(spine.compact_id.clone());
-                    state.reset_root_epoch("Context compacted", raw_ordinal)?;
+                    let applied = state.reset_root_epoch("Context compacted", raw_ordinal)?;
+                    checkpoint.record_root_epoch_reset(
+                        &applied.from,
+                        &applied.to,
+                        "Context compacted",
+                        raw_ordinal,
+                    );
                 }
                 Some(_) => {}
                 None => break,
@@ -116,7 +146,7 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
     let epoch = projection_epoch_metadata(
         source_rollout_ref,
         rollout_items,
-        &state,
+        &checkpoint,
         raw_ordinal,
         &surviving_turn_ids,
         &surviving_compact_ids,
@@ -124,6 +154,7 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
 
     Ok(SpineProjection {
         state,
+        checkpoint,
         response_item_count: raw_ordinal,
         surviving_turn_ids,
         surviving_compact_ids,
@@ -214,6 +245,30 @@ fn surviving_compact_ids(items: &[&RolloutItem]) -> HashSet<String> {
             _ => None,
         })
         .collect()
+}
+
+fn initial_context_prelude_len(items: &[&RolloutItem]) -> Result<u64, SpineProjectionError> {
+    let mut count = 0_u64;
+    for item in items {
+        let RolloutItem::ResponseItem(response_item) = item else {
+            continue;
+        };
+        if !is_initial_context_prelude_item(response_item) {
+            break;
+        }
+        count = count
+            .checked_add(1)
+            .ok_or(SpineProjectionError::RawOrdinalOverflow)?;
+    }
+    Ok(count)
+}
+
+fn is_initial_context_prelude_item(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    role == "developer"
+        || (role == "user" && crate::event_mapping::is_contextual_user_message_content(content))
 }
 
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {

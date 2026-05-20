@@ -2460,7 +2460,35 @@ async fn spine_root_epoch_compaction_installs_slim_native_history() -> anyhow::R
         .iter()
         .find(|event| event["type"] == "mem_install_committed")
         .expect("MemInstall event");
-    assert!(mem_install["compact_id"].as_str() == Some("compact-root"));
+    let compact_id = mem_install["compact_id"]
+        .as_str()
+        .expect("MemInstall compact_id");
+    assert!(
+        compact_id.starts_with("sha1:"),
+        "root archive compact_id should be deterministic, got {compact_id}"
+    );
+    let tree_events = read_json_lines_for_test(&runtime.store().tree_path())?;
+    assert!(
+        tree_events.iter().any(|event| {
+            event["type"] == "root_epoch_reset" && event["compact_id"].as_str() == Some(compact_id)
+        }),
+        "tree ledger should reference committed compact_id {compact_id}: {tree_events:?}"
+    );
+    session.flush_rollout().await?;
+    let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert!(
+        rollout_items.iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::Compacted(compacted)
+                    if compacted
+                        .spine
+                        .as_ref()
+                        .is_some_and(|spine| spine.compact_id == compact_id)
+            )
+        }),
+        "rollout checkpoint should carry committed compact_id {compact_id}: {rollout_items:?}"
+    );
     Ok(())
 }
 
@@ -4005,7 +4033,8 @@ async fn resume_projection_repairs_behind_projection_epoch() -> anyhow::Result<(
     let store = crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?;
     store.create()?;
     store.record_projection_reset(
-        prefix_projection.state.clone(),
+        &prefix_projection.state,
+        prefix_projection.checkpoint.clone(),
         "resume_projection_prefix",
         None,
         prefix_projection.epoch.clone(),
@@ -4059,7 +4088,8 @@ async fn resume_projection_rejects_ahead_projection_epoch() -> anyhow::Result<()
     let store = crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?;
     store.create()?;
     store.record_projection_reset(
-        future_projection.state.clone(),
+        &future_projection.state,
+        future_projection.checkpoint.clone(),
         "future_projection",
         None,
         future_projection.epoch.clone(),

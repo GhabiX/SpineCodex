@@ -4,7 +4,8 @@ use crate::spine::mem_install::MemoryBodyError;
 use crate::spine::mem_install::MemoryBodyRef;
 use crate::spine::mem_install::MemorySectionId;
 use crate::spine::mem_install::memory_body_hash;
-use crate::spine::projection_epoch::projection_epoch_metadata;
+use crate::spine::state::NodeStatus;
+use crate::spine::state::StateCheckpoint;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -24,12 +25,12 @@ fn temp_store() -> (TempDir, SpineSidecarStore) {
 }
 
 fn test_projection_epoch(
-    state: &SpineState,
+    checkpoint: &StateCheckpoint,
 ) -> crate::spine::projection_epoch::ProjectionEpochMetadata {
-    projection_epoch_metadata(
+    crate::spine::projection_epoch::projection_epoch_metadata(
         "test_rollout",
         &[],
-        state,
+        checkpoint,
         0,
         &HashSet::new(),
         &HashSet::new(),
@@ -509,25 +510,7 @@ fn create_writes_root_ledger() {
         vec![json!({
             "type": "spine_initialized",
             "seq": 1,
-            "state": {
-                "cursor": "1.1",
-                "nodes": [
-                    {
-                        "node_id": "1",
-                        "parent_id": null,
-                        "raw_start_ordinal": 0,
-                        "status": "suspended",
-                        "summary": null,
-                    },
-                    {
-                        "node_id": "1.1",
-                        "parent_id": "1",
-                        "raw_start_ordinal": 0,
-                        "status": "live",
-                        "summary": null,
-                    },
-                ],
-            },
+            "initial_raw_start_ordinal": 0,
         })]
     );
     assert_eq!(store.load().expect("load sidecar"), state);
@@ -1448,8 +1431,10 @@ fn compact_index_started_without_terminal_fails_load() {
 fn projection_reset_replays_projected_state_and_copies_artifacts() {
     let (temp, source_store) = temp_store();
     let mut source_state = source_store.create().expect("create source");
+    let mut source_checkpoint = StateCheckpoint::new(0);
     source_store
         .record_transition(&mut source_state, SpineOperation::Open, None, 2, "turn-1")
+        .map(|transition| source_checkpoint.record_open(&transition.from, &transition.to, 2))
         .expect("record source transition");
     source_store
         .append_memory_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsource memory\n")
@@ -1460,10 +1445,11 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
     child_store.create().expect("create child");
     child_store
         .record_projection_reset(
-            source_state.clone(),
+            &source_state,
+            source_checkpoint.clone(),
             "fork_seed",
             None,
-            test_projection_epoch(&source_state),
+            test_projection_epoch(&source_checkpoint),
         )
         .expect("record projection reset");
     let projection_event = read_json_lines(child_store.tree_path())
@@ -1501,6 +1487,37 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
 }
 
 #[test]
+fn projection_reset_checkpoint_mismatch_fails_closed() {
+    let (temp, source_store) = temp_store();
+    let mut source_state = source_store.create().expect("create source");
+    let mut source_checkpoint = StateCheckpoint::new(0);
+    source_store
+        .record_transition(&mut source_state, SpineOperation::Open, None, 2, "turn-1")
+        .map(|transition| source_checkpoint.record_open(&transition.from, &transition.to, 2))
+        .expect("record source transition");
+
+    let child_rollout = temp.path().join("rollout-child.jsonl");
+    let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
+    child_store.create().expect("create child");
+
+    let error = child_store
+        .record_projection_reset(
+            &source_state,
+            StateCheckpoint::new(0),
+            "fork_seed",
+            None,
+            test_projection_epoch(&source_checkpoint),
+        )
+        .expect_err("projection reset checkpoint must match projected state");
+
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("projection reset checkpoint does not replay")
+    ));
+}
+
+#[test]
 fn projection_reset_without_epoch_metadata_fails_closed() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
@@ -1513,24 +1530,9 @@ fn projection_reset_without_epoch_metadata_fails_closed() {
                 "seq": 2,
                 "reason": "legacy_projection",
                 "source_turn_id": null,
-                "state": {
-                    "cursor": "1.1",
-                    "nodes": [
-                        {
-                            "node_id": "1",
-                            "parent_id": null,
-                            "raw_start_ordinal": 0,
-                            "status": "suspended",
-                            "summary": null
-                        },
-                        {
-                            "node_id": "1.1",
-                            "parent_id": "1",
-                            "raw_start_ordinal": 0,
-                            "status": "live",
-                            "summary": null
-                        }
-                    ]
+                "checkpoint": {
+                    "initial_raw_start_ordinal": 0,
+                    "events": []
                 }
             }),
         )
@@ -1557,8 +1559,9 @@ fn projection_reset_without_epoch_metadata_fails_closed() {
 #[test]
 fn projection_reset_with_derived_memory_path_fails_closed() {
     let (_temp, store) = temp_store();
-    let state = store.create().expect("create sidecar");
-    let epoch = test_projection_epoch(&state);
+    let checkpoint = StateCheckpoint::new(0);
+    store.create().expect("create sidecar");
+    let epoch = test_projection_epoch(&checkpoint);
 
     store
         .append_json_line(
@@ -1574,26 +1577,11 @@ fn projection_reset_with_derived_memory_path_fails_closed() {
                 "effective_raw_len": epoch.effective_raw_len,
                 "surviving_turn_ids_hash": epoch.surviving_turn_ids_hash,
                 "surviving_compact_ids": epoch.surviving_compact_ids,
-                "state_hash": epoch.state_hash,
-                "state": {
-                    "cursor": "1.1",
-                    "nodes": [
-                        {
-                            "node_id": "1",
-                            "parent_id": null,
-                            "raw_start_ordinal": 0,
-                            "status": "suspended",
-                            "summary": null,
-                            "memory_path": "nodes/1/memory.md"
-                        },
-                        {
-                            "node_id": "1.1",
-                            "parent_id": "1",
-                            "raw_start_ordinal": 0,
-                            "status": "live",
-                            "summary": null
-                        }
-                    ]
+                "checkpoint_hash": epoch.checkpoint_hash,
+                "checkpoint": {
+                    "initial_raw_start_ordinal": 0,
+                    "events": [],
+                    "nodes": []
                 }
             }),
         )
@@ -1601,11 +1589,11 @@ fn projection_reset_with_derived_memory_path_fails_closed() {
 
     let load_error = store
         .load()
-        .expect_err("derived memory_path must fail closed");
+        .expect_err("derived checkpoint node cache must fail closed");
     assert!(matches!(
         load_error,
         SpineStoreError::Json { source, .. }
-            if source.to_string().contains("unknown field `memory_path`")
+            if source.to_string().contains("unknown field `nodes`")
     ));
 }
 
@@ -1678,6 +1666,7 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
 fn projected_artifact_copy_filters_non_surviving_turn_files() {
     let (temp, source_store) = temp_store();
     let mut source_state = source_store.create().expect("create source");
+    let mut source_checkpoint = StateCheckpoint::new(0);
     source_store
         .record_transition(
             &mut source_state,
@@ -1686,6 +1675,7 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
             2,
             "surviving-turn",
         )
+        .map(|transition| source_checkpoint.record_open(&transition.from, &transition.to, 2))
         .expect("record source transition");
     source_store
         .append_memory_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsurviving memory\n")
@@ -1701,10 +1691,11 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
     child_store.create().expect("create child");
     child_store
         .record_projection_reset(
-            source_state.clone(),
+            &source_state,
+            source_checkpoint.clone(),
             "fork_seed",
             None,
-            test_projection_epoch(&source_state),
+            test_projection_epoch(&source_checkpoint),
         )
         .expect("record projection reset");
     child_store
@@ -1731,6 +1722,7 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
 fn projected_artifact_copy_fails_on_existing_destination_file() {
     let (temp, source_store) = temp_store();
     let mut source_state = source_store.create().expect("create source");
+    let mut source_checkpoint = StateCheckpoint::new(0);
     source_store
         .record_transition(
             &mut source_state,
@@ -1739,6 +1731,7 @@ fn projected_artifact_copy_fails_on_existing_destination_file() {
             2,
             "surviving-turn",
         )
+        .map(|transition| source_checkpoint.record_open(&transition.from, &transition.to, 2))
         .expect("record source transition");
     source_store
         .append_memory_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsource memory\n")
@@ -1749,10 +1742,11 @@ fn projected_artifact_copy_fails_on_existing_destination_file() {
     child_store.create().expect("create child");
     child_store
         .record_projection_reset(
-            source_state.clone(),
+            &source_state,
+            source_checkpoint.clone(),
             "fork_seed",
             None,
-            test_projection_epoch(&source_state),
+            test_projection_epoch(&source_checkpoint),
         )
         .expect("record projection reset");
     child_store

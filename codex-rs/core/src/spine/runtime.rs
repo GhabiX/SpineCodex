@@ -5,6 +5,7 @@ use super::is_spine_transition_tool;
 use super::projection_epoch::ProjectionEpochMetadata;
 use super::state::SpineState;
 use super::state::SpineStateError;
+use super::state::StateCheckpoint;
 use super::store::SpineOperation;
 use super::store::SpineSidecarStore;
 use super::store::SpineStoreError;
@@ -392,6 +393,7 @@ impl SpineRuntime {
     pub(crate) fn record_projection_reset(
         &mut self,
         state: SpineState,
+        checkpoint: StateCheckpoint,
         next_raw_ordinal: u64,
         surviving_turn_ids: HashSet<String>,
         surviving_compact_ids: HashSet<String>,
@@ -400,7 +402,7 @@ impl SpineRuntime {
         source_turn_id: Option<String>,
     ) -> Result<(), SpineRuntimeError> {
         self.store
-            .record_projection_reset(state.clone(), reason, source_turn_id, epoch)?;
+            .record_projection_reset(&state, checkpoint, reason, source_turn_id, epoch)?;
         self.state = state;
         self.next_raw_ordinal = next_raw_ordinal;
         self.surviving_turn_ids = Some(surviving_turn_ids);

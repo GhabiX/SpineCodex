@@ -240,6 +240,7 @@ pub(crate) fn load_initial_spine_runtime(
     {
         runtime.record_projection_reset(
             projection.state.clone(),
+            projection.checkpoint.clone(),
             projection.response_item_count,
             projection.surviving_turn_ids.clone(),
             projection.surviving_compact_ids.clone(),
@@ -341,7 +342,8 @@ pub(crate) async fn seed_forked_spine_sidecar(
 
     child_store.create()?;
     child_store.record_projection_reset(
-        projection.state.clone(),
+        &projection.state,
+        projection.checkpoint.clone(),
         "fork_seed",
         None,
         projection.epoch.clone(),

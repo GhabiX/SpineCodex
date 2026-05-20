@@ -1,6 +1,10 @@
 use super::ids::NodeId;
+use super::ids::NodeIdParseError;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt;
+use thiserror::Error;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NodeStatus {
@@ -57,6 +61,15 @@ impl SpineState {
         }
     }
 
+    pub(crate) fn cursor(&self) -> &NodeId {
+        &self.cursor
+    }
+
+    pub(crate) fn node(&self, node_id: &NodeId) -> Option<&NodeRecord> {
+        self.nodes.get(node_id)
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_records(
         cursor: NodeId,
         records: Vec<NodeRecord>,
@@ -80,14 +93,6 @@ impl SpineState {
         }
         validate_node_status_invariants(&nodes, &cursor)?;
         Ok(Self { cursor, nodes })
-    }
-
-    pub(crate) fn cursor(&self) -> &NodeId {
-        &self.cursor
-    }
-
-    pub(crate) fn node(&self, node_id: &NodeId) -> Option<&NodeRecord> {
-        self.nodes.get(node_id)
     }
 
     pub(crate) fn nodes(&self) -> &BTreeMap<NodeId, NodeRecord> {
@@ -341,86 +346,159 @@ pub(crate) struct Transition {
     pub(crate) to: NodeId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SpineStateError {
-    ArchiveIsInternal,
-    CannotCloseRoot,
-    ClosedNodeHasUnfinishedDescendant {
-        closed_node: NodeId,
-        descendant: NodeId,
-    },
-    DuplicateNode(NodeId),
-    EmptySummary,
-    MissingRawStartOrdinal(NodeId),
-    MissingSummary(SpineOperationName),
-    MultipleLiveNodes {
-        cursor: NodeId,
-        live_nodes: Vec<NodeId>,
-    },
-    SummaryAlreadyWritten(NodeId),
-    SuspendedNodeOutsideCursorPath {
-        node_id: NodeId,
-        cursor: NodeId,
-    },
-    TooManyChildren,
-    UnexpectedSummary(SpineOperationName),
-    UnknownNode(NodeId),
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StateCheckpoint {
+    initial_raw_start_ordinal: u64,
+    events: Vec<StateCheckpointEvent>,
 }
 
-impl fmt::Display for SpineStateError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SpineStateError::ArchiveIsInternal => {
-                f.write_str("archive is an internal spine operation")
-            }
-            SpineStateError::CannotCloseRoot => f.write_str("cannot close the root spine node"),
-            SpineStateError::ClosedNodeHasUnfinishedDescendant {
-                closed_node,
-                descendant,
-            } => write!(
-                f,
-                "closed spine node {} has unfinished descendant {}",
-                closed_node.bracketed(),
-                descendant.bracketed()
-            ),
-            SpineStateError::MissingRawStartOrdinal(node_id) => {
-                write!(f, "missing raw start ordinal for {}", node_id.bracketed())
-            }
-            SpineStateError::MissingSummary(op) => {
-                write!(f, "spine {} requires a summary", op.as_str())
-            }
-            SpineStateError::MultipleLiveNodes { cursor, live_nodes } => write!(
-                f,
-                "spine state must have exactly one live cursor {}; found live nodes {:?}",
-                cursor.bracketed(),
-                live_nodes
-            ),
-            SpineStateError::SummaryAlreadyWritten(node_id) => {
-                write!(f, "summary already written for {}", node_id.bracketed())
-            }
-            SpineStateError::SuspendedNodeOutsideCursorPath { node_id, cursor } => write!(
-                f,
-                "suspended spine node {} is outside cursor path {}",
-                node_id.bracketed(),
-                cursor.bracketed()
-            ),
-            SpineStateError::DuplicateNode(node_id) => {
-                write!(f, "duplicate spine node {}", node_id.bracketed())
-            }
-            SpineStateError::EmptySummary => f.write_str("spine summary must not be empty"),
-            SpineStateError::TooManyChildren => f.write_str("too many spine child nodes"),
-            SpineStateError::UnexpectedSummary(op) => {
-                write!(f, "spine {} does not accept a summary", op.as_str())
-            }
-            SpineStateError::UnknownNode(node_id) => {
-                write!(f, "unknown spine node {}", node_id.bracketed())
+impl StateCheckpoint {
+    pub(crate) fn new(initial_raw_start_ordinal: u64) -> Self {
+        Self {
+            initial_raw_start_ordinal,
+            events: Vec::new(),
+        }
+    }
+
+    pub(crate) fn record_open(&mut self, from: &NodeId, to: &NodeId, raw_start_ordinal: u64) {
+        self.events.push(StateCheckpointEvent::Open {
+            from_node: from.to_string(),
+            to_node: to.to_string(),
+            raw_start_ordinal,
+        });
+    }
+
+    pub(crate) fn record_close(
+        &mut self,
+        from: &NodeId,
+        to: &NodeId,
+        summary: impl Into<String>,
+        raw_start_ordinal: u64,
+    ) {
+        self.events.push(StateCheckpointEvent::Close {
+            from_node: from.to_string(),
+            to_node: to.to_string(),
+            summary: summary.into(),
+            raw_start_ordinal,
+        });
+    }
+
+    pub(crate) fn record_root_epoch_reset(
+        &mut self,
+        root_id: &NodeId,
+        next_leaf_id: &NodeId,
+        summary: impl Into<String>,
+        raw_start_ordinal: u64,
+    ) {
+        self.events.push(StateCheckpointEvent::RootEpochReset {
+            root_id: root_id.to_string(),
+            next_leaf_id: next_leaf_id.to_string(),
+            summary: summary.into(),
+            raw_start_ordinal,
+        });
+    }
+
+    pub(crate) fn replay(&self) -> Result<SpineState, StateCheckpointError> {
+        let mut state = SpineState::new_with_initial_leaf_raw_start(self.initial_raw_start_ordinal);
+        for event in &self.events {
+            match event {
+                StateCheckpointEvent::Open {
+                    from_node,
+                    to_node,
+                    raw_start_ordinal,
+                } => {
+                    let expected_from = NodeId::parse(from_node)?;
+                    let expected_to = NodeId::parse(to_node)?;
+                    let transition = state.open()?;
+                    validate_checkpoint_transition(
+                        "open",
+                        &expected_from,
+                        &expected_to,
+                        &transition,
+                    )?;
+                    state.set_raw_start_ordinal(&transition.to, *raw_start_ordinal)?;
+                }
+                StateCheckpointEvent::Close {
+                    from_node,
+                    to_node,
+                    summary,
+                    raw_start_ordinal,
+                } => {
+                    let expected_from = NodeId::parse(from_node)?;
+                    let expected_to = NodeId::parse(to_node)?;
+                    let transition = state.close(summary.clone())?;
+                    validate_checkpoint_transition(
+                        "close",
+                        &expected_from,
+                        &expected_to,
+                        &transition,
+                    )?;
+                    state.set_raw_start_ordinal(&transition.to, *raw_start_ordinal)?;
+                }
+                StateCheckpointEvent::RootEpochReset {
+                    root_id,
+                    next_leaf_id,
+                    summary,
+                    raw_start_ordinal,
+                } => {
+                    let expected_from = NodeId::parse(root_id)?;
+                    let expected_to = NodeId::parse(next_leaf_id)?;
+                    let transition = state.reset_root_epoch(summary.clone(), *raw_start_ordinal)?;
+                    validate_checkpoint_transition(
+                        "root_epoch_reset",
+                        &expected_from,
+                        &expected_to,
+                        &transition,
+                    )?;
+                }
             }
         }
+        Ok(state)
     }
 }
 
-impl std::error::Error for SpineStateError {}
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum StateCheckpointEvent {
+    Open {
+        from_node: String,
+        to_node: String,
+        raw_start_ordinal: u64,
+    },
+    Close {
+        from_node: String,
+        to_node: String,
+        summary: String,
+        raw_start_ordinal: u64,
+    },
+    RootEpochReset {
+        root_id: String,
+        next_leaf_id: String,
+        summary: String,
+        raw_start_ordinal: u64,
+    },
+}
 
+fn validate_checkpoint_transition(
+    op: &'static str,
+    expected_from: &NodeId,
+    expected_to: &NodeId,
+    actual: &Transition,
+) -> Result<(), StateCheckpointError> {
+    if &actual.from == expected_from && &actual.to == expected_to {
+        return Ok(());
+    }
+    Err(StateCheckpointError::ReplayMismatch {
+        op,
+        expected_from: expected_from.clone(),
+        expected_to: expected_to.clone(),
+        actual_from: actual.from.clone(),
+        actual_to: actual.to.clone(),
+    })
+}
+
+#[cfg(test)]
 fn validate_node_status_invariants(
     nodes: &BTreeMap<NodeId, NodeRecord>,
     cursor: &NodeId,
@@ -467,6 +545,7 @@ fn validate_node_status_invariants(
     Ok(())
 }
 
+#[cfg(test)]
 fn is_ancestor_in_records(
     nodes: &BTreeMap<NodeId, NodeRecord>,
     ancestor_id: &NodeId,
@@ -475,6 +554,7 @@ fn is_ancestor_in_records(
     ancestor_id == node_id || is_descendant_in_records(nodes, node_id, ancestor_id)
 }
 
+#[cfg(test)]
 fn is_descendant_in_records(
     nodes: &BTreeMap<NodeId, NodeRecord>,
     node_id: &NodeId,
@@ -489,6 +569,114 @@ fn is_descendant_in_records(
     }
     false
 }
+
+#[derive(Debug, Error)]
+pub(crate) enum StateCheckpointError {
+    #[error(
+        "spine checkpoint {op} replay mismatch: expected {} -> {}, got {} -> {}",
+        expected_from.bracketed(),
+        expected_to.bracketed(),
+        actual_from.bracketed(),
+        actual_to.bracketed()
+    )]
+    ReplayMismatch {
+        op: &'static str,
+        expected_from: NodeId,
+        expected_to: NodeId,
+        actual_from: NodeId,
+        actual_to: NodeId,
+    },
+    #[error(transparent)]
+    NodeId(#[from] NodeIdParseError),
+    #[error(transparent)]
+    State(#[from] SpineStateError),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SpineStateError {
+    ArchiveIsInternal,
+    CannotCloseRoot,
+    #[cfg(test)]
+    ClosedNodeHasUnfinishedDescendant {
+        closed_node: NodeId,
+        descendant: NodeId,
+    },
+    DuplicateNode(NodeId),
+    EmptySummary,
+    MissingRawStartOrdinal(NodeId),
+    MissingSummary(SpineOperationName),
+    #[cfg(test)]
+    MultipleLiveNodes {
+        cursor: NodeId,
+        live_nodes: Vec<NodeId>,
+    },
+    SummaryAlreadyWritten(NodeId),
+    #[cfg(test)]
+    SuspendedNodeOutsideCursorPath {
+        node_id: NodeId,
+        cursor: NodeId,
+    },
+    TooManyChildren,
+    UnexpectedSummary(SpineOperationName),
+    UnknownNode(NodeId),
+}
+
+impl fmt::Display for SpineStateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SpineStateError::ArchiveIsInternal => {
+                f.write_str("archive is an internal spine operation")
+            }
+            SpineStateError::CannotCloseRoot => f.write_str("cannot close the root spine node"),
+            #[cfg(test)]
+            SpineStateError::ClosedNodeHasUnfinishedDescendant {
+                closed_node,
+                descendant,
+            } => write!(
+                f,
+                "closed spine node {} has unfinished descendant {}",
+                closed_node.bracketed(),
+                descendant.bracketed()
+            ),
+            SpineStateError::MissingRawStartOrdinal(node_id) => {
+                write!(f, "missing raw start ordinal for {}", node_id.bracketed())
+            }
+            SpineStateError::MissingSummary(op) => {
+                write!(f, "spine {} requires a summary", op.as_str())
+            }
+            #[cfg(test)]
+            SpineStateError::MultipleLiveNodes { cursor, live_nodes } => write!(
+                f,
+                "spine state must have exactly one live cursor {}; found live nodes {:?}",
+                cursor.bracketed(),
+                live_nodes
+            ),
+            SpineStateError::SummaryAlreadyWritten(node_id) => {
+                write!(f, "summary already written for {}", node_id.bracketed())
+            }
+            #[cfg(test)]
+            SpineStateError::SuspendedNodeOutsideCursorPath { node_id, cursor } => write!(
+                f,
+                "suspended spine node {} is outside cursor path {}",
+                node_id.bracketed(),
+                cursor.bracketed()
+            ),
+            SpineStateError::DuplicateNode(node_id) => {
+                write!(f, "duplicate spine node {}", node_id.bracketed())
+            }
+            SpineStateError::EmptySummary => f.write_str("spine summary must not be empty"),
+            SpineStateError::TooManyChildren => f.write_str("too many spine child nodes"),
+            SpineStateError::UnexpectedSummary(op) => {
+                write!(f, "spine {} does not accept a summary", op.as_str())
+            }
+            SpineStateError::UnknownNode(node_id) => {
+                write!(f, "unknown spine node {}", node_id.bracketed())
+            }
+        }
+    }
+}
+
+impl std::error::Error for SpineStateError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpineOperationName {

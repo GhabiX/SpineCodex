@@ -1355,6 +1355,7 @@ impl Session {
             runtime
                 .record_projection_reset(
                     projection.state,
+                    projection.checkpoint,
                     projection.response_item_count,
                     projection.surviving_turn_ids,
                     projection.surviving_compact_ids,

@@ -245,17 +245,10 @@ fn deep_close_returns_to_parent_with_closed_child_visible() {
 
 #[test]
 fn close_on_root_fails_without_mutating_state() {
-    let mut state = SpineState::from_records(
-        id(&[1]),
-        vec![NodeRecord {
-            node_id: id(&[1]),
-            parent_id: None,
-            raw_start_ordinal: Some(0),
-            status: NodeStatus::Live,
-            summary: None,
-        }],
-    )
-    .expect("construct root cursor state");
+    let mut state = SpineState::new();
+    state
+        .close("root child done")
+        .expect("close initial child should return to root epoch");
     let before = state.clone();
 
     let error = state
@@ -264,118 +257,6 @@ fn close_on_root_fails_without_mutating_state() {
 
     assert_eq!(error, SpineStateError::CannotCloseRoot);
     assert_eq!(state, before);
-}
-
-#[test]
-fn from_records_rejects_multiple_live_nodes() {
-    let error = SpineState::from_records(
-        id(&[1, 1]),
-        vec![
-            NodeRecord {
-                node_id: id(&[1]),
-                parent_id: None,
-                raw_start_ordinal: Some(0),
-                status: NodeStatus::Suspended,
-                summary: None,
-            },
-            NodeRecord {
-                node_id: id(&[1, 1]),
-                parent_id: Some(id(&[1])),
-                raw_start_ordinal: Some(0),
-                status: NodeStatus::Live,
-                summary: None,
-            },
-            NodeRecord {
-                node_id: id(&[1, 2]),
-                parent_id: Some(id(&[1])),
-                raw_start_ordinal: Some(0),
-                status: NodeStatus::Live,
-                summary: None,
-            },
-        ],
-    )
-    .expect_err("multiple live nodes should fail closed");
-
-    assert!(matches!(error, SpineStateError::MultipleLiveNodes { .. }));
-}
-
-#[test]
-fn from_records_rejects_suspended_node_outside_cursor_path() {
-    let error = SpineState::from_records(
-        id(&[1, 1]),
-        vec![
-            NodeRecord {
-                node_id: id(&[1]),
-                parent_id: None,
-                raw_start_ordinal: Some(0),
-                status: NodeStatus::Suspended,
-                summary: None,
-            },
-            NodeRecord {
-                node_id: id(&[1, 1]),
-                parent_id: Some(id(&[1])),
-                raw_start_ordinal: Some(0),
-                status: NodeStatus::Live,
-                summary: None,
-            },
-            NodeRecord {
-                node_id: id(&[1, 2]),
-                parent_id: Some(id(&[1])),
-                raw_start_ordinal: Some(0),
-                status: NodeStatus::Suspended,
-                summary: None,
-            },
-        ],
-    )
-    .expect_err("suspended non-ancestor should fail closed");
-
-    assert!(matches!(
-        error,
-        SpineStateError::SuspendedNodeOutsideCursorPath { .. }
-    ));
-}
-
-#[test]
-fn from_records_rejects_unfinished_descendant_under_closed_node() {
-    let error = SpineState::from_records(
-        id(&[2, 1]),
-        vec![
-            NodeRecord {
-                node_id: id(&[1]),
-                parent_id: None,
-                raw_start_ordinal: Some(0),
-                status: NodeStatus::Closed,
-                summary: Some("Context compacted".to_string()),
-            },
-            NodeRecord {
-                node_id: id(&[1, 1]),
-                parent_id: Some(id(&[1])),
-                raw_start_ordinal: Some(0),
-                status: NodeStatus::Suspended,
-                summary: None,
-            },
-            NodeRecord {
-                node_id: id(&[2]),
-                parent_id: None,
-                raw_start_ordinal: Some(7),
-                status: NodeStatus::Suspended,
-                summary: None,
-            },
-            NodeRecord {
-                node_id: id(&[2, 1]),
-                parent_id: Some(id(&[2])),
-                raw_start_ordinal: Some(7),
-                status: NodeStatus::Live,
-                summary: None,
-            },
-        ],
-    )
-    .expect_err("unfinished descendant under closed node should fail closed");
-
-    assert!(matches!(
-        error,
-        SpineStateError::ClosedNodeHasUnfinishedDescendant { .. }
-    ));
 }
 
 #[test]

@@ -106,6 +106,28 @@ fn spine_compacted(compact_id: &str, kind: SpineCompactedCheckpointKind) -> Roll
     })
 }
 
+fn contextual_dev_message(text: &str) -> RolloutItem {
+    RolloutItem::ResponseItem(ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    })
+}
+
+fn contextual_user_message(text: &str) -> RolloutItem {
+    RolloutItem::ResponseItem(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    })
+}
+
 #[test]
 fn projects_committed_spine_transitions_from_rollout_prefix() {
     let projection = project_spine_state_from_rollout(&[
@@ -129,6 +151,61 @@ fn projects_committed_spine_transitions_from_rollout_prefix() {
             .summary
             .as_deref(),
         Some("done")
+    );
+}
+
+#[test]
+fn projection_keeps_initial_context_prelude_out_of_root_epoch_cut() {
+    let projection = project_spine_state_from_rollout(&[
+        contextual_dev_message("developer instructions prelude"),
+        contextual_user_message("<environment_context>\nprelude\n</environment_context>"),
+        user_message("real turn"),
+        spine_compacted("compact-root", SpineCompactedCheckpointKind::RootEpoch),
+    ])
+    .expect("project");
+
+    assert_eq!(projection.response_item_count, 3);
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[1]))
+            .and_then(|node| node.raw_start_ordinal),
+        Some(2)
+    );
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[2, 1]))
+            .and_then(|node| node.raw_start_ordinal),
+        Some(3)
+    );
+    assert_eq!(
+        projection.checkpoint.replay().expect("checkpoint replay"),
+        projection.state
+    );
+}
+
+#[test]
+fn projection_does_not_treat_plain_first_user_message_as_prelude() {
+    let projection = project_spine_state_from_rollout(&[
+        user_message("real turn"),
+        spine_compacted("compact-root", SpineCompactedCheckpointKind::RootEpoch),
+    ])
+    .expect("project");
+
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[1]))
+            .and_then(|node| node.raw_start_ordinal),
+        Some(0)
+    );
+    assert_eq!(
+        projection
+            .state
+            .node(&id(&[2, 1]))
+            .and_then(|node| node.raw_start_ordinal),
+        Some(1)
     );
 }
 
@@ -325,7 +402,7 @@ fn projection_epoch_metadata_classifies_resume_position() {
             .surviving_turn_ids_hash
             .starts_with("sha256:")
     );
-    assert!(projection.epoch.state_hash.starts_with("sha256:"));
+    assert!(projection.epoch.checkpoint_hash.starts_with("sha256:"));
 
     let current = projection_rollout_position("rollout-a.jsonl", &source_items)
         .expect("current rollout position");

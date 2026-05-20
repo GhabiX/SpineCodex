@@ -1,6 +1,4 @@
-use super::ids::NodeId;
-use super::state::NodeStatus;
-use super::state::SpineState;
+use super::state::StateCheckpoint;
 use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -16,7 +14,7 @@ pub(crate) struct ProjectionEpochMetadata {
     pub(crate) effective_raw_len: u64,
     pub(crate) surviving_turn_ids_hash: String,
     pub(crate) surviving_compact_ids: Vec<String>,
-    pub(crate) state_hash: String,
+    pub(crate) checkpoint_hash: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,7 +35,7 @@ pub(crate) enum ProjectionEpochClassification {
 pub(crate) fn projection_epoch_metadata(
     source_rollout_ref: impl Into<String>,
     rollout_items: &[RolloutItem],
-    state: &SpineState,
+    checkpoint: &StateCheckpoint,
     effective_raw_len: u64,
     surviving_turn_ids: &HashSet<String>,
     surviving_compact_ids: &HashSet<String>,
@@ -51,7 +49,7 @@ pub(crate) fn projection_epoch_metadata(
         effective_raw_len,
         surviving_turn_ids_hash: hash_sorted_strings(surviving_turn_ids),
         surviving_compact_ids: sorted_strings(surviving_compact_ids),
-        state_hash: projection_state_hash(state)?,
+        checkpoint_hash: projection_checkpoint_hash(checkpoint)?,
     })
 }
 
@@ -104,22 +102,8 @@ fn hash_rollout_items_as_jsonl(rollout_items: &[RolloutItem]) -> Result<String, 
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
-fn projection_state_hash(state: &SpineState) -> Result<String, serde_json::Error> {
-    let snapshot = ProjectionStateHash {
-        cursor: state.cursor().to_string(),
-        nodes: state
-            .nodes()
-            .values()
-            .map(|node| ProjectionNodeHash {
-                node_id: node.node_id.to_string(),
-                parent_id: node.parent_id.as_ref().map(NodeId::to_string),
-                raw_start_ordinal: node.raw_start_ordinal,
-                status: node_status_label(&node.status),
-                summary: node.summary.clone(),
-            })
-            .collect(),
-    };
-    let encoded = serde_json::to_string(&snapshot)?;
+fn projection_checkpoint_hash(checkpoint: &StateCheckpoint) -> Result<String, serde_json::Error> {
+    let encoded = serde_json::to_string(checkpoint)?;
     Ok(format!("sha256:{:x}", Sha256::digest(encoded.as_bytes())))
 }
 
@@ -135,33 +119,10 @@ fn sorted_strings(values: &HashSet<String>) -> Vec<String> {
     values
 }
 
-fn node_status_label(status: &NodeStatus) -> &'static str {
-    match status {
-        NodeStatus::Live => "live",
-        NodeStatus::Suspended => "suspended",
-        NodeStatus::Closed => "closed",
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ProjectionEpochError {
     #[error("spine projection epoch rollout length {len} cannot fit in u64")]
     RolloutTooLong { len: usize },
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-}
-
-#[derive(Serialize)]
-struct ProjectionStateHash {
-    cursor: String,
-    nodes: Vec<ProjectionNodeHash>,
-}
-
-#[derive(Serialize)]
-struct ProjectionNodeHash {
-    node_id: String,
-    parent_id: Option<String>,
-    raw_start_ordinal: Option<u64>,
-    status: &'static str,
-    summary: Option<String>,
 }

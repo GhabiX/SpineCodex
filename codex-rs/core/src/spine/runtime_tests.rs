@@ -93,25 +93,7 @@ fn initial_tree_event(raw_start_ordinal: u64) -> Value {
     json!({
         "type": "spine_initialized",
         "seq": 1,
-        "state": {
-            "cursor": "1.1",
-            "nodes": [
-                {
-                    "node_id": "1",
-                    "parent_id": null,
-                    "raw_start_ordinal": 0,
-                    "status": "suspended",
-                    "summary": null,
-                },
-                {
-                    "node_id": "1.1",
-                    "parent_id": "1",
-                    "raw_start_ordinal": raw_start_ordinal,
-                    "status": "live",
-                    "summary": null,
-                },
-            ],
-        },
+        "initial_raw_start_ordinal": raw_start_ordinal,
     })
 }
 
