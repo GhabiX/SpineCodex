@@ -261,6 +261,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         images,
         model: model_cli_arg,
         oss,
+        runtime_debug_checks,
         oss_provider,
         config_profile,
         sandbox_mode: sandbox_mode_cli_arg,
@@ -291,6 +292,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     };
 
     // Parse `-c` overrides from the CLI.
+    let mut config_overrides = config_overrides;
+    if runtime_debug_checks {
+        config_overrides.enable_runtime_debug_checks();
+    }
     let cli_kv_overrides = match config_overrides.parse_overrides() {
         Ok(v) => v,
         #[allow(clippy::print_stderr)]

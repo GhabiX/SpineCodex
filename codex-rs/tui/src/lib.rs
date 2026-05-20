@@ -735,6 +735,9 @@ pub async fn run_main(
             .raw_overrides
             .push("web_search=\"live\"".to_string());
     }
+    if cli.runtime_debug_checks {
+        cli.config_overrides.enable_runtime_debug_checks();
+    }
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
     let raw_overrides = cli.config_overrides.raw_overrides.clone();

@@ -12,6 +12,7 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -42,6 +43,7 @@ pub(crate) struct Session {
     pub(crate) pending_spine_compact_boundaries: Mutex<Vec<SpineCompactBoundary>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
+    pub(super) rollout_persistence_closed: AtomicBool,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -994,6 +996,7 @@ impl Session {
                 pending_spine_compact_boundaries: Mutex::new(Vec::new()),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
+                rollout_persistence_closed: AtomicBool::new(false),
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {

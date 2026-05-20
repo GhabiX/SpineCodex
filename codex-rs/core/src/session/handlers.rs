@@ -738,6 +738,7 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         };
         sess.send_event_raw(event).await;
     }
+    sess.close_rollout_persistence();
 
     let event = Event {
         id: sub_id,

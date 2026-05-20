@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -1078,6 +1079,15 @@ impl Session {
 
     pub(crate) fn live_thread(&self) -> Option<&LiveThread> {
         self.services.live_thread.as_ref()
+    }
+
+    pub(crate) fn close_rollout_persistence(&self) {
+        self.rollout_persistence_closed
+            .store(true, Ordering::SeqCst);
+    }
+
+    fn rollout_persistence_is_closed(&self) -> bool {
+        self.rollout_persistence_closed.load(Ordering::SeqCst)
     }
 
     /// Flush rollout writes and return the final durability-barrier result.
@@ -3191,6 +3201,9 @@ impl Session {
     }
 
     async fn try_persist_rollout_items(&self, items: &[RolloutItem]) -> CodexResult<()> {
+        if self.rollout_persistence_is_closed() {
+            return Ok(());
+        }
         let Some(live_thread) = self.live_thread() else {
             return Ok(());
         };

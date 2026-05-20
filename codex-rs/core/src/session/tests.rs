@@ -177,6 +177,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
@@ -4203,6 +4204,132 @@ impl FailingFlushThreadStore {
     }
 }
 
+struct ShutdownRejectingThreadStore {
+    inner: Arc<codex_thread_store::InMemoryThreadStore>,
+    closed_threads: tokio::sync::Mutex<HashSet<ThreadId>>,
+}
+
+impl ShutdownRejectingThreadStore {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(codex_thread_store::InMemoryThreadStore::default()),
+            closed_threads: tokio::sync::Mutex::new(HashSet::new()),
+        }
+    }
+
+    async fn calls(&self) -> codex_thread_store::InMemoryThreadStoreCalls {
+        self.inner.calls().await
+    }
+}
+
+#[async_trait::async_trait]
+impl codex_thread_store::ThreadStore for ShutdownRejectingThreadStore {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    async fn create_thread(
+        &self,
+        params: codex_thread_store::CreateThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.create_thread(params).await
+    }
+
+    async fn resume_thread(
+        &self,
+        params: codex_thread_store::ResumeThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.resume_thread(params).await
+    }
+
+    async fn append_items(
+        &self,
+        params: codex_thread_store::AppendThreadItemsParams,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        if self.closed_threads.lock().await.contains(&params.thread_id) {
+            return Err(codex_thread_store::ThreadStoreError::ThreadNotFound {
+                thread_id: params.thread_id,
+            });
+        }
+        self.inner.append_items(params).await
+    }
+
+    async fn persist_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.persist_thread(thread_id).await
+    }
+
+    async fn flush_thread(&self, thread_id: ThreadId) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.flush_thread(thread_id).await
+    }
+
+    async fn shutdown_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.closed_threads.lock().await.insert(thread_id);
+        self.inner.shutdown_thread(thread_id).await
+    }
+
+    async fn discard_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.discard_thread(thread_id).await
+    }
+
+    async fn load_history(
+        &self,
+        params: codex_thread_store::LoadThreadHistoryParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThreadHistory> {
+        self.inner.load_history(params).await
+    }
+
+    async fn read_thread(
+        &self,
+        params: codex_thread_store::ReadThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThread> {
+        self.inner.read_thread(params).await
+    }
+
+    async fn read_thread_by_rollout_path(
+        &self,
+        params: codex_thread_store::ReadThreadByRolloutPathParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThread> {
+        self.inner.read_thread_by_rollout_path(params).await
+    }
+
+    async fn list_threads(
+        &self,
+        params: codex_thread_store::ListThreadsParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::ThreadPage> {
+        self.inner.list_threads(params).await
+    }
+
+    async fn update_thread_metadata(
+        &self,
+        params: codex_thread_store::UpdateThreadMetadataParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThread> {
+        self.inner.update_thread_metadata(params).await
+    }
+
+    async fn archive_thread(
+        &self,
+        params: codex_thread_store::ArchiveThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        self.inner.archive_thread(params).await
+    }
+
+    async fn unarchive_thread(
+        &self,
+        params: codex_thread_store::ArchiveThreadParams,
+    ) -> codex_thread_store::ThreadStoreResult<codex_thread_store::StoredThread> {
+        self.inner.unarchive_thread(params).await
+    }
+}
+
 #[async_trait::async_trait]
 impl codex_thread_store::ThreadStore for FailingFlushThreadStore {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -7058,6 +7185,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_spine_compact_boundaries: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        rollout_persistence_closed: AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -8299,6 +8427,60 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
     );
 }
 
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn post_shutdown_rollout_persistence_is_ignored_after_live_writer_shutdown() {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let store = Arc::new(ShutdownRejectingThreadStore::new());
+    let thread_store: Arc<dyn codex_thread_store::ThreadStore> = store.clone();
+    let config = session.get_config().await;
+    let live_thread = LiveThread::create(
+        Arc::clone(&thread_store),
+        CreateThreadParams {
+            thread_id: session.conversation_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(config.cwd.to_path_buf()),
+                model_provider: config.model_provider_id.clone(),
+                memory_mode: if config.memories.generate_memories {
+                    ThreadMemoryMode::Enabled
+                } else {
+                    ThreadMemoryMode::Disabled
+                },
+            },
+            event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        },
+    )
+    .await
+    .expect("create thread persistence");
+    session.services.thread_store = thread_store;
+    session.services.live_thread = Some(live_thread);
+    let session = Arc::new(session);
+
+    assert!(handlers::shutdown(&session, "sub-1".to_string()).await);
+    session
+        .send_event_raw(Event {
+            id: "late-event".to_string(),
+            msg: EventMsg::Warning(WarningEvent {
+                message: "late event after shutdown".to_string(),
+            }),
+        })
+        .await;
+
+    assert_eq!(
+        codex_thread_store::InMemoryThreadStoreCalls {
+            create_thread: 1,
+            shutdown_thread: 1,
+            ..Default::default()
+        },
+        store.calls().await
+    );
+}
+
 #[tokio::test]
 async fn shutdown_and_wait_allows_multiple_waiters() {
     let (session, _turn_context) = make_session_and_context().await;
@@ -8776,6 +8958,7 @@ where
         pending_spine_compact_boundaries: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        rollout_persistence_closed: AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     });
 

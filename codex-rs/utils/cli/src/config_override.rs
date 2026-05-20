@@ -36,7 +36,20 @@ pub struct CliConfigOverrides {
     pub raw_overrides: Vec<String>,
 }
 
+pub const RUNTIME_DEBUG_CHECKS_OVERRIDE: &str = "debug.runtime_checks=true";
+
 impl CliConfigOverrides {
+    pub fn enable_runtime_debug_checks(&mut self) {
+        if !self
+            .raw_overrides
+            .iter()
+            .any(|override_arg| override_arg == RUNTIME_DEBUG_CHECKS_OVERRIDE)
+        {
+            self.raw_overrides
+                .push(RUNTIME_DEBUG_CHECKS_OVERRIDE.to_string());
+        }
+    }
+
     /// Parse the raw strings captured from the CLI into a list of `(path,
     /// value)` tuples where `value` is a `serde_json::Value`.
     pub fn parse_overrides(&self) -> Result<Vec<(String, Value)>, String> {
@@ -196,5 +209,20 @@ mod tests {
         let tbl = v.as_table().expect("table");
         assert_eq!(tbl.get("a").unwrap().as_integer(), Some(1));
         assert_eq!(tbl.get("b").unwrap().as_integer(), Some(2));
+    }
+
+    #[test]
+    fn enable_runtime_debug_checks_adds_single_override() {
+        let mut overrides = CliConfigOverrides::default();
+        overrides.enable_runtime_debug_checks();
+        overrides.enable_runtime_debug_checks();
+
+        assert_eq!(
+            overrides.raw_overrides,
+            vec![RUNTIME_DEBUG_CHECKS_OVERRIDE.to_string()]
+        );
+        let parsed = overrides.parse_overrides().expect("parse_overrides");
+        assert_eq!(parsed[0].0.as_str(), "debug.runtime_checks");
+        assert_eq!(parsed[0].1.as_bool(), Some(true));
     }
 }

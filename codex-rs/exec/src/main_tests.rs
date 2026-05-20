@@ -35,3 +35,10 @@ fn top_cli_parses_resume_prompt_after_config_flag() {
         "reasoning_level=xhigh"
     );
 }
+
+#[test]
+fn parses_runtime_debug_checks_flag() {
+    let cli = TopCli::parse_from(["codex-exec", "--debug", "review current changes"]);
+
+    assert!(cli.inner.shared.runtime_debug_checks);
+}
