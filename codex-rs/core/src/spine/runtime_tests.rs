@@ -1,6 +1,6 @@
 use super::*;
 use crate::spine::ids::NodeId;
-use crate::spine::projection_epoch::projection_epoch_metadata;
+use crate::spine::state::NodeRecord;
 use crate::spine::state::NodeStatus;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::SpineSidecarStore;
@@ -8,19 +8,9 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::SpineUpdatePlanArgs;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::TaskProjectionArg;
-use codex_protocol::plan_tool::TaskProjectionCurrentArg;
-use codex_protocol::plan_tool::TaskProjectionDraftNodeArg;
-use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::spine_tree::SpineTreeNodeStatus;
-use codex_protocol::spine_tree::SpineTreePlanItemStatus;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::HashSet;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -44,100 +34,22 @@ fn read_json_lines(path: impl AsRef<Path>) -> Vec<Value> {
         .collect()
 }
 
-fn read_json(path: impl AsRef<Path>) -> Value {
-    let contents = std::fs::read_to_string(path).expect("read json");
-    serde_json::from_str(&contents).expect("parse json")
-}
-
-fn plan_args(step: &str, status: StepStatus) -> SpineUpdatePlanArgs {
-    plan_args_many(&[(step, status)])
-}
-
-fn plan_args_many(items: &[(&str, StepStatus)]) -> SpineUpdatePlanArgs {
-    plan_args_many_for_node("1.1", items)
-}
-
-fn plan_args_for_node(current: &str, step: &str, status: StepStatus) -> SpineUpdatePlanArgs {
-    plan_args_many_for_node(current, &[(step, status)])
-}
-
-fn plan_args_many_for_node(current: &str, items: &[(&str, StepStatus)]) -> SpineUpdatePlanArgs {
-    let checklist = items
-        .iter()
-        .map(|(step, status)| PlanItemArg {
-            step: (*step).to_string(),
-            status: status.clone(),
-        })
-        .collect::<Vec<_>>();
-    SpineUpdatePlanArgs {
-        flat: UpdatePlanArgs {
-            explanation: Some("PlanBridge test".to_string()),
-            plan: checklist.clone(),
-        },
-        task_projection: TaskProjectionArg {
-            current: TaskProjectionCurrentArg {
-                node_id: current.to_string(),
-                checklist,
-            },
-            draft_nodes: Vec::new(),
-        },
-    }
-}
-
-fn plan_args_with_task_projection(
-    current: &str,
-    checklist: Vec<&str>,
-    draft_nodes: Vec<(Option<&str>, &str, &str, Vec<&str>)>,
-) -> SpineUpdatePlanArgs {
-    SpineUpdatePlanArgs {
-        flat: UpdatePlanArgs {
-            explanation: Some("task_projection test".to_string()),
-            plan: checklist
-                .iter()
-                .map(|step| PlanItemArg {
-                    step: (*step).to_string(),
-                    status: StepStatus::InProgress,
-                })
-                .collect(),
-        },
-        task_projection: TaskProjectionArg {
-            current: TaskProjectionCurrentArg {
-                node_id: current.to_string(),
-                checklist: checklist
-                    .into_iter()
-                    .map(|step| PlanItemArg {
-                        step: step.to_string(),
-                        status: StepStatus::InProgress,
-                    })
-                    .collect(),
-            },
-            draft_nodes: draft_nodes
-                .into_iter()
-                .map(
-                    |(draft_id, parent, summary, checklist)| TaskProjectionDraftNodeArg {
-                        draft_id: draft_id.map(str::to_string),
-                        parent: parent.to_string(),
-                        summary: summary.to_string(),
-                        checklist: checklist
-                            .into_iter()
-                            .map(|step| PlanItemArg {
-                                step: step.to_string(),
-                                status: StepStatus::Pending,
-                            })
-                            .collect(),
-                    },
-                )
-                .collect(),
-        },
-    }
-}
-
 fn spine_call(call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
         name: crate::spine::SPINE_TOOL_OPEN.to_string(),
         namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
         arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
+fn spine_close_call(call_id: &str, summary: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: crate::spine::SPINE_TOOL_CLOSE.to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: serde_json::json!({ "summary": summary }).to_string(),
         call_id: call_id.to_string(),
     }
 }
@@ -188,10 +100,8 @@ fn initial_tree_event(raw_start_ordinal: u64) -> Value {
                     "node_id": "1",
                     "parent_id": null,
                     "raw_start_ordinal": 0,
-                    "status": "opened",
+                    "status": "suspended",
                     "summary": null,
-                    "memory_path": "nodes/1/memory.md",
-                    "plan_path": "nodes/1/plan.json",
                 },
                 {
                     "node_id": "1.1",
@@ -199,55 +109,10 @@ fn initial_tree_event(raw_start_ordinal: u64) -> Value {
                     "raw_start_ordinal": raw_start_ordinal,
                     "status": "live",
                     "summary": null,
-                    "memory_path": "nodes/1/1/memory.md",
-                    "plan_path": "nodes/1/1/plan.json",
                 },
             ],
         },
     })
-}
-
-#[test]
-fn record_plan_update_writes_active_node_snapshot_without_moving_cursor() {
-    let (_temp, mut runtime) = temp_runtime();
-    let initial_state = runtime.state().clone();
-
-    let snapshot = runtime
-        .record_plan_update("turn-1", plan_args("Inspect root", StepStatus::InProgress))
-        .expect("record plan update");
-
-    assert_eq!(runtime.state(), &initial_state);
-    assert_eq!(snapshot.node_id, "1.1");
-    assert_eq!(snapshot.revision, 1);
-    assert_eq!(snapshot.source_turn_id, "turn-1");
-    assert_eq!(snapshot.event_seq, 2);
-    assert_eq!(snapshot.items.len(), 1);
-    assert_eq!(snapshot.items[0].stable_task_id, "step-1");
-    assert_eq!(snapshot.items[0].step, "Inspect root");
-    assert_eq!(snapshot.items[0].status, "in_progress");
-
-    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
-    assert_eq!(plan["node_id"], "1.1");
-    assert_eq!(plan["revision"], 1);
-    assert_eq!(plan["event_seq"], 2);
-    assert_eq!(plan["source_turn_id"], "turn-1");
-    assert_eq!(plan["items"][0]["stable_task_id"], "step-1");
-    assert_eq!(plan["items"][0]["status"], "in_progress");
-    let tree = read_json_lines(runtime.store().tree_path());
-    assert_eq!(tree[1]["type"], "task_plan_updated");
-    assert_eq!(tree[1]["seq"], 2);
-    assert_eq!(tree[1]["node_id"], "1.1");
-    assert_eq!(tree[1]["revision"], 1);
-    assert_eq!(tree[1]["items"][0]["stable_task_id"], "step-1");
-    assert_eq!(tree[1]["items"][0]["step"], "Inspect root");
-
-    let second = runtime
-        .record_plan_update("turn-2", plan_args("Inspect root", StepStatus::Completed))
-        .expect("record second plan update");
-    assert_eq!(second.revision, 2);
-    assert_eq!(second.event_seq, 3);
-    assert_eq!(second.items[0].stable_task_id, "step-1");
-    assert_eq!(runtime.state(), &initial_state);
 }
 
 #[test]
@@ -308,664 +173,6 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
         .expect("second threshold should appear");
     assert_eq!(second.node_id, id(&[1, 1]));
     assert_eq!(second.threshold_tokens, 80_000);
-}
-
-#[test]
-fn record_plan_update_assigns_task_ids_by_snapshot_order() {
-    let (_temp, mut runtime) = temp_runtime();
-
-    let first = runtime
-        .record_plan_update(
-            "turn-1",
-            plan_args_many(&[
-                ("Inspect root", StepStatus::Pending),
-                ("Verify root", StepStatus::InProgress),
-            ]),
-        )
-        .expect("record first plan update");
-    assert_eq!(first.items[0].stable_task_id, "step-1");
-    assert_eq!(first.items[1].stable_task_id, "step-2");
-
-    let second = runtime
-        .record_plan_update(
-            "turn-2",
-            plan_args_many(&[
-                ("Verify root", StepStatus::InProgress),
-                ("Document root", StepStatus::Pending),
-                ("Inspect root", StepStatus::Completed),
-            ]),
-        )
-        .expect("record second plan update");
-
-    assert_eq!(second.revision, 2);
-    assert_eq!(second.event_seq, 3);
-    assert_eq!(second.items[0].stable_task_id, "step-1");
-    assert_eq!(second.items[1].stable_task_id, "step-2");
-    assert_eq!(second.items[2].stable_task_id, "step-3");
-    assert_eq!(runtime.cursor(), &id(&[1, 1]));
-}
-
-#[test]
-fn build_tree_snapshot_includes_node_local_plans() {
-    let (_temp, mut runtime) = temp_runtime();
-
-    runtime
-        .record_plan_update("turn-1", plan_args("Inspect root", StepStatus::InProgress))
-        .expect("record root plan");
-    let snapshot = runtime.build_tree_snapshot().expect("build snapshot");
-
-    assert_eq!(snapshot.snapshot_seq, 2);
-    assert_eq!(snapshot.active_node_id, "1.1");
-    assert_eq!(snapshot.nodes.len(), 2);
-    let root = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1")
-        .expect("root node");
-    assert_eq!(root.node_id, "1");
-    assert_eq!(root.parent_id, None);
-    assert_eq!(root.summary, None);
-    assert_eq!(root.status, SpineTreeNodeStatus::Opened);
-    assert!(root.plan.is_none());
-    let leaf = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1.1")
-        .expect("initial leaf node");
-    assert_eq!(leaf.parent_id.as_deref(), Some("1"));
-    assert_eq!(leaf.status, SpineTreeNodeStatus::Live);
-    let plan = leaf.plan.as_ref().expect("leaf plan");
-    assert_eq!(plan.revision, 1);
-    assert_eq!(plan.items[0].stable_task_id, "step-1");
-    assert_eq!(plan.items[0].step, "Inspect root");
-    assert_eq!(plan.items[0].status, SpineTreePlanItemStatus::InProgress);
-}
-
-#[test]
-fn projection_reset_filters_plan_from_non_surviving_turn() {
-    let (_temp, mut runtime) = temp_runtime();
-    runtime
-        .record_plan_update(
-            "rolled-back-turn",
-            plan_args("Rolled back plan", StepStatus::InProgress),
-        )
-        .expect("record rolled back plan");
-
-    let projected_state = runtime.state().clone();
-    let epoch = projection_epoch_metadata(
-        "test_rollout",
-        &[],
-        &projected_state,
-        0,
-        &HashSet::from(["surviving-turn".to_string()]),
-        &HashSet::new(),
-    )
-    .expect("projection epoch metadata");
-    runtime
-        .record_projection_reset(
-            projected_state,
-            0,
-            HashSet::from(["surviving-turn".to_string()]),
-            HashSet::new(),
-            epoch,
-            "test_projection",
-            None,
-        )
-        .expect("record projection reset");
-    let snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
-    let root = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1")
-        .expect("root node");
-
-    assert!(root.plan.is_none());
-    assert!(runtime.store().plan_path(&id(&[1, 1])).exists());
-}
-
-#[test]
-fn task_projection_writes_normalized_plantree_without_moving_cursor() {
-    let (_temp, mut runtime) = temp_runtime();
-    let initial_state = runtime.state().clone();
-
-    let snapshot = runtime
-        .record_plan_update(
-            "turn-alloc",
-            plan_args_with_task_projection(
-                "1.1",
-                vec!["Plan scope tree"],
-                vec![
-                    (
-                        None,
-                        "1.1",
-                        "Reproduce failure",
-                        vec!["run focused repro", "capture failing assertion"],
-                    ),
-                    (
-                        None,
-                        "1.1",
-                        "Patch and verify",
-                        vec!["apply minimal fix", "run regression test"],
-                    ),
-                ],
-            ),
-        )
-        .expect("record PlanTree");
-
-    assert_eq!(runtime.state(), &initial_state);
-    assert_eq!(runtime.cursor(), &id(&[1, 1]));
-    assert_eq!(snapshot.node_id, "1.1");
-    assert_eq!(snapshot.event_seq, 2);
-
-    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
-    let spine_plantree = &plan["spine_plantree"];
-    assert_eq!(spine_plantree["anchor_node_id"], "1.1");
-    assert_eq!(spine_plantree["root"]["existing_node_id"], "1.1");
-    assert_eq!(spine_plantree["root"]["summary"], "Task projection 1.1");
-    assert_eq!(
-        spine_plantree["root"]["children"][0]["existing_node_id"],
-        Value::Null
-    );
-    assert_eq!(
-        spine_plantree["root"]["children"][0]["summary"],
-        "Reproduce failure"
-    );
-    assert_eq!(
-        spine_plantree["root"]["children"][0]["checkpoints"],
-        json!([
-            {"task": "run focused repro", "status": "pending"},
-            {"task": "capture failing assertion", "status": "pending"}
-        ])
-    );
-
-    let tree = read_json_lines(runtime.store().tree_path());
-    assert_eq!(tree.len(), 2);
-    assert_eq!(tree[1]["type"], "task_plan_updated");
-    assert_eq!(tree[1]["seq"], 2);
-    assert_eq!(tree[1]["spine_plantree"]["anchor_node_id"], "1.1");
-
-    let tree_snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
-    let root = tree_snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1")
-        .expect("root node");
-    assert!(root.plan.is_none());
-    let leaf = tree_snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1.1")
-        .expect("initial leaf node");
-    let plan = leaf.plan.as_ref().expect("leaf plan");
-    let spine_plantree = plan.spine_plantree.as_ref().expect("root PlanTree");
-    assert_eq!(spine_plantree.anchor_node_id, "1.1");
-    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
-    assert_eq!(spine_plantree.root.children.len(), 2);
-    assert_eq!(spine_plantree.root.children[0].existing_node_id, None);
-    assert_eq!(spine_plantree.root.children[0].summary, "Reproduce failure");
-    assert_eq!(
-        spine_plantree.root.children[0]
-            .checkpoints
-            .iter()
-            .map(|checkpoint| checkpoint.task.as_str())
-            .collect::<Vec<_>>(),
-        vec!["run focused repro", "capture failing assertion"]
-    );
-}
-
-#[test]
-fn task_projection_with_empty_drafts_replaces_previous_plantree() {
-    let (_temp, mut runtime) = temp_runtime();
-    runtime
-        .record_plan_update(
-            "turn-plantree",
-            plan_args_with_task_projection(
-                "1.1",
-                vec!["Plan scope tree"],
-                vec![(None, "1.1", "Verify scope", vec!["run focused tests"])],
-            ),
-        )
-        .expect("record task_projection PlanTree");
-
-    let replaced = runtime
-        .record_plan_update(
-            "turn-replace",
-            plan_args_with_task_projection(
-                "1.1",
-                vec!["Continue without a planned subtree"],
-                Vec::new(),
-            ),
-        )
-        .expect("replace PlanTree");
-
-    let spine_plantree = replaced
-        .spine_plantree
-        .as_ref()
-        .expect("empty task_projection still records normalized root");
-    assert_eq!(spine_plantree.anchor_node_id, "1.1");
-    assert!(spine_plantree.root.children.is_empty());
-    let plan = read_json(runtime.store().plan_path(&id(&[1, 1])));
-    assert!(plan["spine_plantree"]["root"].get("children").is_none());
-}
-
-#[test]
-fn task_projection_defaults_to_open_parent_scope_when_cursor_is_child() {
-    let (_temp, mut runtime) = temp_runtime();
-    runtime
-        .stage_transition(
-            "open-1",
-            "turn-open",
-            SpineOperation::Open,
-            None,
-            /*compact_instruction*/ None,
-        )
-        .expect("stage open");
-    runtime
-        .after_response_items_recorded(
-            "turn-open",
-            &[spine_call("open-1"), function_call_output("open-1")],
-            0,
-            2,
-        )
-        .expect("commit open");
-    runtime.take_last_committed_transition();
-
-    runtime
-        .record_plan_update(
-            "turn-child-plan",
-            plan_args_with_task_projection(
-                "1.1.1",
-                vec!["Work inside child"],
-                vec![(None, "1.1", "Child next scope", vec!["finish child"])],
-            ),
-        )
-        .expect("record task_projection at open parent");
-
-    let plan = read_json(runtime.store().plan_path(&id(&[1, 1, 1])));
-    assert_eq!(plan["spine_plantree"]["anchor_node_id"], "1.1");
-    assert_eq!(plan["spine_plantree"]["root"]["existing_node_id"], "1.1");
-
-    let snapshot = runtime.build_tree_snapshot().expect("build tree snapshot");
-    let root = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1")
-        .expect("root node");
-    let child = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1.1.1")
-        .expect("child node");
-    assert!(root.plan.is_none());
-    assert!(child.plan.is_some());
-    let spine_plantree = child
-        .plan
-        .as_ref()
-        .and_then(|plan| plan.spine_plantree.as_ref())
-        .expect("child PlanTree");
-    assert_eq!(spine_plantree.anchor_node_id, "1.1");
-    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
-}
-
-#[test]
-fn task_projection_rejects_finished_real_parents() {
-    let (_temp, mut runtime) = temp_runtime();
-    runtime
-        .stage_transition(
-            "open-1",
-            "turn-open",
-            SpineOperation::Open,
-            None,
-            /*compact_instruction*/ None,
-        )
-        .expect("stage open");
-    runtime
-        .after_response_items_recorded(
-            "turn-open",
-            &[spine_call("open-1"), function_call_output("open-1")],
-            0,
-            2,
-        )
-        .expect("commit open");
-    runtime.take_last_committed_transition();
-    runtime
-        .stage_transition(
-            "next-1",
-            "turn-next",
-            SpineOperation::Next,
-            "child finished",
-            /*compact_instruction*/ None,
-        )
-        .expect("stage next");
-    runtime
-        .after_response_items_recorded(
-            "turn-next",
-            &[spine_call("next-1"), function_call_output("next-1")],
-            2,
-            4,
-        )
-        .expect("commit next");
-    runtime.take_last_committed_transition();
-
-    let initial_state = runtime.state().clone();
-    let initial_tree = read_json_lines(runtime.store().tree_path());
-    let error = runtime
-        .record_plan_update(
-            "turn-invalid",
-            plan_args_with_task_projection(
-                "1.1.2",
-                vec!["Work in next child"],
-                vec![(
-                    None,
-                    "1.1.1",
-                    "Rewrite finished child",
-                    vec!["should be rejected"],
-                )],
-            ),
-        )
-        .expect_err("finished nodes must be read-only for task_projection");
-
-    assert!(matches!(
-        error,
-        SpineRuntimeError::InvalidPlanTree { message }
-            if message.contains("plantree task_projection parent [1.1.1] is read-only")
-    ));
-    assert_eq!(runtime.state(), &initial_state);
-    assert_eq!(read_json_lines(runtime.store().tree_path()), initial_tree);
-    assert!(!runtime.store().plan_path(&id(&[1, 1, 2])).exists());
-}
-
-#[test]
-fn task_projection_maps_current_checklist_and_child_draft_without_moving_cursor() {
-    let (_temp, mut runtime) = temp_runtime();
-    let initial_state = runtime.state().clone();
-
-    let snapshot = runtime
-        .record_plan_update(
-            "turn-task-projection",
-            plan_args_with_task_projection(
-                "1.1",
-                vec!["Inspect adapter"],
-                vec![(
-                    None,
-                    "1.1",
-                    "Future validation",
-                    vec!["Run projection tests"],
-                )],
-            ),
-        )
-        .expect("record task_projection");
-
-    assert_eq!(runtime.state(), &initial_state);
-    assert_eq!(runtime.cursor(), &id(&[1, 1]));
-    assert_eq!(snapshot.items.len(), 1);
-    assert_eq!(snapshot.items[0].step, "Inspect adapter");
-    let spine_plantree = snapshot
-        .spine_plantree
-        .as_ref()
-        .expect("task_projection should create draft PlanTree");
-    assert_eq!(spine_plantree.anchor_node_id, "1.1");
-    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
-    assert_eq!(spine_plantree.root.children.len(), 1);
-    assert_eq!(spine_plantree.root.children[0].existing_node_id, None);
-    assert_eq!(spine_plantree.root.children[0].summary, "Future validation");
-    assert_eq!(
-        spine_plantree.root.children[0].checkpoints[0].task,
-        "Run projection tests"
-    );
-}
-
-#[test]
-fn task_projection_computes_anchor_for_current_child_and_future_sibling() {
-    let (_temp, mut runtime) = temp_runtime();
-    runtime
-        .stage_transition(
-            "open-1",
-            "turn-open",
-            SpineOperation::Open,
-            None,
-            /*compact_instruction*/ None,
-        )
-        .expect("stage open");
-    runtime
-        .after_response_items_recorded(
-            "turn-open",
-            &[spine_call("open-1"), function_call_output("open-1")],
-            0,
-            2,
-        )
-        .expect("commit open");
-    runtime.take_last_committed_transition();
-    let initial_state = runtime.state().clone();
-
-    let snapshot = runtime
-        .record_plan_update(
-            "turn-task-projection",
-            plan_args_with_task_projection(
-                "1.1.1",
-                vec!["Work inside child"],
-                vec![
-                    (None, "1.1.1", "Child follow-up", vec!["check child"]),
-                    (None, "1.1", "Sibling follow-up", vec!["check sibling"]),
-                ],
-            ),
-        )
-        .expect("record task_projection sibling");
-
-    assert_eq!(runtime.state(), &initial_state);
-    assert_eq!(runtime.cursor(), &id(&[1, 1, 1]));
-    let spine_plantree = snapshot.spine_plantree.as_ref().expect("PlanTree");
-    assert_eq!(spine_plantree.anchor_node_id, "1.1");
-    assert_eq!(spine_plantree.root.existing_node_id.as_deref(), Some("1.1"));
-    assert_eq!(spine_plantree.root.children.len(), 2);
-    assert_eq!(
-        spine_plantree.root.children[0].existing_node_id.as_deref(),
-        Some("1.1.1")
-    );
-    assert_eq!(spine_plantree.root.children[0].children.len(), 1);
-    assert_eq!(
-        spine_plantree.root.children[0].children[0].summary,
-        "Child follow-up"
-    );
-    assert_eq!(spine_plantree.root.children[1].summary, "Sibling follow-up");
-}
-
-#[test]
-fn task_projection_supports_nested_draft_with_prior_draft_id() {
-    let (_temp, mut runtime) = temp_runtime();
-
-    let snapshot = runtime
-        .record_plan_update(
-            "turn-task-projection",
-            plan_args_with_task_projection(
-                "1.1",
-                vec!["Design adapter"],
-                vec![
-                    (Some("~adapter"), "1.1", "Adapter PoC", vec!["normalize"]),
-                    (
-                        None,
-                        "~adapter",
-                        "Nested validation",
-                        vec!["validate nested draft"],
-                    ),
-                ],
-            ),
-        )
-        .expect("record nested task_projection");
-
-    let spine_plantree = snapshot.spine_plantree.as_ref().expect("PlanTree");
-    assert_eq!(spine_plantree.root.children.len(), 1);
-    assert_eq!(spine_plantree.root.children[0].summary, "Adapter PoC");
-    assert_eq!(spine_plantree.root.children[0].children.len(), 1);
-    assert_eq!(
-        spine_plantree.root.children[0].children[0].summary,
-        "Nested validation"
-    );
-}
-
-#[test]
-fn task_projection_rejects_fake_current_or_draft_ids() {
-    let (_temp, mut runtime) = temp_runtime();
-    let error = runtime
-        .record_plan_update(
-            "turn-invalid-current",
-            plan_args_with_task_projection("1.2", vec!["Wrong cursor"], Vec::new()),
-        )
-        .expect_err("current must match cursor");
-
-    assert!(matches!(
-        error,
-        SpineRuntimeError::InvalidPlanTree { message }
-            if message.contains("must match cursor")
-    ));
-
-    let error = runtime
-        .record_plan_update(
-            "turn-invalid-draft-id",
-            plan_args_with_task_projection(
-                "1.1",
-                vec!["Inspect"],
-                vec![(Some("1.1.2"), "1.1", "Bad draft id", Vec::new())],
-            ),
-        )
-        .expect_err("draft id must not look real");
-
-    assert!(matches!(
-        error,
-        SpineRuntimeError::InvalidPlanTree { message }
-            if message.contains("must start with '~'")
-    ));
-}
-
-#[test]
-fn task_projection_rejects_unknown_or_late_draft_parent() {
-    let (_temp, mut runtime) = temp_runtime();
-    let error = runtime
-        .record_plan_update(
-            "turn-invalid-parent",
-            plan_args_with_task_projection(
-                "1.1",
-                vec!["Inspect"],
-                vec![(None, "9.9", "Unknown parent", Vec::new())],
-            ),
-        )
-        .expect_err("unknown real parent should fail");
-
-    assert!(matches!(error, SpineRuntimeError::UnknownNode(_)));
-
-    let error = runtime
-        .record_plan_update(
-            "turn-late-parent",
-            plan_args_with_task_projection(
-                "1.1",
-                vec!["Inspect"],
-                vec![(None, "~later", "Late nested", Vec::new())],
-            ),
-        )
-        .expect_err("draft parent must be earlier");
-
-    assert!(matches!(
-        error,
-        SpineRuntimeError::InvalidPlanTree { message }
-            if message.contains("must reference an earlier draft_id")
-    ));
-}
-
-#[test]
-fn build_tree_snapshot_includes_only_current_node_plan() {
-    let (_temp, mut runtime) = temp_runtime();
-
-    runtime
-        .record_plan_update(
-            "turn-root",
-            plan_args("Inspect root", StepStatus::InProgress),
-        )
-        .expect("record root plan");
-    runtime
-        .stage_transition(
-            "open-1",
-            "turn-open",
-            SpineOperation::Open,
-            None,
-            /*compact_instruction*/ None,
-        )
-        .expect("stage open");
-    runtime
-        .after_response_items_recorded(
-            "turn-open",
-            &[spine_call("open-1"), function_call_output("open-1")],
-            0,
-            2,
-        )
-        .expect("commit open");
-    runtime.take_last_committed_transition();
-
-    runtime
-        .record_plan_update(
-            "turn-child",
-            plan_args_for_node("1.1.1", "Inspect child", StepStatus::InProgress),
-        )
-        .expect("record child plan");
-    runtime
-        .stage_transition(
-            "next-1",
-            "turn-next",
-            SpineOperation::Next,
-            "child done",
-            /*compact_instruction*/ None,
-        )
-        .expect("stage next");
-    runtime
-        .after_response_items_recorded(
-            "turn-next",
-            &[spine_call("next-1"), function_call_output("next-1")],
-            2,
-            4,
-        )
-        .expect("commit next");
-    runtime.take_last_committed_transition();
-
-    runtime
-        .record_plan_update(
-            "turn-sibling",
-            plan_args_for_node("1.1.2", "Inspect sibling", StepStatus::InProgress),
-        )
-        .expect("record sibling plan");
-    let snapshot = runtime.build_tree_snapshot().expect("build snapshot");
-
-    assert_eq!(snapshot.active_node_id, "1.1.2");
-    let root = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1")
-        .expect("root node");
-    let scope = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1.1")
-        .expect("scope node");
-    let child = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1.1.1")
-        .expect("child node");
-    let sibling = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1.1.2")
-        .expect("sibling node");
-
-    assert_eq!(root.status, SpineTreeNodeStatus::Opened);
-    assert_eq!(root.plan, None);
-    assert_eq!(scope.status, SpineTreeNodeStatus::Opened);
-    assert_eq!(scope.plan, None);
-    assert_eq!(child.status, SpineTreeNodeStatus::Finished);
-    assert_eq!(child.plan, None);
-    assert_eq!(sibling.status, SpineTreeNodeStatus::Live);
-    let plan = sibling.plan.as_ref().expect("current sibling plan");
-    assert_eq!(plan.revision, 1);
-    assert_eq!(plan.items[0].step, "Inspect sibling");
-    assert_eq!(plan.items[0].status, SpineTreePlanItemStatus::InProgress);
 }
 
 #[test]
@@ -1113,7 +320,6 @@ fn commit_moves_cursor_after_function_call_output_boundary() {
                 "op": "open",
                 "from_node": "1.1",
                 "to_node": "1.1.1",
-                "to_parent_id": "1.1",
                 "summary": null,
                 "raw_start_ordinal": 2,
                 "source_turn_id": "turn-1",
@@ -1244,7 +450,7 @@ fn namespaced_transition_call_preserves_function_call_start() {
 }
 
 #[test]
-fn next_compact_boundary_uses_finished_leaf_raw_start() {
+fn close_compact_boundary_uses_closed_leaf_raw_start() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
         .stage_transition(
@@ -1269,32 +475,35 @@ fn next_compact_boundary_uses_finished_leaf_raw_start() {
         .expect("record leaf work");
     runtime
         .stage_transition(
-            "next-1",
+            "close-1",
             "turn-2",
-            SpineOperation::Next,
+            SpineOperation::Close,
             "leaf done",
             Some("preserve test output".to_string()),
         )
-        .expect("stage next");
+        .expect("stage close");
     runtime
         .after_response_items_recorded(
             "turn-2",
-            &[spine_call("next-1"), function_call_output("next-1")],
+            &[
+                spine_close_call("close-1", "leaf done"),
+                function_call_output("close-1"),
+            ],
             3,
             5,
         )
-        .expect("commit next");
+        .expect("commit close");
 
     let committed = runtime
         .take_last_committed_transition()
-        .expect("next transition");
+        .expect("close transition");
     let boundaries = runtime
         .plan_compaction_after_transition(&committed)
         .expect("compact boundary");
     assert_eq!(boundaries.len(), 1);
     let boundary = &boundaries[0];
 
-    assert_eq!(boundary.op, SpineOperation::Next);
+    assert_eq!(boundary.op, SpineOperation::Close);
     assert_eq!(boundary.node_id, id(&[1, 1, 1]));
     assert_eq!(boundary.cut_ordinal, 2);
     assert_eq!(boundary.fold_end_ordinal, 5);
@@ -1311,7 +520,7 @@ fn non_spine_compact_stop_transition_stage_fails_after_non_spine_compacted_histo
 
     for op in [
         SpineOperation::Open,
-        SpineOperation::Next,
+        SpineOperation::Close,
         SpineOperation::Close,
     ] {
         let error = runtime
@@ -1327,44 +536,33 @@ fn non_spine_compact_stop_transition_stage_fails_after_non_spine_compacted_histo
 }
 
 #[test]
-fn record_plan_update_fails_after_non_spine_compacted_history_without_writing_sidecar() {
-    let (_temp, mut runtime) = temp_runtime();
-    let plan_path = runtime.store().plan_path(&id(&[1, 1]));
-    runtime.mark_non_spine_compacted_history();
-
-    let error = runtime
-        .record_plan_update("turn-1", plan_args("Inspect root", StepStatus::InProgress))
-        .expect_err("read-only spine sidecar should reject plan mutation");
-
-    assert!(matches!(error, SpineRuntimeError::ArchivedReadOnly { .. }));
-    assert!(!plan_path.exists());
-}
-
-#[test]
-fn next_compact_fails_after_non_spine_compacted_history() {
+fn close_compact_fails_after_non_spine_compacted_history() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
         .stage_transition(
-            "next-1",
+            "close-1",
             "turn-1",
-            SpineOperation::Next,
+            SpineOperation::Close,
             "root done",
             /*compact_instruction*/ None,
         )
-        .expect("stage next");
+        .expect("stage close");
     runtime
         .after_response_items_recorded(
             "turn-1",
-            &[spine_call("next-1"), function_call_output("next-1")],
+            &[
+                spine_close_call("close-1", "root done"),
+                function_call_output("close-1"),
+            ],
             0,
             2,
         )
-        .expect("commit next");
+        .expect("commit close");
     runtime.mark_non_spine_compacted_history();
 
     let committed = runtime
         .take_last_committed_transition()
-        .expect("next transition");
+        .expect("close transition");
     let error = runtime
         .plan_compaction_after_transition(&committed)
         .expect_err("non-spine compacted history should fail fast");
@@ -1373,13 +571,13 @@ fn next_compact_fails_after_non_spine_compacted_history() {
 }
 
 #[test]
-fn close_that_would_close_root_scope_is_rejected() {
+fn close_root_child_stages_return_to_root_epoch() {
     let (_temp, mut runtime) = temp_runtime();
     runtime
         .after_response_items_recorded("turn-1", &[assistant_message("root child work")], 0, 1)
         .expect("record child work");
 
-    let error = runtime
+    let staged = runtime
         .stage_transition(
             "close-1",
             "turn-1",
@@ -1387,14 +585,12 @@ fn close_that_would_close_root_scope_is_rejected() {
             "scope done",
             /*compact_instruction*/ None,
         )
-        .expect_err("close should reject root scope");
+        .expect("close root child should return to root epoch");
 
-    assert!(matches!(
-        error,
-        SpineRuntimeError::State(SpineStateError::CannotCloseRoot)
-    ));
+    assert_eq!(staged.from_node, id(&[1, 1]));
+    assert_eq!(staged.to_node, id(&[1]));
     assert_eq!(runtime.cursor(), &id(&[1, 1]));
-    assert!(runtime.staged_transition().is_none());
+    assert!(runtime.staged_transition().is_some());
 }
 
 #[test]
@@ -1438,38 +634,61 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
     runtime.take_last_committed_transition();
     runtime
         .stage_transition(
-            "next-1",
+            "close-1",
             "turn-3",
-            SpineOperation::Next,
+            SpineOperation::Close,
             "first child done",
             /*compact_instruction*/ None,
         )
-        .expect("stage next");
+        .expect("stage close");
     runtime
         .after_response_items_recorded(
             "turn-3",
-            &[spine_call("next-1"), function_call_output("next-1")],
+            &[
+                spine_close_call("close-1", "first child done"),
+                function_call_output("close-1"),
+            ],
             4,
             6,
         )
-        .expect("commit next");
+        .expect("commit close");
     runtime.take_last_committed_transition();
     runtime
-        .stage_transition_with_child_summary(
-            "close-1",
+        .stage_transition(
+            "open-second-child",
             "turn-4",
+            SpineOperation::Open,
+            None,
+            /*compact_instruction*/ None,
+        )
+        .expect("stage second child open");
+    runtime
+        .after_response_items_recorded(
+            "turn-4",
+            &[
+                spine_call("open-second-child"),
+                function_call_output("open-second-child"),
+            ],
+            6,
+            8,
+        )
+        .expect("commit second child open");
+    runtime.take_last_committed_transition();
+    runtime
+        .stage_transition(
+            "close-1",
+            "turn-5",
             SpineOperation::Close,
-            "scope done",
             "second child done",
             Some("keep subtree decisions".to_string()),
         )
         .expect("stage close");
     runtime
         .after_response_items_recorded(
-            "turn-4",
+            "turn-5",
             &[spine_call("close-1"), function_call_output("close-1")],
-            6,
             8,
+            10,
         )
         .expect("commit close");
     let committed = runtime
@@ -1478,28 +697,54 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
     let boundaries = runtime
         .plan_compaction_after_transition(&committed)
         .expect("compact boundary");
-    assert_eq!(boundaries.len(), 2);
+    assert_eq!(boundaries.len(), 1);
     let child_boundary = &boundaries[0];
-    let parent_boundary = &boundaries[1];
 
     assert_eq!(child_boundary.op, SpineOperation::Close);
     assert_eq!(child_boundary.node_id, id(&[1, 1, 1, 2]));
-    assert_eq!(child_boundary.scope_node_id, Some(id(&[1, 1, 1])));
-    assert_eq!(child_boundary.cut_ordinal, 6);
-    assert_eq!(child_boundary.fold_end_ordinal, 8);
+    assert_eq!(child_boundary.cut_ordinal, 8);
+    assert_eq!(child_boundary.fold_end_ordinal, 10);
     assert_eq!(child_boundary.transition_summary, "second child done");
     assert_eq!(
         child_boundary.compact_instruction.as_deref(),
         Some("keep subtree decisions")
     );
-    assert_eq!(parent_boundary.op, SpineOperation::Close);
-    assert_eq!(parent_boundary.node_id, id(&[1, 1, 1]));
-    assert_eq!(parent_boundary.scope_node_id, Some(id(&[1, 1, 1])));
-    assert_eq!(parent_boundary.cut_ordinal, 2);
-    assert_eq!(parent_boundary.fold_end_ordinal, 8);
-    assert_eq!(parent_boundary.transition_summary, "scope done");
+
+    runtime
+        .stage_transition(
+            "close-scope",
+            "turn-6",
+            SpineOperation::Close,
+            "scope done",
+            Some("keep subtree decisions".to_string()),
+        )
+        .expect("stage scope close");
+    runtime
+        .after_response_items_recorded(
+            "turn-6",
+            &[
+                spine_call("close-scope"),
+                function_call_output("close-scope"),
+            ],
+            10,
+            12,
+        )
+        .expect("commit scope close");
+    let committed = runtime
+        .take_last_committed_transition()
+        .expect("scope close transition");
+    let boundaries = runtime
+        .plan_compaction_after_transition(&committed)
+        .expect("scope compact boundary");
+    assert_eq!(boundaries.len(), 1);
+    let scope_boundary = &boundaries[0];
+    assert_eq!(scope_boundary.op, SpineOperation::Close);
+    assert_eq!(scope_boundary.node_id, id(&[1, 1, 1]));
+    assert_eq!(scope_boundary.cut_ordinal, 10);
+    assert_eq!(scope_boundary.fold_end_ordinal, 12);
+    assert_eq!(scope_boundary.transition_summary, "scope done");
     assert_eq!(
-        parent_boundary.compact_instruction.as_deref(),
+        scope_boundary.compact_instruction.as_deref(),
         Some("keep subtree decisions")
     );
 
@@ -1510,13 +755,14 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
 
     assert!(outline.contains("## Context Compacted"));
     assert!(outline.contains(&format!("Base: {base}")));
-    assert!(outline.contains("[1.1.1] scope done (nodes/1/1/1/memory.md)"));
-    assert!(outline.contains("|-- [1.1.1.1] first child done (nodes/1/1/1/1/memory.md)"));
-    assert!(outline.contains("|-- [1.1.1.2] second child done (nodes/1/1/1/2/memory.md)"));
+    assert!(outline.contains("[1.1.1] scope done"));
+    assert!(outline.contains("|-- [1.1.1.1] first child done"));
+    assert!(outline.contains("|-- [1.1.1.2] second child done"));
     assert!(
         outline.find("|-- [1.1.1.1]").expect("first child row")
             < outline.find("|-- [1.1.1.2]").expect("second child row")
     );
+    assert!(!outline.contains("memory.md"));
 
     let model_outline = runtime
         .render_model_context_compacted_outline(&id(&[1, 1, 1]))
@@ -1527,6 +773,59 @@ fn close_context_outline_lists_scope_and_direct_children_only() {
     assert!(model_outline.contains("|-- [1.1.1.2] second child done"));
     assert!(!model_outline.contains("Base:"));
     assert!(!model_outline.contains("memory.md"));
+}
+
+#[test]
+fn close_context_outline_keeps_numeric_child_order() {
+    let state = SpineState::from_records(
+        id(&[1, 1]),
+        vec![
+            NodeRecord {
+                node_id: id(&[1, 1]),
+                parent_id: Some(id(&[1])),
+                raw_start_ordinal: Some(0),
+                status: NodeStatus::Live,
+                summary: Some("scope".to_string()),
+            },
+            NodeRecord {
+                node_id: id(&[1]),
+                parent_id: None,
+                raw_start_ordinal: Some(0),
+                status: NodeStatus::Suspended,
+                summary: Some("root".to_string()),
+            },
+            NodeRecord {
+                node_id: id(&[1, 1, 2]),
+                parent_id: Some(id(&[1, 1])),
+                raw_start_ordinal: Some(1),
+                status: NodeStatus::Closed,
+                summary: Some("child two".to_string()),
+            },
+            NodeRecord {
+                node_id: id(&[1, 1, 10]),
+                parent_id: Some(id(&[1, 1])),
+                raw_start_ordinal: Some(2),
+                status: NodeStatus::Closed,
+                summary: Some("child ten".to_string()),
+            },
+        ],
+    )
+    .expect("construct state");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let rollout_path = temp.path().join("rollout-2026-05-10T16-00-00-thread.jsonl");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path).expect("store path");
+    let runtime = SpineRuntime::from_parts(store, state, 3);
+
+    let outline = runtime
+        .render_context_compacted_outline(&id(&[1, 1]))
+        .expect("render outline");
+
+    assert!(outline.contains("|-- [1.1.2] child two"));
+    assert!(outline.contains("|-- [1.1.10] child ten"));
+    assert!(
+        outline.find("|-- [1.1.2]").expect("child two row")
+            < outline.find("|-- [1.1.10]").expect("child ten row")
+    );
 }
 
 #[test]
@@ -1670,7 +969,7 @@ fn rejects_second_staged_transition() {
         .stage_transition(
             "call-2",
             "turn-1",
-            SpineOperation::Next,
+            SpineOperation::Close,
             "another",
             /*compact_instruction*/ None,
         )
@@ -1716,7 +1015,7 @@ fn commit_requires_recorded_function_call_start() {
         .stage_transition(
             "call-1",
             "turn-1",
-            SpineOperation::Next,
+            SpineOperation::Close,
             "root done",
             /*compact_instruction*/ None,
         )
@@ -1787,7 +1086,21 @@ fn commit_failure_leaves_cursor_and_tree_unchanged() {
 
 #[test]
 fn stage_uses_state_validation_without_mutating_runtime() {
-    let (_temp, mut runtime) = temp_runtime();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let rollout_path = temp.path().join("rollout-2026-05-10T16-00-00-thread.jsonl");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path).expect("store path");
+    let state = SpineState::from_records(
+        id(&[1]),
+        vec![NodeRecord {
+            node_id: id(&[1]),
+            parent_id: None,
+            raw_start_ordinal: Some(0),
+            status: NodeStatus::Live,
+            summary: None,
+        }],
+    )
+    .expect("construct root cursor state");
+    let mut runtime = SpineRuntime::from_parts(store, state, 0);
 
     let error = runtime
         .stage_transition(
@@ -1803,7 +1116,7 @@ fn stage_uses_state_validation_without_mutating_runtime() {
         error,
         SpineRuntimeError::State(SpineStateError::CannotCloseRoot)
     ));
-    assert_eq!(runtime.cursor(), &id(&[1, 1]));
+    assert_eq!(runtime.cursor(), &id(&[1]));
     assert!(runtime.staged_transition().is_none());
 }
 
@@ -1866,7 +1179,7 @@ fn root_epoch_archive_plans_internal_archive_boundary() {
             .state()
             .node(&id(&[1, 1, 1]))
             .map(|node| node.status.clone()),
-        Some(NodeStatus::Finished)
+        Some(NodeStatus::Closed)
     );
     assert_eq!(
         runtime

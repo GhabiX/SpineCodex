@@ -33,7 +33,7 @@ fn segment_random_expected_failures_are_classified() {
 }
 
 #[test]
-#[should_panic(expected = "I16 auto compact must reduce Cost(Pi)")]
+#[should_panic(expected = "resource budget policy: auto compact must reduce Cost(Pi)")]
 fn auto_compact_rejects_non_reducing_mem() {
     let mut trace = DeterministicTrace::new(1616);
     let span = RawSpan::new(0, 4).expect("span");
@@ -191,7 +191,7 @@ impl DeterministicTrace {
         let raw_cost = self.raw_cost(span);
         assert!(
             memory_cost < raw_cost,
-            "I16 auto compact must reduce Cost(Pi): seed {}\nops:\n{}\nraw_cost={raw_cost} memory_cost={memory_cost}",
+            "resource budget policy: auto compact must reduce Cost(Pi): seed {}\nops:\n{}\nraw_cost={raw_cost} memory_cost={memory_cost}",
             self.seed,
             self.ops.join("\n")
         );

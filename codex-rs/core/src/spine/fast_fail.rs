@@ -4,45 +4,39 @@ use thiserror::Error;
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub(crate) enum RuntimeFastFailError {
     #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} has no matching CompactStarted span"
+        "I7 structured Mem evidence: MemInstall {compact_id} has no matching CompactStarted span"
     )]
     MemInstallMissingStarted { compact_id: String },
-    #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} has duplicate compact_id"
-    )]
+    #[error("I7 structured Mem evidence: MemInstall {compact_id} has duplicate compact_id")]
     MemInstallDuplicateCompactId { compact_id: String },
     #[error(
-        "I11 suffix/root install never exposes host checkpoint before semantic commit: MemInstall {compact_id} follows {terminal}"
+        "I14 install order never exposes host checkpoint before semantic commit: MemInstall {compact_id} follows {terminal}"
     )]
     MemInstallCheckpointBeforeCommit {
         compact_id: String,
         terminal: &'static str,
     },
     #[error(
-        "I11 suffix/root install never exposes host checkpoint before semantic commit: MemInstall {compact_id} is followed by invalid terminal {terminal}"
+        "I14 install order never exposes host checkpoint before semantic commit: MemInstall {compact_id} is followed by invalid terminal {terminal}"
     )]
     MemInstallInvalidTerminalAfterCommit {
         compact_id: String,
         terminal: &'static str,
     },
     #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} does not match CompactStarted span metadata"
+        "I7 structured Mem evidence: MemInstall {compact_id} does not match CompactStarted span metadata"
     )]
     MemInstallSpanMismatch { compact_id: String },
-    #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} is missing projection_ref"
-    )]
+    #[error("I7 structured Mem evidence: MemInstall {compact_id} is missing projection_ref")]
     MemInstallMissingProjectionRef { compact_id: String },
-    #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} is missing source_rollout_ref"
-    )]
+    #[error("I7 structured Mem evidence: MemInstall {compact_id} is missing source_rollout_ref")]
     MemInstallMissingSourceRolloutRef { compact_id: String },
     #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} source_rollout_ref does not match CompactStarted rollout"
+        "I7 structured Mem evidence: MemInstall {compact_id} source_rollout_ref does not match CompactStarted rollout"
     )]
     MemInstallSourceRolloutMismatch { compact_id: String },
     #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} has malformed memory body ref {memory_section_id:?} for storage {storage_ref}"
+        "I7 structured Mem evidence: MemInstall {compact_id} has malformed memory body ref {memory_section_id:?} for storage {storage_ref}"
     )]
     MemInstallMalformedBodyRef {
         compact_id: String,
@@ -50,14 +44,14 @@ pub(crate) enum RuntimeFastFailError {
         storage_ref: String,
     },
     #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} body section {section_id} is missing"
+        "I7 structured Mem evidence: MemInstall {compact_id} body section {section_id} is missing"
     )]
     MemInstallMissingBody {
         compact_id: String,
         section_id: String,
     },
     #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} body hash mismatch for {section_id}: expected {expected}, actual {actual}"
+        "I7 structured Mem evidence: MemInstall {compact_id} body hash mismatch for {section_id}: expected {expected}, actual {actual}"
     )]
     MemInstallBodyHashMismatch {
         compact_id: String,
@@ -66,7 +60,7 @@ pub(crate) enum RuntimeFastFailError {
         actual: String,
     },
     #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} body storage mismatch for {section_id}: expected {expected}, actual {actual}"
+        "I7 structured Mem evidence: MemInstall {compact_id} body storage mismatch for {section_id}: expected {expected}, actual {actual}"
     )]
     MemInstallBodyStorageMismatch {
         compact_id: String,
@@ -75,19 +69,11 @@ pub(crate) enum RuntimeFastFailError {
         actual: String,
     },
     #[error(
-        "I6 every committed Mem has span metadata and verified body: MemInstall {compact_id} has unsupported schema_version {schema_version}"
+        "I7 structured Mem evidence: MemInstall {compact_id} has unsupported schema_version {schema_version}"
     )]
     MemInstallUnsupportedSchema {
         compact_id: String,
         schema_version: u32,
-    },
-    #[error(
-        "I7 pending install artifacts invisible to Project(Pi): MemInstall {compact_id} committed_at_seq {actual}, expected {expected}"
-    )]
-    MemInstallCommittedSeqMismatch {
-        compact_id: String,
-        expected: u64,
-        actual: u64,
     },
 }
 

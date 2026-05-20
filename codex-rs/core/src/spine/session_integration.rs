@@ -1,21 +1,21 @@
-use super::debug_audit::RuntimeDebugBoundary;
-use super::debug_audit::audit_projection_epoch;
 use super::projection::SpineProjection;
 use super::projection::project_spine_state_from_rollout_with_source;
+use super::projection::surviving_spine_compact_ids_from_rollout;
 use super::projection_epoch::ProjectionEpochClassification;
 use super::projection_epoch::classify_projection_epoch;
 use super::projection_epoch::projection_rollout_position;
 use super::runtime::SpineRuntime;
 use super::runtime::SpineRuntimeError;
+use super::state::SpineState;
 use super::store::SpineSidecarStore;
+use super::store::SpineStoreError;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ThreadStore;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -23,6 +23,7 @@ pub(crate) struct InitialSpineScan {
     pub(crate) response_item_count: u64,
     pub(crate) has_spine_history: bool,
     pub(crate) has_non_spine_compaction: bool,
+    pub(crate) surviving_compact_ids: HashSet<String>,
     pub(crate) projection: Option<SpineProjection>,
 }
 
@@ -32,6 +33,7 @@ impl InitialSpineScan {
             response_item_count: 0,
             has_spine_history: false,
             has_non_spine_compaction: false,
+            surviving_compact_ids: HashSet::new(),
             projection: None,
         }
     }
@@ -44,16 +46,20 @@ pub(crate) async fn initial_spine_scan(
         InitialHistory::New | InitialHistory::Cleared => Ok(InitialSpineScan::empty()),
         InitialHistory::Resumed(resumed) => {
             if let Some(rollout_path) = resumed.rollout_path.as_ref() {
-                let (items, _, _) =
+                let (rollout_items, _, _) =
                     crate::rollout::RolloutRecorder::load_rollout_items(rollout_path).await?;
                 let mut scan = initial_spine_scan_items(
-                    &items,
+                    &resumed.history,
                     SpineProjectionPolicy::Resume,
                     rollout_path.to_string_lossy(),
                 )?;
                 if scan.has_spine_history {
-                    scan.projection = resume_projection_from_sidecar_epoch(rollout_path, &items)?
-                        .or(scan.projection);
+                    scan.projection = resume_projection_from_sidecar_epoch(
+                        rollout_path,
+                        &rollout_items,
+                        &resumed.history,
+                    )?
+                    .or(scan.projection);
                 }
                 Ok(scan)
             } else {
@@ -69,6 +75,14 @@ pub(crate) async fn initial_spine_scan(
             SpineProjectionPolicy::Fork,
             "forked_initial_history".into(),
         )?),
+    }
+}
+
+pub(crate) fn initial_history_has_spine_history(initial_history: &InitialHistory) -> bool {
+    match initial_history {
+        InitialHistory::New | InitialHistory::Cleared => false,
+        InitialHistory::Resumed(resumed) => has_spine_history_items(&resumed.history),
+        InitialHistory::Forked(items) => has_spine_history_items(items),
     }
 }
 
@@ -88,9 +102,10 @@ fn initial_spine_scan_items(
         SpineProjectionPolicy::Fork => has_spine_history,
     };
     Ok(InitialSpineScan {
-        response_item_count: response_item_count(items),
+        response_item_count: response_item_count(items)?,
         has_spine_history,
         has_non_spine_compaction: latest_compaction_is_non_spine(items),
+        surviving_compact_ids: surviving_spine_compact_ids_from_rollout(items)?,
         projection: needs_projection
             .then(|| project_spine_state_from_rollout_with_source(source_rollout_ref, items))
             .transpose()?,
@@ -99,7 +114,8 @@ fn initial_spine_scan_items(
 
 fn resume_projection_from_sidecar_epoch(
     rollout_path: &Path,
-    items: &[RolloutItem],
+    rollout_items: &[RolloutItem],
+    replay_items: &[RolloutItem],
 ) -> anyhow::Result<Option<SpineProjection>> {
     if !SpineSidecarStore::has_sidecar_for_rollout(rollout_path)? {
         return Ok(None);
@@ -111,17 +127,23 @@ fn resume_projection_from_sidecar_epoch(
     let Some(epoch) = store.latest_projection_epoch()? else {
         return Ok(None);
     };
-    let epoch_len = usize::try_from(epoch.processed_rollout_len).unwrap_or(usize::MAX);
-    let prefix_len = epoch_len.min(items.len());
+    let epoch_len = usize::try_from(epoch.processed_rollout_len).map_err(|_| {
+        anyhow::anyhow!(
+            "spine sidecar projection epoch length {} cannot be represented on this platform",
+            epoch.processed_rollout_len
+        )
+    })?;
+    let prefix_len = epoch_len.min(rollout_items.len());
     let source_rollout_ref = rollout_path.to_string_lossy();
     let current_prefix =
-        projection_rollout_position(source_rollout_ref.as_ref(), &items[..prefix_len])?;
-    let current_processed_rollout_len = u64::try_from(items.len()).unwrap_or(u64::MAX);
+        projection_rollout_position(source_rollout_ref.as_ref(), &rollout_items[..prefix_len])?;
+    let current_processed_rollout_len = u64::try_from(rollout_items.len())
+        .map_err(|_| anyhow::anyhow!("resumed rollout has too many items"))?;
     match classify_projection_epoch(&epoch, &current_prefix, current_processed_rollout_len) {
         ProjectionEpochClassification::Current | ProjectionEpochClassification::Behind => {
             let projection =
-                project_spine_state_from_rollout_with_source(source_rollout_ref, items)?;
-            store.validate_root_meminstall_survivors(&projection.root_epoch_compact_hashes)?;
+                project_spine_state_from_rollout_with_source(source_rollout_ref, replay_items)?;
+            store.validate_root_meminstall_survivors(&projection.root_epoch_compact_ids)?;
             Ok(Some(projection))
         }
         ProjectionEpochClassification::Ahead => {
@@ -178,6 +200,7 @@ pub(crate) fn load_initial_spine_runtime(
     next_raw_ordinal: u64,
     has_spine_history: bool,
     has_non_spine_compaction: bool,
+    surviving_compact_ids: &HashSet<String>,
     projection: Option<&SpineProjection>,
 ) -> Result<SpineRuntime, SpineRuntimeError> {
     let mut runtime = if has_spine_history {
@@ -191,13 +214,27 @@ pub(crate) fn load_initial_spine_runtime(
         }
         SpineRuntime::load(store, next_raw_ordinal)?
     } else {
-        let store = if SpineSidecarStore::has_sidecar_for_rollout(rollout_path)? {
+        let has_existing_sidecar = SpineSidecarStore::has_sidecar_for_rollout(rollout_path)?;
+        let store = if has_existing_sidecar {
             SpineSidecarStore::for_rollout(rollout_path)?
         } else {
             SpineSidecarStore::create_for_rollout(rollout_path)?
         };
-        SpineRuntime::load_or_create(store, next_raw_ordinal)?
+        let runtime = SpineRuntime::load_or_create(store, next_raw_ordinal)?;
+        if has_existing_sidecar && runtime.state() != &SpineState::new() {
+            return Err(SpineStoreError::InvalidLedger(
+                "existing Spine sidecar state is not admissible for history without Spine evidence"
+                    .to_string(),
+            )
+            .into());
+        }
+        runtime
     };
+    if has_spine_history {
+        runtime
+            .store()
+            .validate_mem_install_survivors(surviving_compact_ids)?;
+    }
     if let Some(projection) = projection
         && runtime.state() != &projection.state
     {
@@ -205,7 +242,7 @@ pub(crate) fn load_initial_spine_runtime(
             projection.state.clone(),
             projection.response_item_count,
             projection.surviving_turn_ids.clone(),
-            projection.surviving_compact_hashes.clone(),
+            projection.surviving_compact_ids.clone(),
             projection.epoch.clone(),
             "resume_projection",
             None,
@@ -216,25 +253,13 @@ pub(crate) fn load_initial_spine_runtime(
     {
         runtime.record_projection_survivors(
             projection.surviving_turn_ids.clone(),
-            projection.surviving_compact_hashes.clone(),
+            projection.surviving_compact_ids.clone(),
         );
     }
     if has_non_spine_compaction {
         runtime.mark_non_spine_compacted_history();
     }
     Ok(runtime)
-}
-
-pub(crate) fn record_plan_update_snapshot(
-    runtime: &mut SpineRuntime,
-    turn_id: &str,
-    args: SpineUpdatePlanArgs,
-) -> Result<Option<SpineTreeUpdateEvent>, SpineRuntimeError> {
-    if !runtime.is_mutable() {
-        return Ok(None);
-    }
-    runtime.record_plan_update(turn_id, args)?;
-    Ok(Some(runtime.build_tree_snapshot()?))
 }
 
 pub(crate) fn after_response_items_recorded(
@@ -263,7 +288,6 @@ pub(crate) async fn seed_forked_spine_sidecar(
     thread_store: &Arc<dyn ThreadStore>,
     initial_history: &InitialHistory,
     child_rollout_path: &Path,
-    runtime_debug_checks: bool,
 ) -> anyhow::Result<()> {
     let InitialHistory::Forked(rollout_items) = initial_history else {
         return Ok(());
@@ -305,17 +329,10 @@ pub(crate) async fn seed_forked_spine_sidecar(
         parent_rollout_path.to_string_lossy(),
         rollout_items,
     )?;
-    parent_store.validate_root_meminstall_survivors(&projection.root_epoch_compact_hashes)?;
-    if runtime_debug_checks {
-        audit_projection_epoch(
-            RuntimeDebugBoundary::ForkSeed,
-            projection.response_item_count,
-            &projection.epoch,
-            format!("fork seed {}", child_store.root().display()),
-        )?;
-    }
+    parent_store.validate_mem_install_survivors(&projection.surviving_compact_ids)?;
+    parent_store.validate_root_meminstall_survivors(&projection.root_epoch_compact_ids)?;
     let projected_response_count = projection.response_item_count;
-    let expected_response_count = response_item_count(rollout_items);
+    let expected_response_count = response_item_count(rollout_items)?;
     if projected_response_count > expected_response_count {
         anyhow::bail!(
             "forked spine projection counted {projected_response_count} response items, expected {expected_response_count}"
@@ -330,7 +347,7 @@ pub(crate) async fn seed_forked_spine_sidecar(
         projection.epoch.clone(),
     )?;
     child_store
-        .copy_projected_compact_index_from(&parent_store, &projection.surviving_compact_hashes)?;
+        .copy_projected_compact_index_from(&parent_store, &projection.surviving_compact_ids)?;
     child_store.copy_projected_node_artifacts_from(
         &parent_store,
         projection.node_ids(),
@@ -339,14 +356,14 @@ pub(crate) async fn seed_forked_spine_sidecar(
     Ok(())
 }
 
-fn response_item_count(items: &[RolloutItem]) -> u64 {
+fn response_item_count(items: &[RolloutItem]) -> anyhow::Result<u64> {
     u64::try_from(
         items
             .iter()
             .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
             .count(),
     )
-    .unwrap_or(u64::MAX)
+    .map_err(|_| anyhow::anyhow!("spine response item count cannot fit in u64"))
 }
 
 fn end_ordinal_for_items(
@@ -362,10 +379,10 @@ fn end_ordinal_for_items(
 
 fn has_spine_history_items(items: &[RolloutItem]) -> bool {
     items.iter().any(|item| match item {
-        RolloutItem::Compacted(compacted) => is_spine_compact_message(&compacted.message),
+        RolloutItem::Compacted(compacted) => compacted.spine.is_some(),
         RolloutItem::ResponseItem(ResponseItem::FunctionCall {
             name, namespace, ..
-        }) => super::is_spine_history_tool(name, namespace.as_deref()),
+        }) => super::is_spine_shaped_history_tool(name, namespace.as_deref()),
         _ => false,
     })
 }
@@ -381,14 +398,8 @@ fn latest_compaction_is_non_spine(items: &[RolloutItem]) -> bool {
         .iter()
         .rev()
         .find_map(|item| match item {
-            RolloutItem::Compacted(compacted) => {
-                Some(!is_spine_compact_message(&compacted.message))
-            }
+            RolloutItem::Compacted(compacted) => Some(compacted.spine.is_none()),
             _ => None,
         })
         .unwrap_or(false)
-}
-
-fn is_spine_compact_message(message: &str) -> bool {
-    message.starts_with("Spine compacted ")
 }

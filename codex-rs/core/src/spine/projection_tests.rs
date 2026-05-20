@@ -8,6 +8,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::SpineCompactedCheckpoint;
+use codex_protocol::protocol::SpineCompactedCheckpointKind;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -34,14 +36,6 @@ fn spine_call(call_id: &str, op: &str, summary: &str) -> RolloutItem {
         format!(r#"{{"summary":"{summary}"}}"#)
     };
     spine_call_with_args(call_id, op, &arguments)
-}
-
-fn spine_close_call(call_id: &str, child_summary: &str, summary: &str) -> RolloutItem {
-    spine_call_with_args(
-        call_id,
-        SPINE_TOOL_CLOSE,
-        &format!(r#"{{"child_summary":"{child_summary}","summary":"{summary}"}}"#),
-    )
 }
 
 fn spine_call_with_args(call_id: &str, op: &str, arguments: &str) -> RolloutItem {
@@ -97,6 +91,18 @@ fn compacted(message: &str) -> RolloutItem {
     RolloutItem::Compacted(CompactedItem {
         message: message.to_string(),
         replacement_history: Some(Vec::new()),
+        spine: None,
+    })
+}
+
+fn spine_compacted(compact_id: &str, kind: SpineCompactedCheckpointKind) -> RolloutItem {
+    RolloutItem::Compacted(CompactedItem {
+        message: format!("checkpoint {compact_id}"),
+        replacement_history: Some(Vec::new()),
+        spine: Some(SpineCompactedCheckpoint {
+            compact_id: compact_id.to_string(),
+            kind,
+        }),
     })
 }
 
@@ -106,12 +112,14 @@ fn projects_committed_spine_transitions_from_rollout_prefix() {
         user_message("start"),
         spine_call("open-1", SPINE_TOOL_OPEN, "scope"),
         call_output("open-1"),
-        spine_call("next-1", SPINE_TOOL_NEXT, "done"),
-        call_output("next-1"),
+        spine_call("close-1", SPINE_TOOL_CLOSE, "done"),
+        call_output("close-1"),
+        spine_call("open-2", SPINE_TOOL_OPEN, "next scope"),
+        call_output("open-2"),
     ])
     .expect("project");
 
-    assert_eq!(projection.response_item_count, 5);
+    assert_eq!(projection.response_item_count, 7);
     assert_eq!(projection.state.cursor().to_string(), "1.1.2");
     assert_eq!(
         projection
@@ -125,18 +133,18 @@ fn projects_committed_spine_transitions_from_rollout_prefix() {
 }
 
 #[test]
-fn projects_namespaced_close_with_child_summary() {
+fn projects_namespaced_close_to_parent() {
     let projection = project_spine_state_from_rollout(&[
         user_message("start"),
         spine_call("open-1", SPINE_TOOL_OPEN, "scope"),
         call_output("open-1"),
-        spine_close_call("close-1", "leaf done", "scope done"),
+        spine_call("close-1", SPINE_TOOL_CLOSE, "leaf done"),
         call_output("close-1"),
     ])
     .expect("project");
 
     assert_eq!(projection.response_item_count, 5);
-    assert_eq!(projection.state.cursor().to_string(), "1.2");
+    assert_eq!(projection.state.cursor().to_string(), "1.1");
     assert_eq!(
         projection
             .state
@@ -153,7 +161,7 @@ fn projects_namespaced_close_with_child_summary() {
             .expect("parent node")
             .summary
             .as_deref(),
-        Some("scope done")
+        None
     );
 }
 
@@ -164,8 +172,8 @@ fn projection_applies_thread_rollback_markers() {
         spine_call("open-1", SPINE_TOOL_OPEN, "scope"),
         call_output("open-1"),
         user_message("drop this turn"),
-        spine_call("next-1", SPINE_TOOL_NEXT, "rolled back"),
-        call_output("next-1"),
+        spine_call("close-1", SPINE_TOOL_CLOSE, "rolled back"),
+        call_output("close-1"),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
         })),
@@ -183,7 +191,7 @@ fn projection_applies_thread_rollback_markers() {
 }
 
 #[test]
-fn projection_rolls_back_namespaced_close_with_child_summary() {
+fn projection_rolls_back_namespaced_close() {
     let projection = project_spine_state_from_rollout(&[
         turn_started("turn-1"),
         user_message("start"),
@@ -192,7 +200,7 @@ fn projection_rolls_back_namespaced_close_with_child_summary() {
         turn_complete("turn-1"),
         turn_started("rolled-back-turn"),
         user_message("drop close"),
-        spine_close_call("close-1", "rolled leaf", "rolled scope"),
+        spine_call("close-1", SPINE_TOOL_CLOSE, "rolled leaf"),
         call_output("close-1"),
         turn_complete("rolled-back-turn"),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
@@ -222,8 +230,8 @@ fn non_spine_compact_stop_projection_ignores_later_spine_transitions() {
         call_output("open-1"),
         compacted("native compact summary"),
         user_message("after native compact"),
-        spine_call("next-after-stop", SPINE_TOOL_NEXT, "must not project"),
-        call_output("next-after-stop"),
+        spine_call("unknown-after-stop", "unknown", "must not project"),
+        call_output("unknown-after-stop"),
     ])
     .expect("project");
 
@@ -245,8 +253,8 @@ fn projection_keeps_only_surviving_turn_ids_after_rollback() {
         turn_complete("turn-1"),
         turn_started("rolled-back-turn"),
         user_message("drop this turn"),
-        spine_call("next-1", SPINE_TOOL_NEXT, "rolled back"),
-        call_output("next-1"),
+        spine_call("close-1", SPINE_TOOL_CLOSE, "rolled back"),
+        call_output("close-1"),
         turn_complete("rolled-back-turn"),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
@@ -259,17 +267,15 @@ fn projection_keeps_only_surviving_turn_ids_after_rollback() {
 }
 
 #[test]
-fn projection_keeps_only_surviving_compact_hashes_after_rollback() {
-    let surviving_message = "Spine compacted 1.1 [1, 4)";
-    let rolled_back_message = "Spine compacted 1.1 [1, 6)";
+fn projection_keeps_only_surviving_compact_ids_after_rollback() {
     let projection = project_spine_state_from_rollout(&[
         turn_started("turn-1"),
         user_message("start"),
-        compacted(surviving_message),
+        spine_compacted("compact-surviving", SpineCompactedCheckpointKind::Suffix),
         turn_complete("turn-1"),
         turn_started("rolled-back-turn"),
         user_message("redo this turn"),
-        compacted(rolled_back_message),
+        spine_compacted("compact-rolled-back", SpineCompactedCheckpointKind::Suffix),
         turn_complete("rolled-back-turn"),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
@@ -279,13 +285,13 @@ fn projection_keeps_only_surviving_compact_hashes_after_rollback() {
 
     assert!(
         projection
-            .surviving_compact_hashes
-            .contains(&compact_message_hash(surviving_message))
+            .surviving_compact_ids
+            .contains("compact-surviving")
     );
     assert!(
         !projection
-            .surviving_compact_hashes
-            .contains(&compact_message_hash(rolled_back_message))
+            .surviving_compact_ids
+            .contains("compact-rolled-back")
     );
 }
 
@@ -356,7 +362,7 @@ fn projection_root_epoch_compact_seals_archived_subtree() {
         user_message("start"),
         spine_call("open-1", SPINE_TOOL_OPEN, "scope"),
         call_output("open-1"),
-        compacted("Spine compacted root epoch 1 [0, 3)"),
+        spine_compacted("compact-root", SpineCompactedCheckpointKind::RootEpoch),
         user_message("continue"),
         spine_call("open-2", SPINE_TOOL_OPEN, "post archive scope"),
         call_output("open-2"),
@@ -384,7 +390,7 @@ fn projection_root_epoch_compact_seals_archived_subtree() {
             .state
             .node(&id(&[1, 1, 1]))
             .map(|node| node.status.clone()),
-        Some(NodeStatus::Finished)
+        Some(NodeStatus::Closed)
     );
     assert_eq!(
         projection

@@ -1,9 +1,7 @@
 use super::compact::SpineCompactBoundary;
 use super::compact::render_context_compacted_outline;
-use super::compact::render_slim_context_compacted_outline;
 use super::ids::NodeId;
 use super::is_spine_transition_tool;
-use super::plan_bridge::PlanSnapshot;
 use super::projection_epoch::ProjectionEpochMetadata;
 use super::state::SpineState;
 use super::state::SpineStateError;
@@ -14,7 +12,6 @@ use super::store::TransitionSummaryArg;
 use super::trajs::RawOrdinalRange;
 use super::view::render_tree;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -37,7 +34,7 @@ pub(crate) struct SpineRuntime {
     pending_spine_call_starts: HashMap<String, u64>,
     mode: SpineRuntimeMode,
     surviving_turn_ids: Option<HashSet<String>>,
-    surviving_compact_hashes: Option<HashSet<String>>,
+    surviving_compact_ids: Option<HashSet<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,7 +98,7 @@ impl SpineRuntime {
             pending_spine_call_starts: HashMap::new(),
             mode: SpineRuntimeMode::Mutable,
             surviving_turn_ids: None,
-            surviving_compact_hashes: None,
+            surviving_compact_ids: None,
         }
     }
 
@@ -117,13 +114,13 @@ impl SpineRuntime {
         self.state.cursor()
     }
 
-    pub(crate) fn surviving_compact_hashes(&self) -> Option<&HashSet<String>> {
-        self.surviving_compact_hashes.as_ref()
+    pub(crate) fn surviving_compact_ids(&self) -> Option<&HashSet<String>> {
+        self.surviving_compact_ids.as_ref()
     }
 
-    pub(crate) fn record_surviving_compact_hash(&mut self, message_hash: String) {
-        if let Some(surviving_compact_hashes) = self.surviving_compact_hashes.as_mut() {
-            surviving_compact_hashes.insert(message_hash);
+    pub(crate) fn record_surviving_compact_id(&mut self, compact_id: String) {
+        if let Some(surviving_compact_ids) = self.surviving_compact_ids.as_mut() {
+            surviving_compact_ids.insert(compact_id);
         }
     }
 
@@ -172,11 +169,6 @@ impl SpineRuntime {
                 .ok_or_else(|| SpineRuntimeError::MissingSummary {
                     node_id: scope_node_id.clone(),
                 })?;
-        let scope_memory_path = self.store.memory_path(scope_node_id);
-        let scope_memory_path = scope_memory_path
-            .strip_prefix(self.store.root())
-            .unwrap_or(scope_memory_path.as_path())
-            .to_path_buf();
         let mut child_rows = Vec::new();
         for child in self
             .state
@@ -184,32 +176,27 @@ impl SpineRuntime {
             .values()
             .filter(|node| node.parent_id.as_ref() == Some(scope_node_id))
         {
-            let summary = child
-                .summary
-                .clone()
-                .unwrap_or_else(|| compact_outline_status_label(&child.status).to_string());
-            let memory_path = self.store.memory_path(&child.node_id);
-            let memory_path = memory_path
-                .strip_prefix(self.store.root())
-                .unwrap_or(memory_path.as_path())
-                .to_string_lossy()
-                .into_owned();
+            let summary =
+                child
+                    .summary
+                    .clone()
+                    .ok_or_else(|| SpineRuntimeError::MissingSummary {
+                        node_id: child.node_id.clone(),
+                    })?;
             child_rows.push((
                 child.node_id.clone(),
                 format!("[{}] {}", child.node_id, summary),
-                memory_path,
             ));
         }
-        child_rows.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
+        child_rows.sort_by(|(left_id, _), (right_id, _)| left_id.cmp(right_id));
         let child_rows = child_rows
             .into_iter()
-            .map(|(_, summary, path)| (summary, path))
+            .map(|(_, row)| row)
             .collect::<Vec<_>>();
         Ok(render_context_compacted_outline(
             scope_node_id,
             scope_summary,
-            self.store.root(),
-            &scope_memory_path,
+            Some(self.store.root()),
             &child_rows,
         ))
     }
@@ -236,10 +223,13 @@ impl SpineRuntime {
             .values()
             .filter(|node| node.parent_id.as_ref() == Some(scope_node_id))
         {
-            let summary = child
-                .summary
-                .clone()
-                .unwrap_or_else(|| compact_outline_status_label(&child.status).to_string());
+            let summary =
+                child
+                    .summary
+                    .clone()
+                    .ok_or_else(|| SpineRuntimeError::MissingSummary {
+                        node_id: child.node_id.clone(),
+                    })?;
             child_rows.push((
                 child.node_id.clone(),
                 format!("[{}] {}", child.node_id, summary),
@@ -250,9 +240,10 @@ impl SpineRuntime {
             .into_iter()
             .map(|(_, row)| row)
             .collect::<Vec<_>>();
-        Ok(render_slim_context_compacted_outline(
+        Ok(render_context_compacted_outline(
             scope_node_id,
             scope_summary,
+            None,
             &child_rows,
         ))
     }
@@ -284,88 +275,31 @@ impl SpineRuntime {
     ) -> Result<Vec<SpineCompactBoundary>, SpineRuntimeError> {
         match committed.op {
             SpineOperation::Open => Ok(Vec::new()),
-            SpineOperation::Next => {
+            SpineOperation::Close => {
                 self.ensure_spine_mutation_allowed()?;
                 let cut_ordinal =
                     self.raw_start_ordinal(&committed.from_node)
                         .ok_or_else(|| SpineRuntimeError::MissingRawStartOrdinal {
                             node_id: committed.from_node.clone(),
                         })?;
-                Ok(vec![SpineCompactBoundary {
-                    op: committed.op,
-                    node_id: committed.from_node.clone(),
-                    scope_node_id: None,
-                    cut_ordinal,
-                    fold_end_ordinal: committed.boundary_end,
-                    transition_summary: committed.summary.clone().ok_or_else(|| {
-                        SpineRuntimeError::MissingSummary {
-                            node_id: committed.from_node.clone(),
-                        }
-                    })?,
-                    compact_instruction: committed.compact_instruction.clone(),
-                }])
-            }
-            SpineOperation::Close => {
-                self.ensure_spine_mutation_allowed()?;
-                let scope_node_id = self
-                    .state
-                    .node(&committed.from_node)
-                    .and_then(|node| node.parent_id.clone())
-                    .ok_or_else(|| SpineRuntimeError::MissingCloseScope {
-                        node_id: committed.from_node.clone(),
-                    })?;
-                self.store
-                    .validate_matching_open_for_scope(&scope_node_id, committed.boundary_end)?;
-                let child_cut_ordinal =
-                    self.raw_start_ordinal(&committed.from_node)
-                        .ok_or_else(|| SpineRuntimeError::MissingRawStartOrdinal {
-                            node_id: committed.from_node.clone(),
-                        })?;
-                let scope_cut_ordinal =
-                    self.raw_start_ordinal(&scope_node_id).ok_or_else(|| {
-                        SpineRuntimeError::MissingRawStartOrdinal {
-                            node_id: scope_node_id.clone(),
-                        }
-                    })?;
-                let child_summary = self
+                let transition_summary = self
                     .state
                     .node(&committed.from_node)
                     .ok_or_else(|| SpineRuntimeError::UnknownNode(committed.from_node.clone()))?
                     .summary
                     .clone()
-                    .or_else(|| committed.child_summary.clone())
+                    .or_else(|| committed.summary.clone())
                     .ok_or_else(|| SpineRuntimeError::MissingSummary {
                         node_id: committed.from_node.clone(),
                     })?;
-                let scope_summary = self
-                    .state
-                    .node(&scope_node_id)
-                    .ok_or_else(|| SpineRuntimeError::UnknownNode(scope_node_id.clone()))?
-                    .summary
-                    .clone()
-                    .ok_or_else(|| SpineRuntimeError::MissingSummary {
-                        node_id: scope_node_id.clone(),
-                    })?;
-                Ok(vec![
-                    SpineCompactBoundary {
-                        op: committed.op,
-                        node_id: committed.from_node.clone(),
-                        scope_node_id: Some(scope_node_id.clone()),
-                        cut_ordinal: child_cut_ordinal,
-                        fold_end_ordinal: committed.boundary_end,
-                        transition_summary: child_summary,
-                        compact_instruction: committed.compact_instruction.clone(),
-                    },
-                    SpineCompactBoundary {
-                        op: committed.op,
-                        node_id: scope_node_id.clone(),
-                        scope_node_id: Some(scope_node_id),
-                        cut_ordinal: scope_cut_ordinal,
-                        fold_end_ordinal: committed.boundary_end,
-                        transition_summary: scope_summary,
-                        compact_instruction: committed.compact_instruction.clone(),
-                    },
-                ])
+                Ok(vec![SpineCompactBoundary {
+                    op: committed.op,
+                    node_id: committed.from_node.clone(),
+                    cut_ordinal,
+                    fold_end_ordinal: committed.boundary_end,
+                    transition_summary,
+                    compact_instruction: committed.compact_instruction.clone(),
+                }])
             }
             SpineOperation::Archive => Err(SpineRuntimeError::ArchiveIsInternal),
         }
@@ -381,7 +315,6 @@ impl SpineRuntime {
         Ok(SpineCompactBoundary {
             op: SpineOperation::Archive,
             node_id,
-            scope_node_id: None,
             cut_ordinal,
             fold_end_ordinal: self.next_raw_ordinal,
             transition_summary,
@@ -461,7 +394,7 @@ impl SpineRuntime {
         state: SpineState,
         next_raw_ordinal: u64,
         surviving_turn_ids: HashSet<String>,
-        surviving_compact_hashes: HashSet<String>,
+        surviving_compact_ids: HashSet<String>,
         epoch: ProjectionEpochMetadata,
         reason: impl Into<String>,
         source_turn_id: Option<String>,
@@ -471,7 +404,7 @@ impl SpineRuntime {
         self.state = state;
         self.next_raw_ordinal = next_raw_ordinal;
         self.surviving_turn_ids = Some(surviving_turn_ids);
-        self.surviving_compact_hashes = Some(surviving_compact_hashes);
+        self.surviving_compact_ids = Some(surviving_compact_ids);
         self.staged_transition = None;
         self.last_committed_transition = None;
         self.pending_spine_call_starts.clear();
@@ -481,10 +414,10 @@ impl SpineRuntime {
     pub(crate) fn record_projection_survivors(
         &mut self,
         surviving_turn_ids: HashSet<String>,
-        surviving_compact_hashes: HashSet<String>,
+        surviving_compact_ids: HashSet<String>,
     ) {
         self.surviving_turn_ids = Some(surviving_turn_ids);
-        self.surviving_compact_hashes = Some(surviving_compact_hashes);
+        self.surviving_compact_ids = Some(surviving_compact_ids);
     }
 
     fn ensure_spine_mutation_allowed(&self) -> Result<(), SpineRuntimeError> {
@@ -496,28 +429,8 @@ impl SpineRuntime {
         Ok(())
     }
 
-    pub(crate) fn record_plan_update(
-        &mut self,
-        turn_id: impl Into<String>,
-        args: SpineUpdatePlanArgs,
-    ) -> Result<PlanSnapshot, SpineRuntimeError> {
-        self.ensure_spine_mutation_allowed()?;
-        super::plan_overlay::record_plan_update(
-            &self.state,
-            &self.store,
-            self.cursor(),
-            turn_id.into(),
-            args,
-        )
-    }
-
     pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineRuntimeError> {
-        super::tree_snapshot::build_tree_snapshot(
-            &self.state,
-            &self.store,
-            self.cursor(),
-            self.surviving_turn_ids.as_ref(),
-        )
+        super::tree_snapshot::build_tree_snapshot(&self.state, &self.store, self.cursor())
     }
 
     pub(crate) fn after_response_items_recorded(
@@ -600,25 +513,6 @@ impl SpineRuntime {
         summary: impl TransitionSummaryArg,
         compact_instruction: Option<String>,
     ) -> Result<&StagedTransition, SpineRuntimeError> {
-        self.stage_transition_with_child_summary(
-            call_id,
-            turn_id,
-            op,
-            summary,
-            None::<String>,
-            compact_instruction,
-        )
-    }
-
-    pub(crate) fn stage_transition_with_child_summary(
-        &mut self,
-        call_id: impl Into<String>,
-        turn_id: impl Into<String>,
-        op: SpineOperation,
-        summary: impl TransitionSummaryArg,
-        child_summary: impl TransitionSummaryArg,
-        compact_instruction: Option<String>,
-    ) -> Result<&StagedTransition, SpineRuntimeError> {
         self.ensure_spine_mutation_allowed()?;
         if let Some(staged) = self.staged_transition.as_ref() {
             return Err(SpineRuntimeError::TransitionAlreadyStaged {
@@ -629,25 +523,8 @@ impl SpineRuntime {
         let call_id = call_id.into();
         let turn_id = turn_id.into();
         let summary = summary.into_transition_summary();
-        let child_summary = child_summary.into_transition_summary();
         let mut validation_state = self.state.clone();
-        let transition = op.apply_with_child_summary(
-            &mut validation_state,
-            summary.clone(),
-            child_summary.clone(),
-        )?;
-        if op == SpineOperation::Close {
-            let scope_node_id = self
-                .state
-                .node(&transition.from)
-                .and_then(|node| node.parent_id.clone())
-                .ok_or_else(|| SpineRuntimeError::MissingCloseScope {
-                    node_id: transition.from.clone(),
-                })?;
-            self.store
-                .validate_matching_open_for_scope(&scope_node_id, self.next_raw_ordinal)?;
-        }
-
+        let transition = op.apply(&mut validation_state, summary.clone())?;
         let call_start_ordinal = self.pending_spine_call_starts.remove(&call_id);
 
         self.staged_transition = Some(StagedTransition {
@@ -658,7 +535,6 @@ impl SpineRuntime {
             to_node: transition.to,
             visible_spine: validation_state.visible_spine(),
             summary,
-            child_summary,
             compact_instruction,
             call_start_ordinal,
         });
@@ -704,11 +580,9 @@ impl SpineRuntime {
         }
 
         let mut validation_state = self.state.clone();
-        let validation_transition = staged.op.apply_with_child_summary(
-            &mut validation_state,
-            staged.summary.clone(),
-            staged.child_summary.clone(),
-        )?;
+        let validation_transition = staged
+            .op
+            .apply(&mut validation_state, staged.summary.clone())?;
         if validation_transition.from != staged.from_node
             || validation_transition.to != staged.to_node
         {
@@ -730,24 +604,13 @@ impl SpineRuntime {
         )?;
 
         let mut next_state = self.state.clone();
-        let transition = if staged.child_summary.is_some() {
-            self.store.record_transition_with_child_summary(
-                &mut next_state,
-                staged.op,
-                staged.summary.clone(),
-                staged.child_summary.clone(),
-                boundary_end_ordinal,
-                staged.turn_id.clone(),
-            )?
-        } else {
-            self.store.record_transition(
-                &mut next_state,
-                staged.op,
-                staged.summary.clone(),
-                boundary_end_ordinal,
-                staged.turn_id.clone(),
-            )?
-        };
+        let transition = self.store.record_transition(
+            &mut next_state,
+            staged.op,
+            staged.summary.clone(),
+            boundary_end_ordinal,
+            staged.turn_id.clone(),
+        )?;
         if transition.from != staged.from_node || transition.to != staged.to_node {
             return Err(SpineRuntimeError::StagedTransitionMismatch {
                 expected_from: staged.from_node.clone(),
@@ -767,7 +630,6 @@ impl SpineRuntime {
             call_start_ordinal,
             boundary_end: boundary_end_ordinal,
             summary: staged.summary,
-            child_summary: staged.child_summary,
             compact_instruction: staged.compact_instruction,
         };
         self.last_committed_transition = Some(committed.clone());
@@ -787,14 +649,6 @@ impl SpineRuntime {
     }
 }
 
-fn compact_outline_status_label(status: &super::state::NodeStatus) -> &'static str {
-    match status {
-        super::state::NodeStatus::Live | super::state::NodeStatus::Opened => "live",
-        super::state::NodeStatus::Finished => "finished",
-        super::state::NodeStatus::Closed => "closed",
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OpenRange {
     node_id: NodeId,
@@ -810,7 +664,6 @@ pub(crate) struct StagedTransition {
     pub(crate) to_node: NodeId,
     pub(crate) visible_spine: Vec<NodeId>,
     pub(crate) summary: Option<String>,
-    pub(crate) child_summary: Option<String>,
     pub(crate) compact_instruction: Option<String>,
     pub(crate) call_start_ordinal: Option<u64>,
 }
@@ -824,7 +677,6 @@ pub(crate) struct CommittedTransition {
     pub(crate) call_start_ordinal: u64,
     pub(crate) boundary_end: u64,
     pub(crate) summary: Option<String>,
-    pub(crate) child_summary: Option<String>,
     pub(crate) compact_instruction: Option<String>,
 }
 
@@ -868,22 +720,14 @@ pub(crate) enum SpineRuntimeError {
     },
     #[error("spine node {node_id} is missing raw_start_ordinal")]
     MissingRawStartOrdinal { node_id: NodeId },
-    #[error("spine close transition from {node_id} has no parent scope")]
-    MissingCloseScope { node_id: NodeId },
     #[error("spine node {node_id} is missing summary for compact outline")]
     MissingSummary { node_id: NodeId },
-    #[error("spine task tree is archived read-only: {reason}")]
+    #[error("spine cursor is archived read-only: {reason}")]
     ArchivedReadOnly { reason: String },
     #[error("archive is an internal spine compact operation")]
     ArchiveIsInternal,
     #[error("unknown spine node {0}")]
     UnknownNode(NodeId),
-    #[error("spine plan revision overflow")]
-    PlanRevisionOverflow,
-    #[error("unknown spine plan item status {0}")]
-    UnknownPlanItemStatus(String),
-    #[error("invalid spine plantree: {message}")]
-    InvalidPlanTree { message: String },
     #[error(
         "staged spine transition mismatch: expected {expected_from} -> {expected_to}, got {actual_from} -> {actual_to}"
     )]

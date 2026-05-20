@@ -47,13 +47,12 @@ fn spine_view_instructions_keep_core_contract() {
         "</spine_view>",
         "runtime-generated memory IR",
         "Spine Memory is internal context; never expose or imitate it in user-visible messages.",
-        "task_projection.current.checklist",
-        "task_projection.draft_nodes",
-        "never send spine_plantree as input",
+        "Use update_plan only as the ordinary short-lived checklist",
         "does not create, finish, close, compact, or move Spine nodes",
-        "spine.next/close are not end-of-response cleanup",
-        "Do not use summary, child_summary, or instruction with spine.open",
+        "spine.open/close are not end-of-response cleanup",
+        "Do not use summary or instruction with spine.open",
         "Completed Spine nodes are read-only",
+        "finish the current scope and return to its parent",
     ] {
         assert!(
             SPINE_VIEW_INSTRUCTIONS.contains(required),
@@ -64,10 +63,13 @@ fn spine_view_instructions_keep_core_contract() {
     for forbidden in [
         "A node is a working scope, not a checklist item",
         "The node summary is only a short tree label",
+        "task plan",
+        "task_projection",
         "use update_plan with spine_plantree",
         "spine_plantree.root.children",
         "current spine_plantree",
         "update spine_plantree first",
+        "PlanTree",
     ] {
         assert!(
             !SPINE_VIEW_INSTRUCTIONS.contains(forbidden),

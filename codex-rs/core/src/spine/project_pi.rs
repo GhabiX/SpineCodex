@@ -1,20 +1,14 @@
-#![allow(dead_code)]
-
 use super::ids::NodeId;
-use super::projection_epoch::ProjectionEpochMetadata;
 use super::segment::RawSpan;
 use super::segment::Segment;
 use super::segment::SegmentArtifacts;
 use super::segment::SegmentError;
 use super::segment::canonical_cover;
 use super::segment::span;
-use super::segment::validate_cover;
 use super::segment::validate_future_live_boundaries;
 use super::state::NodeStatus;
 use super::state::SpineState;
 use super::store::CommittedMemInstall;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -23,11 +17,6 @@ pub(crate) struct ProjectInput {
     pub(crate) raw_len: u64,
     pub(crate) state: SpineState,
     pub(crate) mem_installs: Vec<ProjectMemInstall>,
-    pub(crate) required_mem_ids: BTreeSet<String>,
-    pub(crate) notes: Vec<ProjectNote>,
-    pub(crate) projection_epoch: Option<ProjectionEpochMetadata>,
-    pub(crate) resource_profile: Option<ProjectResourceProfile>,
-    pub(crate) stop_reason: Option<String>,
 }
 
 impl ProjectInput {
@@ -36,11 +25,6 @@ impl ProjectInput {
             raw_len,
             state,
             mem_installs: Vec::new(),
-            required_mem_ids: BTreeSet::new(),
-            notes: Vec::new(),
-            projection_epoch: None,
-            resource_profile: None,
-            stop_reason: None,
         }
     }
 }
@@ -50,7 +34,6 @@ pub(crate) struct ProjectMemInstall {
     pub(crate) compact_id: String,
     pub(crate) node_id: NodeId,
     pub(crate) span: RawSpan,
-    pub(crate) body_verified: bool,
 }
 
 impl ProjectMemInstall {
@@ -64,7 +47,6 @@ impl ProjectMemInstall {
             compact_id: compact_id.into(),
             node_id,
             span: RawSpan::new(start, end).map_err(ProjectError::from)?,
-            body_verified: true,
         })
     }
 }
@@ -78,32 +60,8 @@ impl From<&CommittedMemInstall> for ProjectMemInstall {
                 start: install.cut_ordinal,
                 end: install.fold_end_ordinal,
             },
-            body_verified: true,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ProjectNote {
-    pub(crate) raw_ordinal: u64,
-    pub(crate) kind: String,
-}
-
-impl ProjectNote {
-    pub(crate) fn new(raw_ordinal: u64, kind: impl Into<String>) -> Self {
-        Self {
-            raw_ordinal,
-            kind: kind.into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ProjectResourceProfile {
-    pub(crate) raw_tokens_per_item: u64,
-    pub(crate) mem_tokens: BTreeMap<String, u64>,
-    pub(crate) note_tokens: BTreeMap<String, u64>,
-    pub(crate) budget_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,7 +71,6 @@ pub(crate) struct ProjectResult {
     pub(crate) live_boundaries: Vec<u64>,
     pub(crate) admitted_mem_ids: Vec<String>,
     pub(crate) rejected_mem_ids: Vec<RejectedProjectMem>,
-    pub(crate) cost: Option<ProjectCost>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,11 +86,6 @@ pub(crate) enum ProjectMemRejectionReason {
     CoveredByAncestor,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ProjectCost {
-    pub(crate) total_tokens: u64,
-}
-
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub(crate) enum ProjectError {
     #[error("ProjectCoverGap: {message}")]
@@ -142,60 +94,20 @@ pub(crate) enum ProjectError {
     ProjectCoverOverlap { message: String },
     #[error("ProjectLiveStartInsideMem: {message}")]
     ProjectLiveStartInsideMem { message: String },
-    #[error("ProjectMissingMemInstall: {compact_id}")]
-    ProjectMissingMemInstall { compact_id: String },
-    #[error("ProjectMissingMemoryBody: {compact_id}")]
-    ProjectMissingMemoryBody { compact_id: String },
     #[error("ProjectForkEvidenceIncomplete: {message}")]
     ProjectForkEvidenceIncomplete { message: String },
-    #[error("ProjectStopBoundary: {reason}")]
-    ProjectStopBoundary { reason: String },
-    #[error("ProjectBudgetExceeded: cost {cost} exceeds budget {budget}")]
-    ProjectBudgetExceeded { cost: u64, budget: u64 },
 }
 
 pub(crate) fn project_pi(input: ProjectInput) -> Result<ProjectResult, ProjectError> {
-    if let Some(reason) = input.stop_reason {
-        return Err(ProjectError::ProjectStopBoundary { reason });
-    }
-    if let Some(epoch) = &input.projection_epoch
-        && epoch.effective_raw_len != input.raw_len
-    {
-        return Err(ProjectError::ProjectForkEvidenceIncomplete {
-            message: format!(
-                "projection epoch effective_raw_len {} does not match ProjectInput raw_len {}",
-                epoch.effective_raw_len, input.raw_len
-            ),
-        });
-    }
-
     let visible_nodes = input.state.visible_spine();
     let visible_set = visible_nodes.iter().cloned().collect::<HashSet<_>>();
     let live_boundaries = live_boundaries(&input.state, &visible_nodes)?;
     let mut rejected = Vec::new();
     let mut visible_installs = Vec::new();
 
-    let install_ids = input
-        .mem_installs
-        .iter()
-        .map(|install| install.compact_id.clone())
-        .collect::<BTreeSet<_>>();
-    for required in &input.required_mem_ids {
-        if !install_ids.contains(required) {
-            return Err(ProjectError::ProjectMissingMemInstall {
-                compact_id: required.clone(),
-            });
-        }
-    }
-
     let all_installs = input.mem_installs;
     let all_artifacts = segment_artifacts(&all_installs);
     for install in all_installs {
-        if !install.body_verified {
-            return Err(ProjectError::ProjectMissingMemoryBody {
-                compact_id: install.compact_id,
-            });
-        }
         if !visible_set.contains(&install.node_id) {
             rejected.push(RejectedProjectMem {
                 compact_id: install.compact_id,
@@ -208,7 +120,7 @@ pub(crate) fn project_pi(input: ProjectInput) -> Result<ProjectResult, ProjectEr
                 message: format!("visible node {} is missing from state", install.node_id),
             }
         })?;
-        if !matches!(node.status, NodeStatus::Finished | NodeStatus::Closed) {
+        if !matches!(node.status, NodeStatus::Closed) {
             rejected.push(RejectedProjectMem {
                 compact_id: install.compact_id,
                 reason: ProjectMemRejectionReason::NodeNotSealed,
@@ -223,9 +135,7 @@ pub(crate) fn project_pi(input: ProjectInput) -> Result<ProjectResult, ProjectEr
         .iter()
         .map(|install| install.compact_id.as_str())
         .collect::<Vec<_>>();
-    let base_pi = canonical_cover(input.raw_len, compact_ids, &artifacts)?;
-    let pi = insert_notes(base_pi, &artifacts, input.raw_len, input.notes)?;
-    validate_cover(&pi, &artifacts)?;
+    let pi = canonical_cover(input.raw_len, compact_ids, &artifacts)?;
     validate_future_live_boundaries(&pi, &artifacts, &live_boundaries)?;
 
     let admitted_mem_ids = pi
@@ -236,11 +146,6 @@ pub(crate) fn project_pi(input: ProjectInput) -> Result<ProjectResult, ProjectEr
         })
         .collect::<Vec<_>>();
     mark_covered_rejections(&mut rejected, &all_artifacts, &pi)?;
-    let cost = input
-        .resource_profile
-        .as_ref()
-        .map(|profile| project_cost(&pi, &artifacts, profile))
-        .transpose()?;
 
     Ok(ProjectResult {
         pi,
@@ -248,7 +153,6 @@ pub(crate) fn project_pi(input: ProjectInput) -> Result<ProjectResult, ProjectEr
         live_boundaries,
         admitted_mem_ids,
         rejected_mem_ids: rejected,
-        cost,
     })
 }
 
@@ -261,7 +165,7 @@ fn live_boundaries(state: &SpineState, visible_nodes: &[NodeId]) -> Result<Vec<u
                 .ok_or_else(|| ProjectError::ProjectForkEvidenceIncomplete {
                     message: format!("visible node {node_id} is missing from state"),
                 })?;
-        if matches!(node.status, NodeStatus::Live | NodeStatus::Opened) {
+        if matches!(node.status, NodeStatus::Live | NodeStatus::Suspended) {
             let raw_start = node.raw_start_ordinal.ok_or_else(|| {
                 ProjectError::ProjectForkEvidenceIncomplete {
                     message: format!("mutable visible node {node_id} is missing raw_start_ordinal"),
@@ -280,95 +184,6 @@ fn segment_artifacts(installs: &[ProjectMemInstall]) -> SegmentArtifacts {
         .iter()
         .map(|install| (install.compact_id.clone(), install.span))
         .collect()
-}
-
-fn insert_notes(
-    segments: Vec<Segment>,
-    artifacts: &SegmentArtifacts,
-    raw_len: u64,
-    notes: Vec<ProjectNote>,
-) -> Result<Vec<Segment>, ProjectError> {
-    let mut notes = notes;
-    notes.sort_by(|left, right| {
-        left.raw_ordinal
-            .cmp(&right.raw_ordinal)
-            .then_with(|| left.kind.cmp(&right.kind))
-    });
-    if let Some(note) = notes.iter().find(|note| note.raw_ordinal > raw_len) {
-        return Err(ProjectError::ProjectForkEvidenceIncomplete {
-            message: format!(
-                "note {} at raw ordinal {} exceeds raw_len {}",
-                note.kind, note.raw_ordinal, raw_len
-            ),
-        });
-    }
-
-    let mut result = Vec::new();
-    let mut note_index = 0;
-    for segment in segments {
-        let Some(segment_span) = span(&segment, artifacts)? else {
-            result.push(segment);
-            continue;
-        };
-        while note_index < notes.len() && notes[note_index].raw_ordinal < segment_span.start {
-            result.push(Segment::note(notes[note_index].kind.clone()));
-            note_index += 1;
-        }
-        match segment {
-            Segment::Raw(raw_span) => {
-                let mut cursor = raw_span.start;
-                while note_index < notes.len() && notes[note_index].raw_ordinal <= raw_span.end {
-                    let note = &notes[note_index];
-                    if note.raw_ordinal > cursor {
-                        result.push(Segment::Raw(RawSpan {
-                            start: cursor,
-                            end: note.raw_ordinal,
-                        }));
-                    }
-                    result.push(Segment::note(note.kind.clone()));
-                    cursor = note.raw_ordinal;
-                    note_index += 1;
-                }
-                if cursor < raw_span.end {
-                    result.push(Segment::Raw(RawSpan {
-                        start: cursor,
-                        end: raw_span.end,
-                    }));
-                }
-            }
-            Segment::Mem { compact_id } => {
-                while note_index < notes.len()
-                    && notes[note_index].raw_ordinal == segment_span.start
-                {
-                    result.push(Segment::note(notes[note_index].kind.clone()));
-                    note_index += 1;
-                }
-                if note_index < notes.len()
-                    && segment_span.start < notes[note_index].raw_ordinal
-                    && notes[note_index].raw_ordinal < segment_span.end
-                {
-                    return Err(ProjectError::ProjectLiveStartInsideMem {
-                        message: format!(
-                            "note {} at raw ordinal {} lies inside Mem {compact_id} {}",
-                            notes[note_index].kind, notes[note_index].raw_ordinal, segment_span
-                        ),
-                    });
-                }
-                result.push(Segment::Mem { compact_id });
-                while note_index < notes.len() && notes[note_index].raw_ordinal == segment_span.end
-                {
-                    result.push(Segment::note(notes[note_index].kind.clone()));
-                    note_index += 1;
-                }
-            }
-            Segment::Note { .. } => unreachable!("base cover does not contain notes"),
-        }
-    }
-    while note_index < notes.len() {
-        result.push(Segment::note(notes[note_index].kind.clone()));
-        note_index += 1;
-    }
-    Ok(result)
 }
 
 fn mark_covered_rejections(
@@ -399,60 +214,23 @@ fn mark_covered_rejections(
     Ok(())
 }
 
-fn project_cost(
-    pi: &[Segment],
-    artifacts: &SegmentArtifacts,
-    profile: &ProjectResourceProfile,
-) -> Result<ProjectCost, ProjectError> {
-    let mut total = 0u64;
-    for segment in pi {
-        match segment {
-            Segment::Raw(raw_span) => {
-                total = total.saturating_add(
-                    raw_span
-                        .end
-                        .saturating_sub(raw_span.start)
-                        .saturating_mul(profile.raw_tokens_per_item),
-                );
-            }
-            Segment::Mem { compact_id } => {
-                let Some(tokens) = profile.mem_tokens.get(compact_id) else {
-                    return Err(ProjectError::ProjectMissingMemoryBody {
-                        compact_id: compact_id.clone(),
-                    });
-                };
-                total = total.saturating_add(*tokens);
-            }
-            Segment::Note { kind } => {
-                total = total.saturating_add(*profile.note_tokens.get(kind).unwrap_or(&0));
-            }
-        }
-    }
-    if let Some(budget) = profile.budget_tokens
-        && total > budget
-    {
-        return Err(ProjectError::ProjectBudgetExceeded {
-            cost: total,
-            budget,
-        });
-    }
-    validate_cover(pi, artifacts)?;
-    Ok(ProjectCost {
-        total_tokens: total,
-    })
-}
-
 impl From<SegmentError> for ProjectError {
     fn from(error: SegmentError) -> Self {
         match error {
-            SegmentError::CoverGap { .. } | SegmentError::ReplacementMatchedNoCover { .. } => {
-                ProjectError::ProjectCoverGap {
+            SegmentError::CoverGap { .. } => ProjectError::ProjectCoverGap {
+                message: error.to_string(),
+            },
+            #[cfg(test)]
+            SegmentError::ReplacementMatchedNoCover { .. } => ProjectError::ProjectCoverGap {
+                message: error.to_string(),
+            },
+            SegmentError::CoverOverlap { .. } | SegmentError::CanonicalMemOverlap { .. } => {
+                ProjectError::ProjectCoverOverlap {
                     message: error.to_string(),
                 }
             }
-            SegmentError::CoverOverlap { .. }
-            | SegmentError::CanonicalMemOverlap { .. }
-            | SegmentError::ReplacementCutsSpan { .. } => ProjectError::ProjectCoverOverlap {
+            #[cfg(test)]
+            SegmentError::ReplacementCutsSpan { .. } => ProjectError::ProjectCoverOverlap {
                 message: error.to_string(),
             },
             SegmentError::LiveStartInsideMem { .. }
@@ -460,16 +238,20 @@ impl From<SegmentError> for ProjectError {
             | SegmentError::BoundaryRoundTrip { .. } => ProjectError::ProjectLiveStartInsideMem {
                 message: error.to_string(),
             },
-            SegmentError::MissingMemArtifact { compact_id } => {
-                ProjectError::ProjectMissingMemInstall { compact_id }
-            }
-            SegmentError::CanonicalMemPastRawLen { .. }
-            | SegmentError::EmptySpan { .. }
-            | SegmentError::ReplacementEmpty { .. } => {
+            SegmentError::MissingMemArtifact { .. } => {
                 ProjectError::ProjectForkEvidenceIncomplete {
                     message: error.to_string(),
                 }
             }
+            SegmentError::CanonicalMemPastRawLen { .. } | SegmentError::EmptySpan { .. } => {
+                ProjectError::ProjectForkEvidenceIncomplete {
+                    message: error.to_string(),
+                }
+            }
+            #[cfg(test)]
+            SegmentError::ReplacementEmpty { .. } => ProjectError::ProjectForkEvidenceIncomplete {
+                message: error.to_string(),
+            },
         }
     }
 }

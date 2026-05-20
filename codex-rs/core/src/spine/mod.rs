@@ -1,14 +1,11 @@
 pub(crate) mod candidate_mem_plan;
 pub(crate) mod checkpoint_render;
 pub(crate) mod compact;
-pub(crate) mod debug_audit;
 pub(crate) mod fast_fail;
 pub(crate) mod host_bridge;
 pub(crate) mod ids;
 pub(crate) mod instructions;
 pub(crate) mod mem_install;
-pub(crate) mod plan_bridge;
-pub(crate) mod plan_overlay;
 pub(crate) mod project_pi;
 pub(crate) mod projection;
 pub(crate) mod projection_epoch;
@@ -24,19 +21,14 @@ pub(crate) mod view;
 
 pub(crate) const SPINE_NAMESPACE: &str = "spine";
 pub(crate) const SPINE_TOOL_OPEN: &str = "open";
-pub(crate) const SPINE_TOOL_NEXT: &str = "next";
 pub(crate) const SPINE_TOOL_CLOSE: &str = "close";
 pub(crate) const SPINE_TOOL_TREE: &str = "tree";
 
 pub(crate) fn is_spine_transition_tool(name: &str, namespace: Option<&str>) -> bool {
+    namespace == Some(SPINE_NAMESPACE) && matches!(name, SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE)
+}
+
+pub(crate) fn is_spine_shaped_history_tool(name: &str, namespace: Option<&str>) -> bool {
+    let _ = name;
     namespace == Some(SPINE_NAMESPACE)
-        && matches!(name, SPINE_TOOL_OPEN | SPINE_TOOL_NEXT | SPINE_TOOL_CLOSE)
-}
-
-pub(crate) fn is_spine_tree_tool(name: &str, namespace: Option<&str>) -> bool {
-    namespace == Some(SPINE_NAMESPACE) && name == SPINE_TOOL_TREE
-}
-
-pub(crate) fn is_spine_history_tool(name: &str, namespace: Option<&str>) -> bool {
-    is_spine_transition_tool(name, namespace) || is_spine_tree_tool(name, namespace)
 }

@@ -5,8 +5,7 @@ use std::fmt;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NodeStatus {
     Live,
-    Opened,
-    Finished,
+    Suspended,
     Closed,
 }
 
@@ -39,7 +38,7 @@ impl SpineState {
             node_id: initial_epoch.clone(),
             parent_id: None,
             raw_start_ordinal: Some(initial_leaf_raw_start_ordinal),
-            status: NodeStatus::Opened,
+            status: NodeStatus::Suspended,
             summary: None,
         };
         let initial_leaf_record = NodeRecord {
@@ -79,6 +78,7 @@ impl SpineState {
                 return Err(SpineStateError::UnknownNode(parent_id.clone()));
             }
         }
+        validate_node_status_invariants(&nodes, &cursor)?;
         Ok(Self { cursor, nodes })
     }
 
@@ -121,6 +121,13 @@ impl SpineState {
             }
             prefix.push(*segment);
         }
+        for child in self.nodes.values().filter(|node| {
+            node.parent_id.as_ref() == Some(&self.cursor) && node.status == NodeStatus::Closed
+        }) {
+            if !visible.contains(&child.node_id) {
+                visible.push(child.node_id.clone());
+            }
+        }
         visible
     }
 
@@ -128,73 +135,28 @@ impl SpineState {
         let from = self.cursor.clone();
         let child = from.child(self.next_child_index(Some(&from))?);
 
-        self.set_status(&from, NodeStatus::Opened)?;
+        self.set_status(&from, NodeStatus::Suspended)?;
         self.insert_node(child.clone(), Some(from.clone()))?;
         self.cursor = child.clone();
 
         Ok(Transition { from, to: child })
     }
 
-    pub(crate) fn next(
-        &mut self,
-        summary: impl Into<String>,
-    ) -> Result<Transition, SpineStateError> {
-        let from = self.cursor.clone();
-        let parent = self.parent_id(&from)?;
-        if parent.is_none() {
-            return Err(SpineStateError::CannotAdvanceRoot);
-        }
-        let next_sibling = self.next_sibling_id(parent.as_ref())?;
-
-        self.write_summary(&from, summary)?;
-        self.set_status(&from, NodeStatus::Finished)?;
-        self.insert_node(next_sibling.clone(), parent)?;
-        self.cursor = next_sibling.clone();
-
-        Ok(Transition {
-            from,
-            to: next_sibling,
-        })
-    }
-
-    #[cfg(test)]
     pub(crate) fn close(
         &mut self,
-        summary: impl Into<String>,
-    ) -> Result<Transition, SpineStateError> {
-        self.close_with_child_summary(None::<String>, summary)
-    }
-
-    pub(crate) fn close_with_child_summary(
-        &mut self,
-        child_summary: impl TransitionChildSummaryArg,
         summary: impl Into<String>,
     ) -> Result<Transition, SpineStateError> {
         let from = self.cursor.clone();
         let parent = self
             .parent_id(&from)?
             .ok_or(SpineStateError::CannotCloseRoot)?;
-        let grandparent = self
-            .parent_id(&parent)?
-            .ok_or(SpineStateError::CannotCloseRoot)?;
-        if grandparent == NodeId::root() {
-            return Err(SpineStateError::CannotCloseRoot);
-        }
-        let parent_sibling = self.next_sibling_id(Some(&grandparent))?;
 
-        if let Some(child_summary) = child_summary.into_transition_child_summary() {
-            self.write_summary(&from, child_summary)?;
-        }
-        self.write_summary(&parent, summary)?;
-        self.set_status(&from, NodeStatus::Finished)?;
-        self.set_status(&parent, NodeStatus::Closed)?;
-        self.insert_node(parent_sibling.clone(), Some(grandparent))?;
-        self.cursor = parent_sibling.clone();
+        self.write_summary(&from, summary)?;
+        self.set_status(&from, NodeStatus::Closed)?;
+        self.set_status(&parent, NodeStatus::Live)?;
+        self.cursor = parent.clone();
 
-        Ok(Transition {
-            from,
-            to: parent_sibling,
-        })
+        Ok(Transition { from, to: parent })
     }
 
     pub(crate) fn reset_root_epoch(
@@ -210,7 +172,7 @@ impl SpineState {
         self.set_status(&from, NodeStatus::Closed)?;
         self.seal_archived_subtree(&from)?;
         self.insert_node(next_epoch.clone(), None)?;
-        self.set_status(&next_epoch, NodeStatus::Opened)?;
+        self.set_status(&next_epoch, NodeStatus::Suspended)?;
         self.set_raw_start_ordinal(&next_epoch, initial_leaf_raw_start_ordinal)?;
         self.insert_node(next_leaf.clone(), Some(next_epoch))?;
         self.set_raw_start_ordinal(&next_leaf, initial_leaf_raw_start_ordinal)?;
@@ -264,13 +226,6 @@ impl SpineState {
             .ok_or_else(|| SpineStateError::UnknownNode(node_id.clone()))
     }
 
-    fn next_sibling_id(&self, parent_id: Option<&NodeId>) -> Result<NodeId, SpineStateError> {
-        match parent_id {
-            Some(parent) => Ok(parent.child(self.next_child_index(Some(parent))?)),
-            None => Ok(NodeId::root_epoch(self.next_child_index(None)?)),
-        }
-    }
-
     fn next_child_index(&self, parent_id: Option<&NodeId>) -> Result<u32, SpineStateError> {
         let count = self
             .nodes
@@ -313,9 +268,10 @@ impl SpineState {
                 .status
                 .clone();
             match status {
-                NodeStatus::Live => self.set_status(&node_id, NodeStatus::Finished)?,
-                NodeStatus::Opened => self.set_status(&node_id, NodeStatus::Closed)?,
-                NodeStatus::Finished | NodeStatus::Closed => {}
+                NodeStatus::Live | NodeStatus::Suspended => {
+                    self.set_status(&node_id, NodeStatus::Closed)?;
+                }
+                NodeStatus::Closed => {}
             }
         }
         Ok(())
@@ -388,13 +344,24 @@ pub(crate) struct Transition {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpineStateError {
     ArchiveIsInternal,
-    CannotAdvanceRoot,
     CannotCloseRoot,
+    ClosedNodeHasUnfinishedDescendant {
+        closed_node: NodeId,
+        descendant: NodeId,
+    },
     DuplicateNode(NodeId),
     EmptySummary,
     MissingRawStartOrdinal(NodeId),
     MissingSummary(SpineOperationName),
+    MultipleLiveNodes {
+        cursor: NodeId,
+        live_nodes: Vec<NodeId>,
+    },
     SummaryAlreadyWritten(NodeId),
+    SuspendedNodeOutsideCursorPath {
+        node_id: NodeId,
+        cursor: NodeId,
+    },
     TooManyChildren,
     UnexpectedSummary(SpineOperationName),
     UnknownNode(NodeId),
@@ -406,17 +373,37 @@ impl fmt::Display for SpineStateError {
             SpineStateError::ArchiveIsInternal => {
                 f.write_str("archive is an internal spine operation")
             }
-            SpineStateError::CannotAdvanceRoot => f.write_str("cannot advance the root spine node"),
             SpineStateError::CannotCloseRoot => f.write_str("cannot close the root spine node"),
+            SpineStateError::ClosedNodeHasUnfinishedDescendant {
+                closed_node,
+                descendant,
+            } => write!(
+                f,
+                "closed spine node {} has unfinished descendant {}",
+                closed_node.bracketed(),
+                descendant.bracketed()
+            ),
             SpineStateError::MissingRawStartOrdinal(node_id) => {
                 write!(f, "missing raw start ordinal for {}", node_id.bracketed())
             }
             SpineStateError::MissingSummary(op) => {
                 write!(f, "spine {} requires a summary", op.as_str())
             }
+            SpineStateError::MultipleLiveNodes { cursor, live_nodes } => write!(
+                f,
+                "spine state must have exactly one live cursor {}; found live nodes {:?}",
+                cursor.bracketed(),
+                live_nodes
+            ),
             SpineStateError::SummaryAlreadyWritten(node_id) => {
                 write!(f, "summary already written for {}", node_id.bracketed())
             }
+            SpineStateError::SuspendedNodeOutsideCursorPath { node_id, cursor } => write!(
+                f,
+                "suspended spine node {} is outside cursor path {}",
+                node_id.bracketed(),
+                cursor.bracketed()
+            ),
             SpineStateError::DuplicateNode(node_id) => {
                 write!(f, "duplicate spine node {}", node_id.bracketed())
             }
@@ -434,40 +421,85 @@ impl fmt::Display for SpineStateError {
 
 impl std::error::Error for SpineStateError {}
 
+fn validate_node_status_invariants(
+    nodes: &BTreeMap<NodeId, NodeRecord>,
+    cursor: &NodeId,
+) -> Result<(), SpineStateError> {
+    let live_nodes = nodes
+        .values()
+        .filter(|node| node.status == NodeStatus::Live)
+        .map(|node| node.node_id.clone())
+        .collect::<Vec<_>>();
+    if live_nodes.as_slice() != [cursor.clone()] {
+        return Err(SpineStateError::MultipleLiveNodes {
+            cursor: cursor.clone(),
+            live_nodes,
+        });
+    }
+
+    for node in nodes.values() {
+        match node.status {
+            NodeStatus::Live => {}
+            NodeStatus::Suspended => {
+                if !is_ancestor_in_records(nodes, &node.node_id, cursor) {
+                    return Err(SpineStateError::SuspendedNodeOutsideCursorPath {
+                        node_id: node.node_id.clone(),
+                        cursor: cursor.clone(),
+                    });
+                }
+            }
+            NodeStatus::Closed => {
+                for descendant in nodes.values() {
+                    if descendant.node_id != node.node_id
+                        && descendant.status != NodeStatus::Closed
+                        && is_descendant_in_records(nodes, &descendant.node_id, &node.node_id)
+                    {
+                        return Err(SpineStateError::ClosedNodeHasUnfinishedDescendant {
+                            closed_node: node.node_id.clone(),
+                            descendant: descendant.node_id.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_ancestor_in_records(
+    nodes: &BTreeMap<NodeId, NodeRecord>,
+    ancestor_id: &NodeId,
+    node_id: &NodeId,
+) -> bool {
+    ancestor_id == node_id || is_descendant_in_records(nodes, node_id, ancestor_id)
+}
+
+fn is_descendant_in_records(
+    nodes: &BTreeMap<NodeId, NodeRecord>,
+    node_id: &NodeId,
+    ancestor_id: &NodeId,
+) -> bool {
+    let mut parent_id = nodes.get(node_id).and_then(|node| node.parent_id.as_ref());
+    while let Some(parent) = parent_id {
+        if parent == ancestor_id {
+            return true;
+        }
+        parent_id = nodes.get(parent).and_then(|node| node.parent_id.as_ref());
+    }
+    false
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpineOperationName {
     Open,
-    Next,
     Close,
-}
-
-pub(crate) trait TransitionChildSummaryArg {
-    fn into_transition_child_summary(self) -> Option<String>;
-}
-
-impl TransitionChildSummaryArg for Option<String> {
-    fn into_transition_child_summary(self) -> Option<String> {
-        self
-    }
-}
-
-impl TransitionChildSummaryArg for String {
-    fn into_transition_child_summary(self) -> Option<String> {
-        Some(self)
-    }
-}
-
-impl TransitionChildSummaryArg for &str {
-    fn into_transition_child_summary(self) -> Option<String> {
-        Some(self.to_string())
-    }
 }
 
 impl SpineOperationName {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             SpineOperationName::Open => "open",
-            SpineOperationName::Next => "next",
             SpineOperationName::Close => "close",
         }
     }

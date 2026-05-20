@@ -1,6 +1,5 @@
 use super::*;
 use crate::spine::ids::NodeId;
-use crate::spine::project_pi::ProjectMemRejectionReason;
 use crate::spine::segment::Segment;
 use crate::spine::state::SpineState;
 use crate::spine::store::SpineOperation;
@@ -23,8 +22,6 @@ fn installed_span(
         op,
         cut_ordinal,
         fold_end_ordinal,
-        replacement_history_len: 0,
-        message_hash: format!("sha1:{compact_id}"),
     }
 }
 
@@ -33,29 +30,29 @@ fn candidate_mem_cover_adds_candidate_to_runtime_artifacts() {
     let spans = vec![installed_span(
         "compact-a",
         id(&[1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         1,
         4,
     )];
     let candidate = CandidateMem::new(
         "compact-b",
         id(&[2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         RawSpan { start: 5, end: 8 },
     );
 
-    let cover = plan_candidate_mem_cover(9, &spans, &candidate).expect("cover");
+    let (pi, artifacts) = plan_candidate_mem_cover(9, &spans, &candidate).expect("cover");
 
     assert_eq!(
-        cover.artifacts.get("compact-a"),
+        artifacts.get("compact-a"),
         Some(&RawSpan { start: 1, end: 4 })
     );
     assert_eq!(
-        cover.artifacts.get("compact-b"),
+        artifacts.get("compact-b"),
         Some(&RawSpan { start: 5, end: 8 })
     );
     assert_eq!(
-        cover.pi,
+        pi,
         vec![
             Segment::Raw(RawSpan { start: 0, end: 1 }),
             Segment::Mem {
@@ -75,7 +72,7 @@ fn candidate_mem_cover_rejects_candidate_past_raw_len() {
     let candidate = CandidateMem::new(
         "compact-b",
         id(&[2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         RawSpan { start: 5, end: 8 },
     );
 
@@ -83,14 +80,19 @@ fn candidate_mem_cover_rejects_candidate_past_raw_len() {
 
     assert!(
         err.to_string()
-            .contains("compact-b node 2 op Next span [5,8)"),
+            .contains("compact-b node 2 op Close span [5,8)"),
         "error should identify the candidate: {err}"
     );
 }
 
 #[test]
 fn candidate_mem_plan_cover_only_rejects_live_boundary_inside_candidate() {
-    let candidate = CandidateMem::anonymous("root-archive", RawSpan { start: 0, end: 8 });
+    let candidate = CandidateMem::new(
+        "root-archive",
+        id(&[1]),
+        SpineOperation::Archive,
+        RawSpan { start: 0, end: 8 },
+    );
 
     let err = plan_candidate_mem(
         10,
@@ -98,7 +100,6 @@ fn candidate_mem_plan_cover_only_rejects_live_boundary_inside_candidate() {
         &candidate,
         CandidateMemPlanMode::CoverOnly {
             live_boundaries: &[4],
-            admission: CandidateAdmissionPolicy::MustAdmit,
         },
     )
     .expect_err("live boundary inside candidate");
@@ -111,53 +112,25 @@ fn candidate_mem_plan_cover_only_rejects_live_boundary_inside_candidate() {
 }
 
 #[test]
-fn candidate_mem_plan_projection_backed_allows_node_not_visible_rejection() {
+fn candidate_mem_plan_projection_backed_rejects_node_not_visible_candidate() {
     let state = SpineState::new();
     let candidate = CandidateMem::new(
         "hidden-candidate",
         id(&[9]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         RawSpan { start: 0, end: 4 },
     );
 
-    let plan = plan_candidate_mem(
+    let err = plan_candidate_mem(
         6,
         &[],
         &candidate,
-        CandidateMemPlanMode::ProjectionBacked {
-            state: &state,
-            admission: CandidateAdmissionPolicy::AdmitOrRejectNodeNotVisible,
-        },
+        CandidateMemPlanMode::ProjectionBacked { state: &state },
     )
-    .expect("node-not-visible rejection is allowed for suffix");
-
-    assert!(!plan.admitted_candidate);
-    assert_eq!(
-        plan.rejected_candidate_reason,
-        Some(ProjectMemRejectionReason::NodeNotVisible)
-    );
-}
-
-#[test]
-fn candidate_mem_plan_projection_backed_requires_candidate_when_policy_must_admit() {
-    let state = SpineState::new();
-    let candidate = CandidateMem::new(
-        "hidden-candidate",
-        id(&[9]),
-        SpineOperation::Next,
-        RawSpan { start: 0, end: 4 },
-    );
+    .expect_err("node-not-visible candidate must fail closed");
 
     assert!(
-        plan_candidate_mem(
-            6,
-            &[],
-            &candidate,
-            CandidateMemPlanMode::ProjectionBacked {
-                state: &state,
-                admission: CandidateAdmissionPolicy::MustAdmit,
-            },
-        )
-        .is_err()
+        err.to_string().contains("NodeNotVisible"),
+        "error should report Project(Pi) rejection reason: {err}"
     );
 }

@@ -26,8 +26,6 @@ pub(crate) struct ProjectionRolloutPosition {
     pub(crate) processed_rollout_hash: String,
 }
 
-// Step 13 wires resume admission to this classifier.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectionEpochClassification {
     Behind,
@@ -43,7 +41,7 @@ pub(crate) fn projection_epoch_metadata(
     effective_raw_len: u64,
     surviving_turn_ids: &HashSet<String>,
     surviving_compact_ids: &HashSet<String>,
-) -> Result<ProjectionEpochMetadata, serde_json::Error> {
+) -> Result<ProjectionEpochMetadata, ProjectionEpochError> {
     let source_rollout_ref = source_rollout_ref.into();
     let position = projection_rollout_position(source_rollout_ref, rollout_items)?;
     Ok(ProjectionEpochMetadata {
@@ -60,8 +58,11 @@ pub(crate) fn projection_epoch_metadata(
 pub(crate) fn projection_rollout_position(
     source_rollout_ref: impl Into<String>,
     rollout_items: &[RolloutItem],
-) -> Result<ProjectionRolloutPosition, serde_json::Error> {
-    let processed_rollout_len = u64::try_from(rollout_items.len()).unwrap_or(u64::MAX);
+) -> Result<ProjectionRolloutPosition, ProjectionEpochError> {
+    let processed_rollout_len =
+        u64::try_from(rollout_items.len()).map_err(|_| ProjectionEpochError::RolloutTooLong {
+            len: rollout_items.len(),
+        })?;
     Ok(ProjectionRolloutPosition {
         source_rollout_ref: source_rollout_ref.into(),
         processed_rollout_len,
@@ -69,7 +70,6 @@ pub(crate) fn projection_rollout_position(
     })
 }
 
-#[allow(dead_code)]
 pub(crate) fn classify_projection_epoch(
     epoch: &ProjectionEpochMetadata,
     current_prefix_at_epoch_len: &ProjectionRolloutPosition,
@@ -138,10 +138,17 @@ fn sorted_strings(values: &HashSet<String>) -> Vec<String> {
 fn node_status_label(status: &NodeStatus) -> &'static str {
     match status {
         NodeStatus::Live => "live",
-        NodeStatus::Opened => "opened",
-        NodeStatus::Finished => "finished",
+        NodeStatus::Suspended => "suspended",
         NodeStatus::Closed => "closed",
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ProjectionEpochError {
+    #[error("spine projection epoch rollout length {len} cannot fit in u64")]
+    RolloutTooLong { len: usize },
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
 
 #[derive(Serialize)]

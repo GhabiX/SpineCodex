@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 use std::fmt;
 use thiserror::Error;
@@ -50,6 +48,7 @@ pub(crate) enum Segment {
 }
 
 impl Segment {
+    #[cfg(test)]
     pub(crate) fn raw(start: u64, end: u64) -> Result<Self, SegmentError> {
         Ok(Self::Raw(RawSpan::new(start, end)?))
     }
@@ -73,10 +72,12 @@ pub(crate) struct SegmentPosition {
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub(crate) enum SegmentError {
-    #[error("I1 cover(Pi) ordered/gap-free/non-overlap: segment {index:?} has empty span {span}")]
+    #[error(
+        "I5 canonical segment cover ordered/gap-free/non-overlap: segment {index:?} has empty span {span}"
+    )]
     EmptySpan { index: Option<usize>, span: RawSpan },
     #[error(
-        "I1 cover(Pi) ordered/gap-free/non-overlap: segment {index} creates raw gap, expected start {expected_start}, got {actual_start}"
+        "I5 canonical segment cover ordered/gap-free/non-overlap: segment {index} creates raw gap, expected start {expected_start}, got {actual_start}"
     )]
     CoverGap {
         index: usize,
@@ -84,17 +85,17 @@ pub(crate) enum SegmentError {
         actual_start: u64,
     },
     #[error(
-        "I1 cover(Pi) ordered/gap-free/non-overlap: segment {index} creates raw overlap, expected start {expected_start}, got {actual_start}"
+        "I5 canonical segment cover ordered/gap-free/non-overlap: segment {index} creates raw overlap, expected start {expected_start}, got {actual_start}"
     )]
     CoverOverlap {
         index: usize,
         expected_start: u64,
         actual_start: u64,
     },
-    #[error("I6 every committed Mem has span metadata: Mem {compact_id} has no surviving artifact")]
+    #[error("I7 structured Mem evidence: Mem {compact_id} has no surviving artifact")]
     MissingMemArtifact { compact_id: String },
     #[error(
-        "I3 no future live raw_start inside Mem interior: live raw_start {raw_start} lies inside Mem {compact_id} {span}"
+        "I9 no future live_start inside Mem interior: live raw_start {raw_start} lies inside Mem {compact_id} {span}"
     )]
     LiveStartInsideMem {
         raw_start: u64,
@@ -102,36 +103,41 @@ pub(crate) enum SegmentError {
         span: RawSpan,
     },
     #[error(
-        "I2 f/g round-trip at legal boundaries: raw boundary {raw_boundary} does not map through f"
+        "I8 future live boundaries round-trip through f/g: raw boundary {raw_boundary} does not map through f"
     )]
     BoundaryNotMapped { raw_boundary: u64 },
     #[error(
-        "I2 f/g round-trip at legal boundaries: raw boundary {raw_boundary} maps to {position:?}, but g returns {mapped:?}"
+        "I8 future live boundaries round-trip through f/g: raw boundary {raw_boundary} maps to {position:?}, but g returns {mapped:?}"
     )]
     BoundaryRoundTrip {
         raw_boundary: u64,
         position: SegmentPosition,
         mapped: Option<u64>,
     },
-    #[error("I1 replacement exact-cover: cannot replace empty span {span}")]
+    #[cfg(test)]
+    #[error("I6 exact Cover_Pi replacement: cannot replace empty span {span}")]
     ReplacementEmpty { span: RawSpan },
+    #[cfg(test)]
     #[error(
-        "I1 replacement exact-cover: replacement {replacement} cuts through existing segment {existing}"
+        "I6 exact Cover_Pi replacement: replacement {replacement} cuts through existing segment {existing}"
     )]
     ReplacementCutsSpan {
         replacement: RawSpan,
         existing: RawSpan,
     },
-    #[error("I1 replacement exact-cover: replacement {span} matched no raw-consuming cover")]
+    #[cfg(test)]
+    #[error("I6 exact Cover_Pi replacement: replacement {span} matched no raw-consuming cover")]
     ReplacementMatchedNoCover { span: RawSpan },
-    #[error("I1 canonical cover: Mem {compact_id} span {span} extends past raw_len {raw_len}")]
+    #[error(
+        "I5 canonical segment cover: Mem {compact_id} span {span} extends past raw_len {raw_len}"
+    )]
     CanonicalMemPastRawLen {
         compact_id: String,
         span: RawSpan,
         raw_len: u64,
     },
     #[error(
-        "I1 canonical cover: Mem {compact_id} span {span} overlaps prior selected span {prior}"
+        "I5 canonical segment cover: Mem {compact_id} span {span} overlaps prior selected span {prior}"
     )]
     CanonicalMemOverlap {
         compact_id: String,
@@ -304,6 +310,7 @@ pub(crate) fn g_boundary(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn replace_exact_cover(
     segments: &[Segment],
     artifacts: &SegmentArtifacts,

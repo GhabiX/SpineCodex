@@ -1,32 +1,29 @@
 use super::SPINE_NAMESPACE;
 use super::SPINE_TOOL_CLOSE;
-use super::SPINE_TOOL_NEXT;
 use super::SPINE_TOOL_OPEN;
 use super::ids::NodeId;
+use super::projection_epoch::ProjectionEpochError;
 use super::projection_epoch::ProjectionEpochMetadata;
 use super::projection_epoch::projection_epoch_metadata;
 use super::state::SpineState;
 use super::state::SpineStateError;
 use super::store::SpineOperation;
-use super::store::compact_message_hash;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SpineCompactedCheckpointKind;
 use serde::Deserialize;
 use serde::de;
 use std::collections::HashSet;
 use thiserror::Error;
-
-const ROOT_EPOCH_COMPACT_MESSAGE_PREFIX: &str = "Spine compacted root epoch ";
-const SPINE_COMPACT_MESSAGE_PREFIX: &str = "Spine compacted ";
 
 #[derive(Debug)]
 pub(crate) struct SpineProjection {
     pub(crate) state: SpineState,
     pub(crate) response_item_count: u64,
     pub(crate) surviving_turn_ids: HashSet<String>,
-    pub(crate) surviving_compact_hashes: HashSet<String>,
-    pub(crate) root_epoch_compact_hashes: HashSet<String>,
+    pub(crate) surviving_compact_ids: HashSet<String>,
+    pub(crate) root_epoch_compact_ids: HashSet<String>,
     pub(crate) epoch: ProjectionEpochMetadata,
 }
 
@@ -48,8 +45,12 @@ pub(crate) enum SpineProjectionError {
     RawOrdinalOverflow,
     #[error("spine projection saw duplicate pending transition {call_id}")]
     DuplicatePendingTransition { call_id: String },
+    #[error("unsupported spine tool {name} in rollout projection for {call_id}")]
+    UnsupportedSpineTool { call_id: String, name: String },
+    #[error("spine projection rollback turn count {num_turns} cannot fit in usize")]
+    RollbackTurnCountOverflow { num_turns: u32 },
     #[error("failed to build projection epoch metadata: {0}")]
-    Metadata(#[from] serde_json::Error),
+    Metadata(#[from] ProjectionEpochError),
     #[error(transparent)]
     State(#[from] SpineStateError),
 }
@@ -65,13 +66,13 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
     source_rollout_ref: impl Into<String>,
     rollout_items: &[RolloutItem],
 ) -> Result<SpineProjection, SpineProjectionError> {
-    let effective_items = effective_rollout_items(rollout_items);
+    let effective_items = effective_rollout_items(rollout_items)?;
     let mut state = SpineState::new();
     let mut raw_ordinal = 0_u64;
     let mut pending_transition: Option<PendingTransition> = None;
     let surviving_turn_ids = surviving_turn_ids(&effective_items);
-    let surviving_compact_hashes = surviving_compact_hashes(&effective_items);
-    let mut root_epoch_compact_hashes = HashSet::new();
+    let surviving_compact_ids = surviving_compact_ids(&effective_items);
+    let mut root_epoch_compact_ids = HashSet::new();
 
     for item in effective_items {
         match item {
@@ -95,28 +96,19 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
                     let transition = pending_transition
                         .take()
                         .expect("pending transition checked above");
-                    let applied = transition.op.apply_with_child_summary(
-                        &mut state,
-                        transition.summary,
-                        transition.child_summary,
-                    )?;
+                    let applied = transition.op.apply(&mut state, transition.summary)?;
                     state.set_raw_start_ordinal(&applied.to, item_end)?;
                 }
                 raw_ordinal = item_end;
             }
-            RolloutItem::Compacted(compacted)
-                if compacted
-                    .message
-                    .starts_with(ROOT_EPOCH_COMPACT_MESSAGE_PREFIX) =>
-            {
-                root_epoch_compact_hashes.insert(compact_message_hash(&compacted.message));
-                state.reset_root_epoch("Context compacted", raw_ordinal)?;
-            }
-            RolloutItem::Compacted(compacted)
-                if is_non_spine_compact_message(&compacted.message) =>
-            {
-                break;
-            }
+            RolloutItem::Compacted(compacted) => match compacted.spine.as_ref() {
+                Some(spine) if spine.kind == SpineCompactedCheckpointKind::RootEpoch => {
+                    root_epoch_compact_ids.insert(spine.compact_id.clone());
+                    state.reset_root_epoch("Context compacted", raw_ordinal)?;
+                }
+                Some(_) => {}
+                None => break,
+            },
             _ => {}
         }
     }
@@ -127,25 +119,38 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
         &state,
         raw_ordinal,
         &surviving_turn_ids,
-        &surviving_compact_hashes,
+        &surviving_compact_ids,
     )?;
 
     Ok(SpineProjection {
         state,
         response_item_count: raw_ordinal,
         surviving_turn_ids,
-        surviving_compact_hashes,
-        root_epoch_compact_hashes,
+        surviving_compact_ids,
+        root_epoch_compact_ids,
         epoch,
     })
 }
 
-fn effective_rollout_items(items: &[RolloutItem]) -> Vec<&RolloutItem> {
+pub(crate) fn surviving_spine_compact_ids_from_rollout(
+    rollout_items: &[RolloutItem],
+) -> Result<HashSet<String>, SpineProjectionError> {
+    let effective_items = effective_rollout_items(rollout_items)?;
+    Ok(surviving_compact_ids(&effective_items))
+}
+
+fn effective_rollout_items(
+    items: &[RolloutItem],
+) -> Result<Vec<&RolloutItem>, SpineProjectionError> {
     let mut effective: Vec<&RolloutItem> = Vec::new();
     for item in items {
         match item {
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                let num_turns = usize::try_from(rollback.num_turns).map_err(|_| {
+                    SpineProjectionError::RollbackTurnCountOverflow {
+                        num_turns: rollback.num_turns,
+                    }
+                })?;
                 if num_turns == 0 {
                     continue;
                 }
@@ -169,7 +174,7 @@ fn effective_rollout_items(items: &[RolloutItem]) -> Vec<&RolloutItem> {
             _ => effective.push(item),
         }
     }
-    effective
+    Ok(effective)
 }
 
 fn surviving_turn_ids(items: &[&RolloutItem]) -> HashSet<String> {
@@ -198,22 +203,17 @@ fn surviving_turn_ids(items: &[&RolloutItem]) -> HashSet<String> {
     turn_ids
 }
 
-fn surviving_compact_hashes(items: &[&RolloutItem]) -> HashSet<String> {
+fn surviving_compact_ids(items: &[&RolloutItem]) -> HashSet<String> {
     items
         .iter()
         .filter_map(|item| match item {
-            RolloutItem::Compacted(compacted)
-                if compacted.message.starts_with(SPINE_COMPACT_MESSAGE_PREFIX) =>
-            {
-                Some(compact_message_hash(&compacted.message))
-            }
+            RolloutItem::Compacted(compacted) => compacted
+                .spine
+                .as_ref()
+                .map(|spine| spine.compact_id.clone()),
             _ => None,
         })
         .collect()
-}
-
-fn is_non_spine_compact_message(message: &str) -> bool {
-    !message.starts_with(SPINE_COMPACT_MESSAGE_PREFIX)
 }
 
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
@@ -247,7 +247,6 @@ struct PendingTransition {
     call_id: String,
     op: SpineOperation,
     summary: Option<String>,
-    child_summary: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,20 +255,7 @@ struct NamespacedOpenArgs {}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct NamespacedSummaryArgs {
-    summary: String,
-    #[serde(
-        default,
-        rename = "instruction",
-        deserialize_with = "discard_optional_string"
-    )]
-    _instruction: (),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct NamespacedCloseArgs {
-    child_summary: String,
     summary: String,
     #[serde(
         default,
@@ -294,51 +280,41 @@ fn spine_transition_from_response_item(
     };
 
     if namespace.as_deref() == Some(SPINE_NAMESPACE) {
-        let (op, summary, child_summary) =
-            match name.as_str() {
-                SPINE_TOOL_OPEN => {
-                    serde_json::from_str::<NamespacedOpenArgs>(arguments).map_err(|source| {
+        let (op, summary) = match name.as_str() {
+            SPINE_TOOL_OPEN => {
+                serde_json::from_str::<NamespacedOpenArgs>(arguments).map_err(|source| {
+                    SpineProjectionError::ArgsJson {
+                        call_id: call_id.clone(),
+                        source,
+                    }
+                })?;
+                (SpineOperation::Open, None)
+            }
+            SPINE_TOOL_CLOSE => {
+                let args =
+                    serde_json::from_str::<NamespacedCloseArgs>(arguments).map_err(|source| {
                         SpineProjectionError::ArgsJson {
                             call_id: call_id.clone(),
                             source,
                         }
                     })?;
-                    (SpineOperation::Open, None, None)
-                }
-                SPINE_TOOL_NEXT => {
-                    let args = serde_json::from_str::<NamespacedSummaryArgs>(arguments).map_err(
-                        |source| SpineProjectionError::ArgsJson {
-                            call_id: call_id.clone(),
-                            source,
-                        },
-                    )?;
-                    let NamespacedSummaryArgs {
-                        summary,
-                        _instruction: _,
-                    } = args;
-                    (SpineOperation::Next, Some(summary), None)
-                }
-                SPINE_TOOL_CLOSE => {
-                    let args = serde_json::from_str::<NamespacedCloseArgs>(arguments).map_err(
-                        |source| SpineProjectionError::ArgsJson {
-                            call_id: call_id.clone(),
-                            source,
-                        },
-                    )?;
-                    let NamespacedCloseArgs {
-                        child_summary,
-                        summary,
-                        _instruction: _,
-                    } = args;
-                    (SpineOperation::Close, Some(summary), Some(child_summary))
-                }
-                _ => return Ok(None),
-            };
+                let NamespacedCloseArgs {
+                    summary,
+                    _instruction: _,
+                } = args;
+                (SpineOperation::Close, Some(summary))
+            }
+            other => {
+                return Err(SpineProjectionError::UnsupportedSpineTool {
+                    call_id: call_id.clone(),
+                    name: other.to_string(),
+                });
+            }
+        };
         return Ok(Some(PendingTransition {
             call_id: call_id.clone(),
             op,
             summary,
-            child_summary,
         }));
     }
 
@@ -388,28 +364,22 @@ mod instruction_projection_tests {
     }
 
     #[test]
-    fn projection_accepts_runtime_valid_compact_instruction_on_next() {
-        let projection = project_spine_state_from_rollout(&[
+    fn projection_rejects_unknown_namespaced_spine_tool() {
+        let error = project_spine_state_from_rollout(&[
             user_message("start"),
             spine_call(
-                "next-1",
-                SPINE_TOOL_NEXT,
+                "unknown-1",
+                "unknown",
                 r#"{"summary":"done","instruction":"keep failing test"}"#,
             ),
-            call_output("next-1"),
+            call_output("unknown-1"),
         ])
-        .expect("project");
+        .expect_err("unknown namespaced spine tools must fail closed");
 
-        assert_eq!(projection.state.cursor().to_string(), "1.2");
-        assert_eq!(
-            projection
-                .state
-                .node(&NodeId::from_segments(vec![1, 1]))
-                .expect("node")
-                .summary
-                .as_deref(),
-            Some("done")
-        );
+        assert!(matches!(
+            error,
+            SpineProjectionError::UnsupportedSpineTool { .. }
+        ));
     }
 
     #[test]
@@ -421,13 +391,13 @@ mod instruction_projection_tests {
             spine_call(
                 "close-1",
                 SPINE_TOOL_CLOSE,
-                r#"{"child_summary":"leaf done","summary":"done","instruction":"keep child context"}"#,
+                r#"{"summary":"done","instruction":"keep child context"}"#,
             ),
             call_output("close-1"),
         ])
         .expect("project");
 
-        assert_eq!(projection.state.cursor().to_string(), "1.2");
+        assert_eq!(projection.state.cursor().to_string(), "1.1");
         assert_eq!(
             projection
                 .state
@@ -435,7 +405,7 @@ mod instruction_projection_tests {
                 .expect("node")
                 .summary
                 .as_deref(),
-            Some("done")
+            None
         );
         assert_eq!(
             projection
@@ -444,7 +414,7 @@ mod instruction_projection_tests {
                 .expect("child node")
                 .summary
                 .as_deref(),
-            Some("leaf done")
+            Some("done")
         );
     }
 

@@ -1,5 +1,4 @@
 use super::ids::NodeId;
-use super::ids::NodeIdParseError;
 use super::runtime::SpineRuntimeHint;
 use super::state::NodeStatus;
 use super::state::SpineState;
@@ -59,7 +58,7 @@ pub(crate) fn render_size_hint(
     if let Some(budget) = budget {
         let remaining_tokens = budget.limit_tokens.saturating_sub(budget.used_tokens);
         return format!(
-            "\n\nSpine warning: context pressure is high at {}k/{}k tokens ({}k left); current live node is about {}k. At the next natural boundary, use spine.next/close to move finished work into a memory before Codex auto-compacts the root epoch.",
+            "\n\nSpine warning: context pressure is high at {}k/{}k tokens ({}k left); current live node is about {}k. At the next natural boundary, use spine.close to finish the current scope before Codex auto-compacts the root epoch.",
             rounded_k_tokens(budget.used_tokens),
             rounded_k_tokens(budget.limit_tokens),
             rounded_k_tokens(remaining_tokens),
@@ -67,7 +66,7 @@ pub(crate) fn render_size_hint(
         );
     }
     format!(
-        "\n\nSpine warning: current live node is about {}k tokens and is carried into every request. At a natural boundary, use spine.next/close to move finished work into a memory.",
+        "\n\nSpine warning: current live node is about {}k tokens and is carried into every request. At a natural boundary, use spine.close to finish the current scope.",
         rounded_k_tokens(hint.estimated_tokens)
     )
 }
@@ -125,8 +124,7 @@ fn format_subtree(
         line.push_str(" Current");
     } else {
         line.push(' ');
-        let undone_as_compact = is_unfinished_under_closed_ancestor(state, node_id);
-        line.push_str(format_status(&node.status, undone_as_compact));
+        line.push_str(format_status(&node.status));
         if let Some(summary) = node
             .summary
             .as_deref()
@@ -214,37 +212,12 @@ fn previous_root_epoch_id(node_id: &NodeId) -> Option<NodeId> {
     Some(NodeId::from_segments(vec![segments[0] - 1]))
 }
 
-fn format_status(status: &NodeStatus, undone_as_compact: bool) -> &'static str {
-    if undone_as_compact {
-        return "[undone as compact]";
-    }
+fn format_status(status: &NodeStatus) -> &'static str {
     match status {
         NodeStatus::Live => "live",
-        NodeStatus::Opened => "live",
-        NodeStatus::Finished => "finished",
+        NodeStatus::Suspended => "suspended",
         NodeStatus::Closed => "closed",
     }
-}
-
-fn is_unfinished_under_closed_ancestor(state: &SpineState, node_id: &NodeId) -> bool {
-    let Some(node) = state.node(node_id) else {
-        return false;
-    };
-    if !matches!(node.status, NodeStatus::Live | NodeStatus::Opened) {
-        return false;
-    }
-
-    let mut parent_id = node.parent_id.as_ref();
-    while let Some(parent) = parent_id {
-        let Some(parent_node) = state.node(parent) else {
-            return false;
-        };
-        if matches!(parent_node.status, NodeStatus::Closed) {
-            return true;
-        }
-        parent_id = parent_node.parent_id.as_ref();
-    }
-    false
 }
 
 fn should_show_memory_ref(
@@ -253,7 +226,7 @@ fn should_show_memory_ref(
     status: &NodeStatus,
     current_root_epoch: Option<&NodeId>,
 ) -> bool {
-    if !matches!(status, NodeStatus::Finished | NodeStatus::Closed) {
+    if !matches!(status, NodeStatus::Closed) {
         return false;
     }
     if is_root_epoch(state, node_id) {
@@ -272,14 +245,9 @@ pub(crate) fn display_node_id(node_id: &NodeId) -> String {
     node_id.to_string()
 }
 
-pub(crate) fn parse_display_node_id(value: &str) -> Result<NodeId, NodeIdParseError> {
-    NodeId::parse(value)
-}
-
 pub(crate) fn op_label(op: SpineOperation) -> &'static str {
     match op {
         SpineOperation::Open => "open",
-        SpineOperation::Next => "next",
         SpineOperation::Close => "close",
         SpineOperation::Archive => "archive",
     }

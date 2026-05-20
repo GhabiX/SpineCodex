@@ -1,7 +1,16 @@
 use super::*;
+use crate::spine::candidate_mem_plan::CandidateMem;
+use crate::spine::candidate_mem_plan::CandidateMemPlan;
 use crate::spine::ids::NodeId;
+use crate::spine::segment::RawSpan;
+use crate::spine::segment::Segment;
+use crate::spine::segment::SegmentArtifacts;
+use crate::spine::segment::canonical_cover;
+use crate::spine::segment::span;
 use crate::spine::state::SpineState;
 use crate::spine::view::render_tree;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -45,9 +54,222 @@ fn installed_span(
         op,
         cut_ordinal,
         fold_end_ordinal,
-        replacement_history_len: 0,
-        message_hash: format!("sha1:{compact_id}"),
     }
+}
+
+fn test_candidate_plan(
+    raw_len: u64,
+    runtime_spans: &[InstalledCompactSpan],
+    candidate: &CandidateMem,
+) -> CodexResult<CandidateMemPlan> {
+    let mut artifacts: SegmentArtifacts = runtime_spans
+        .iter()
+        .map(|span| {
+            (
+                span.compact_id.clone(),
+                RawSpan {
+                    start: span.cut_ordinal,
+                    end: span.fold_end_ordinal,
+                },
+            )
+        })
+        .collect();
+    artifacts.insert(candidate.compact_id.clone(), candidate.span);
+    let mut compact_ids = runtime_spans
+        .iter()
+        .map(|span| span.compact_id.as_str())
+        .collect::<Vec<_>>();
+    compact_ids.push(candidate.compact_id.as_str());
+    let pi = canonical_cover(raw_len, compact_ids, &artifacts).map_err(|error| {
+        CodexErr::Fatal(format!(
+            "render(Pi) failed to build canonical cover: {error}"
+        ))
+    })?;
+    Ok(CandidateMemPlan { pi, artifacts })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RootArchiveReplacementHistory {
+    replacement_history: Vec<ResponseItem>,
+    archive_cut_ordinal: u64,
+    archive_cut_index: usize,
+}
+
+fn build_root_archive_replacement_history(
+    history: &[ResponseItem],
+    planned_cut_index: usize,
+    fold_end_ordinal: u64,
+    initial_context_items: Vec<ResponseItem>,
+    root_memory_item: ResponseItem,
+    runtime_spans: &[InstalledCompactSpan],
+) -> CodexResult<RootArchiveReplacementHistory> {
+    const ROOT_ARCHIVE_COMPACT_ID: &str = "__spine_root_archive_render_pi__";
+    let (archive_cut_ordinal, archive_cut_index) =
+        resolve_root_archive_cut(history, planned_cut_index, fold_end_ordinal, runtime_spans)?;
+    let raw_len = raw_ordinal_for_effective_index_with_spans(history, history.len(), runtime_spans)
+        .ok_or_else(|| {
+            CodexErr::Fatal("spine root archive render(Pi) could not map history end".to_string())
+        })?;
+    let candidate = CandidateMem::new(
+        ROOT_ARCHIVE_COMPACT_ID,
+        id(&[1]),
+        SpineOperation::Archive,
+        RawSpan {
+            start: archive_cut_ordinal,
+            end: fold_end_ordinal,
+        },
+    );
+    let candidate_plan = test_candidate_plan(raw_len, runtime_spans, &candidate)?;
+    let replacement_history = build_root_archive_replacement_history_from_candidate_plan(
+        history,
+        runtime_spans,
+        ROOT_ARCHIVE_COMPACT_ID,
+        initial_context_items,
+        root_memory_item,
+        &candidate_plan,
+    )?;
+    Ok(RootArchiveReplacementHistory {
+        replacement_history,
+        archive_cut_ordinal,
+        archive_cut_index,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RenderPiOrigin {
+    Raw(RawSpan),
+    Mem(String),
+    Note(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RenderedPiItem {
+    origin: RenderPiOrigin,
+    item: ResponseItem,
+}
+
+fn render_pi_bridge_items(
+    history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+    pi: &[Segment],
+    artifacts: &SegmentArtifacts,
+    mem_items: &BTreeMap<String, ResponseItem>,
+    note_items: &BTreeMap<String, Vec<ResponseItem>>,
+) -> CodexResult<Vec<RenderedPiItem>> {
+    let mut rendered = Vec::new();
+    for segment in pi {
+        match segment {
+            Segment::Raw(raw_span) => {
+                let start_index = effective_index_for_raw_ordinal_with_spans(
+                    history,
+                    raw_span.start,
+                    runtime_spans,
+                )
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "render(Pi) Raw {} start does not map to an effective index",
+                        raw_span
+                    ))
+                })?;
+                let end_index = effective_index_for_raw_ordinal_with_spans(
+                    history,
+                    raw_span.end,
+                    runtime_spans,
+                )
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "render(Pi) Raw {} end does not map to an effective index",
+                        raw_span
+                    ))
+                })?;
+                if start_index > end_index {
+                    return Err(CodexErr::Fatal(format!(
+                        "render(Pi) Raw {} maps to inverted effective range [{start_index}, {end_index})",
+                        raw_span
+                    )));
+                }
+                rendered.extend(history[start_index..end_index].iter().cloned().map(|item| {
+                    RenderedPiItem {
+                        origin: RenderPiOrigin::Raw(*raw_span),
+                        item,
+                    }
+                }));
+            }
+            Segment::Mem { compact_id } => {
+                span(segment, artifacts).map_err(|error| {
+                    CodexErr::Fatal(format!(
+                        "render(Pi) failed to build canonical cover: {error}"
+                    ))
+                })?;
+                let item = mem_items.get(compact_id).ok_or_else(|| {
+                    CodexErr::Fatal(format!("render(Pi) missing Mem item for {compact_id}"))
+                })?;
+                rendered.push(RenderedPiItem {
+                    origin: RenderPiOrigin::Mem(compact_id.clone()),
+                    item: item.clone(),
+                });
+            }
+            Segment::Note { kind } => {
+                let items = note_items.get(kind).ok_or_else(|| {
+                    CodexErr::Fatal(format!("render(Pi) missing Note item for {kind}"))
+                })?;
+                rendered.extend(items.iter().cloned().map(|item| RenderedPiItem {
+                    origin: RenderPiOrigin::Note(kind.clone()),
+                    item,
+                }));
+            }
+        }
+    }
+    Ok(rendered)
+}
+
+fn build_test_splice_replacement_history(
+    old_history: &[ResponseItem],
+    cut_index: usize,
+    fold_end_index: usize,
+    ir_items: Vec<ResponseItem>,
+) -> Vec<ResponseItem> {
+    let mut replacement_history = Vec::with_capacity(
+        cut_index + ir_items.len() + old_history.len().saturating_sub(fold_end_index),
+    );
+    replacement_history.extend_from_slice(&old_history[..cut_index]);
+    replacement_history.extend(ir_items);
+    replacement_history.extend_from_slice(&old_history[fold_end_index..]);
+    replacement_history
+}
+
+fn build_suffix_replacement_history_from_pi(
+    old_history: &[ResponseItem],
+    runtime_spans: &[InstalledCompactSpan],
+    compact_id: &str,
+    boundary: &SpineCompactBoundary,
+    memory_item: ResponseItem,
+    note_items: Vec<ResponseItem>,
+) -> CodexResult<Vec<ResponseItem>> {
+    let raw_len =
+        raw_ordinal_for_effective_index_with_spans(old_history, old_history.len(), runtime_spans)
+            .ok_or_else(|| {
+            CodexErr::Fatal("spine suffix render(Pi) could not map history end".to_string())
+        })?;
+    let new_span = RawSpan {
+        start: boundary.cut_ordinal,
+        end: boundary.fold_end_ordinal,
+    };
+    let candidate = CandidateMem::new(
+        compact_id.to_string(),
+        boundary.node_id.clone(),
+        boundary.op,
+        new_span,
+    );
+    let candidate_plan = test_candidate_plan(raw_len, runtime_spans, &candidate)?;
+    build_suffix_replacement_history_from_candidate_plan(
+        old_history,
+        runtime_spans,
+        compact_id,
+        &candidate_plan,
+        memory_item,
+        note_items,
+    )
 }
 
 fn rollout_serialized(item: ResponseItem) -> ResponseItem {
@@ -191,15 +413,15 @@ fn tool_pairing_classifier_covers_response_item_call_shapes() {
 #[test]
 fn effective_mapping_satisfies_formal_item_semantics() {
     let spans = vec![
-        installed_span("compact-a", id(&[1]), SpineOperation::Next, 1, 4),
-        installed_span("compact-b", id(&[2]), SpineOperation::Next, 5, 8),
+        installed_span("compact-a", id(&[1]), SpineOperation::Close, 1, 4),
+        installed_span("compact-b", id(&[2]), SpineOperation::Close, 5, 8),
     ];
     let history = vec![
         text_item("raw 0"),
-        render_spine_memory_item(&id(&[1]), SpineOperation::Next, "a", "a facts"),
+        render_spine_memory_item(&id(&[1]), SpineOperation::Close, "a", "a facts"),
         render_spine_handoff_item(&id(&[1]), &id(&[2])),
         text_item("raw 4"),
-        render_spine_memory_item(&id(&[2]), SpineOperation::Next, "b", "b facts"),
+        render_spine_memory_item(&id(&[2]), SpineOperation::Close, "b", "b facts"),
         render_spine_initial_context_item(vec![ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -245,14 +467,14 @@ fn effective_mapping_satisfies_formal_item_semantics() {
 fn raw_ordinals_map_slim_spine_memory_with_runtime_span() {
     let memory_item = render_spine_memory_item(
         &id(&[1, 2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "leaf summary",
         "leaf body",
     );
     let spans = vec![installed_span(
         "compact-1",
         id(&[1, 2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         1,
         4,
     )];
@@ -288,14 +510,14 @@ fn raw_ordinals_map_slim_spine_memory_with_runtime_span() {
 fn raw_ordinals_map_serialized_slim_spine_memory_with_runtime_span() {
     let memory_item = rollout_serialized(render_spine_memory_item(
         &id(&[1, 2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "leaf summary",
         "leaf body",
     ));
     let spans = vec![installed_span(
         "compact-1",
         id(&[1, 2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         1,
         4,
     )];
@@ -319,7 +541,7 @@ fn raw_ordinals_map_serialized_slim_spine_memory_with_runtime_span() {
 fn raw_ordinals_treat_plain_final_answer_markdown_memory_as_raw1() {
     let previous_memory = render_spine_memory_item(
         &id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "previous leaf",
         "previous facts",
     );
@@ -327,15 +549,16 @@ fn raw_ordinals_treat_plain_final_answer_markdown_memory_as_raw1() {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: "## Spine Memory\n\nNode: 1.2\nOperation: next\nSummary: visible answer\n\nfacts"
-                .to_string(),
+            text:
+                "## Spine Memory\n\nNode: 1.2\nOperation: close\nSummary: visible answer\n\nfacts"
+                    .to_string(),
         }],
         phase: Some(MessagePhase::FinalAnswer),
     };
     let spans = vec![installed_span(
         "compact-1-1",
         id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         1,
         4,
     )];
@@ -371,7 +594,7 @@ fn raw_ordinals_treat_plain_final_answer_markdown_memory_as_raw1() {
 fn raw_ordinals_treat_unmarked_markdown_memory_without_span_as_raw1() {
     let history = vec![
         text_item("prefix"),
-        text_item("## Spine Memory\n\nNode: 1.2\nOperation: next\nSummary: visible\n\nfacts"),
+        text_item("## Spine Memory\n\nNode: 1.2\nOperation: close\nSummary: visible\n\nfacts"),
         text_item("tail"),
     ];
 
@@ -398,7 +621,7 @@ fn raw_ordinals_treat_unmarked_markdown_memory_without_span_as_raw1() {
 fn raw_ordinals_treat_spine_handoff_as_zero_width() {
     let memory_item = render_spine_memory_item(
         &id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "previous leaf",
         "previous facts",
     );
@@ -406,7 +629,7 @@ fn raw_ordinals_treat_spine_handoff_as_zero_width() {
     let spans = vec![installed_span(
         "compact-1-1",
         id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         1,
         4,
     )];
@@ -536,7 +759,7 @@ fn suffix_fold_after_root_archive_reinjected_context_starts_at_next_live_item() 
         text_item("future epoch first live item"),
     ];
     let input = SpineCompactInput {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[2, 1]),
         cut_ordinal: 8,
         fold_end_ordinal: 12,
@@ -565,7 +788,7 @@ fn suffix_fold_after_root_archive_reinjected_context_starts_at_next_live_item() 
         ]
     );
     assert_eq!(
-        plan.replacement_tail,
+        history[plan.fold_end_index..].to_vec(),
         vec![text_item("future epoch first live item")]
     );
 }
@@ -577,7 +800,7 @@ fn suffix_fold_does_not_extend_past_handoff_shifted_boundary() {
         text_item("raw 1"),
         render_spine_memory_item(
             &id(&[1, 1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             "node 1.1 done",
             "node 1.1 facts",
         ),
@@ -592,12 +815,12 @@ fn suffix_fold_does_not_extend_past_handoff_shifted_boundary() {
     let spans = vec![installed_span(
         "compact-1-1",
         id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         2,
         106,
     )];
     let input = SpineCompactInput {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[1, 2]),
         cut_ordinal: 106,
         fold_end_ordinal: 217,
@@ -621,8 +844,9 @@ fn suffix_fold_does_not_extend_past_handoff_shifted_boundary() {
         plan.input.suffix_items.last(),
         Some(&function_call_output("call-next"))
     );
-    assert!(
-        plan.replacement_tail.is_empty(),
+    assert_eq!(
+        plan.fold_end_index,
+        history.len(),
         "fold end should already include the transition output, so closure must not extend past it"
     );
 }
@@ -634,22 +858,22 @@ fn future_live_start_remains_mappable_after_handoff_compact() {
         text_item("raw 1"),
         render_spine_memory_item(
             &id(&[1, 1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             "node 1.1 done",
             "node 1.1 facts",
         ),
         render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2])),
         render_spine_memory_item(
             &id(&[1, 2]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             "node 1.2 done",
             "node 1.2 facts",
         ),
         render_spine_handoff_item(&id(&[1, 2]), &id(&[1, 3])),
     ];
     let spans = vec![
-        installed_span("compact-1-1", id(&[1, 1]), SpineOperation::Next, 2, 106),
-        installed_span("compact-1-2", id(&[1, 2]), SpineOperation::Next, 106, 217),
+        installed_span("compact-1-1", id(&[1, 1]), SpineOperation::Close, 2, 106),
+        installed_span("compact-1-2", id(&[1, 2]), SpineOperation::Close, 106, 217),
     ];
 
     let live_start_index = effective_index_for_raw_ordinal_with_spans(&history, 217, &spans)
@@ -665,7 +889,7 @@ fn future_live_start_remains_mappable_after_handoff_compact() {
 fn raw_ordinals_fail_fast_for_slim_spine_memory_without_runtime_span() {
     let memory_item = render_spine_memory_item(
         &id(&[1, 2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "leaf summary",
         "leaf body",
     );
@@ -684,7 +908,7 @@ fn raw_ordinals_fail_fast_for_slim_spine_memory_without_runtime_span() {
         text_item("prefix"),
         rollout_serialized(render_spine_memory_item(
             &id(&[1, 2]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             "leaf summary",
             "leaf body",
         )),
@@ -704,12 +928,12 @@ fn raw_ordinals_fail_fast_for_slim_spine_memory_without_runtime_span() {
 fn raw_ordinals_ignore_unmatched_later_runtime_spans() {
     let memory_item = render_spine_memory_item(
         &id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "leaf summary",
         "leaf body",
     );
     let spans = vec![
-        installed_span("compact-child", id(&[1, 1]), SpineOperation::Next, 1, 4),
+        installed_span("compact-child", id(&[1, 1]), SpineOperation::Close, 1, 4),
         installed_span("rolled-back-scope", id(&[1]), SpineOperation::Close, 1, 6),
     ];
     let history = vec![text_item("prefix"), memory_item, text_item("tail")];
@@ -755,7 +979,7 @@ fn raw_ordinals_treat_legacy_memory_carriers_as_plain_raw1() {
         phase: None,
     };
     let bare_markdown =
-        text_item("## Spine Memory\n\nNode: 1\nOperation: next\nSummary: leaf\n\nfacts");
+        text_item("## Spine Memory\n\nNode: 1\nOperation: close\nSummary: leaf\n\nfacts");
     let history = vec![
         text_item("prefix"),
         legacy_xml,
@@ -777,11 +1001,15 @@ fn runtime_span_mapping_skips_obsolete_spans_before_current_memory() {
     let legacy_ir = text_item(
         "<spine_ir id=\"spine-ir:1.1:1-4:next\" node=\"1.1\" op=\"next\" runtime_generated=\"true\" fold_start=\"1\" fold_end=\"4\">\n<memory>\nlegacy body\n</memory>\n</spine_ir>",
     );
-    let slim =
-        render_spine_memory_item(&id(&[1, 2]), SpineOperation::Next, "slim leaf", "slim body");
+    let slim = render_spine_memory_item(
+        &id(&[1, 2]),
+        SpineOperation::Close,
+        "slim leaf",
+        "slim body",
+    );
     let spans = vec![
-        installed_span("compact-legacy", id(&[1, 1]), SpineOperation::Next, 1, 4),
-        installed_span("compact-slim", id(&[1, 2]), SpineOperation::Next, 3, 5),
+        installed_span("compact-legacy", id(&[1, 1]), SpineOperation::Close, 1, 4),
+        installed_span("compact-slim", id(&[1, 2]), SpineOperation::Close, 3, 5),
     ];
     let history = vec![text_item("prefix"), legacy_ir, text_item("middle"), slim];
 
@@ -803,12 +1031,12 @@ fn runtime_span_mapping_skips_obsolete_spans_before_current_memory() {
 fn runtime_span_mapping_uses_filtered_slim_memory_span_after_redo() {
     let memory_item = render_spine_memory_item(
         &id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "redo leaf",
         "current compact facts",
     );
-    let stale_span = installed_span("compact-old", id(&[1, 1]), SpineOperation::Next, 1, 4);
-    let current_span = installed_span("compact-new", id(&[1, 1]), SpineOperation::Next, 1, 6);
+    let stale_span = installed_span("compact-old", id(&[1, 1]), SpineOperation::Close, 1, 4);
+    let current_span = installed_span("compact-new", id(&[1, 1]), SpineOperation::Close, 1, 6);
     let history = vec![text_item("prefix"), memory_item, text_item("tail")];
 
     assert_eq!(
@@ -863,9 +1091,13 @@ fn replacement_history_splices_prefix_memory_and_tail() {
         text_item("c"),
         text_item("d"),
     ];
-    let memory_item =
-        render_spine_memory_item(&id(&[1]), SpineOperation::Next, "leaf summary", "leaf body");
-    let replacement = build_suffix_replacement_history(&old_history, 1, 3, vec![memory_item]);
+    let memory_item = render_spine_memory_item(
+        &id(&[1]),
+        SpineOperation::Close,
+        "leaf summary",
+        "leaf body",
+    );
+    let replacement = build_test_splice_replacement_history(&old_history, 1, 3, vec![memory_item]);
 
     assert_eq!(replacement.len(), 3);
     assert_eq!(replacement[0], old_history[0]);
@@ -922,18 +1154,6 @@ fn root_archive_replacement_folds_prior_spine_memory_into_archive_span() {
     assert!(rendered.contains("spine_initial_context"));
     assert!(!rendered.contains("recent user message should be folded"));
     assert!(!rendered.contains("ordinary assistant prefix"));
-    validate_spine_replacement_history_admissible(
-        &replacement.replacement_history,
-        &[installed_span(
-            "compact-root",
-            id(&[2]),
-            SpineOperation::Archive,
-            1,
-            5,
-        )],
-        &[1, 5],
-    )
-    .expect("root archive replacement should be mappable");
 }
 
 #[test]
@@ -943,14 +1163,14 @@ fn root_archive_replacement_must_not_emit_discontinuous_memory_spans() {
         text_item("raw 1"),
         render_spine_memory_item(
             &id(&[1, 1, 1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             "first",
             "first facts",
         ),
         text_item("raw gap 10"),
         render_spine_memory_item(
             &id(&[1, 1, 2]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             "second",
             "second facts",
         ),
@@ -970,8 +1190,8 @@ fn root_archive_replacement_must_not_emit_discontinuous_memory_spans() {
         Vec::new(),
         root_memory,
         &[
-            installed_span("compact-1", id(&[1, 1, 1]), SpineOperation::Next, 2, 10),
-            installed_span("compact-2", id(&[1, 1, 2]), SpineOperation::Next, 11, 25),
+            installed_span("compact-1", id(&[1, 1, 1]), SpineOperation::Close, 2, 10),
+            installed_span("compact-2", id(&[1, 1, 2]), SpineOperation::Close, 11, 25),
         ],
     )
     .expect("build root archive replacement");
@@ -991,12 +1211,6 @@ fn root_archive_replacement_must_not_emit_discontinuous_memory_spans() {
         2,
         50,
     )];
-    validate_spine_replacement_history_admissible(
-        &replacement.replacement_history,
-        &spans_after_install,
-        &[2, 50],
-    )
-    .expect("root archive replacement should be mappable");
     assert_eq!(
         effective_index_for_raw_ordinal_with_spans(
             &replacement.replacement_history,
@@ -1008,7 +1222,7 @@ fn root_archive_replacement_must_not_emit_discontinuous_memory_spans() {
 }
 
 #[test]
-fn render_pi_bridge_suffix_matches_legacy_splice() {
+fn render_pi_bridge_suffix_matches_direct_splice() {
     let old_history = vec![
         text_item("a"),
         text_item("b"),
@@ -1016,9 +1230,8 @@ fn render_pi_bridge_suffix_matches_legacy_splice() {
         text_item("d"),
     ];
     let boundary = SpineCompactBoundary {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[1, 1]),
-        scope_node_id: Some(id(&[1])),
         cut_ordinal: 1,
         fold_end_ordinal: 3,
         transition_summary: "leaf done".to_string(),
@@ -1026,12 +1239,12 @@ fn render_pi_bridge_suffix_matches_legacy_splice() {
     };
     let memory_item = render_spine_memory_item(
         &id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "leaf done",
         "memory body",
     );
     let handoff_item = render_spine_handoff_item(&id(&[1, 1]), &id(&[1, 2]));
-    let legacy = build_suffix_replacement_history(
+    let direct_splice = build_test_splice_replacement_history(
         &old_history,
         1,
         3,
@@ -1048,7 +1261,7 @@ fn render_pi_bridge_suffix_matches_legacy_splice() {
     )
     .expect("render pi suffix");
 
-    assert_eq!(rendered, legacy);
+    assert_eq!(rendered, direct_splice);
 }
 
 #[test]
@@ -1064,7 +1277,7 @@ fn render_pi_bridge_records_origin_for_every_item() {
     ];
     let memory_item = render_spine_memory_item(
         &id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "leaf done",
         "memory body",
     );
@@ -1107,11 +1320,11 @@ fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
         text_item("tail after folded suffix"),
     ];
     let input = SpineCompactInput {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[1, 1]),
         cut_ordinal: 3,
         fold_end_ordinal: 8,
-        spine_tree: "1: finished leaf [memory already in context]\n2: Current".to_string(),
+        spine_tree: "1: closed leaf [memory already in context]\n2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
         transition_summary: "leaf done".to_string(),
@@ -1133,13 +1346,13 @@ fn suffix_fold_keeps_cut_after_complete_prefix_tool_output() {
         text_item("previous turn final answer")
     );
 
-    let replacement = build_suffix_replacement_history(
+    let replacement = build_test_splice_replacement_history(
         &history,
         plan.cut_index,
         plan.fold_end_index,
         vec![render_spine_memory_item(
             &id(&[1, 1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             "leaf done",
             "Pending continuation: respond exactly DONE",
         )],
@@ -1197,14 +1410,14 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
     assert_eq!(plan.input.suffix_items[1], function_call("tree-1"));
     assert_eq!(plan.input.suffix_items[2], function_call_output("tree-1"));
     assert_eq!(
-        plan.replacement_tail,
+        history[plan.fold_end_index..].to_vec(),
         vec![
             text_item("assistant answered tree"),
             user_item("tail after compact request")
         ]
     );
 
-    let replacement = build_suffix_replacement_history(
+    let replacement = build_test_splice_replacement_history(
         &history,
         plan.cut_index,
         plan.fold_end_index,
@@ -1227,14 +1440,14 @@ fn suffix_fold_extends_end_to_keep_tool_call_output_with_call() {
 fn suffix_fold_uses_runtime_span_for_slim_memory_item() {
     let slim = render_spine_memory_item(
         &id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         "previous leaf",
         "previous compact facts",
     );
     let spans = vec![installed_span(
         "compact-1",
         id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         1,
         5,
     )];
@@ -1248,11 +1461,11 @@ fn suffix_fold_uses_runtime_span_for_slim_memory_item() {
         text_item("tail after folded suffix"),
     ];
     let input = SpineCompactInput {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[1, 2]),
         cut_ordinal: 5,
         fold_end_ordinal: 9,
-        spine_tree: "1: finished previous [memory already in context]\n2: Current".to_string(),
+        spine_tree: "1: closed previous [memory already in context]\n2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
         transition_summary: "current done".to_string(),
@@ -1275,7 +1488,7 @@ fn suffix_fold_uses_runtime_span_for_slim_memory_item() {
         user_item("current turn asks next")
     );
     assert_eq!(
-        plan.replacement_tail,
+        history[plan.fold_end_index..].to_vec(),
         vec![text_item("tail after folded suffix")]
     );
 }
@@ -1334,7 +1547,10 @@ fn close_parent_suffix_fold_can_cover_installed_child_memory_span() {
         vec![text_item("raw prelude 0"), text_item("raw prelude 1")]
     );
     assert_eq!(plan.input.suffix_items[4], child_memory);
-    assert_eq!(plan.replacement_tail, vec![text_item("future live raw 8")]);
+    assert_eq!(
+        history[plan.fold_end_index..].to_vec(),
+        vec![text_item("future live raw 8")]
+    );
 
     let parent_memory = render_spine_memory_item(
         &id(&[1, 1, 1]),
@@ -1342,7 +1558,7 @@ fn close_parent_suffix_fold_can_cover_installed_child_memory_span() {
         "scope done",
         "parent compact facts",
     );
-    let replacement = build_suffix_replacement_history(
+    let replacement = build_test_splice_replacement_history(
         &history,
         plan.cut_index,
         plan.fold_end_index,
@@ -1388,11 +1604,11 @@ fn suffix_fold_pulls_call_back_when_output_is_inside_range() {
         text_item("assistant final"),
     ];
     let input = SpineCompactInput {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[1, 1]),
         cut_ordinal: 2,
         fold_end_ordinal: 3,
-        spine_tree: "1: finished leaf [memory already in context]\n2: Current".to_string(),
+        spine_tree: "1: closed leaf [memory already in context]\n2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
         transition_summary: "leaf done".to_string(),
@@ -1421,11 +1637,11 @@ fn suffix_fold_pulls_custom_tool_call_back_when_output_is_inside_range() {
         text_item("assistant final"),
     ];
     let input = SpineCompactInput {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[1, 1]),
         cut_ordinal: 2,
         fold_end_ordinal: 3,
-        spine_tree: "1: finished leaf [memory already in context]\n2: Current".to_string(),
+        spine_tree: "1: closed leaf [memory already in context]\n2: Current".to_string(),
         prefix_items: Vec::new(),
         suffix_items: Vec::new(),
         transition_summary: "leaf done".to_string(),
@@ -1483,7 +1699,7 @@ fn render_memory_item_uses_durable_marker_without_span_metadata() {
     let ResponseItem::Message { id, .. } = item else {
         panic!("unexpected item type");
     };
-    assert_eq!(id.as_deref(), Some("spine-memory:1.2:close"));
+    assert_eq!(id, None);
 }
 
 #[test]
@@ -1499,7 +1715,7 @@ fn render_handoff_item_preserves_durable_instructions() {
 
     assert!(text.starts_with("<spine_handoff>"));
     assert!(text.contains("Spine transition completed: 1.1 -> 1.2"));
-    assert!(text.contains("use 1.1's generated memory as the active-turn handoff"));
+    assert!(text.contains("use 1.1's generated memory as the current scope handoff"));
     assert!(text.contains(
         "Spine Memory is internal context; never expose or imitate it in user-visible messages."
     ));
@@ -1511,7 +1727,7 @@ fn render_handoff_item_preserves_durable_instructions() {
         "unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated memory as current obligations"
     ));
     assert!(text.contains(
-        "reconstruct the current node plan from the generated memory, latest user intent, and current evidence"
+        "reconstruct the current scope state from the generated memory, latest user intent, and current evidence"
     ));
     assert!(text.contains(
         "Before asking for new instructions, answer or continue any pending latest user request"
@@ -1524,10 +1740,11 @@ fn render_handoff_item_preserves_durable_instructions() {
 #[test]
 fn codex_builtin_prompt_uses_fork_full_history_shape() {
     let mut state = SpineState::new();
-    state.next("leaf done").expect("finish leaf");
+    state.close("leaf done").expect("finish leaf");
+    state.open().expect("open next leaf");
     let spine_tree = render_tree(&state, state.cursor());
     let input = SpineCompactInput {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[1, 1]),
         cut_ordinal: 1,
         fold_end_ordinal: 3,
@@ -1550,7 +1767,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(!rendered.contains("quoted_suffix_response_items_json"));
     assert!(!rendered.contains("Target suffix item count"));
     assert!(rendered.contains("<spine_tree>"));
-    assert!(rendered.contains("1.1: finished leaf done [memory already in context]"));
+    assert!(rendered.contains("1.1: closed leaf done [memory already in context]"));
     assert!(rendered.contains("1.2: Current"));
     assert!(!rendered.contains("spine_compact_"));
     assert_eq!(prompt[0], input.prefix_items[0]);
@@ -1569,7 +1786,7 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
     assert!(text.contains("validation status, blockers, unresolved questions"));
     assert!(text.contains("Target tree node: 1.1"));
     assert!(text.contains("Internal node id: 1.1"));
-    assert!(text.contains("Target operation: next"));
+    assert!(text.contains("Target operation: close"));
     assert!(text.contains("Spine Tree summary label: leaf done"));
     assert!(text.contains("Return exactly the compacted suffix as Markdown."));
     assert!(text.contains("Do not wrap it in XML/HTML tags or code fences."));
@@ -1592,11 +1809,11 @@ fn codex_builtin_prompt_uses_fork_full_history_shape() {
 #[test]
 fn codex_builtin_prompt_includes_compact_instruction_when_present() {
     let input = SpineCompactInput {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[1, 1]),
         cut_ordinal: 1,
         fold_end_ordinal: 3,
-        spine_tree: "1: finished leaf done [memory already in context]".to_string(),
+        spine_tree: "1: closed leaf done [memory already in context]".to_string(),
         prefix_items: vec![text_item("prefix")],
         suffix_items: vec![text_item("suffix")],
         transition_summary: "leaf done".to_string(),
@@ -1626,11 +1843,11 @@ fn codex_builtin_prompt_includes_compact_instruction_when_present() {
 #[test]
 fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
     let input = SpineCompactInput {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: id(&[1, 1]),
         cut_ordinal: 1,
         fold_end_ordinal: 3,
-        spine_tree: "1: finished leaf done [memory already in context]".to_string(),
+        spine_tree: "1: closed leaf done [memory already in context]".to_string(),
         prefix_items: vec![text_item("prefix")],
         suffix_items: vec![text_item("suffix")],
         transition_summary: "leaf done".to_string(),
@@ -1663,7 +1880,15 @@ fn codex_builtin_prompt_reuses_main_request_envelope_without_final_schema() {
         output_schema_strict: false,
     };
 
-    let compact_prompt = build_codex_builtin_prompt(&input, &prompt_envelope);
+    let compact_prompt = crate::Prompt {
+        input: build_codex_builtin_prompt_input(&input),
+        tools: prompt_envelope.tools.clone(),
+        parallel_tool_calls: prompt_envelope.parallel_tool_calls,
+        base_instructions: prompt_envelope.base_instructions.clone(),
+        personality: prompt_envelope.personality,
+        output_schema: None,
+        output_schema_strict: true,
+    };
 
     assert_eq!(compact_prompt.tools, vec![tool]);
     assert!(compact_prompt.parallel_tool_calls);

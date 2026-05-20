@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use sha1::Digest;
 use std::fmt;
 use thiserror::Error;

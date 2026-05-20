@@ -1,7 +1,6 @@
 use super::ids::NodeId;
 use super::project_pi::ProjectInput;
 use super::project_pi::ProjectMemInstall;
-use super::project_pi::ProjectMemRejectionReason;
 use super::project_pi::project_pi;
 use super::segment::RawSpan;
 use super::segment::Segment;
@@ -20,8 +19,8 @@ use std::fmt;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CandidateMem {
     pub(crate) compact_id: String,
-    pub(crate) node_id: Option<NodeId>,
-    pub(crate) op: Option<SpineOperation>,
+    pub(crate) node_id: NodeId,
+    pub(crate) op: SpineOperation,
     pub(crate) span: RawSpan,
 }
 
@@ -34,63 +33,29 @@ impl CandidateMem {
     ) -> Self {
         Self {
             compact_id: compact_id.into(),
-            node_id: Some(node_id),
-            op: Some(op),
-            span,
-        }
-    }
-
-    pub(crate) fn anonymous(compact_id: impl Into<String>, span: RawSpan) -> Self {
-        Self {
-            compact_id: compact_id.into(),
-            node_id: None,
-            op: None,
+            node_id,
+            op,
             span,
         }
     }
 
     fn label(&self) -> String {
-        match (&self.node_id, self.op) {
-            (Some(node_id), Some(op)) => {
-                format!(
-                    "{} node {} op {:?} span {}",
-                    self.compact_id, node_id, op, self.span
-                )
-            }
-            _ => format!("{} span {}", self.compact_id, self.span),
-        }
+        format!(
+            "{} node {} op {:?} span {}",
+            self.compact_id, self.node_id, self.op, self.span
+        )
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CandidateMemCover {
-    pub(crate) pi: Vec<Segment>,
-    pub(crate) artifacts: SegmentArtifacts,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CandidateAdmissionPolicy {
-    MustAdmit,
-    AdmitOrRejectNodeNotVisible,
-}
-
 pub(crate) enum CandidateMemPlanMode<'a> {
-    ProjectionBacked {
-        state: &'a SpineState,
-        admission: CandidateAdmissionPolicy,
-    },
-    CoverOnly {
-        live_boundaries: &'a [u64],
-        admission: CandidateAdmissionPolicy,
-    },
+    ProjectionBacked { state: &'a SpineState },
+    CoverOnly { live_boundaries: &'a [u64] },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CandidateMemPlan {
     pub(crate) pi: Vec<Segment>,
     pub(crate) artifacts: SegmentArtifacts,
-    pub(crate) admitted_candidate: bool,
-    pub(crate) rejected_candidate_reason: Option<ProjectMemRejectionReason>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,11 +70,11 @@ impl fmt::Display for CandidateMemCoverError {
     }
 }
 
-pub(crate) fn plan_candidate_mem_cover(
+fn plan_candidate_mem_cover(
     raw_len: u64,
     runtime_spans: &[InstalledCompactSpan],
     candidate: &CandidateMem,
-) -> Result<CandidateMemCover, CandidateMemCoverError> {
+) -> Result<(Vec<Segment>, SegmentArtifacts), CandidateMemCoverError> {
     let mut artifacts = artifacts_from_runtime_spans(runtime_spans);
     artifacts.insert(candidate.compact_id.clone(), candidate.span);
     let mut compact_ids = runtime_spans
@@ -123,7 +88,7 @@ pub(crate) fn plan_candidate_mem_cover(
             source,
         }
     })?;
-    Ok(CandidateMemCover { pi, artifacts })
+    Ok((pi, artifacts))
 }
 
 pub(crate) fn plan_candidate_mem(
@@ -132,7 +97,7 @@ pub(crate) fn plan_candidate_mem(
     candidate: &CandidateMem,
     mode: CandidateMemPlanMode<'_>,
 ) -> CodexResult<CandidateMemPlan> {
-    let CandidateMemCover { pi, artifacts } =
+    let (pi, artifacts) =
         plan_candidate_mem_cover(raw_len, runtime_spans, candidate).map_err(|err| {
             CodexErr::Fatal(format!(
                 "candidate Mem segment cover rejected {}: {err}",
@@ -141,7 +106,7 @@ pub(crate) fn plan_candidate_mem(
         })?;
 
     match mode {
-        CandidateMemPlanMode::ProjectionBacked { state, admission } => {
+        CandidateMemPlanMode::ProjectionBacked { state } => {
             let live_starts = visible_live_starts_for_segment_plan(state)?;
             validate_future_live_boundaries(&pi, &artifacts, &live_starts).map_err(|err| {
                 CodexErr::Fatal(format!(
@@ -161,32 +126,21 @@ pub(crate) fn plan_candidate_mem(
                 candidate,
                 admitted_candidate,
                 &rejected_candidate_reason,
-                admission,
             )?;
-            Ok(CandidateMemPlan {
-                pi,
-                artifacts,
-                admitted_candidate,
-                rejected_candidate_reason,
-            })
+            Ok(CandidateMemPlan { pi, artifacts })
         }
-        CandidateMemPlanMode::CoverOnly {
-            live_boundaries,
-            admission,
-        } => {
+        CandidateMemPlanMode::CoverOnly { live_boundaries } => {
             validate_future_live_boundaries(&pi, &artifacts, live_boundaries).map_err(|err| {
                 CodexErr::Fatal(format!(
                     "candidate Mem segment live-boundary validation failed for {}: {err}",
                     candidate.compact_id
                 ))
             })?;
-            validate_candidate_admission(candidate, true, &None, admission)?;
-            Ok(CandidateMemPlan {
-                pi,
-                artifacts,
-                admitted_candidate: true,
-                rejected_candidate_reason: None,
-            })
+            let admitted_candidate = pi.iter().any(|segment| {
+                matches!(segment, Segment::Mem { compact_id } if compact_id == &candidate.compact_id)
+            });
+            validate_candidate_admission(candidate, admitted_candidate, &None)?;
+            Ok(CandidateMemPlan { pi, artifacts })
         }
     }
 }
@@ -214,16 +168,10 @@ fn project_candidate_mem(
             })?,
         );
     }
-    let node_id = candidate.node_id.clone().ok_or_else(|| {
-        CodexErr::Fatal(format!(
-            "candidate Mem segment plan requires node id for {}",
-            candidate.compact_id
-        ))
-    })?;
     input.mem_installs.push(
         ProjectMemInstall::new(
             candidate.compact_id.clone(),
-            node_id,
+            candidate.node_id.clone(),
             candidate.span.start,
             candidate.span.end,
         )
@@ -245,20 +193,18 @@ fn project_candidate_mem(
 fn validate_candidate_admission(
     candidate: &CandidateMem,
     admitted_candidate: bool,
-    rejected_candidate_reason: &Option<ProjectMemRejectionReason>,
-    admission: CandidateAdmissionPolicy,
+    rejected_candidate_reason: &Option<super::project_pi::ProjectMemRejectionReason>,
 ) -> CodexResult<()> {
     if admitted_candidate {
         return Ok(());
     }
-    if admission == CandidateAdmissionPolicy::AdmitOrRejectNodeNotVisible
-        && *rejected_candidate_reason == Some(ProjectMemRejectionReason::NodeNotVisible)
-    {
-        return Ok(());
-    }
+    let reason = rejected_candidate_reason
+        .as_ref()
+        .map(|reason| format!(" ({reason:?})"))
+        .unwrap_or_default();
     Err(CodexErr::Fatal(format!(
-        "candidate Mem segment plan did not admit candidate Mem {}",
-        candidate.compact_id
+        "candidate Mem segment plan did not admit candidate Mem {}{}",
+        candidate.compact_id, reason
     )))
 }
 
@@ -270,7 +216,7 @@ fn visible_live_starts_for_segment_plan(state: &SpineState) -> CodexResult<Vec<u
                 "candidate Mem segment plan visible node {node_id} is missing"
             )));
         };
-        if matches!(node.status, NodeStatus::Live | NodeStatus::Opened) {
+        if matches!(node.status, NodeStatus::Live | NodeStatus::Suspended) {
             let Some(raw_start) = node.raw_start_ordinal else {
                 return Err(CodexErr::Fatal(format!(
                     "candidate Mem segment plan mutable node {node_id} is missing raw_start_ordinal"

@@ -19,7 +19,7 @@ use serde_json::Value;
 use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_segment_integration_next_compact_resume_reads_real_sidecar() -> anyhow::Result<()> {
+async fn spine_segment_integration_close_compact_resume_reads_real_sidecar() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -27,18 +27,18 @@ async fn spine_segment_integration_next_compact_resume_reads_real_sidecar() -> a
         &server,
         vec![
             sse(vec![
-                ev_response_created("resp-next"),
-                ev_spine_transition_call("next-1", "next", "next segment done", None),
-                ev_completed("resp-next"),
+                ev_response_created("resp-close"),
+                ev_spine_transition_call("close-1", "close", "segment done"),
+                ev_completed("resp-close"),
             ]),
             sse(vec![
-                ev_response_created("resp-next-compact"),
-                ev_assistant_message("msg-next-compact", "Segment next memory."),
-                ev_completed("resp-next-compact"),
+                ev_response_created("resp-close-compact"),
+                ev_assistant_message("msg-close-compact", "Segment close memory."),
+                ev_completed("resp-close-compact"),
             ]),
             sse(vec![
                 ev_response_created("resp-resume"),
-                ev_assistant_message("msg-resume", "resumed from next memory"),
+                ev_assistant_message("msg-resume", "resumed from close memory"),
                 ev_completed("resp-resume"),
             ]),
         ],
@@ -58,12 +58,12 @@ async fn spine_segment_integration_next_compact_resume_reads_real_sidecar() -> a
 
     let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
     assert_sidecar_core_files(&sidecar_dir)?;
-    assert_state_cursor(&sidecar_dir, "1.2")?;
-    assert_tree_transition(&sidecar_dir, "next", "1.1", "1.2")?;
-    assert_bridge_checkpoint_committed(&sidecar_dir, "1.1", "next")?;
+    assert_state_cursor(&sidecar_dir, "1")?;
+    assert_tree_transition(&sidecar_dir, "close", "1.1", "1")?;
+    assert_mem_install_committed(&sidecar_dir, "1.1", "close")?;
     assert_memory_contains(
         &sidecar_dir.join("nodes/1/1/memory.md"),
-        "Segment next memory.",
+        "Segment close memory.",
     )?;
     assert_raw_mirror_nonempty(&sidecar_dir)?;
 
@@ -78,11 +78,11 @@ async fn spine_segment_integration_next_compact_resume_reads_real_sidecar() -> a
         .last()
         .expect("resume turn should send a model request");
     assert!(
-        resume_request.body_contains_text("Segment next memory."),
+        resume_request.body_contains_text("Segment close memory."),
         "resume request should hydrate compacted sidecar memory: {resume_request:?}"
     );
     assert_sidecar_core_files(&sidecar_dir)?;
-    assert_state_cursor(&sidecar_dir, "1.2")?;
+    assert_state_cursor(&sidecar_dir, "1")?;
 
     Ok(())
 }
@@ -98,23 +98,23 @@ async fn spine_segment_integration_close_compact_resume_preserves_child_and_pare
         vec![
             sse(vec![
                 ev_response_created("resp-open"),
-                ev_spine_transition_call("open-1", "open", "open child", None),
+                ev_spine_transition_call("open-1", "open", "open child"),
                 ev_completed("resp-open"),
             ]),
             sse(vec![
-                ev_response_created("resp-close"),
-                ev_spine_transition_call(
-                    "close-1",
-                    "close",
-                    "parent scope done",
-                    Some("child leaf done"),
-                ),
-                ev_completed("resp-close"),
+                ev_response_created("resp-close-child"),
+                ev_spine_transition_call("close-child-1", "close", "child leaf done"),
+                ev_completed("resp-close-child"),
             ]),
             sse(vec![
                 ev_response_created("resp-close-child-compact"),
                 ev_assistant_message("msg-close-child-compact", "Segment close child memory."),
                 ev_completed("resp-close-child-compact"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-close-parent"),
+                ev_spine_transition_call("close-parent-1", "close", "parent scope done"),
+                ev_completed("resp-close-parent"),
             ]),
             sse(vec![
                 ev_response_created("resp-close-parent-compact"),
@@ -140,15 +140,17 @@ async fn spine_segment_integration_close_compact_resume_preserves_child_and_pare
         .expect("session should expose rollout path");
 
     test.submit_turn("open child segment").await?;
-    test.submit_turn("close child and parent").await?;
+    test.submit_turn("close child").await?;
+    test.submit_turn("close parent").await?;
 
     let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
     assert_sidecar_core_files(&sidecar_dir)?;
-    assert_state_cursor(&sidecar_dir, "1.2")?;
+    assert_state_cursor(&sidecar_dir, "1")?;
     assert_tree_transition(&sidecar_dir, "open", "1.1", "1.1.1")?;
-    assert_tree_transition(&sidecar_dir, "close", "1.1.1", "1.2")?;
-    assert_bridge_checkpoint_committed(&sidecar_dir, "1.1.1", "close")?;
-    assert_bridge_checkpoint_committed(&sidecar_dir, "1.1", "close")?;
+    assert_tree_transition(&sidecar_dir, "close", "1.1.1", "1.1")?;
+    assert_tree_transition(&sidecar_dir, "close", "1.1", "1")?;
+    assert_mem_install_committed(&sidecar_dir, "1.1.1", "close")?;
+    assert_mem_install_committed(&sidecar_dir, "1.1", "close")?;
     assert_memory_contains(
         &sidecar_dir.join("nodes/1/1/1/memory.md"),
         "Segment close child memory.",
@@ -171,8 +173,8 @@ async fn spine_segment_integration_close_compact_resume_preserves_child_and_pare
         "resume should hydrate parent memory: {resume_request:?}"
     );
     assert!(
-        !resume_request.body_contains_text("Segment close child memory."),
-        "parent memory should subsume child memory in the default prompt"
+        resume_request.body_contains_text("Segment close child memory."),
+        "current close-scoped compaction keeps child memory visible and auditable: {resume_request:?}"
     );
 
     Ok(())
@@ -180,7 +182,6 @@ async fn spine_segment_integration_close_compact_resume_preserves_child_and_pare
 
 fn spine_builder() -> core_test_support::test_codex::TestCodexBuilder {
     test_codex().with_model("gpt-5.4").with_config(|config| {
-        config.runtime_debug_checks = true;
         config
             .features
             .enable(Feature::SpineTaskTree)
@@ -188,16 +189,10 @@ fn spine_builder() -> core_test_support::test_codex::TestCodexBuilder {
     })
 }
 
-fn ev_spine_transition_call(
-    call_id: &str,
-    name: &str,
-    summary: &str,
-    child_summary: Option<&str>,
-) -> Value {
+fn ev_spine_transition_call(call_id: &str, name: &str, summary: &str) -> Value {
     let arguments = match name {
         "open" => "{}".to_string(),
         "close" => json!({
-            "child_summary": child_summary.expect("close should include child summary"),
             "summary": summary,
         })
         .to_string(),
@@ -223,7 +218,6 @@ fn sidecar_dir_for_rollout_path(rollout_path: &Path) -> PathBuf {
 fn assert_sidecar_core_files(sidecar_dir: &Path) -> anyhow::Result<()> {
     for relative in [
         "tree.jsonl",
-        "state.json",
         "compact.index.jsonl",
         "trajs.index.jsonl",
         "raw/rollout.raw.jsonl",
@@ -235,9 +229,23 @@ fn assert_sidecar_core_files(sidecar_dir: &Path) -> anyhow::Result<()> {
 }
 
 fn assert_state_cursor(sidecar_dir: &Path, expected: &str) -> anyhow::Result<()> {
-    let state = read_json(sidecar_dir.join("state.json"))?;
+    let events = read_json_lines(sidecar_dir.join("tree.jsonl"))?;
+    let state = events
+        .iter()
+        .rev()
+        .find_map(|event| match event.get("type").and_then(Value::as_str) {
+            Some("spine_initialized") | Some("projection_reset") => event.get("state"),
+            Some("transition_applied") | Some("root_epoch_reset") => Some(event),
+            _ => None,
+        })
+        .context("tree ledger should contain cursor-bearing state")?;
+    let cursor = match state.get("type").and_then(Value::as_str) {
+        Some("transition_applied") => state.get("to_node"),
+        Some("root_epoch_reset") => state.get("next_leaf_id"),
+        _ => state.get("cursor"),
+    };
     assert_eq!(
-        state.get("cursor").and_then(Value::as_str),
+        cursor.and_then(Value::as_str),
         Some(expected),
         "unexpected state cursor: {state:?}"
     );
@@ -263,11 +271,7 @@ fn assert_tree_transition(
     Ok(())
 }
 
-fn assert_bridge_checkpoint_committed(
-    sidecar_dir: &Path,
-    node_id: &str,
-    op: &str,
-) -> anyhow::Result<()> {
+fn assert_mem_install_committed(sidecar_dir: &Path, node_id: &str, op: &str) -> anyhow::Result<()> {
     let index = read_json_lines(sidecar_dir.join("compact.index.jsonl"))?;
     assert!(
         index.iter().any(|event| {
@@ -279,15 +283,15 @@ fn assert_bridge_checkpoint_committed(
     );
     assert!(
         index.iter().any(|event| {
-            event.get("type").and_then(Value::as_str) == Some("bridge_checkpoint_committed")
+            event.get("type").and_then(Value::as_str) == Some("mem_install_committed")
                 && event.get("node_id").and_then(Value::as_str) == Some(node_id)
                 && event.get("op").and_then(Value::as_str) == Some(op)
                 && event
-                    .get("replacement_history_len")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|len| len > 0)
+                    .get("compact_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id.starts_with("sha1:"))
         }),
-        "missing bridge checkpoint for {node_id} {op}: {index:?}"
+        "missing MemInstall for {node_id} {op}: {index:?}"
     );
     Ok(())
 }
@@ -313,13 +317,6 @@ fn assert_raw_mirror_nonempty(sidecar_dir: &Path) -> anyhow::Result<()> {
         "raw mirror should contain response item facts: {raw_mirror:?}"
     );
     Ok(())
-}
-
-fn read_json(path: impl AsRef<Path>) -> anyhow::Result<Value> {
-    let path = path.as_ref();
-    let contents =
-        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    serde_json::from_str(&contents).with_context(|| format!("parse {}", path.display()))
 }
 
 fn read_json_lines(path: impl AsRef<Path>) -> anyhow::Result<Vec<Value>> {

@@ -1,6 +1,4 @@
 use super::*;
-use crate::spine::debug_audit::INV_MEM_EVIDENCE;
-use crate::spine::debug_audit::audit_bridge_checkpoint_span_source;
 use crate::spine::fast_fail::RuntimeFastFailError;
 use crate::spine::mem_install::MemoryBodyError;
 use crate::spine::mem_install::MemoryBodyRef;
@@ -82,15 +80,18 @@ fn compact_started(
     }
 }
 
-fn compact_installed(
+fn append_legacy_compact_installed_event(
+    store: &SpineSidecarStore,
     compact_id: &str,
     node_id: NodeId,
-    op: SpineOperation,
+    op: &str,
     cut_ordinal: u64,
     fold_end_ordinal: u64,
-    replacement_history_len: usize,
     message_hash: &str,
-) -> CompactInstalledRecord {
+) {
+    let seq = store
+        .next_jsonl_seq(&store.compact_index_path())
+        .expect("seq");
     let memory_node_path = node_id
         .segments()
         .iter()
@@ -98,29 +99,22 @@ fn compact_installed(
         .collect::<Vec<_>>()
         .join("/");
     let memory_path = format!("nodes/{memory_node_path}/memory.md");
-    CompactInstalledRecord {
-        attempt: compact_attempt(compact_id, node_id, op, cut_ordinal, fold_end_ordinal),
-        replacement_history_len,
-        memory_path,
-        message_hash: message_hash.to_string(),
-    }
-}
-
-fn bridge_checkpoint_committed(
-    compact_id: &str,
-    node_id: NodeId,
-    op: SpineOperation,
-    cut_ordinal: u64,
-    fold_end_ordinal: u64,
-    replacement_history_len: usize,
-    message_hash: &str,
-) -> BridgeCheckpointCommittedRecord {
-    BridgeCheckpointCommittedRecord {
-        attempt: compact_attempt(compact_id, node_id, op, cut_ordinal, fold_end_ordinal),
-        replacement_history_len,
-        message_hash: message_hash.to_string(),
-        source_rollout_ref: "../rollout.jsonl".to_string(),
-    }
+    store
+        .append_json_line(
+            &store.compact_index_path(),
+            &json!({
+                "type": "compact_installed",
+                "seq": seq,
+                "compact_id": compact_id,
+                "node_id": node_id.to_string(),
+                "op": op,
+                "cut_ordinal": cut_ordinal,
+                "fold_end_ordinal": fold_end_ordinal,
+                "memory_path": memory_path,
+                "message_hash": message_hash,
+            }),
+        )
+        .expect("append legacy compact_installed event");
 }
 
 fn mem_install_committed(
@@ -129,25 +123,17 @@ fn mem_install_committed(
     op: SpineOperation,
     cut_ordinal: u64,
     fold_end_ordinal: u64,
-    replacement_history_len: usize,
-    message_hash: &str,
     body_ref: MemoryBodyRef,
 ) -> MemInstallCommittedRecord {
     MemInstallCommittedRecord {
         attempt: compact_attempt(compact_id, node_id, op, cut_ordinal, fold_end_ordinal),
         body_ref,
-        replacement_history_len,
-        message_hash: message_hash.to_string(),
         projection_ref: "projection:seq-1".to_string(),
         source_rollout_ref: "../rollout.jsonl".to_string(),
     }
 }
 
-fn append_root_meminstall_evidence(
-    store: &SpineSidecarStore,
-    compact_id: &str,
-    message_hash: &str,
-) {
+fn append_root_meminstall_evidence(store: &SpineSidecarStore, compact_id: &str) {
     store
         .append_compact_started(compact_started(
             compact_id,
@@ -174,8 +160,6 @@ fn append_root_meminstall_evidence(
             SpineOperation::Archive,
             0,
             7,
-            3,
-            message_hash,
             body_ref,
         ))
         .expect("append root mem install");
@@ -188,8 +172,6 @@ fn append_meminstall_evidence(
     op: SpineOperation,
     cut_ordinal: u64,
     fold_end_ordinal: u64,
-    replacement_history_len: usize,
-    message_hash: &str,
 ) -> MemoryBodyRef {
     store
         .append_compact_started(compact_started(
@@ -228,35 +210,28 @@ fn append_meminstall_evidence(
             op,
             cut_ordinal,
             fold_end_ordinal,
-            replacement_history_len,
-            message_hash,
             body_ref.clone(),
         ))
         .expect("append mem install");
     body_ref
 }
 
-fn append_bridge_checkpoint(
+fn append_meminstall_checkpoint_evidence(
     store: &SpineSidecarStore,
     compact_id: &str,
     node_id: NodeId,
     op: SpineOperation,
     cut_ordinal: u64,
     fold_end_ordinal: u64,
-    replacement_history_len: usize,
-    message_hash: &str,
 ) {
-    store
-        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
-            compact_id,
-            node_id,
-            op,
-            cut_ordinal,
-            fold_end_ordinal,
-            replacement_history_len,
-            message_hash,
-        ))
-        .expect("append bridge checkpoint");
+    append_meminstall_evidence(
+        store,
+        compact_id,
+        node_id.clone(),
+        op,
+        cut_ordinal,
+        fold_end_ordinal,
+    );
 }
 
 fn compact_terminal(
@@ -294,521 +269,87 @@ fn event_rollout_item() -> RolloutItem {
 }
 
 #[test]
-fn root_meminstall_survivor_matrix() {
-    for bits in 0_u8..64 {
-        let root_epoch_reset = bits & 0b000001 != 0;
-        let mem_install_committed = bits & 0b000010 != 0;
-        let compact_span = bits & 0b000100 != 0;
-        let body_artifact = bits & 0b001000 != 0;
-        let projection_source_ref = bits & 0b010000 != 0;
-        let bridge_checkpoint_ref = bits & 0b100000 != 0;
-
-        let admission = classify_root_meminstall_survivor(
-            root_epoch_reset,
-            mem_install_committed,
-            compact_span,
-            body_artifact,
-            projection_source_ref,
-            bridge_checkpoint_ref,
-        );
-
-        match bits {
-            0 => assert_eq!(
-                admission,
-                RootMemInstallSurvivorAdmission::OldEpochProjected
-            ),
-            63 => assert_eq!(
-                admission,
-                RootMemInstallSurvivorAdmission::RootMemInstallAdmitted
-            ),
-            _ => assert_eq!(
-                admission,
-                RootMemInstallSurvivorAdmission::PartialRootMemInstallFailClosed
-            ),
-        }
-    }
-}
-
-#[test]
-fn runtime_span_authority_policy_table() {
-    use RuntimeSpanAuthorityAdmission::*;
-
-    let cases = [
-        (false, false, false, NoSpan),
-        (false, true, false, InvalidHostCheckpointWithoutMemInstall),
-        (false, true, true, UseLegacyCompactInstalledSpan),
-        (
-            false,
-            false,
-            true,
-            InvalidCompactInstalledWithoutHostCheckpoint,
-        ),
-        (true, false, false, DeferCommittedSpanUntilHostCheckpoint),
-        (true, true, false, PoisonCommittedSpanWithoutBridgeTerminal),
-        (true, true, true, UseCommittedInstalledSpan),
-        (
-            true,
-            false,
-            true,
-            InvalidCompactInstalledWithoutHostCheckpoint,
-        ),
-    ];
-
-    for (mem_install_committed, host_checkpoint_materialized, compact_installed, expected) in cases
-    {
-        assert_eq!(
-            classify_runtime_span_authority(
-                mem_install_committed,
-                host_checkpoint_materialized,
-                compact_installed,
-            ),
-            expected,
-            "mem_install_committed={mem_install_committed} host_checkpoint_materialized={host_checkpoint_materialized} compact_installed={compact_installed}"
-        );
-    }
-}
-
-#[test]
-fn runtime_span_authority_policy_blocks_direct_p5_switch_for_committed_only() {
-    assert_eq!(
-        classify_runtime_span_authority(true, false, false,),
-        RuntimeSpanAuthorityAdmission::DeferCommittedSpanUntilHostCheckpoint
-    );
-    assert_eq!(
-        classify_runtime_span_authority(true, true, false,),
-        RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal
-    );
-}
-
-#[test]
-fn runtime_span_authority_admissions_classify_actual_compact_ids() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-legacy",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-        ))
-        .expect("append legacy compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-legacy",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-            3,
-            "sha1:legacy",
-        ))
-        .expect("append legacy compact installed");
-
-    append_meminstall_evidence(
-        &store,
-        "compact-defer",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        8,
-        5,
-        "sha1:defer",
-    );
-
-    append_meminstall_evidence(
-        &store,
-        "compact-poison",
-        id(&[1, 3]),
-        SpineOperation::Next,
-        8,
-        12,
-        6,
-        "sha1:poison",
-    );
-    append_bridge_checkpoint(
-        &store,
-        "compact-poison",
-        id(&[1, 3]),
-        SpineOperation::Next,
-        8,
-        12,
-        6,
-        "sha1:poison",
-    );
-
-    append_meminstall_evidence(
-        &store,
-        "compact-current",
-        id(&[1, 4]),
-        SpineOperation::Next,
-        12,
-        16,
-        7,
-        "sha1:current",
-    );
-    append_bridge_checkpoint(
-        &store,
-        "compact-current",
-        id(&[1, 4]),
-        SpineOperation::Next,
-        12,
-        16,
-        7,
-        "sha1:current",
-    );
-    store
-        .append_compact_installed(compact_installed(
-            "compact-current",
-            id(&[1, 4]),
-            SpineOperation::Next,
-            12,
-            16,
-            7,
-            "sha1:current",
-        ))
-        .expect("append current compact installed");
-
-    let admissions = store
-        .runtime_span_authority_admissions_matching_hashes(None)
-        .expect("classify runtime span authority");
-
-    assert_eq!(
-        admissions
-            .iter()
-            .map(|record| (record.span.compact_id.as_str(), record.admission))
-            .collect::<Vec<_>>(),
-        vec![
-            (
-                "compact-legacy",
-                RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan,
-            ),
-            (
-                "compact-defer",
-                RuntimeSpanAuthorityAdmission::DeferCommittedSpanUntilHostCheckpoint,
-            ),
-            (
-                "compact-poison",
-                RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal,
-            ),
-            (
-                "compact-current",
-                RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan,
-            ),
-        ]
-    );
-    assert_eq!(admissions[3].span.cut_ordinal, 12);
-    assert_eq!(admissions[3].span.fold_end_ordinal, 16);
-}
-
-#[test]
-fn runtime_span_authority_admissions_keep_transitional_rows_legacy() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-transitional",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:transitional",
-    );
-
-    let mut events = store
-        .read_compact_index_events()
-        .expect("read compact index events");
-    events.push(CompactIndexEvent::CompactInstalled {
-        seq: 0,
-        compact_id: "compact-transitional".to_string(),
-        node_id: "1.2".to_string(),
-        op: SpineOperation::Next,
-        cut_ordinal: 4,
-        fold_end_ordinal: 9,
-        replacement_history_len: 7,
-        memory_path: "nodes/1/2/memory.md".to_string(),
-        message_hash: "sha1:transitional".to_string(),
-    });
-    store
-        .write_compact_index_events(events)
-        .expect("write transitional compact index");
-
-    let admissions = store
-        .runtime_span_authority_admissions_matching_hashes(None)
-        .expect("classify transitional row");
-
-    assert_eq!(admissions.len(), 1);
-    assert_eq!(admissions[0].span.compact_id, "compact-transitional");
-    assert_eq!(
-        admissions[0].admission,
-        RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan
-    );
-}
-
-#[test]
-fn runtime_span_authority_admissions_filter_by_surviving_hashes() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-old",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-        ))
-        .expect("append old compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-old",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-            3,
-            "sha1:old",
-        ))
-        .expect("append old compact installed");
-    append_meminstall_evidence(
-        &store,
-        "compact-current",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:current",
-    );
-    append_bridge_checkpoint(
-        &store,
-        "compact-current",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:current",
-    );
-    store
-        .append_compact_installed(compact_installed(
-            "compact-current",
-            id(&[1, 2]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:current",
-        ))
-        .expect("append current compact installed");
-
-    let surviving_hashes = HashSet::from(["sha1:current".to_string()]);
-    let admissions = store
-        .runtime_span_authority_admissions_matching_hashes(Some(&surviving_hashes))
-        .expect("classify filtered runtime span authority");
-
-    assert_eq!(admissions.len(), 1);
-    assert_eq!(admissions[0].span.compact_id, "compact-current");
-    assert_eq!(
-        admissions[0].admission,
-        RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan
-    );
-}
-
-#[test]
-fn bridge_checkpoint_committed_spans_admit_meminstall_bridge_terminal() {
+fn committed_mem_install_spans_admit_verified_survivor() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     append_meminstall_evidence(
         &store,
         "compact-current",
         id(&[1, 2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         4,
         9,
-        7,
-        "sha1:current",
-    );
-    append_bridge_checkpoint(
-        &store,
-        "compact-current",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:current",
     );
 
     let spans = store
-        .bridge_checkpoint_committed_spans_matching_hashes(None)
-        .expect("read bridge checkpoint spans");
+        .committed_mem_install_spans_matching_ids(None)
+        .expect("read committed MemInstall spans");
 
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].compact_id, "compact-current");
     assert_eq!(spans[0].node_id, id(&[1, 2]));
-    assert_eq!(spans[0].op, SpineOperation::Next);
+    assert_eq!(spans[0].op, SpineOperation::Close);
     assert_eq!(spans[0].cut_ordinal, 4);
     assert_eq!(spans[0].fold_end_ordinal, 9);
-    assert_eq!(spans[0].replacement_history_len, 7);
-    assert_eq!(spans[0].message_hash, "sha1:current");
 }
 
 #[test]
-fn bridge_checkpoint_committed_spans_filter_by_surviving_hashes() {
+fn committed_mem_install_spans_filter_runtime_spans_by_surviving_ids() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
-    for (compact_id, node_id, start, end, len, hash) in [
-        ("compact-old", id(&[1, 1]), 1, 4, 3, "sha1:old"),
-        ("compact-current", id(&[1, 2]), 4, 9, 7, "sha1:current"),
+    for (compact_id, node_id, start, end) in [
+        ("compact-old", id(&[1, 1]), 1, 4),
+        ("compact-current", id(&[1, 2]), 4, 9),
     ] {
         append_meminstall_evidence(
             &store,
             compact_id,
             node_id.clone(),
-            SpineOperation::Next,
+            SpineOperation::Close,
             start,
             end,
-            len,
-            hash,
-        );
-        append_bridge_checkpoint(
-            &store,
-            compact_id,
-            node_id.clone(),
-            SpineOperation::Next,
-            start,
-            end,
-            len,
-            hash,
         );
     }
 
-    let surviving_hashes = HashSet::from(["sha1:current".to_string()]);
+    let surviving_ids = HashSet::from(["compact-current".to_string()]);
     let spans = store
-        .bridge_checkpoint_committed_spans_matching_hashes(Some(&surviving_hashes))
-        .expect("read filtered bridge checkpoint spans");
+        .committed_mem_install_spans_matching_ids(Some(&surviving_ids))
+        .expect("read filtered MemInstall spans");
 
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].compact_id, "compact-current");
-    assert_eq!(spans[0].message_hash, "sha1:current");
 }
 
 #[test]
-fn bridge_checkpoint_committed_spans_skip_meminstall_only() {
+fn compact_index_rejects_legacy_compact_installed_json() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
-    append_meminstall_evidence(
+    append_legacy_compact_installed_event(
         &store,
-        "compact-deferred",
-        id(&[1]),
-        SpineOperation::Next,
+        "compact-legacy",
+        id(&[1, 2]),
+        "close",
         4,
         9,
-        7,
-        "sha1:deferred",
+        "sha1:legacy",
     );
 
-    let spans = store
-        .bridge_checkpoint_committed_spans_matching_hashes(None)
-        .expect("read bridge checkpoint spans");
-
-    assert!(
-        spans.is_empty(),
-        "MemInstall-only rows are not terminal runtime spans"
-    );
-}
-
-#[test]
-fn bridge_checkpoint_committed_spans_reject_bridge_without_meminstall() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-invalid",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-    let mut events = store
-        .read_compact_index_events()
-        .expect("read compact index events");
-    events.push(CompactIndexEvent::BridgeCheckpointCommitted {
-        seq: 0,
-        compact_id: "compact-invalid".to_string(),
-        node_id: "1".to_string(),
-        op: SpineOperation::Next,
-        cut_ordinal: 4,
-        fold_end_ordinal: 9,
-        replacement_history_len: 7,
-        message_hash: "sha1:invalid".to_string(),
-        source_rollout_ref: "../rollout.jsonl".to_string(),
-    });
-    store
-        .write_compact_index_events(events)
-        .expect("write invalid compact index");
-
-    let err = store
-        .bridge_checkpoint_committed_spans_matching_hashes(None)
-        .expect_err("bridge checkpoint without MemInstall should fail closed");
+    let error = store
+        .load()
+        .expect_err("legacy compact_installed JSON should fail closed");
 
     assert!(matches!(
-        err,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("bridge_checkpoint_committed")
-                && message.contains("precedes mem_install_committed")
+        error,
+        SpineStoreError::Json { source, .. }
+            if source.to_string().contains("unknown variant `compact_installed`")
     ));
 }
 
 #[test]
-fn bridge_checkpoint_committed_spans_ignore_transitional_compact_installed_presence() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-transitional",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:transitional",
-    );
-    let mut events = store
-        .read_compact_index_events()
-        .expect("read compact index events");
-    events.push(CompactIndexEvent::CompactInstalled {
-        seq: 0,
-        compact_id: "compact-transitional".to_string(),
-        node_id: "1.2".to_string(),
-        op: SpineOperation::Next,
-        cut_ordinal: 4,
-        fold_end_ordinal: 9,
-        replacement_history_len: 7,
-        memory_path: "nodes/1/2/memory.md".to_string(),
-        message_hash: "sha1:transitional".to_string(),
-    });
-    store
-        .write_compact_index_events(events)
-        .expect("write transitional compact index");
-
-    let spans = store
-        .bridge_checkpoint_committed_spans_matching_hashes(None)
-        .expect("read bridge checkpoint spans");
-
-    assert!(
-        spans.is_empty(),
-        "CompactInstalled without BridgeCheckpointCommitted is not terminal source"
-    );
-}
-
-#[test]
-fn root_meminstall_survivor_matrix_validates_store_evidence() {
+fn root_meminstall_survivor_validation_checks_store_evidence() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
-    append_root_meminstall_evidence(&store, "compact-root", "sha1:root");
+    append_root_meminstall_evidence(&store, "compact-root");
     store
         .record_root_epoch_archive(
             &mut state,
@@ -819,16 +360,16 @@ fn root_meminstall_survivor_matrix_validates_store_evidence() {
         )
         .expect("record root reset");
 
-    let surviving_hashes = HashSet::from(["sha1:root".to_string()]);
+    let surviving_ids = HashSet::from(["compact-root".to_string()]);
     store
-        .validate_root_meminstall_survivors(&surviving_hashes)
+        .validate_root_meminstall_survivors(&surviving_ids)
         .expect("complete root survivor evidence should validate");
 
     let (_temp_missing_reset, missing_reset_store) = temp_store();
     missing_reset_store.create().expect("create sidecar");
-    append_root_meminstall_evidence(&missing_reset_store, "compact-root", "sha1:root");
+    append_root_meminstall_evidence(&missing_reset_store, "compact-root");
     let err = missing_reset_store
-        .validate_root_meminstall_survivors(&surviving_hashes)
+        .validate_root_meminstall_survivors(&surviving_ids)
         .expect_err("missing root reset must fail closed");
     assert!(matches!(
         err,
@@ -848,7 +389,7 @@ fn root_meminstall_survivor_matrix_validates_store_evidence() {
         )
         .expect("record root reset");
     let err = missing_meminstall_store
-        .validate_root_meminstall_survivors(&surviving_hashes)
+        .validate_root_meminstall_survivors(&surviving_ids)
         .expect_err("missing MemInstall must fail closed");
     assert!(matches!(
         err,
@@ -957,7 +498,7 @@ fn create_for_rollout_writes_base_locator() {
 }
 
 #[test]
-fn create_writes_root_ledger_and_state_cache() {
+fn create_writes_root_ledger() {
     let (_temp, store) = temp_store();
 
     let state = store.create().expect("create sidecar");
@@ -975,10 +516,8 @@ fn create_writes_root_ledger_and_state_cache() {
                         "node_id": "1",
                         "parent_id": null,
                         "raw_start_ordinal": 0,
-                        "status": "opened",
+                        "status": "suspended",
                         "summary": null,
-                        "memory_path": "nodes/1/memory.md",
-                        "plan_path": "nodes/1/plan.json",
                     },
                     {
                         "node_id": "1.1",
@@ -986,39 +525,12 @@ fn create_writes_root_ledger_and_state_cache() {
                         "raw_start_ordinal": 0,
                         "status": "live",
                         "summary": null,
-                        "memory_path": "nodes/1/1/memory.md",
-                        "plan_path": "nodes/1/1/plan.json",
                     },
                 ],
             },
         })]
     );
-    assert_eq!(
-        read_json(store.state_path()),
-        json!({
-            "cursor": "1.1",
-            "nodes": [
-                {
-                    "node_id": "1",
-                    "parent_id": null,
-                    "raw_start_ordinal": 0,
-                    "status": "opened",
-                    "summary": null,
-                    "memory_path": "nodes/1/memory.md",
-                    "plan_path": "nodes/1/plan.json",
-                },
-                {
-                    "node_id": "1.1",
-                    "parent_id": "1",
-                    "raw_start_ordinal": 0,
-                    "status": "live",
-                    "summary": null,
-                    "memory_path": "nodes/1/1/memory.md",
-                    "plan_path": "nodes/1/1/plan.json",
-                },
-            ],
-        })
-    );
+    assert_eq!(store.load().expect("load sidecar"), state);
     assert!(store.root().join("nodes").join("1").is_dir());
     assert!(store.root().join("nodes").join("1").join("1").is_dir());
     assert!(store.trajs_index_path().exists());
@@ -1064,45 +576,6 @@ fn tree_metadata_cache_matches_replayed_next_seq() {
 }
 
 #[test]
-fn failed_tree_append_does_not_advance_metadata_cache() {
-    let (_temp, store) = temp_store();
-    let mut state = store.create().expect("create sidecar");
-
-    assert_eq!(
-        store.next_tree_event_seq().expect("next seq after create"),
-        2
-    );
-    let bad_snapshot = PlanSnapshot {
-        node_id: "1".to_string(),
-        revision: 1,
-        explanation: Some("wrong seq".to_string()),
-        items: Vec::new(),
-        spine_plantree: None,
-        source_turn_id: "turn-bad".to_string(),
-        event_seq: 3,
-    };
-    let error = store
-        .write_plan_snapshot(&id(&[1]), &bad_snapshot)
-        .expect_err("wrong tree seq should fail before append");
-    assert!(matches!(
-        error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("tree event seq 3 does not match next tree seq 2")
-    ));
-    assert_eq!(
-        store
-            .next_tree_event_seq()
-            .expect("next seq after failed append"),
-        2
-    );
-
-    store
-        .record_transition(&mut state, SpineOperation::Open, None, 8, "turn-1")
-        .expect("next valid append should still use seq 2");
-    assert_eq!(read_json_lines(store.tree_path())[1]["seq"], json!(2));
-}
-
-#[test]
 fn records_transition_summary_and_replays_from_tree() {
     let (_temp, store) = temp_store();
     let mut state = store.create().expect("create sidecar");
@@ -1140,7 +613,6 @@ fn records_transition_summary_and_replays_from_tree() {
             "op": "open",
             "from_node": "1.1",
             "to_node": "1.1.1",
-            "to_parent_id": "1.1",
             "summary": null,
             "raw_start_ordinal": 8,
             "source_turn_id": "turn-1",
@@ -1156,6 +628,74 @@ fn records_transition_summary_and_replays_from_tree() {
             .and_then(|node| node.raw_start_ordinal),
         Some(8)
     );
+}
+
+#[test]
+fn legacy_child_summary_tree_event_fails_closed() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+
+    store
+        .append_json_line(
+            &store.tree_path(),
+            &json!({
+                "type": "transition_applied",
+                "seq": 2,
+                "op": "close",
+                "from_node": "1.1",
+                "to_node": "1.2",
+                "summary": "old parent summary",
+                "child_summary": "old child summary",
+                "raw_start_ordinal": 8,
+                "source_turn_id": "turn-legacy",
+            }),
+        )
+        .expect("append legacy child_summary event");
+    store
+        .set_cached_next_tree_seq(3)
+        .expect("advance test metadata cache");
+
+    let error = store
+        .load()
+        .expect_err("legacy close shape should fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::Json { source, .. }
+            if source.to_string().contains("unknown field `child_summary`")
+    ));
+}
+
+#[test]
+fn transition_without_source_turn_id_fails_closed() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+
+    store
+        .append_json_line(
+            &store.tree_path(),
+            &json!({
+                "type": "transition_applied",
+                "seq": 2,
+                "op": "open",
+                "from_node": "1.1",
+                "to_node": "1.1.1",
+                "summary": null,
+                "raw_start_ordinal": 8
+            }),
+        )
+        .expect("append transition without source turn");
+    store
+        .set_cached_next_tree_seq(3)
+        .expect("advance test metadata cache");
+
+    let error = store
+        .load()
+        .expect_err("transition without source turn must fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::Json { source, .. }
+            if source.to_string().contains("missing field `source_turn_id`")
+    ));
 }
 
 #[test]
@@ -1194,7 +734,6 @@ fn records_root_epoch_archive_and_replays_from_tree() {
             "seq": 4,
             "root_id": "1",
             "next_leaf_id": "2.1",
-            "next_parent_id": "2",
             "summary": "context compacted",
             "raw_start_ordinal": 21,
             "compact_id": "compact-1",
@@ -1222,7 +761,7 @@ fn records_root_epoch_archive_and_replays_from_tree() {
         loaded
             .node(&id(&[1, 1, 1, 1]))
             .map(|node| node.status.clone()),
-        Some(NodeStatus::Finished)
+        Some(NodeStatus::Closed)
     );
     assert_eq!(
         loaded
@@ -1270,7 +809,6 @@ fn root_cursor_archive_parent_links_survive_reload() {
             "seq": 2,
             "root_id": "1",
             "next_leaf_id": "2.1",
-            "next_parent_id": "2",
             "summary": "context compacted",
             "raw_start_ordinal": 7,
             "compact_id": "compact-root",
@@ -1444,200 +982,6 @@ fn appends_node_trajs_next_to_memory() {
 }
 
 #[test]
-fn state_cache_mismatch_replays_and_repairs_cache() {
-    let (_temp, store) = temp_store();
-    let mut state = store.create().expect("create sidecar");
-    store
-        .record_transition(&mut state, SpineOperation::Open, None, 8, "turn-1")
-        .expect("record transition");
-    let mut cache = read_json(store.state_path());
-    cache["cursor"] = json!("9");
-    std::fs::write(
-        store.state_path(),
-        serde_json::to_string_pretty(&cache).expect("serialize cache"),
-    )
-    .expect("write mutated cache");
-
-    let loaded = store.load().expect("mismatched cache should replay");
-
-    assert_eq!(loaded.cursor(), &id(&[1, 1, 1]));
-    let repaired = read_json(store.state_path());
-    assert_eq!(repaired["cursor"], json!("1.1.1"));
-}
-
-#[test]
-fn writes_plan_snapshot_without_planbridge_integration() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    let plan = json!({
-        "items": [{
-            "text": "implement sidecar store",
-            "status": "in_progress",
-        }]
-    });
-
-    let path = store
-        .write_plan(&id(&[1]), &plan)
-        .expect("write plan snapshot");
-
-    assert_eq!(path, store.root().join("nodes/1/plan.json"));
-    assert_eq!(read_json(path), plan);
-}
-
-#[test]
-fn writes_plan_snapshot_with_plantree_and_replays_without_mutating_state() {
-    let (_temp, store) = temp_store();
-    let state = store.create().expect("create sidecar");
-    let snapshot = PlanSnapshot {
-        node_id: "1".to_string(),
-        revision: 1,
-        explanation: Some("group upcoming checkpoints".to_string()),
-        items: vec![PlanSnapshotItem {
-            stable_task_id: "step-1".to_string(),
-            step: "plan scope tree".to_string(),
-            status: "in_progress".to_string(),
-        }],
-        spine_plantree: Some(PlanTreeSnapshot {
-            anchor_node_id: "1".to_string(),
-            root: crate::spine::plan_bridge::PlanTreeScope {
-                existing_node_id: Some("1".to_string()),
-                summary: "Fix task".to_string(),
-                status: Some("in_progress".to_string()),
-                checkpoints: Vec::new(),
-                children: vec![
-                    crate::spine::plan_bridge::PlanTreeScope {
-                        existing_node_id: None,
-                        summary: "Reproduce".to_string(),
-                        status: Some("pending".to_string()),
-                        checkpoints: vec![crate::spine::plan_bridge::PlanTreeCheckpoint {
-                            task: "run repro".to_string(),
-                            status: "pending".to_string(),
-                        }],
-                        children: Vec::new(),
-                    },
-                    crate::spine::plan_bridge::PlanTreeScope {
-                        existing_node_id: None,
-                        summary: "Continue future".to_string(),
-                        status: Some("pending".to_string()),
-                        checkpoints: vec![crate::spine::plan_bridge::PlanTreeCheckpoint {
-                            task: "keep root task focused".to_string(),
-                            status: "pending".to_string(),
-                        }],
-                        children: Vec::new(),
-                    },
-                ],
-            },
-        }),
-        source_turn_id: "turn-alloc".to_string(),
-        event_seq: 2,
-    };
-
-    let path = store
-        .write_plan_snapshot(&id(&[1]), &snapshot)
-        .expect("write plan snapshot");
-
-    assert_eq!(path, store.root().join("nodes/1/plan.json"));
-    assert_eq!(
-        store.read_plan_revision(&id(&[1])).expect("revision"),
-        Some(1)
-    );
-    assert_eq!(
-        store
-            .read_plan_snapshot(&id(&[1]))
-            .expect("read plan snapshot"),
-        Some(snapshot)
-    );
-    let tree = read_json_lines(store.tree_path());
-    assert_eq!(tree.len(), 2);
-    assert_eq!(tree[0]["type"], "spine_initialized");
-    assert_eq!(
-        tree[1],
-        json!({
-            "type": "task_plan_updated",
-            "seq": 2,
-            "node_id": "1",
-            "revision": 1,
-            "explanation": "group upcoming checkpoints",
-            "items": [
-                {
-                    "stable_task_id": "step-1",
-                    "step": "plan scope tree",
-                    "status": "in_progress",
-                }
-            ],
-            "spine_plantree": {
-                "anchor_node_id": "1",
-                "root": {
-                    "existing_node_id": "1",
-                    "summary": "Fix task",
-                    "status": "in_progress",
-                    "children": [
-                        {
-                            "existing_node_id": null,
-                            "summary": "Reproduce",
-                            "status": "pending",
-                            "checkpoints": [{"task": "run repro", "status": "pending"}],
-                        },
-                        {
-                            "existing_node_id": null,
-                            "summary": "Continue future",
-                            "status": "pending",
-                            "checkpoints": [{"task": "keep root task focused", "status": "pending"}],
-                        },
-                    ],
-                },
-            },
-            "source_turn_id": "turn-alloc",
-        })
-    );
-    assert_eq!(store.load().expect("reload sidecar"), state);
-}
-
-#[test]
-fn replay_rejects_duplicate_plantree_existing_scope_nodes() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    let snapshot = PlanSnapshot {
-        node_id: "1".to_string(),
-        revision: 1,
-        explanation: Some("ambiguous duplicate scope".to_string()),
-        items: Vec::new(),
-        spine_plantree: Some(PlanTreeSnapshot {
-            anchor_node_id: "1".to_string(),
-            root: crate::spine::plan_bridge::PlanTreeScope {
-                existing_node_id: Some("1".to_string()),
-                summary: "Root scope".to_string(),
-                status: None,
-                checkpoints: Vec::new(),
-                children: vec![crate::spine::plan_bridge::PlanTreeScope {
-                    existing_node_id: Some("1".to_string()),
-                    summary: "Duplicate root scope".to_string(),
-                    status: None,
-                    checkpoints: Vec::new(),
-                    children: Vec::new(),
-                }],
-            },
-        }),
-        source_turn_id: "turn-dup".to_string(),
-        event_seq: 2,
-    };
-
-    store
-        .write_plan_snapshot(&id(&[1]), &snapshot)
-        .expect("write duplicate PlanTree snapshot");
-
-    let error = store
-        .load()
-        .expect_err("duplicate PlanTree scope nodes should fail replay");
-    assert!(
-        error
-            .to_string()
-            .contains("spine_plantree duplicates scope node [1]"),
-        "unexpected error: {error}"
-    );
-}
-
-#[test]
 fn appends_trajs_index_without_raw_rollout_payload() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
@@ -1751,35 +1095,7 @@ fn records_size_hint_emission_without_changing_replayed_state() {
 }
 
 #[test]
-fn validates_matching_open_for_close_scope() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-
-    let missing = store
-        .validate_matching_open_for_scope(&id(&[1]), 4)
-        .expect_err("missing matching open should fail");
-    assert!(
-        matches!(missing, SpineStoreError::InvalidLedger(message) if message.contains("matching open"))
-    );
-
-    store
-        .append_transition_committed(
-            "call-1",
-            SpineOperation::Open,
-            &id(&[1]),
-            &id(&[1, 1]),
-            0,
-            2,
-        )
-        .expect("append open transition");
-
-    store
-        .validate_matching_open_for_scope(&id(&[1]), 4)
-        .expect("matching open validates scope");
-}
-
-#[test]
-fn appends_compact_index_and_raw_mirror_events() {
+fn compact_index_records_mem_install_without_polluting_raw_mirror() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
 
@@ -1795,30 +1111,14 @@ fn appends_compact_index_and_raw_mirror_events() {
             },
         )])
         .expect("append raw mirror item");
-    store
-        .append_compact_started(compact_started(
-            "compact-1",
-            id(&[1, 2]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-1",
-            id(&[1, 2]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:abc",
-        ))
-        .expect("append compact installed");
-    store
-        .append_raw_mirror_compact_checkpoint("compact-1", "sha1:abc", 7)
-        .expect("append raw mirror checkpoint");
-
+    append_meminstall_checkpoint_evidence(
+        &store,
+        "compact-1",
+        id(&[1, 2]),
+        SpineOperation::Close,
+        4,
+        9,
+    );
     assert_eq!(
         read_json_lines(store.compact_index_path()),
         vec![
@@ -1827,189 +1127,33 @@ fn appends_compact_index_and_raw_mirror_events() {
                 "seq": 1,
                 "compact_id": "compact-1",
                 "node_id": "1.2",
-                "op": "next",
+                "op": "close",
                 "cut_ordinal": 4,
                 "fold_end_ordinal": 9,
                 "strategy": "codex_builtin_text",
-                "raw_trajs": "raw/rollout.raw.jsonl",
                 "rollout": "../rollout.jsonl",
             }),
             json!({
-                "type": "compact_installed",
+                "type": "mem_install_committed",
                 "seq": 2,
+                "schema_version": 3,
                 "compact_id": "compact-1",
                 "node_id": "1.2",
-                "op": "next",
+                "op": "close",
                 "cut_ordinal": 4,
                 "fold_end_ordinal": 9,
-                "replacement_history_len": 7,
-                "memory_path": "nodes/1/2/memory.md",
-                "message_hash": "sha1:abc",
+                "memory_section_id": "nodes/1/2/memory.md#section-0",
+                "body_hash": memory_body_hash("compact-1 body"),
+                "storage_ref": "nodes/1/2/memory.md",
+                "projection_ref": "projection:seq-1",
+                "source_rollout_ref": "../rollout.jsonl",
             }),
         ]
     );
 
     let raw_mirror = read_json_lines(store.raw_rollout_path());
+    assert_eq!(raw_mirror.len(), 1);
     assert_eq!(raw_mirror[0]["type"], "response_item");
-    assert_eq!(
-        raw_mirror[1],
-        json!({
-            "type": "raw_mirror_event",
-            "compact_id": "compact-1",
-            "message_hash": "sha1:abc",
-            "replacement_history_len": 7,
-        })
-    );
-}
-
-#[test]
-fn bridge_checkpoint_committed_writes_host_checkpoint_phase_marker() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-    store
-        .append_memory_section(
-            &id(&[1]),
-            "\n\n## Auto Compact\n\nBase: /base\nFold: response ordinals [4, 9)\nNode trajs: nodes/1/trajs.jsonl\nRaw mirror: raw/rollout.raw.jsonl\nRollout: ../rollout.jsonl\n\nportable body\n\n## Node Summary\n\nsummary\n",
-        )
-        .expect("append memory section");
-    let body_ref = store
-        .generated_memory_sections(&id(&[1]))
-        .expect("generated sections")[0]
-        .body_ref();
-    store
-        .append_mem_install_committed(mem_install_committed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-            body_ref,
-        ))
-        .expect("append mem install commit");
-    store
-        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-        ))
-        .expect("append bridge checkpoint");
-
-    assert_eq!(
-        read_json_lines(store.compact_index_path())[2],
-        json!({
-            "type": "bridge_checkpoint_committed",
-            "seq": 3,
-            "compact_id": "compact-1",
-            "node_id": "1",
-            "op": "next",
-            "cut_ordinal": 4,
-            "fold_end_ordinal": 9,
-            "replacement_history_len": 7,
-            "message_hash": "sha1:message",
-            "source_rollout_ref": "../rollout.jsonl",
-        })
-    );
-    store
-        .load()
-        .expect("bridge checkpoint without terminal is a replayable poison boundary");
-}
-
-#[test]
-fn bridge_checkpoint_committed_requires_meminstall() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-
-    let error = store
-        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-        ))
-        .expect_err("bridge checkpoint before MemInstall should fail closed");
-    assert!(matches!(
-        error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("precedes mem_install_committed")
-    ));
-}
-
-#[test]
-fn bridge_checkpoint_committed_rejects_meminstall_mismatch() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-    store
-        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nbody\n")
-        .expect("append memory section");
-    let body_ref = store
-        .generated_memory_sections(&id(&[1]))
-        .expect("generated sections")[0]
-        .body_ref();
-    store
-        .append_mem_install_committed(mem_install_committed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-            body_ref,
-        ))
-        .expect("append mem install commit");
-
-    let error = store
-        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            8,
-            "sha1:message",
-        ))
-        .expect_err("replacement_history_len mismatch should fail closed");
-    assert!(matches!(
-        error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("replacement_history_len does not match mem_install_committed")
-    ));
 }
 
 #[test]
@@ -2020,7 +1164,7 @@ fn runtime_fast_fail_compact_index_mem_install_committed_writes_semantic_marker(
         .append_compact_started(compact_started(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
         ))
@@ -2040,26 +1184,12 @@ fn runtime_fast_fail_compact_index_mem_install_committed_writes_semantic_marker(
         .append_mem_install_committed(mem_install_committed(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
-            7,
-            "sha1:message",
             body_ref.clone(),
         ))
         .expect("append mem install commit");
-    store
-        .append_bridge_checkpoint_committed(bridge_checkpoint_committed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-        ))
-        .expect("append bridge checkpoint");
-
     assert_eq!(
         read_json_lines(store.compact_index_path()),
         vec![
@@ -2068,41 +1198,25 @@ fn runtime_fast_fail_compact_index_mem_install_committed_writes_semantic_marker(
                 "seq": 1,
                 "compact_id": "compact-1",
                 "node_id": "1",
-                "op": "next",
+                "op": "close",
                 "cut_ordinal": 4,
                 "fold_end_ordinal": 9,
                 "strategy": "codex_builtin_text",
-                "raw_trajs": "raw/rollout.raw.jsonl",
                 "rollout": "../rollout.jsonl",
             }),
             json!({
                 "type": "mem_install_committed",
                 "seq": 2,
-                "schema_version": 1,
+                "schema_version": 3,
                 "compact_id": "compact-1",
                 "node_id": "1",
-                "op": "next",
+                "op": "close",
                 "cut_ordinal": 4,
                 "fold_end_ordinal": 9,
                 "memory_section_id": "nodes/1/memory.md#section-0",
                 "body_hash": memory_body_hash("portable body"),
                 "storage_ref": "nodes/1/memory.md",
-                "message_hash": "sha1:message",
-                "replacement_history_len": 7,
                 "projection_ref": "projection:seq-1",
-                "source_rollout_ref": "../rollout.jsonl",
-                "committed_at_seq": 2,
-            }),
-            json!({
-                "type": "bridge_checkpoint_committed",
-                "seq": 3,
-                "compact_id": "compact-1",
-                "node_id": "1",
-                "op": "next",
-                "cut_ordinal": 4,
-                "fold_end_ordinal": 9,
-                "replacement_history_len": 7,
-                "message_hash": "sha1:message",
                 "source_rollout_ref": "../rollout.jsonl",
             }),
         ]
@@ -2115,119 +1229,6 @@ fn runtime_fast_fail_compact_index_mem_install_committed_writes_semantic_marker(
     assert_eq!(installs[0].compact_id, "compact-1");
     assert_eq!(installs[0].body_ref, body_ref);
     store.load().expect("mem install commit is terminal");
-}
-
-#[test]
-fn compact_installed_after_meminstall_requires_bridge_checkpoint() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-    store
-        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nbody\n")
-        .expect("append memory section");
-    let body_ref = store
-        .generated_memory_sections(&id(&[1]))
-        .expect("generated sections")[0]
-        .body_ref();
-    store
-        .append_mem_install_committed(mem_install_committed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-            body_ref,
-        ))
-        .expect("append mem install commit");
-
-    let error = store
-        .append_compact_installed(compact_installed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-        ))
-        .expect_err("new compact installed must have bridge checkpoint marker");
-    assert!(matches!(
-        error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("without bridge_checkpoint_committed")
-    ));
-}
-
-#[test]
-fn runtime_fast_fail_compact_index_legacy_compact_installed_is_not_mem_install_commit() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-legacy",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-    store
-        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nlegacy body\n")
-        .expect("append legacy memory section");
-    let body_ref = store
-        .generated_memory_sections(&id(&[1]))
-        .expect("generated sections")[0]
-        .body_ref();
-    store
-        .append_compact_installed(compact_installed(
-            "compact-legacy",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:legacy",
-        ))
-        .expect("append compact installed");
-
-    store
-        .load()
-        .expect("legacy compact installed remains valid");
-    assert!(
-        store
-            .committed_mem_installs()
-            .expect("committed mem installs")
-            .is_empty()
-    );
-    let error = store
-        .append_mem_install_committed(mem_install_committed(
-            "compact-legacy",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:legacy",
-            body_ref,
-        ))
-        .expect_err("mem install after checkpoint should fail closed");
-    assert!(matches!(
-        error,
-        SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallCheckpointBeforeCommit {
-            terminal: "compact_installed",
-            ..
-        })
-    ));
 }
 
 #[test]
@@ -2246,11 +1247,9 @@ fn runtime_fast_fail_compact_index_mem_install_missing_started_fails_closed() {
         .append_mem_install_committed(mem_install_committed(
             "compact-missing-start",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
-            7,
-            "sha1:message",
             body_ref,
         ))
         .expect_err("missing started should fail closed");
@@ -2268,7 +1267,7 @@ fn runtime_fast_fail_compact_index_mem_install_missing_body_fails_closed() {
         .append_compact_started(compact_started(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
         ))
@@ -2285,11 +1284,9 @@ fn runtime_fast_fail_compact_index_mem_install_missing_body_fails_closed() {
         .append_mem_install_committed(mem_install_committed(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
-            7,
-            "sha1:message",
             missing_body_ref,
         ))
         .expect_err("missing body should fail closed");
@@ -2308,7 +1305,7 @@ fn runtime_fast_fail_compact_index_mem_install_missing_projection_ref_fails_clos
         .append_compact_started(compact_started(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
         ))
@@ -2320,16 +1317,8 @@ fn runtime_fast_fail_compact_index_mem_install_missing_projection_ref_fails_clos
         .generated_memory_sections(&id(&[1]))
         .expect("generated sections")[0]
         .body_ref();
-    let mut record = mem_install_committed(
-        "compact-1",
-        id(&[1]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-        body_ref,
-    );
+    let mut record =
+        mem_install_committed("compact-1", id(&[1]), SpineOperation::Close, 4, 9, body_ref);
     record.projection_ref.clear();
 
     let error = store
@@ -2352,7 +1341,7 @@ fn runtime_fast_fail_compact_index_mem_install_duplicate_compact_id_fails_closed
         .append_compact_started(compact_started(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
         ))
@@ -2368,11 +1357,9 @@ fn runtime_fast_fail_compact_index_mem_install_duplicate_compact_id_fails_closed
         .append_mem_install_committed(mem_install_committed(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
-            7,
-            "sha1:message",
             body_ref.clone(),
         ))
         .expect("append first mem install commit");
@@ -2381,11 +1368,9 @@ fn runtime_fast_fail_compact_index_mem_install_duplicate_compact_id_fails_closed
         .append_mem_install_committed(mem_install_committed(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
-            7,
-            "sha1:message",
             body_ref,
         ))
         .expect_err("duplicate mem install should fail closed");
@@ -2404,7 +1389,7 @@ fn runtime_fast_fail_compact_index_mem_install_body_dependency_drift_fails_load(
         .append_compact_started(compact_started(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
         ))
@@ -2420,11 +1405,9 @@ fn runtime_fast_fail_compact_index_mem_install_body_dependency_drift_fails_load(
         .append_mem_install_committed(mem_install_committed(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
-            7,
-            "sha1:message",
             body_ref,
         ))
         .expect("append mem install commit");
@@ -2447,7 +1430,7 @@ fn compact_index_started_without_terminal_fails_load() {
         .append_compact_started(compact_started(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
         ))
@@ -2518,63 +1501,111 @@ fn projection_reset_replays_projected_state_and_copies_artifacts() {
 }
 
 #[test]
-fn latest_projection_epoch_ignores_legacy_and_rejects_partial_metadata() {
+fn projection_reset_without_epoch_metadata_fails_closed() {
     let (_temp, store) = temp_store();
-    let state = store.create().expect("create sidecar");
+    store.create().expect("create sidecar");
 
     store
-        .append_tree_event(&TreeEvent::ProjectionReset {
-            seq: store.next_tree_seq().expect("legacy projection seq"),
-            reason: "legacy_projection".to_string(),
-            source_turn_id: None,
-            source_rollout_ref: None,
-            processed_rollout_len: None,
-            processed_rollout_hash: None,
-            effective_raw_len: None,
-            surviving_turn_ids_hash: None,
-            surviving_compact_ids: None,
-            state_hash: None,
-            state: StateSnapshot::from_state(&state),
-        })
+        .append_json_line(
+            &store.tree_path(),
+            &json!({
+                "type": "projection_reset",
+                "seq": 2,
+                "reason": "legacy_projection",
+                "source_turn_id": null,
+                "state": {
+                    "cursor": "1.1",
+                    "nodes": [
+                        {
+                            "node_id": "1",
+                            "parent_id": null,
+                            "raw_start_ordinal": 0,
+                            "status": "suspended",
+                            "summary": null
+                        },
+                        {
+                            "node_id": "1.1",
+                            "parent_id": "1",
+                            "raw_start_ordinal": 0,
+                            "status": "live",
+                            "summary": null
+                        }
+                    ]
+                }
+            }),
+        )
         .expect("append legacy projection reset");
-    assert!(
-        store
-            .latest_projection_epoch()
-            .expect("legacy projection epoch")
-            .is_none()
-    );
-
-    store
-        .append_tree_event(&TreeEvent::ProjectionReset {
-            seq: store.next_tree_seq().expect("partial projection seq"),
-            reason: "partial_projection".to_string(),
-            source_turn_id: None,
-            source_rollout_ref: Some("rollout.jsonl".to_string()),
-            processed_rollout_len: None,
-            processed_rollout_hash: None,
-            effective_raw_len: None,
-            surviving_turn_ids_hash: None,
-            surviving_compact_ids: None,
-            state_hash: None,
-            state: StateSnapshot::from_state(&state),
-        })
-        .expect("append partial projection reset");
 
     let error = store
         .latest_projection_epoch()
-        .expect_err("partial projection epoch must fail closed");
+        .expect_err("legacy projection epoch must fail closed");
     assert!(matches!(
         error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("partial projection epoch metadata")
+        SpineStoreError::Json { source, .. }
+            if source.to_string().contains("missing field `source_rollout_ref`")
     ));
     let load_error = store
         .load()
-        .expect_err("partial projection epoch must also fail replay");
+        .expect_err("legacy projection epoch must also fail replay");
     assert!(matches!(
         load_error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("partial projection epoch metadata")
+        SpineStoreError::Json { source, .. }
+            if source.to_string().contains("missing field `source_rollout_ref`")
+    ));
+}
+
+#[test]
+fn projection_reset_with_derived_memory_path_fails_closed() {
+    let (_temp, store) = temp_store();
+    let state = store.create().expect("create sidecar");
+    let epoch = test_projection_epoch(&state);
+
+    store
+        .append_json_line(
+            &store.tree_path(),
+            &json!({
+                "type": "projection_reset",
+                "seq": 2,
+                "reason": "old_snapshot_shape",
+                "source_turn_id": null,
+                "source_rollout_ref": epoch.source_rollout_ref,
+                "processed_rollout_len": epoch.processed_rollout_len,
+                "processed_rollout_hash": epoch.processed_rollout_hash,
+                "effective_raw_len": epoch.effective_raw_len,
+                "surviving_turn_ids_hash": epoch.surviving_turn_ids_hash,
+                "surviving_compact_ids": epoch.surviving_compact_ids,
+                "state_hash": epoch.state_hash,
+                "state": {
+                    "cursor": "1.1",
+                    "nodes": [
+                        {
+                            "node_id": "1",
+                            "parent_id": null,
+                            "raw_start_ordinal": 0,
+                            "status": "suspended",
+                            "summary": null,
+                            "memory_path": "nodes/1/memory.md"
+                        },
+                        {
+                            "node_id": "1.1",
+                            "parent_id": "1",
+                            "raw_start_ordinal": 0,
+                            "status": "live",
+                            "summary": null
+                        }
+                    ]
+                }
+            }),
+        )
+        .expect("append old projection reset shape");
+
+    let load_error = store
+        .load()
+        .expect_err("derived memory_path must fail closed");
+    assert!(matches!(
+        load_error,
+        SpineStoreError::Json { source, .. }
+            if source.to_string().contains("unknown field `memory_path`")
     ));
 }
 
@@ -2607,7 +1638,6 @@ fn root_cursor_archive_creates_epoch_under_hidden_root() {
             "seq": 2,
             "root_id": "1",
             "next_leaf_id": "2.1",
-            "next_parent_id": "2",
             "summary": "context compacted",
             "raw_start_ordinal": 7,
             "compact_id": "compact-root",
@@ -2666,27 +1696,6 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
             "\n\n## Auto Compact\n\nrolled back memory\n",
         )
         .expect("write rolled back memory");
-    source_store
-        .write_plan_snapshot(
-            &id(&[1, 1]),
-            &PlanSnapshot {
-                node_id: "1.1".to_string(),
-                revision: 1,
-                explanation: None,
-                items: vec![PlanSnapshotItem {
-                    stable_task_id: "step-1".to_string(),
-                    step: "rolled back plan".to_string(),
-                    status: "in_progress".to_string(),
-                }],
-                spine_plantree: None,
-                source_turn_id: "rolled-back-turn".to_string(),
-                event_seq: source_store
-                    .next_tree_event_seq()
-                    .expect("next tree seq for plan"),
-            },
-        )
-        .expect("write rolled back plan");
-
     let child_rollout = temp.path().join("rollout-child.jsonl");
     let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
     child_store.create().expect("create child");
@@ -2716,110 +1725,107 @@ fn projected_artifact_copy_filters_non_surviving_turn_files() {
         child_store.read_memory(&id(&[1, 1, 1])),
         Err(SpineStoreError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound
     ));
-    assert!(!child_store.plan_path(&id(&[1, 1])).exists());
+}
+
+#[test]
+fn projected_artifact_copy_fails_on_existing_destination_file() {
+    let (temp, source_store) = temp_store();
+    let mut source_state = source_store.create().expect("create source");
+    source_store
+        .record_transition(
+            &mut source_state,
+            SpineOperation::Open,
+            None,
+            2,
+            "surviving-turn",
+        )
+        .expect("record source transition");
+    source_store
+        .append_memory_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nsource memory\n")
+        .expect("write source memory");
+
+    let child_rollout = temp.path().join("rollout-child.jsonl");
+    let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
+    child_store.create().expect("create child");
+    child_store
+        .record_projection_reset(
+            source_state.clone(),
+            "fork_seed",
+            None,
+            test_projection_epoch(&source_state),
+        )
+        .expect("record projection reset");
+    child_store
+        .append_memory_section(&id(&[1, 1]), "\n\n## Auto Compact\n\nstale child memory\n")
+        .expect("write stale child memory");
+
+    let error = child_store
+        .copy_projected_node_artifacts_from(
+            &source_store,
+            source_state.nodes().keys(),
+            &HashSet::from(["surviving-turn".to_string()]),
+        )
+        .expect_err("existing destination artifact must fail closed");
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("refusing to overwrite existing spine node artifact")
+    ));
 }
 
 #[test]
 fn compact_index_started_then_installed_loads() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:abc",
-        ))
-        .expect("append compact installed");
+    append_meminstall_checkpoint_evidence(
+        &store,
+        "compact-1",
+        id(&[1]),
+        SpineOperation::Close,
+        4,
+        9,
+    );
 
     store.load().expect("resolved compact should load");
 }
 
 #[test]
-fn installed_compact_spans_return_full_runtime_ledger() {
+fn committed_mem_install_spans_return_full_runtime_ledger() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-child",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-        ))
-        .expect("append child compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-child",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-            3,
-            "sha1:child",
-        ))
-        .expect("append child compact installed");
-    store
-        .append_compact_started(compact_started(
-            "compact-scope",
-            id(&[1]),
-            SpineOperation::Close,
-            1,
-            6,
-        ))
-        .expect("append scope compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-scope",
-            id(&[1]),
-            SpineOperation::Close,
-            1,
-            6,
-            2,
-            "sha1:scope",
-        ))
-        .expect("append scope compact installed");
-    store
-        .append_compact_started(compact_started(
-            "compact-sibling",
-            id(&[2]),
-            SpineOperation::Next,
-            7,
-            9,
-        ))
-        .expect("append sibling compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-sibling",
-            id(&[2]),
-            SpineOperation::Next,
-            7,
-            9,
-            4,
-            "sha1:sibling",
-        ))
-        .expect("append sibling compact installed");
+    append_meminstall_checkpoint_evidence(
+        &store,
+        "compact-child",
+        id(&[1, 1]),
+        SpineOperation::Close,
+        1,
+        4,
+    );
+    append_meminstall_checkpoint_evidence(
+        &store,
+        "compact-scope",
+        id(&[1]),
+        SpineOperation::Close,
+        1,
+        6,
+    );
+    append_meminstall_checkpoint_evidence(
+        &store,
+        "compact-sibling",
+        id(&[2]),
+        SpineOperation::Close,
+        7,
+        9,
+    );
 
     let spans = store
-        .installed_compact_spans()
-        .expect("read installed spans");
+        .committed_mem_install_spans_matching_ids(None)
+        .expect("read committed MemInstall spans");
 
     assert_eq!(spans.len(), 3);
     assert_eq!(spans[0].compact_id, "compact-child");
     assert_eq!(spans[0].node_id, id(&[1, 1]));
-    assert_eq!(spans[0].op, SpineOperation::Next);
+    assert_eq!(spans[0].op, SpineOperation::Close);
     assert_eq!(spans[0].cut_ordinal, 1);
     assert_eq!(spans[0].fold_end_ordinal, 4);
     assert_eq!(spans[1].compact_id, "compact-scope");
@@ -2837,51 +1843,27 @@ fn installed_compact_spans_return_full_runtime_ledger() {
 fn projected_compact_spans_filter_stale_duplicate_boundaries() {
     let (temp, source_store) = temp_store();
     source_store.create().expect("create source sidecar");
-    source_store
-        .append_compact_started(compact_started(
-            "compact-old",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-        ))
-        .expect("append old compact started");
-    source_store
-        .append_compact_installed(compact_installed(
-            "compact-old",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-            3,
-            "sha1:old",
-        ))
-        .expect("append old compact installed");
-    source_store
-        .append_compact_started(compact_started(
-            "compact-new",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            6,
-        ))
-        .expect("append new compact started");
-    source_store
-        .append_compact_installed(compact_installed(
-            "compact-new",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            6,
-            3,
-            "sha1:new",
-        ))
-        .expect("append new compact installed");
+    append_meminstall_checkpoint_evidence(
+        &source_store,
+        "compact-old",
+        id(&[1, 1]),
+        SpineOperation::Close,
+        1,
+        4,
+    );
+    append_meminstall_checkpoint_evidence(
+        &source_store,
+        "compact-new",
+        id(&[1, 1]),
+        SpineOperation::Close,
+        1,
+        6,
+    );
 
-    let surviving_hashes = HashSet::from(["sha1:new".to_string()]);
+    let surviving_ids = HashSet::from(["compact-new".to_string()]);
     let filtered_spans = source_store
-        .installed_compact_spans_matching_hashes(Some(&surviving_hashes))
-        .expect("read filtered spans");
+        .committed_mem_install_spans_matching_ids(Some(&surviving_ids))
+        .expect("read filtered MemInstall spans");
     assert_eq!(filtered_spans.len(), 1);
     assert_eq!(filtered_spans[0].compact_id, "compact-new");
     assert_eq!(filtered_spans[0].fold_end_ordinal, 6);
@@ -2890,11 +1872,14 @@ fn projected_compact_spans_filter_stale_duplicate_boundaries() {
     let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
     child_store.create().expect("create child sidecar");
     child_store
-        .copy_projected_compact_index_from(&source_store, &surviving_hashes)
+        .copy_projected_compact_index_from(&source_store, &surviving_ids)
         .expect("copy filtered compact index");
+    child_store
+        .copy_node_artifacts_from(&source_store, [id(&[1, 1])].iter())
+        .expect("copy surviving memory artifact");
     let copied_spans = child_store
-        .installed_compact_spans()
-        .expect("read copied spans");
+        .committed_mem_install_spans_matching_ids(None)
+        .expect("read copied MemInstall spans");
     assert_eq!(copied_spans.len(), 1);
     assert_eq!(copied_spans[0].compact_id, "compact-new");
     assert_eq!(copied_spans[0].fold_end_ordinal, 6);
@@ -2908,252 +1893,93 @@ fn projected_compact_spans_filter_stale_duplicate_boundaries() {
 }
 
 #[test]
-fn committed_mem_install_spans_match_compact_installed_for_suffix() {
+fn validate_mem_install_survivors_accepts_verified_meminstall() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     append_meminstall_evidence(
         &store,
-        "compact-1",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-    append_bridge_checkpoint(
-        &store,
-        "compact-1",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-    store
-        .append_compact_installed(compact_installed(
-            "compact-1",
-            id(&[1, 2]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:message",
-        ))
-        .expect("append compact installed");
-
-    assert_eq!(
-        store
-            .committed_mem_install_spans()
-            .expect("read committed spans"),
-        store
-            .installed_compact_spans()
-            .expect("read installed spans")
-    );
-}
-
-#[test]
-fn committed_mem_install_spans_match_compact_installed_for_root_archive() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-root",
+        "compact-mem-only",
         id(&[1]),
-        SpineOperation::Archive,
-        0,
-        7,
-        3,
-        "sha1:root",
+        SpineOperation::Close,
+        1,
+        4,
     );
-    append_bridge_checkpoint(
-        &store,
-        "compact-root",
+
+    let err =
+        store.validate_mem_install_survivors(&HashSet::from(["compact-mem-only".to_string()]));
+
+    assert!(err.is_ok());
+}
+
+#[test]
+fn copy_projected_compact_index_from_keeps_meminstall_survivor() {
+    let (temp, source_store) = temp_store();
+    source_store.create().expect("create source sidecar");
+    append_meminstall_evidence(
+        &source_store,
+        "compact-mem-only",
         id(&[1]),
-        SpineOperation::Archive,
-        0,
-        7,
-        3,
-        "sha1:root",
+        SpineOperation::Close,
+        1,
+        4,
     );
-    store
-        .append_compact_installed(compact_installed(
-            "compact-root",
-            id(&[1]),
-            SpineOperation::Archive,
-            0,
-            7,
-            3,
-            "sha1:root",
-        ))
-        .expect("append compact installed");
 
-    assert_eq!(
-        store
-            .committed_mem_install_spans()
-            .expect("read committed spans"),
-        store
-            .installed_compact_spans()
-            .expect("read installed spans")
-    );
+    let child_rollout = temp.path().join("rollout-child.jsonl");
+    let child_store = SpineSidecarStore::create_for_rollout(child_rollout).expect("child store");
+    child_store.create().expect("create child sidecar");
+    child_store
+        .copy_projected_compact_index_from(
+            &source_store,
+            &HashSet::from(["compact-mem-only".to_string()]),
+        )
+        .expect("copy compact index");
+    child_store
+        .copy_node_artifacts_from(&source_store, [id(&[1])].iter())
+        .expect("copy surviving memory artifact");
+
+    let spans = child_store
+        .committed_mem_install_spans_matching_ids(None)
+        .expect("read copied MemInstall spans");
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].compact_id, "compact-mem-only");
+    assert_eq!(read_json_lines(child_store.compact_index_path()).len(), 2);
 }
 
 #[test]
-fn bridge_checkpoint_span_source_audit_accepts_matching_sources() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-1",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-    append_bridge_checkpoint(
-        &store,
-        "compact-1",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-
-    audit_bridge_checkpoint_span_source(&store, None, "compact index")
-        .expect("matching span sources should pass shadow audit");
-}
-
-#[test]
-fn bridge_checkpoint_span_source_audit_reports_committed_only_span() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-committed-only",
-        id(&[1]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
-
-    let error = audit_bridge_checkpoint_span_source(&store, None, "compact index")
-        .expect_err("committed-only source mismatch should be reported");
-
-    assert_eq!(error.invariant(), INV_MEM_EVIDENCE);
-    assert!(error.to_string().contains("compact-committed-only"));
-    assert!(
-        error
-            .to_string()
-            .contains("BridgeCheckpointCommitted span source did not match")
-    );
-}
-
-#[test]
-fn bridge_checkpoint_span_source_audit_ignores_legacy_installed_outside_current_hash() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-legacy",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-        ))
-        .expect("append legacy compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-legacy",
-            id(&[1, 1]),
-            SpineOperation::Next,
-            1,
-            4,
-            3,
-            "sha1:legacy",
-        ))
-        .expect("append legacy compact installed");
-    append_meminstall_evidence(
-        &store,
-        "compact-current",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:current",
-    );
-    append_bridge_checkpoint(
-        &store,
-        "compact-current",
-        id(&[1, 2]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:current",
-    );
-
-    let current_hashes = HashSet::from(["sha1:current".to_string()]);
-    audit_bridge_checkpoint_span_source(&store, Some(&current_hashes), "compact index")
-        .expect("current-hash shadow audit should ignore legacy installed-only spans");
-}
-
-#[test]
-fn committed_mem_install_spans_filter_by_surviving_hashes() {
+fn committed_mem_install_spans_filter_by_surviving_ids() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
     append_meminstall_evidence(
         &store,
         "compact-old",
         id(&[1, 1]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         1,
         4,
-        3,
-        "sha1:old",
     );
     append_meminstall_evidence(
         &store,
         "compact-new",
         id(&[1, 2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         4,
         8,
-        5,
-        "sha1:new",
     );
 
-    let surviving_hashes = HashSet::from(["sha1:new".to_string()]);
+    let surviving_ids = HashSet::from(["compact-new".to_string()]);
     let spans = store
-        .committed_mem_install_spans_matching_hashes(Some(&surviving_hashes))
+        .committed_mem_install_spans_matching_ids(Some(&surviving_ids))
         .expect("read filtered committed spans");
 
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].compact_id, "compact-new");
-    assert_eq!(spans[0].message_hash, "sha1:new");
 }
 
 #[test]
 fn committed_mem_install_spans_reject_missing_body() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-1",
-        id(&[1]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
+    append_meminstall_evidence(&store, "compact-1", id(&[1]), SpineOperation::Close, 4, 9);
     std::fs::write(store.memory_path(&id(&[1])), "changed body").expect("rewrite memory");
 
     let error = store
@@ -3169,16 +1995,7 @@ fn committed_mem_install_spans_reject_missing_body() {
 fn committed_mem_install_spans_reject_duplicate_compact_id() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
-    append_meminstall_evidence(
-        &store,
-        "compact-1",
-        id(&[1]),
-        SpineOperation::Next,
-        4,
-        9,
-        7,
-        "sha1:message",
-    );
+    append_meminstall_evidence(&store, "compact-1", id(&[1]), SpineOperation::Close, 4, 9);
     let mut events = store
         .read_compact_index_events()
         .expect("read compact index events");
@@ -3205,7 +2022,7 @@ fn committed_mem_install_spans_skip_failed_or_interrupted_attempts() {
         .append_compact_started(compact_started(
             "compact-failed",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             1,
             3,
         ))
@@ -3214,7 +2031,7 @@ fn committed_mem_install_spans_skip_failed_or_interrupted_attempts() {
         .append_compact_failed(compact_terminal(
             "compact-failed",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             1,
             3,
             "failed",
@@ -3224,7 +2041,7 @@ fn committed_mem_install_spans_skip_failed_or_interrupted_attempts() {
         .append_compact_started(compact_started(
             "compact-interrupted",
             id(&[1, 1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             3,
             5,
         ))
@@ -3233,7 +2050,7 @@ fn committed_mem_install_spans_skip_failed_or_interrupted_attempts() {
         .append_compact_interrupted(compact_terminal(
             "compact-interrupted",
             id(&[1, 1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             3,
             5,
             "interrupted",
@@ -3243,11 +2060,9 @@ fn committed_mem_install_spans_skip_failed_or_interrupted_attempts() {
         &store,
         "compact-ok",
         id(&[1, 2]),
-        SpineOperation::Next,
+        SpineOperation::Close,
         5,
         8,
-        4,
-        "sha1:ok",
     );
 
     let spans = store
@@ -3265,7 +2080,7 @@ fn compact_index_started_then_failed_loads() {
         .append_compact_started(compact_started(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
         ))
@@ -3274,7 +2089,7 @@ fn compact_index_started_then_failed_loads() {
         .append_compact_failed(compact_terminal(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
             "strategy failed",
@@ -3292,7 +2107,7 @@ fn compact_index_started_then_interrupted_loads() {
         .append_compact_started(compact_started(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
         ))
@@ -3301,7 +2116,7 @@ fn compact_index_started_then_interrupted_loads() {
         .append_compact_interrupted(compact_terminal(
             "compact-1",
             id(&[1]),
-            SpineOperation::Next,
+            SpineOperation::Close,
             4,
             9,
             "turn aborted",
@@ -3315,7 +2130,7 @@ fn compact_index_started_then_interrupted_loads() {
             "seq": 2,
             "compact_id": "compact-1",
             "node_id": "1",
-            "op": "next",
+            "op": "close",
             "cut_ordinal": 4,
             "fold_end_ordinal": 9,
             "strategy": "codex_builtin_text",
@@ -3328,104 +2143,46 @@ fn compact_index_started_then_interrupted_loads() {
 }
 
 #[test]
-fn compact_index_terminal_without_started_fails_load() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:abc",
-        ))
-        .expect("append compact installed");
-
-    let error = store
-        .load()
-        .expect_err("terminal without started should fail");
-    assert!(matches!(
-        error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("compact_installed without matching compact_started")
-    ));
-}
-
-#[test]
 fn compact_index_terminal_mismatch_fails_load() {
     let (_temp, store) = temp_store();
     store.create().expect("create sidecar");
+    let body_ref =
+        append_meminstall_evidence(&store, "compact-1", id(&[1]), SpineOperation::Close, 4, 9);
     store
-        .append_compact_started(compact_started(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Close,
-            4,
-            9,
-            7,
-            "sha1:abc",
-        ))
-        .expect("append mismatched compact installed");
+        .write_compact_index_events(vec![
+            CompactIndexEvent::CompactStarted {
+                seq: 1,
+                compact_id: "compact-1".to_string(),
+                node_id: "1".to_string(),
+                op: SpineOperation::Close,
+                cut_ordinal: 4,
+                fold_end_ordinal: 10,
+                strategy: "codex_builtin_text".to_string(),
+                rollout: "../rollout.jsonl".to_string(),
+            },
+            CompactIndexEvent::MemInstallCommitted {
+                seq: 2,
+                schema_version: MEM_INSTALL_COMMITTED_SCHEMA_VERSION,
+                compact_id: "compact-1".to_string(),
+                node_id: "1".to_string(),
+                op: SpineOperation::Close,
+                cut_ordinal: 4,
+                fold_end_ordinal: 9,
+                memory_section_id: body_ref.section_id.to_string(),
+                body_hash: body_ref.body_hash,
+                storage_ref: body_ref.section_id.storage_ref,
+                projection_ref: "projection:seq-1".to_string(),
+                source_rollout_ref: "../rollout.jsonl".to_string(),
+            },
+        ])
+        .expect("write mismatched compact index");
 
     let error = store.load().expect_err("mismatched terminal should fail");
     assert!(matches!(
         error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("compact_installed does not match compact_started")
-    ));
-}
-
-#[test]
-fn compact_index_duplicate_terminal_fails_load() {
-    let (_temp, store) = temp_store();
-    store.create().expect("create sidecar");
-    store
-        .append_compact_started(compact_started(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-        ))
-        .expect("append compact started");
-    store
-        .append_compact_installed(compact_installed(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            7,
-            "sha1:abc",
-        ))
-        .expect("append compact installed");
-    store
-        .append_compact_failed(compact_terminal(
-            "compact-1",
-            id(&[1]),
-            SpineOperation::Next,
-            4,
-            9,
-            "late failure",
-        ))
-        .expect("append duplicate terminal");
-
-    let error = store.load().expect_err("duplicate terminal should fail");
-    assert!(matches!(
-        error,
-        SpineStoreError::InvalidLedger(message)
-            if message.contains("duplicate terminal event for compact-1")
+        SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallSpanMismatch {
+            compact_id,
+        }) if compact_id == "compact-1"
     ));
 }
 
@@ -3440,11 +2197,10 @@ fn compact_index_seq_gap_fails_load() {
             "seq": 2,
             "compact_id": "compact-1",
             "node_id": "1",
-            "op": "next",
+            "op": "close",
             "cut_ordinal": 4,
             "fold_end_ordinal": 9,
             "strategy": "codex_builtin_text",
-            "raw_trajs": "raw/rollout.raw.jsonl",
             "rollout": "../rollout.jsonl",
         }))
         .expect("serialize compact event")

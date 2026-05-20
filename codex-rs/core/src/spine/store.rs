@@ -11,10 +11,6 @@ use super::mem_install::MemoryBodyRef;
 use super::mem_install::MemorySectionId;
 use super::mem_install::parse_generated_memory_sections;
 use super::mem_install::verify_memory_body_ref as verify_memory_body_ref_in_memory;
-use super::plan_bridge::PlanSnapshot;
-use super::plan_bridge::PlanSnapshotItem;
-use super::plan_bridge::PlanTreeScope;
-use super::plan_bridge::PlanTreeSnapshot;
 use super::projection_epoch::ProjectionEpochMetadata;
 use super::state::NodeStatus;
 use super::state::SpineOperationName;
@@ -25,7 +21,6 @@ use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use sha1::Digest;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -33,7 +28,6 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::io::ErrorKind;
 use std::io::Write;
 use std::path::Component;
 use std::path::Path;
@@ -44,23 +38,15 @@ use std::sync::MutexGuard;
 use thiserror::Error;
 
 const TREE_FILE: &str = "tree.jsonl";
-const STATE_FILE: &str = "state.json";
 const NODES_DIR: &str = "nodes";
 const MEMORY_FILE: &str = "memory.md";
 const NODE_TRAJS_FILE: &str = "trajs.jsonl";
-const PLAN_FILE: &str = "plan.json";
 const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
 const SPINE_BASE_LOCATOR_VERSION: u32 = 1;
-const MEM_INSTALL_COMMITTED_SCHEMA_VERSION: u32 = 1;
-
-pub(crate) fn compact_message_hash(message: &str) -> String {
-    let mut hasher = sha1::Sha1::new();
-    hasher.update(message.as_bytes());
-    format!("sha1:{:x}", hasher.finalize())
-}
+const MEM_INSTALL_COMMITTED_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineSidecarStore {
@@ -193,10 +179,6 @@ impl SpineSidecarStore {
         self.root.join(TREE_FILE)
     }
 
-    pub(crate) fn state_path(&self) -> PathBuf {
-        self.root.join(STATE_FILE)
-    }
-
     pub(crate) fn trajs_index_path(&self) -> PathBuf {
         self.root.join(TRAJS_INDEX_FILE)
     }
@@ -225,10 +207,6 @@ impl SpineSidecarStore {
         self.node_dir(node_id).join(NODE_TRAJS_FILE)
     }
 
-    pub(crate) fn plan_path(&self, node_id: &NodeId) -> PathBuf {
-        self.node_dir(node_id).join(PLAN_FILE)
-    }
-
     pub(crate) fn create(&self) -> Result<SpineState, SpineStoreError> {
         let tree_path = self.tree_path();
         if tree_path.exists() {
@@ -252,21 +230,12 @@ impl SpineSidecarStore {
         self.append_json_line(&tree_path, &event)?;
         self.set_cached_next_tree_seq(2)?;
 
-        self.write_state_cache(&state)?;
         Ok(state)
     }
 
     pub(crate) fn load(&self) -> Result<SpineState, SpineStoreError> {
         let state = self.replay_tree()?;
         self.validate_compact_index()?;
-        let state_path = self.state_path();
-        if state_path.exists() {
-            let cached = self.read_state_cache(&state_path)?;
-            let replayed = StateSnapshot::from_state(&state);
-            if cached != replayed {
-                self.write_state_cache(&state)?;
-            }
-        }
         Ok(state)
     }
 
@@ -278,39 +247,11 @@ impl SpineSidecarStore {
         raw_start_ordinal: u64,
         source_turn_id: impl Into<String>,
     ) -> Result<Transition, SpineStoreError> {
-        self.record_transition_with_child_summary(
-            state,
-            op,
-            summary,
-            None::<String>,
-            raw_start_ordinal,
-            source_turn_id,
-        )
-    }
-
-    pub(crate) fn record_transition_with_child_summary(
-        &self,
-        state: &mut SpineState,
-        op: SpineOperation,
-        summary: impl TransitionSummaryArg,
-        child_summary: impl TransitionSummaryArg,
-        raw_start_ordinal: u64,
-        source_turn_id: impl Into<String>,
-    ) -> Result<Transition, SpineStoreError> {
         let summary = summary.into_transition_summary();
-        let child_summary = child_summary.into_transition_summary();
         let source_turn_id = source_turn_id.into();
         let mut next_state = state.clone();
-        let transition =
-            op.apply_with_child_summary(&mut next_state, summary.clone(), child_summary.clone())?;
+        let transition = op.apply(&mut next_state, summary.clone())?;
         next_state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
-        let to_parent_id = next_state
-            .node(&transition.to)
-            .ok_or_else(|| SpineStoreError::InvalidLedger("transition target missing".to_string()))?
-            .parent_id
-            .as_ref()
-            .map(ToString::to_string);
-
         self.ensure_node_dir(&transition.to)?;
 
         let event = TreeEvent::TransitionApplied {
@@ -318,16 +259,13 @@ impl SpineSidecarStore {
             op,
             from_node: transition.from.to_string(),
             to_node: transition.to.to_string(),
-            to_parent_id,
             summary,
-            child_summary,
             raw_start_ordinal,
             source_turn_id,
         };
         self.append_tree_event(&event)?;
 
         *state = next_state;
-        self.write_state_cache(state)?;
         Ok(transition)
     }
 
@@ -344,22 +282,12 @@ impl SpineSidecarStore {
         let source_turn_id = source_turn_id.into();
         let mut next_state = state.clone();
         let transition = next_state.reset_root_epoch(summary.clone(), raw_start_ordinal)?;
-        let to_parent_id = next_state
-            .node(&transition.to)
-            .ok_or_else(|| {
-                SpineStoreError::InvalidLedger("root epoch archive target missing".to_string())
-            })?
-            .parent_id
-            .as_ref()
-            .map(ToString::to_string);
-
         self.ensure_node_dir(&transition.to)?;
 
         let event = TreeEvent::RootEpochReset {
             seq: self.next_tree_seq()?,
             root_id: transition.from.to_string(),
             next_leaf_id: transition.to.to_string(),
-            next_parent_id: to_parent_id,
             summary,
             raw_start_ordinal,
             compact_id,
@@ -368,7 +296,6 @@ impl SpineSidecarStore {
         self.append_tree_event(&event)?;
 
         *state = next_state;
-        self.write_state_cache(state)?;
         Ok(transition)
     }
 
@@ -389,7 +316,7 @@ impl SpineSidecarStore {
         };
         self.append_tree_event(&event)?;
         *state = next_state;
-        self.write_state_cache(state)
+        Ok(())
     }
 
     pub(crate) fn record_projection_reset(
@@ -406,17 +333,17 @@ impl SpineSidecarStore {
             seq: self.next_tree_seq()?,
             reason: reason.into(),
             source_turn_id,
-            source_rollout_ref: Some(epoch.source_rollout_ref),
-            processed_rollout_len: Some(epoch.processed_rollout_len),
-            processed_rollout_hash: Some(epoch.processed_rollout_hash),
-            effective_raw_len: Some(epoch.effective_raw_len),
-            surviving_turn_ids_hash: Some(epoch.surviving_turn_ids_hash),
-            surviving_compact_ids: Some(epoch.surviving_compact_ids),
-            state_hash: Some(epoch.state_hash),
+            source_rollout_ref: epoch.source_rollout_ref,
+            processed_rollout_len: epoch.processed_rollout_len,
+            processed_rollout_hash: epoch.processed_rollout_hash,
+            effective_raw_len: epoch.effective_raw_len,
+            surviving_turn_ids_hash: epoch.surviving_turn_ids_hash,
+            surviving_compact_ids: epoch.surviving_compact_ids,
+            state_hash: epoch.state_hash,
             state: StateSnapshot::from_state(&state),
         };
         self.append_tree_event(&event)?;
-        self.write_state_cache(&state)
+        Ok(())
     }
 
     #[cfg(test)]
@@ -428,7 +355,6 @@ impl SpineSidecarStore {
         for node_id in node_ids {
             self.ensure_node_dir(node_id)?;
             self.copy_node_file_if_present(source, node_id, MEMORY_FILE)?;
-            self.copy_node_file_if_present(source, node_id, PLAN_FILE)?;
         }
         Ok(())
     }
@@ -447,12 +373,6 @@ impl SpineSidecarStore {
             {
                 self.copy_node_file_if_present(source, node_id, MEMORY_FILE)?;
             }
-            if source
-                .read_plan_snapshot(node_id)?
-                .is_some_and(|snapshot| surviving_turn_ids.contains(&snapshot.source_turn_id))
-            {
-                self.copy_node_file_if_present(source, node_id, PLAN_FILE)?;
-            }
         }
         Ok(())
     }
@@ -460,7 +380,7 @@ impl SpineSidecarStore {
     pub(crate) fn copy_projected_compact_index_from(
         &self,
         source: &SpineSidecarStore,
-        surviving_message_hashes: &HashSet<String>,
+        surviving_compact_ids: &HashSet<String>,
     ) -> Result<(), SpineStoreError> {
         let source_path = source.compact_index_path();
         if !source_path.exists() {
@@ -468,33 +388,10 @@ impl SpineSidecarStore {
         }
 
         let events = source.read_compact_index_events()?;
-        let surviving_compact_ids = events
-            .iter()
-            .filter_map(|event| match event {
-                CompactIndexEvent::CompactInstalled {
-                    compact_id,
-                    message_hash,
-                    ..
-                }
-                | CompactIndexEvent::BridgeCheckpointCommitted {
-                    compact_id,
-                    message_hash,
-                    ..
-                }
-                | CompactIndexEvent::MemInstallCommitted {
-                    compact_id,
-                    message_hash,
-                    ..
-                } if surviving_message_hashes.contains(message_hash) => Some(compact_id.clone()),
-                _ => None,
-            })
-            .collect::<HashSet<_>>();
         let filtered_events = events
             .into_iter()
             .filter(|event| match event {
                 CompactIndexEvent::CompactStarted { compact_id, .. }
-                | CompactIndexEvent::CompactInstalled { compact_id, .. }
-                | CompactIndexEvent::BridgeCheckpointCommitted { compact_id, .. }
                 | CompactIndexEvent::MemInstallCommitted { compact_id, .. } => {
                     surviving_compact_ids.contains(compact_id)
                 }
@@ -507,9 +404,9 @@ impl SpineSidecarStore {
 
     pub(crate) fn validate_root_meminstall_survivors(
         &self,
-        surviving_root_message_hashes: &HashSet<String>,
+        surviving_root_compact_ids: &HashSet<String>,
     ) -> Result<(), SpineStoreError> {
-        if surviving_root_message_hashes.is_empty() {
+        if surviving_root_compact_ids.is_empty() {
             return Ok(());
         }
 
@@ -522,45 +419,22 @@ impl SpineSidecarStore {
             }
         }
 
-        let mut committed_by_hash: HashMap<String, Vec<String>> = HashMap::new();
+        let mut committed_root_compact_ids = HashSet::new();
         for event in self.read_compact_index_events()? {
-            if let CompactIndexEvent::MemInstallCommitted {
-                compact_id,
-                op,
-                message_hash,
-                ..
-            } = event
-                && surviving_root_message_hashes.contains(&message_hash)
+            if let CompactIndexEvent::MemInstallCommitted { compact_id, op, .. } = event
+                && surviving_root_compact_ids.contains(&compact_id)
                 && op == SpineOperation::Archive
             {
-                committed_by_hash
-                    .entry(message_hash)
-                    .or_default()
-                    .push(compact_id);
+                committed_root_compact_ids.insert(compact_id);
             }
         }
 
-        for message_hash in surviving_root_message_hashes {
-            let compact_ids = committed_by_hash
-                .get(message_hash)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            let unique_mem_install = compact_ids.len() == 1;
-            let root_epoch_reset = compact_ids
-                .first()
-                .is_some_and(|compact_id| reset_compact_ids.contains(compact_id));
-            let admission = classify_root_meminstall_survivor(
-                root_epoch_reset,
-                unique_mem_install,
-                unique_mem_install,
-                unique_mem_install,
-                unique_mem_install,
-                true,
-            );
-            if admission != RootMemInstallSurvivorAdmission::RootMemInstallAdmitted {
+        for compact_id in surviving_root_compact_ids {
+            let root_epoch_reset = reset_compact_ids.contains(compact_id);
+            let mem_install_committed = committed_root_compact_ids.contains(compact_id);
+            if !root_epoch_reset || !mem_install_committed {
                 return Err(SpineStoreError::InvalidLedger(format!(
-                    "partial root MemInstall survivor set for checkpoint {message_hash}: root_epoch_reset={root_epoch_reset}, matching_mem_install_count={}",
-                    compact_ids.len()
+                    "partial root MemInstall survivor set for compact {compact_id}: root_epoch_reset={root_epoch_reset}, mem_install_committed={mem_install_committed}"
                 )));
             }
         }
@@ -568,102 +442,27 @@ impl SpineSidecarStore {
         Ok(())
     }
 
-    pub(crate) fn write_plan<T: Serialize>(
+    pub(crate) fn validate_mem_install_survivors(
         &self,
-        node_id: &NodeId,
-        plan: &T,
-    ) -> Result<PathBuf, SpineStoreError> {
-        self.ensure_node_dir(node_id)?;
-        let path = self.plan_path(node_id);
-        let contents =
-            serde_json::to_string_pretty(plan).map_err(|source| SpineStoreError::Json {
-                path: path.clone(),
-                source,
-            })? + "\n";
-        std::fs::write(&path, contents).map_err(|source| SpineStoreError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(path)
-    }
-
-    pub(crate) fn write_plan_snapshot(
-        &self,
-        node_id: &NodeId,
-        snapshot: &PlanSnapshot,
-    ) -> Result<PathBuf, SpineStoreError> {
-        let event = TreeEvent::TaskPlanUpdated {
-            seq: snapshot.event_seq,
-            node_id: node_id.to_string(),
-            revision: snapshot.revision,
-            explanation: snapshot.explanation.clone(),
-            items: snapshot.items.clone(),
-            spine_plantree: snapshot.spine_plantree.clone(),
-            source_turn_id: snapshot.source_turn_id.clone(),
-        };
-        self.append_tree_event(&event)?;
-        self.write_plan(node_id, snapshot)
-    }
-
-    pub(crate) fn read_plan_snapshot(
-        &self,
-        node_id: &NodeId,
-    ) -> Result<Option<PlanSnapshot>, SpineStoreError> {
-        let path = self.plan_path(node_id);
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(contents) => contents,
-            Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(source) => {
-                return Err(SpineStoreError::Io {
-                    path: path.clone(),
-                    source,
-                });
-            }
-        };
-        let snapshot = serde_json::from_str::<PlanSnapshot>(&contents).map_err(|source| {
-            SpineStoreError::Json {
-                path: path.clone(),
-                source,
-            }
-        })?;
-        Ok(Some(snapshot))
-    }
-
-    pub(crate) fn read_projected_plan_snapshot(
-        &self,
-        node_id: &NodeId,
-        surviving_turn_ids: Option<&HashSet<String>>,
-    ) -> Result<Option<PlanSnapshot>, SpineStoreError> {
-        let Some(snapshot) = self.read_plan_snapshot(node_id)? else {
-            return Ok(None);
-        };
-        if surviving_turn_ids.is_none_or(|turn_ids| turn_ids.contains(&snapshot.source_turn_id)) {
-            Ok(Some(snapshot))
-        } else {
-            Ok(None)
+        surviving_compact_ids: &HashSet<String>,
+    ) -> Result<(), SpineStoreError> {
+        if surviving_compact_ids.is_empty() {
+            return Ok(());
         }
-    }
 
-    pub(crate) fn read_plan_revision(
-        &self,
-        node_id: &NodeId,
-    ) -> Result<Option<u64>, SpineStoreError> {
-        let node_id = node_id.to_string();
-        let mut latest_revision = None;
-        for event in self.read_tree_events()? {
-            let TreeEvent::TaskPlanUpdated {
-                node_id: event_node_id,
-                revision,
-                ..
-            } = event
-            else {
-                continue;
-            };
-            if event_node_id == node_id {
-                latest_revision = Some(revision);
+        let committed_ids = self
+            .committed_mem_install_spans_matching_ids(Some(surviving_compact_ids))?
+            .into_iter()
+            .map(|span| span.compact_id)
+            .collect::<HashSet<_>>();
+        for compact_id in surviving_compact_ids {
+            if !committed_ids.contains(compact_id) {
+                return Err(SpineStoreError::InvalidLedger(format!(
+                    "surviving Spine compact checkpoint {compact_id} has no committed MemInstall evidence"
+                )));
             }
         }
-        Ok(latest_revision)
+        Ok(())
     }
 
     pub(crate) fn append_raw_items_recorded(
@@ -869,52 +668,6 @@ impl SpineSidecarStore {
         Ok(())
     }
 
-    pub(crate) fn validate_matching_open_for_scope(
-        &self,
-        scope_node_id: &NodeId,
-        close_boundary_end: u64,
-    ) -> Result<(), SpineStoreError> {
-        for event in self.read_trajs_index_events()? {
-            let TrajsIndexEvent::TransitionCommitted {
-                op,
-                from_node,
-                to_node,
-                boundary_end,
-                ..
-            } = event
-            else {
-                continue;
-            };
-            if op != SpineOperation::Open || boundary_end > close_boundary_end {
-                continue;
-            }
-            let from_node = NodeId::parse(&from_node)?;
-            let to_node = NodeId::parse(&to_node)?;
-            if &from_node == scope_node_id && is_direct_child_of(&to_node, scope_node_id) {
-                return Ok(());
-            }
-        }
-
-        Err(SpineStoreError::InvalidLedger(format!(
-            "close compact scope {} has no matching open transition",
-            scope_node_id.bracketed()
-        )))
-    }
-
-    pub(crate) fn append_raw_mirror_compact_checkpoint(
-        &self,
-        compact_id: impl Into<String>,
-        message_hash: impl Into<String>,
-        replacement_history_len: usize,
-    ) -> Result<(), SpineStoreError> {
-        let event = RawMirrorEvent::RawMirrorEvent {
-            compact_id: compact_id.into(),
-            message_hash: message_hash.into(),
-            replacement_history_len,
-        };
-        self.append_json_line(&self.raw_rollout_path(), &event)
-    }
-
     pub(crate) fn append_compact_started(
         &self,
         record: CompactStartedRecord,
@@ -940,55 +693,11 @@ impl SpineSidecarStore {
             cut_ordinal,
             fold_end_ordinal,
             strategy,
-            raw_trajs: format!("{RAW_DIR}/{RAW_ROLLOUT_FILE}"),
             rollout,
         };
         self.append_json_line(&path, &event)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn append_compact_installed(
-        &self,
-        record: CompactInstalledRecord,
-    ) -> Result<(), SpineStoreError> {
-        let CompactInstalledRecord {
-            attempt:
-                CompactAttemptRecord {
-                    compact_id,
-                    node_id,
-                    op,
-                    cut_ordinal,
-                    fold_end_ordinal,
-                },
-            replacement_history_len,
-            memory_path,
-            message_hash,
-        } = record;
-        let path = self.compact_index_path();
-        let existing_attempts = self.compact_attempt_state_for_bridge_checkpoint_validation()?;
-        if let Some(attempt) = existing_attempts.get(&compact_id)
-            && attempt.mem_install_committed
-            && !attempt.bridge_checkpoint_committed
-        {
-            return Err(SpineStoreError::InvalidLedger(format!(
-                "compact.index.jsonl compact_installed for {compact_id} follows mem_install_committed without bridge_checkpoint_committed"
-            )));
-        }
-        let event = CompactIndexEvent::CompactInstalled {
-            seq: self.next_jsonl_seq(&path)?,
-            compact_id,
-            node_id: node_id.to_string(),
-            op,
-            cut_ordinal,
-            fold_end_ordinal,
-            replacement_history_len,
-            memory_path,
-            message_hash,
-        };
-        self.append_json_line(&path, &event)
-    }
-
-    #[allow(dead_code)]
     pub(crate) fn append_mem_install_committed(
         &self,
         record: MemInstallCommittedRecord,
@@ -1003,8 +712,6 @@ impl SpineSidecarStore {
                     fold_end_ordinal,
                 },
             body_ref,
-            replacement_history_len,
-            message_hash,
             projection_ref,
             source_rollout_ref,
         } = record;
@@ -1037,45 +744,9 @@ impl SpineSidecarStore {
             memory_section_id,
             body_hash: body_ref.body_hash,
             storage_ref,
-            message_hash,
-            replacement_history_len,
             projection_ref,
             source_rollout_ref,
-            committed_at_seq: seq,
         };
-        self.append_json_line(&path, &event)
-    }
-
-    pub(crate) fn append_bridge_checkpoint_committed(
-        &self,
-        record: BridgeCheckpointCommittedRecord,
-    ) -> Result<(), SpineStoreError> {
-        let BridgeCheckpointCommittedRecord {
-            attempt:
-                CompactAttemptRecord {
-                    compact_id,
-                    node_id,
-                    op,
-                    cut_ordinal,
-                    fold_end_ordinal,
-                },
-            replacement_history_len,
-            message_hash,
-            source_rollout_ref,
-        } = record;
-        let path = self.compact_index_path();
-        let event = CompactIndexEvent::BridgeCheckpointCommitted {
-            seq: self.next_jsonl_seq(&path)?,
-            compact_id,
-            node_id: node_id.to_string(),
-            op,
-            cut_ordinal,
-            fold_end_ordinal,
-            replacement_history_len,
-            message_hash,
-            source_rollout_ref,
-        };
-        self.validate_bridge_checkpoint_commit_preconditions(&event)?;
         self.append_json_line(&path, &event)
     }
 
@@ -1163,7 +834,6 @@ impl SpineSidecarStore {
             .map_err(|source| SpineStoreError::Io { path, source })
     }
 
-    #[allow(dead_code)]
     pub(crate) fn generated_memory_sections(
         &self,
         node_id: &NodeId,
@@ -1175,7 +845,6 @@ impl SpineSidecarStore {
         ))
     }
 
-    #[allow(dead_code)]
     pub(crate) fn verify_memory_body_ref(
         &self,
         node_id: &NodeId,
@@ -1211,9 +880,7 @@ impl SpineSidecarStore {
                     op,
                     from_node,
                     to_node,
-                    to_parent_id,
                     summary,
-                    child_summary,
                     raw_start_ordinal,
                     ..
                 } => {
@@ -1224,8 +891,7 @@ impl SpineSidecarStore {
                     })?;
                     let from_node = NodeId::parse(&from_node)?;
                     let to_node = NodeId::parse(&to_node)?;
-                    let to_parent_id = to_parent_id.as_deref().map(NodeId::parse).transpose()?;
-                    let transition = op.apply_with_child_summary(state, summary, child_summary)?;
+                    let transition = op.apply(state, summary)?;
                     if transition.from != from_node || transition.to != to_node {
                         return Err(SpineStoreError::InvalidLedger(format!(
                             "transition replay mismatch: expected {} -> {}, got {} -> {}",
@@ -1235,60 +901,11 @@ impl SpineSidecarStore {
                             transition.to.bracketed()
                         )));
                     }
-                    let actual_parent_id = state
-                        .node(&transition.to)
-                        .and_then(|node| node.parent_id.clone());
-                    if actual_parent_id != to_parent_id {
-                        return Err(SpineStoreError::InvalidLedger(format!(
-                            "transition target parent mismatch for {}",
-                            transition.to.bracketed()
-                        )));
-                    }
                     state.set_raw_start_ordinal(&transition.to, raw_start_ordinal)?;
-                }
-                TreeEvent::TaskPlanUpdated {
-                    node_id,
-                    revision,
-                    spine_plantree,
-                    ..
-                } => {
-                    if revision == 0 {
-                        return Err(SpineStoreError::InvalidLedger(
-                            "task_plan_updated revision must be non-zero".to_string(),
-                        ));
-                    }
-                    let state = state.as_ref().ok_or_else(|| {
-                        SpineStoreError::InvalidLedger(
-                            "task_plan_updated appeared before root node creation".to_string(),
-                        )
-                    })?;
-                    let node_id = NodeId::parse(&node_id)?;
-                    if state.node(&node_id).is_none() {
-                        return Err(SpineStoreError::InvalidLedger(format!(
-                            "task_plan_updated references unknown node {}",
-                            node_id.bracketed()
-                        )));
-                    }
-                    if let Some(spine_plantree) = spine_plantree {
-                        let anchor_node_id = NodeId::parse(&spine_plantree.anchor_node_id)?;
-                        if state.node(&anchor_node_id).is_none() {
-                            return Err(SpineStoreError::InvalidLedger(format!(
-                                "task_plan_updated spine_plantree references unknown anchor node {}",
-                                anchor_node_id.bracketed()
-                            )));
-                        }
-                        let mut existing_scope_nodes = HashSet::new();
-                        validate_plantree_scope_references(
-                            state,
-                            &spine_plantree.root,
-                            &mut existing_scope_nodes,
-                        )?;
-                    }
                 }
                 TreeEvent::RootEpochReset {
                     root_id,
                     next_leaf_id,
-                    next_parent_id,
                     summary,
                     raw_start_ordinal,
                     ..
@@ -1300,8 +917,6 @@ impl SpineSidecarStore {
                     })?;
                     let root_id = NodeId::parse(&root_id)?;
                     let next_leaf_id = NodeId::parse(&next_leaf_id)?;
-                    let next_parent_id =
-                        next_parent_id.as_deref().map(NodeId::parse).transpose()?;
                     let transition = state.reset_root_epoch(summary, raw_start_ordinal)?;
                     if transition.from != root_id || transition.to != next_leaf_id {
                         return Err(SpineStoreError::InvalidLedger(format!(
@@ -1309,15 +924,6 @@ impl SpineSidecarStore {
                             root_id.bracketed(),
                             next_leaf_id.bracketed(),
                             transition.from.bracketed(),
-                            transition.to.bracketed()
-                        )));
-                    }
-                    let actual_parent_id = state
-                        .node(&transition.to)
-                        .and_then(|node| node.parent_id.clone());
-                    if actual_parent_id != next_parent_id {
-                        return Err(SpineStoreError::InvalidLedger(format!(
-                            "root epoch reset target parent mismatch for {}",
                             transition.to.bracketed()
                         )));
                     }
@@ -1337,25 +943,8 @@ impl SpineSidecarStore {
                     state.set_raw_start_ordinal(&node_id, raw_start_ordinal)?;
                 }
                 TreeEvent::ProjectionReset {
-                    source_rollout_ref,
-                    processed_rollout_len,
-                    processed_rollout_hash,
-                    effective_raw_len,
-                    surviving_turn_ids_hash,
-                    surviving_compact_ids,
-                    state_hash,
-                    state: snapshot,
-                    ..
+                    state: snapshot, ..
                 } => {
-                    projection_epoch_metadata_from_event(
-                        source_rollout_ref,
-                        processed_rollout_len,
-                        processed_rollout_hash,
-                        effective_raw_len,
-                        surviving_turn_ids_hash,
-                        surviving_compact_ids,
-                        state_hash,
-                    )?;
                     state = Some(spine_state_from_snapshot(snapshot)?);
                 }
                 TreeEvent::SpineHintEmitted { node_id, .. } => {
@@ -1423,8 +1012,6 @@ impl SpineSidecarStore {
         Ok(events)
     }
 
-    // Step 13 wires resume admission to this metadata reader.
-    #[allow(dead_code)]
     pub(crate) fn latest_projection_epoch(
         &self,
     ) -> Result<Option<ProjectionEpochMetadata>, SpineStoreError> {
@@ -1443,7 +1030,7 @@ impl SpineSidecarStore {
             else {
                 continue;
             };
-            latest = Some(projection_epoch_metadata_from_event(
+            latest = Some(ProjectionEpochMetadata {
                 source_rollout_ref,
                 processed_rollout_len,
                 processed_rollout_hash,
@@ -1451,51 +1038,9 @@ impl SpineSidecarStore {
                 surviving_turn_ids_hash,
                 surviving_compact_ids,
                 state_hash,
-            )?);
+            });
         }
-        Ok(latest.flatten())
-    }
-
-    fn read_trajs_index_events(&self) -> Result<Vec<TrajsIndexEvent>, SpineStoreError> {
-        let path = self.trajs_index_path();
-        let file = File::open(&path).map_err(|source| SpineStoreError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let reader = BufReader::new(file);
-        let mut events = Vec::new();
-
-        for (index, line) in reader.lines().enumerate() {
-            let line = line.map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-            if line.trim().is_empty() {
-                return Err(SpineStoreError::InvalidLedger(format!(
-                    "trajs.index.jsonl line {} is empty",
-                    index + 1
-                )));
-            }
-            let event: TrajsIndexEvent =
-                serde_json::from_str(&line).map_err(|source| SpineStoreError::Json {
-                    path: path.clone(),
-                    source,
-                })?;
-            let expected_seq = u64::try_from(index + 1).map_err(|_| {
-                SpineStoreError::InvalidLedger("trajs.index.jsonl has too many events".to_string())
-            })?;
-            if event.seq() != expected_seq {
-                return Err(SpineStoreError::InvalidLedger(format!(
-                    "trajs.index.jsonl line {} has seq {}, expected {}",
-                    index + 1,
-                    event.seq(),
-                    expected_seq
-                )));
-            }
-            events.push(event);
-        }
-
-        Ok(events)
+        Ok(latest)
     }
 
     fn read_compact_index_events(&self) -> Result<Vec<CompactIndexEvent>, SpineStoreError> {
@@ -1542,7 +1087,6 @@ impl SpineSidecarStore {
         Ok(events)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn committed_mem_installs(
         &self,
     ) -> Result<Vec<CommittedMemInstall>, SpineStoreError> {
@@ -1558,11 +1102,8 @@ impl SpineSidecarStore {
                 memory_section_id,
                 body_hash,
                 storage_ref,
-                message_hash,
-                replacement_history_len,
                 projection_ref,
                 source_rollout_ref,
-                committed_at_seq,
                 ..
             } = event
             else {
@@ -1578,11 +1119,8 @@ impl SpineSidecarStore {
                     section_id: MemorySectionId::parse(memory_section_id, storage_ref)?,
                     body_hash,
                 },
-                replacement_history_len,
-                message_hash,
                 projection_ref,
                 source_rollout_ref,
-                committed_at_seq,
             });
         }
         Ok(installs)
@@ -1592,19 +1130,17 @@ impl SpineSidecarStore {
     pub(crate) fn committed_mem_install_spans(
         &self,
     ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
-        self.committed_mem_install_spans_matching_hashes(None)
+        self.committed_mem_install_spans_matching_ids(None)
     }
 
-    pub(crate) fn committed_mem_install_spans_matching_hashes(
+    pub(crate) fn committed_mem_install_spans_matching_ids(
         &self,
-        surviving_message_hashes: Option<&HashSet<String>>,
+        surviving_compact_ids: Option<&HashSet<String>>,
     ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
         let mut spans = Vec::new();
 
         for install in self.committed_mem_installs()? {
-            if surviving_message_hashes
-                .is_some_and(|hashes| !hashes.contains(&install.message_hash))
-            {
+            if surviving_compact_ids.is_some_and(|ids| !ids.contains(&install.compact_id)) {
                 continue;
             }
             if install.cut_ordinal >= install.fold_end_ordinal {
@@ -1619,147 +1155,10 @@ impl SpineSidecarStore {
                 op: install.op,
                 cut_ordinal: install.cut_ordinal,
                 fold_end_ordinal: install.fold_end_ordinal,
-                replacement_history_len: install.replacement_history_len,
-                message_hash: install.message_hash,
             });
         }
 
         Ok(spans)
-    }
-
-    pub(crate) fn bridge_checkpoint_committed_spans_matching_hashes(
-        &self,
-        surviving_message_hashes: Option<&HashSet<String>>,
-    ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
-        let spans = self
-            .runtime_span_authority_admissions_matching_hashes(surviving_message_hashes)?
-            .into_iter()
-            .filter_map(|record| match record.admission {
-                RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan
-                | RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal => {
-                    // No-legacy source: BridgeCheckpointCommitted is the terminal
-                    // proof. The current admission name is transitional until R4.
-                    Some(record.span)
-                }
-                _ => None,
-            })
-            .collect();
-        Ok(spans)
-    }
-
-    pub(crate) fn runtime_span_authority_admissions_matching_hashes(
-        &self,
-        surviving_message_hashes: Option<&HashSet<String>>,
-    ) -> Result<Vec<RuntimeSpanAuthorityRecord>, SpineStoreError> {
-        self.validate_compact_index()?;
-
-        let mut attempts = HashMap::new();
-        let mut order = Vec::new();
-        for event in self.read_compact_index_events()? {
-            match event {
-                CompactIndexEvent::CompactStarted {
-                    compact_id,
-                    node_id,
-                    op,
-                    cut_ordinal,
-                    fold_end_ordinal,
-                    ..
-                } => {
-                    order.push(compact_id.clone());
-                    attempts.insert(
-                        compact_id.clone(),
-                        RuntimeSpanAuthorityAttempt {
-                            compact_id,
-                            node_id: NodeId::parse(&node_id)?,
-                            op,
-                            cut_ordinal,
-                            fold_end_ordinal,
-                            mem_install: None,
-                            bridge_checkpoint_committed: false,
-                            installed: None,
-                        },
-                    );
-                }
-                CompactIndexEvent::MemInstallCommitted {
-                    compact_id,
-                    node_id,
-                    op,
-                    cut_ordinal,
-                    fold_end_ordinal,
-                    replacement_history_len,
-                    message_hash,
-                    ..
-                } => {
-                    let Some(attempt) = attempts.get_mut(&compact_id) else {
-                        return Err(
-                            RuntimeFastFailError::MemInstallMissingStarted { compact_id }.into(),
-                        );
-                    };
-                    attempt.mem_install = Some(InstalledCompactSpan {
-                        compact_id,
-                        node_id: NodeId::parse(&node_id)?,
-                        op,
-                        cut_ordinal,
-                        fold_end_ordinal,
-                        replacement_history_len,
-                        message_hash,
-                    });
-                }
-                CompactIndexEvent::BridgeCheckpointCommitted { compact_id, .. } => {
-                    let Some(attempt) = attempts.get_mut(&compact_id) else {
-                        return Err(SpineStoreError::InvalidLedger(format!(
-                            "compact.index.jsonl has bridge_checkpoint_committed without matching compact_started for {compact_id}"
-                        )));
-                    };
-                    attempt.bridge_checkpoint_committed = true;
-                }
-                CompactIndexEvent::CompactInstalled {
-                    compact_id,
-                    node_id,
-                    op,
-                    cut_ordinal,
-                    fold_end_ordinal,
-                    replacement_history_len,
-                    message_hash,
-                    ..
-                } => {
-                    let Some(attempt) = attempts.get_mut(&compact_id) else {
-                        return Err(SpineStoreError::InvalidLedger(format!(
-                            "compact.index.jsonl has compact_installed without matching compact_started for {compact_id}"
-                        )));
-                    };
-                    attempt.installed = Some(InstalledCompactSpan {
-                        compact_id,
-                        node_id: NodeId::parse(&node_id)?,
-                        op,
-                        cut_ordinal,
-                        fold_end_ordinal,
-                        replacement_history_len,
-                        message_hash,
-                    });
-                }
-                CompactIndexEvent::CompactFailed { .. }
-                | CompactIndexEvent::CompactInterrupted { .. } => {}
-            }
-        }
-
-        let mut records = Vec::new();
-        for compact_id in order {
-            let Some(attempt) = attempts.remove(&compact_id) else {
-                continue;
-            };
-            let Some(record) = runtime_span_authority_record_for_attempt(attempt)? else {
-                continue;
-            };
-            if surviving_message_hashes
-                .is_some_and(|hashes| !hashes.contains(&record.span.message_hash))
-            {
-                continue;
-            }
-            records.push(record);
-        }
-
-        Ok(records)
     }
 
     fn validate_mem_install_commit_preconditions(
@@ -1805,16 +1204,6 @@ impl SpineSidecarStore {
                     if compact_id == attempt.compact_id =>
                 {
                     duplicate_commit = true;
-                }
-                CompactIndexEvent::CompactInstalled { compact_id, .. }
-                    if compact_id == attempt.compact_id =>
-                {
-                    terminal_before_commit = Some("compact_installed");
-                }
-                CompactIndexEvent::BridgeCheckpointCommitted { compact_id, .. }
-                    if compact_id == attempt.compact_id =>
-                {
-                    terminal_before_commit = Some("bridge_checkpoint_committed");
                 }
                 CompactIndexEvent::CompactFailed { compact_id, .. }
                     if compact_id == attempt.compact_id =>
@@ -1864,109 +1253,6 @@ impl SpineSidecarStore {
         Ok(())
     }
 
-    fn compact_attempt_state_for_bridge_checkpoint_validation(
-        &self,
-    ) -> Result<HashMap<String, CompactAttemptState>, SpineStoreError> {
-        let mut attempts = HashMap::new();
-        for existing in self.read_compact_index_events()? {
-            match existing {
-                CompactIndexEvent::CompactStarted {
-                    compact_id,
-                    node_id,
-                    op,
-                    cut_ordinal,
-                    fold_end_ordinal,
-                    rollout,
-                    ..
-                } => {
-                    attempts.insert(
-                        compact_id,
-                        CompactAttemptState {
-                            node_id,
-                            op,
-                            cut_ordinal,
-                            fold_end_ordinal,
-                            rollout,
-                            terminal: None,
-                            mem_install_committed: false,
-                            mem_install_message_hash: None,
-                            mem_install_replacement_history_len: None,
-                            bridge_checkpoint_committed: false,
-                        },
-                    );
-                }
-                CompactIndexEvent::MemInstallCommitted {
-                    compact_id,
-                    message_hash,
-                    replacement_history_len,
-                    ..
-                } => {
-                    if let Some(attempt) = attempts.get_mut(&compact_id) {
-                        attempt.mem_install_committed = true;
-                        attempt.mem_install_message_hash = Some(message_hash);
-                        attempt.mem_install_replacement_history_len = Some(replacement_history_len);
-                    }
-                }
-                CompactIndexEvent::BridgeCheckpointCommitted { compact_id, .. } => {
-                    if let Some(attempt) = attempts.get_mut(&compact_id) {
-                        attempt.bridge_checkpoint_committed = true;
-                    }
-                }
-                CompactIndexEvent::CompactInstalled { compact_id, .. } => {
-                    if let Some(attempt) = attempts.get_mut(&compact_id) {
-                        attempt.terminal = Some("compact_installed");
-                    }
-                }
-                CompactIndexEvent::CompactFailed { compact_id, .. } => {
-                    if let Some(attempt) = attempts.get_mut(&compact_id) {
-                        attempt.terminal = Some("compact_failed");
-                    }
-                }
-                CompactIndexEvent::CompactInterrupted { compact_id, .. } => {
-                    if let Some(attempt) = attempts.get_mut(&compact_id) {
-                        attempt.terminal = Some("compact_interrupted");
-                    }
-                }
-            }
-        }
-        Ok(attempts)
-    }
-
-    fn validate_bridge_checkpoint_commit_preconditions(
-        &self,
-        event: &CompactIndexEvent,
-    ) -> Result<(), SpineStoreError> {
-        let CompactIndexEvent::BridgeCheckpointCommitted {
-            compact_id,
-            node_id,
-            op,
-            cut_ordinal,
-            fold_end_ordinal,
-            replacement_history_len,
-            message_hash,
-            source_rollout_ref,
-            ..
-        } = event
-        else {
-            return Err(SpineStoreError::InvalidLedger(
-                "bridge checkpoint precondition requires bridge_checkpoint_committed event"
-                    .to_string(),
-            ));
-        };
-        let mut attempts = self.compact_attempt_state_for_bridge_checkpoint_validation()?;
-        record_bridge_checkpoint_committed(
-            &mut attempts,
-            compact_id.clone(),
-            node_id.clone(),
-            *op,
-            *cut_ordinal,
-            *fold_end_ordinal,
-            *replacement_history_len,
-            message_hash.clone(),
-            source_rollout_ref.clone(),
-        )
-    }
-
     fn validate_compact_index(&self) -> Result<(), SpineStoreError> {
         let mut attempts: HashMap<String, CompactAttemptState> = HashMap::new();
 
@@ -1992,9 +1278,6 @@ impl SpineSidecarStore {
                                 rollout,
                                 terminal: None,
                                 mem_install_committed: false,
-                                mem_install_message_hash: None,
-                                mem_install_replacement_history_len: None,
-                                bridge_checkpoint_committed: false,
                             },
                         )
                         .is_some()
@@ -2015,11 +1298,8 @@ impl SpineSidecarStore {
                     memory_section_id,
                     body_hash,
                     storage_ref,
-                    message_hash,
-                    replacement_history_len,
                     projection_ref,
                     source_rollout_ref,
-                    committed_at_seq,
                 } => {
                     record_mem_install_committed(
                         self,
@@ -2034,52 +1314,8 @@ impl SpineSidecarStore {
                         memory_section_id,
                         body_hash,
                         storage_ref,
-                        message_hash,
-                        replacement_history_len,
                         projection_ref,
                         source_rollout_ref,
-                        committed_at_seq,
-                    )?;
-                }
-                CompactIndexEvent::BridgeCheckpointCommitted {
-                    compact_id,
-                    node_id,
-                    op,
-                    cut_ordinal,
-                    fold_end_ordinal,
-                    replacement_history_len,
-                    message_hash,
-                    source_rollout_ref,
-                    ..
-                } => {
-                    record_bridge_checkpoint_committed(
-                        &mut attempts,
-                        compact_id,
-                        node_id,
-                        op,
-                        cut_ordinal,
-                        fold_end_ordinal,
-                        replacement_history_len,
-                        message_hash,
-                        source_rollout_ref,
-                    )?;
-                }
-                CompactIndexEvent::CompactInstalled {
-                    compact_id,
-                    node_id,
-                    op,
-                    cut_ordinal,
-                    fold_end_ordinal,
-                    ..
-                } => {
-                    record_compact_terminal(
-                        &mut attempts,
-                        compact_id,
-                        node_id,
-                        op,
-                        cut_ordinal,
-                        fold_end_ordinal,
-                        "compact_installed",
                     )?;
                 }
                 CompactIndexEvent::CompactFailed {
@@ -2124,66 +1360,12 @@ impl SpineSidecarStore {
         for (compact_id, attempt) in attempts {
             if attempt.terminal.is_none() && !attempt.mem_install_committed {
                 return Err(SpineStoreError::InvalidLedger(format!(
-                    "compact.index.jsonl has dangling compact_started for {compact_id}; explicit spine compact repair is required"
+                    "compact.index.jsonl has dangling compact_started for {compact_id}; failing closed"
                 )));
             }
         }
 
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn installed_compact_spans(
-        &self,
-    ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
-        self.installed_compact_spans_matching_hashes(None)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn installed_compact_spans_matching_hashes(
-        &self,
-        surviving_message_hashes: Option<&HashSet<String>>,
-    ) -> Result<Vec<InstalledCompactSpan>, SpineStoreError> {
-        let mut spans = Vec::new();
-
-        for event in self.read_compact_index_events()? {
-            if let CompactIndexEvent::CompactInstalled {
-                compact_id,
-                node_id,
-                op,
-                cut_ordinal,
-                fold_end_ordinal,
-                replacement_history_len,
-                message_hash,
-                ..
-            } = event
-            {
-                if surviving_message_hashes.is_some_and(|hashes| !hashes.contains(&message_hash)) {
-                    continue;
-                }
-                if cut_ordinal >= fold_end_ordinal {
-                    return Err(SpineStoreError::InvalidLedger(format!(
-                        "compact.index.jsonl installed span for {compact_id} is empty or inverted: [{cut_ordinal}, {fold_end_ordinal})"
-                    )));
-                }
-                let parsed_node_id = NodeId::parse(&node_id).map_err(|err| {
-                    SpineStoreError::InvalidLedger(format!(
-                        "compact.index.jsonl installed span for {compact_id} has invalid node_id {node_id:?}: {err}"
-                    ))
-                })?;
-                spans.push(InstalledCompactSpan {
-                    compact_id,
-                    node_id: parsed_node_id,
-                    op,
-                    cut_ordinal,
-                    fold_end_ordinal,
-                    replacement_history_len,
-                    message_hash,
-                });
-            }
-        }
-
-        Ok(spans)
     }
 
     fn write_compact_index_events(
@@ -2396,7 +1578,10 @@ impl SpineSidecarStore {
         }
         let destination_path = self.node_dir(node_id).join(file_name);
         if destination_path.exists() {
-            return Ok(());
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "refusing to overwrite existing spine node artifact {}",
+                destination_path.display()
+            )));
         }
         std::fs::copy(&source_path, &destination_path).map_err(|source| SpineStoreError::Io {
             path: destination_path,
@@ -2404,36 +1589,12 @@ impl SpineSidecarStore {
         })?;
         Ok(())
     }
-
-    fn write_state_cache(&self, state: &SpineState) -> Result<(), SpineStoreError> {
-        let path = self.state_path();
-        let contents =
-            serde_json::to_string_pretty(&StateSnapshot::from_state(state)).map_err(|source| {
-                SpineStoreError::Json {
-                    path: path.clone(),
-                    source,
-                }
-            })? + "\n";
-        std::fs::write(&path, contents).map_err(|source| SpineStoreError::Io { path, source })
-    }
-
-    fn read_state_cache(&self, path: &Path) -> Result<StateSnapshot, SpineStoreError> {
-        let contents = std::fs::read_to_string(path).map_err(|source| SpineStoreError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        serde_json::from_str(&contents).map_err(|source| SpineStoreError::Json {
-            path: path.to_path_buf(),
-            source,
-        })
-    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SpineOperation {
     Open,
-    Next,
     Close,
     Archive,
 }
@@ -2454,35 +1615,14 @@ pub(crate) struct CompactStartedRecord {
     pub(crate) rollout: String,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub(crate) struct CompactInstalledRecord {
-    pub(crate) attempt: CompactAttemptRecord,
-    pub(crate) replacement_history_len: usize,
-    pub(crate) memory_path: String,
-    pub(crate) message_hash: String,
-}
-
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct MemInstallCommittedRecord {
     pub(crate) attempt: CompactAttemptRecord,
     pub(crate) body_ref: MemoryBodyRef,
-    pub(crate) replacement_history_len: usize,
-    pub(crate) message_hash: String,
     pub(crate) projection_ref: String,
     pub(crate) source_rollout_ref: String,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct BridgeCheckpointCommittedRecord {
-    pub(crate) attempt: CompactAttemptRecord,
-    pub(crate) replacement_history_len: usize,
-    pub(crate) message_hash: String,
-    pub(crate) source_rollout_ref: String,
-}
-
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CommittedMemInstall {
     pub(crate) compact_id: String,
@@ -2491,11 +1631,8 @@ pub(crate) struct CommittedMemInstall {
     pub(crate) cut_ordinal: u64,
     pub(crate) fold_end_ordinal: u64,
     pub(crate) body_ref: MemoryBodyRef,
-    pub(crate) replacement_history_len: usize,
-    pub(crate) message_hash: String,
     pub(crate) projection_ref: String,
     pub(crate) source_rollout_ref: String,
-    pub(crate) committed_at_seq: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -2528,40 +1665,27 @@ impl TransitionSummaryArg for &str {
 }
 
 impl SpineOperation {
-    pub(crate) fn apply_with_child_summary(
+    pub(crate) fn apply(
         self,
         state: &mut SpineState,
         summary: Option<String>,
-        child_summary: Option<String>,
     ) -> Result<Transition, SpineStateError> {
         match self {
             SpineOperation::Open => {
                 if summary.is_some() {
                     return Err(SpineStateError::UnexpectedSummary(SpineOperationName::Open));
                 }
-                if child_summary.is_some() {
-                    return Err(SpineStateError::UnexpectedSummary(SpineOperationName::Open));
-                }
                 state.open()
             }
-            SpineOperation::Next => {
-                if child_summary.is_some() {
-                    return Err(SpineStateError::UnexpectedSummary(SpineOperationName::Next));
-                }
-                state
-                    .next(summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Next))?)
-            }
-            SpineOperation::Close => state.close_with_child_summary(
-                child_summary,
-                summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Close))?,
-            ),
+            SpineOperation::Close => state
+                .close(summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Close))?),
             SpineOperation::Archive => Err(SpineStateError::ArchiveIsInternal),
         }
     }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum TreeEvent {
     SpineInitialized {
         seq: u64,
@@ -2572,29 +1696,14 @@ enum TreeEvent {
         op: SpineOperation,
         from_node: String,
         to_node: String,
-        to_parent_id: Option<String>,
         summary: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        child_summary: Option<String>,
         raw_start_ordinal: u64,
-        #[serde(default)]
-        source_turn_id: String,
-    },
-    TaskPlanUpdated {
-        seq: u64,
-        node_id: String,
-        revision: u64,
-        explanation: Option<String>,
-        items: Vec<PlanSnapshotItem>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        spine_plantree: Option<PlanTreeSnapshot>,
         source_turn_id: String,
     },
     RootEpochReset {
         seq: u64,
         root_id: String,
         next_leaf_id: String,
-        next_parent_id: Option<String>,
         summary: String,
         raw_start_ordinal: u64,
         compact_id: String,
@@ -2610,20 +1719,13 @@ enum TreeEvent {
         seq: u64,
         reason: String,
         source_turn_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        source_rollout_ref: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        processed_rollout_len: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        processed_rollout_hash: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        effective_raw_len: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        surviving_turn_ids_hash: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        surviving_compact_ids: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        state_hash: Option<String>,
+        source_rollout_ref: String,
+        processed_rollout_len: u64,
+        processed_rollout_hash: String,
+        effective_raw_len: u64,
+        surviving_turn_ids_hash: String,
+        surviving_compact_ids: Vec<String>,
+        state_hash: String,
         state: StateSnapshot,
     },
     SpineHintEmitted {
@@ -2640,7 +1742,6 @@ impl TreeEvent {
         match self {
             TreeEvent::SpineInitialized { seq, .. }
             | TreeEvent::TransitionApplied { seq, .. }
-            | TreeEvent::TaskPlanUpdated { seq, .. }
             | TreeEvent::RootEpochReset { seq, .. }
             | TreeEvent::RawStartOrdinalUpdated { seq, .. }
             | TreeEvent::ProjectionReset { seq, .. }
@@ -2650,7 +1751,7 @@ impl TreeEvent {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum TrajsIndexEvent {
     RawItemsRecorded {
         seq: u64,
@@ -2670,15 +1771,6 @@ enum TrajsIndexEvent {
     },
 }
 
-impl TrajsIndexEvent {
-    fn seq(&self) -> u64 {
-        match self {
-            TrajsIndexEvent::RawItemsRecorded { seq, .. }
-            | TrajsIndexEvent::TransitionCommitted { seq, .. } => *seq,
-        }
-    }
-}
-
 #[derive(Debug)]
 struct CompactAttemptState {
     node_id: String,
@@ -2688,9 +1780,6 @@ struct CompactAttemptState {
     rollout: String,
     terminal: Option<&'static str>,
     mem_install_committed: bool,
-    mem_install_message_hash: Option<String>,
-    mem_install_replacement_history_len: Option<usize>,
-    bridge_checkpoint_committed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2700,30 +1789,10 @@ pub(crate) struct InstalledCompactSpan {
     pub(crate) op: SpineOperation,
     pub(crate) cut_ordinal: u64,
     pub(crate) fold_end_ordinal: u64,
-    pub(crate) replacement_history_len: usize,
-    pub(crate) message_hash: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RuntimeSpanAuthorityRecord {
-    pub(crate) span: InstalledCompactSpan,
-    pub(crate) admission: RuntimeSpanAuthorityAdmission,
-}
-
-#[derive(Debug)]
-struct RuntimeSpanAuthorityAttempt {
-    compact_id: String,
-    node_id: NodeId,
-    op: SpineOperation,
-    cut_ordinal: u64,
-    fold_end_ordinal: u64,
-    mem_install: Option<InstalledCompactSpan>,
-    bridge_checkpoint_committed: bool,
-    installed: Option<InstalledCompactSpan>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum CompactIndexEvent {
     CompactStarted {
         seq: u64,
@@ -2733,30 +1802,7 @@ enum CompactIndexEvent {
         cut_ordinal: u64,
         fold_end_ordinal: u64,
         strategy: String,
-        raw_trajs: String,
         rollout: String,
-    },
-    CompactInstalled {
-        seq: u64,
-        compact_id: String,
-        node_id: String,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        replacement_history_len: usize,
-        memory_path: String,
-        message_hash: String,
-    },
-    BridgeCheckpointCommitted {
-        seq: u64,
-        compact_id: String,
-        node_id: String,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        replacement_history_len: usize,
-        message_hash: String,
-        source_rollout_ref: String,
     },
     MemInstallCommitted {
         seq: u64,
@@ -2769,11 +1815,8 @@ enum CompactIndexEvent {
         memory_section_id: String,
         body_hash: String,
         storage_ref: String,
-        message_hash: String,
-        replacement_history_len: usize,
         projection_ref: String,
         source_rollout_ref: String,
-        committed_at_seq: u64,
     },
     CompactFailed {
         seq: u64,
@@ -2801,8 +1844,6 @@ impl CompactIndexEvent {
     fn seq(&self) -> u64 {
         match self {
             CompactIndexEvent::CompactStarted { seq, .. }
-            | CompactIndexEvent::CompactInstalled { seq, .. }
-            | CompactIndexEvent::BridgeCheckpointCommitted { seq, .. }
             | CompactIndexEvent::MemInstallCommitted { seq, .. }
             | CompactIndexEvent::CompactFailed { seq, .. }
             | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq,
@@ -2812,18 +1853,9 @@ impl CompactIndexEvent {
     fn set_seq(&mut self, next_seq: u64) {
         match self {
             CompactIndexEvent::CompactStarted { seq, .. }
-            | CompactIndexEvent::CompactInstalled { seq, .. }
-            | CompactIndexEvent::BridgeCheckpointCommitted { seq, .. }
+            | CompactIndexEvent::MemInstallCommitted { seq, .. }
             | CompactIndexEvent::CompactFailed { seq, .. }
             | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq = next_seq,
-            CompactIndexEvent::MemInstallCommitted {
-                seq,
-                committed_at_seq,
-                ..
-            } => {
-                *seq = next_seq;
-                *committed_at_seq = next_seq;
-            }
         }
     }
 }
@@ -2853,7 +1885,7 @@ fn record_compact_terminal(
             "compact.index.jsonl has {terminal} without matching compact_started for {compact_id}"
         )));
     };
-    if attempt.mem_install_committed && terminal != "compact_installed" {
+    if attempt.mem_install_committed {
         return Err(RuntimeFastFailError::MemInstallInvalidTerminalAfterCommit {
             compact_id,
             terminal,
@@ -2878,69 +1910,10 @@ fn record_compact_terminal(
     Ok(())
 }
 
-fn record_bridge_checkpoint_committed(
-    attempts: &mut HashMap<String, CompactAttemptState>,
-    compact_id: String,
-    node_id: String,
-    op: SpineOperation,
-    cut_ordinal: u64,
-    fold_end_ordinal: u64,
-    replacement_history_len: usize,
-    message_hash: String,
-    source_rollout_ref: String,
-) -> Result<(), SpineStoreError> {
-    let Some(attempt) = attempts.get_mut(&compact_id) else {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl has bridge_checkpoint_committed without matching compact_started for {compact_id}"
-        )));
-    };
-    if !attempt.mem_install_committed {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl bridge_checkpoint_committed for {compact_id} precedes mem_install_committed"
-        )));
-    }
-    if attempt.bridge_checkpoint_committed {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl has duplicate bridge_checkpoint_committed for {compact_id}"
-        )));
-    }
-    if attempt.terminal.is_some() {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl bridge_checkpoint_committed for {compact_id} follows terminal event"
-        )));
-    }
-    if attempt.node_id != node_id
-        || attempt.op != op
-        || attempt.cut_ordinal != cut_ordinal
-        || attempt.fold_end_ordinal != fold_end_ordinal
-    {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl bridge_checkpoint_committed does not match compact_started for {compact_id}"
-        )));
-    }
-    if attempt.rollout != source_rollout_ref {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl bridge_checkpoint_committed source_rollout_ref does not match compact_started for {compact_id}"
-        )));
-    }
-    if attempt.mem_install_message_hash.as_deref() != Some(message_hash.as_str()) {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl bridge_checkpoint_committed message_hash does not match mem_install_committed for {compact_id}"
-        )));
-    }
-    if attempt.mem_install_replacement_history_len != Some(replacement_history_len) {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl bridge_checkpoint_committed replacement_history_len does not match mem_install_committed for {compact_id}"
-        )));
-    }
-    attempt.bridge_checkpoint_committed = true;
-    Ok(())
-}
-
 fn record_mem_install_committed(
     store: &SpineSidecarStore,
     attempts: &mut HashMap<String, CompactAttemptState>,
-    seq: u64,
+    _seq: u64,
     schema_version: u32,
     compact_id: String,
     node_id: String,
@@ -2950,24 +1923,13 @@ fn record_mem_install_committed(
     memory_section_id: String,
     body_hash: String,
     storage_ref: String,
-    message_hash: String,
-    replacement_history_len: usize,
     projection_ref: String,
     source_rollout_ref: String,
-    committed_at_seq: u64,
 ) -> Result<(), SpineStoreError> {
     if schema_version != MEM_INSTALL_COMMITTED_SCHEMA_VERSION {
         return Err(RuntimeFastFailError::MemInstallUnsupportedSchema {
             compact_id,
             schema_version,
-        }
-        .into());
-    }
-    if committed_at_seq != seq {
-        return Err(RuntimeFastFailError::MemInstallCommittedSeqMismatch {
-            compact_id,
-            expected: seq,
-            actual: committed_at_seq,
         }
         .into());
     }
@@ -3013,152 +1975,7 @@ fn record_mem_install_committed(
         Err(err) => return Err(err),
     }
     attempt.mem_install_committed = true;
-    attempt.mem_install_message_hash = Some(message_hash);
-    attempt.mem_install_replacement_history_len = Some(replacement_history_len);
     Ok(())
-}
-
-fn runtime_span_authority_record_for_attempt(
-    attempt: RuntimeSpanAuthorityAttempt,
-) -> Result<Option<RuntimeSpanAuthorityRecord>, SpineStoreError> {
-    let mem_install_committed = attempt.mem_install.is_some();
-    let compact_installed = attempt.installed.is_some();
-    let admission =
-        if mem_install_committed && compact_installed && !attempt.bridge_checkpoint_committed {
-            RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan
-        } else {
-            let host_checkpoint_materialized = attempt.bridge_checkpoint_committed
-                || (compact_installed && !mem_install_committed);
-            classify_runtime_span_authority(
-                mem_install_committed,
-                host_checkpoint_materialized,
-                compact_installed,
-            )
-        };
-
-    match admission {
-        RuntimeSpanAuthorityAdmission::NoSpan => Ok(None),
-        RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan => {
-            let span = attempt.installed.as_ref().ok_or_else(|| {
-                SpineStoreError::InvalidLedger(format!(
-                    "compact.index.jsonl legacy runtime span admission for {} has no compact_installed span",
-                    attempt.compact_id
-                ))
-            })?;
-            validate_runtime_span_matches_attempt(&attempt, span, "compact_installed")?;
-            let span = attempt.installed.expect("checked compact_installed span");
-            Ok(Some(RuntimeSpanAuthorityRecord { span, admission }))
-        }
-        RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan => {
-            let span = attempt.mem_install.as_ref().ok_or_else(|| {
-                SpineStoreError::InvalidLedger(format!(
-                    "compact.index.jsonl committed runtime span admission for {} has no mem_install_committed span",
-                    attempt.compact_id
-                ))
-            })?;
-            let installed = attempt.installed.as_ref().ok_or_else(|| {
-                SpineStoreError::InvalidLedger(format!(
-                    "compact.index.jsonl committed runtime span admission for {} has no compact_installed span",
-                    attempt.compact_id
-                ))
-            })?;
-            validate_runtime_span_matches_attempt(&attempt, span, "mem_install_committed")?;
-            validate_runtime_span_matches_attempt(&attempt, installed, "compact_installed")?;
-            if span != installed {
-                return Err(SpineStoreError::InvalidLedger(format!(
-                    "compact.index.jsonl committed runtime span admission for {} has mismatched mem_install_committed and compact_installed spans",
-                    attempt.compact_id
-                )));
-            }
-            let span = attempt
-                .mem_install
-                .expect("checked mem_install_committed span");
-            Ok(Some(RuntimeSpanAuthorityRecord { span, admission }))
-        }
-        RuntimeSpanAuthorityAdmission::DeferCommittedSpanUntilHostCheckpoint
-        | RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal => {
-            let span = attempt.mem_install.as_ref().ok_or_else(|| {
-                SpineStoreError::InvalidLedger(format!(
-                    "compact.index.jsonl runtime span admission for {} has no mem_install_committed span",
-                    attempt.compact_id
-                ))
-            })?;
-            validate_runtime_span_matches_attempt(&attempt, span, "mem_install_committed")?;
-            let span = attempt
-                .mem_install
-                .expect("checked mem_install_committed span");
-            Ok(Some(RuntimeSpanAuthorityRecord { span, admission }))
-        }
-        RuntimeSpanAuthorityAdmission::InvalidHostCheckpointWithoutMemInstall
-        | RuntimeSpanAuthorityAdmission::InvalidCompactInstalledWithoutHostCheckpoint => {
-            Err(SpineStoreError::InvalidLedger(format!(
-                "compact.index.jsonl invalid runtime span authority state for {}: {admission:?}",
-                attempt.compact_id
-            )))
-        }
-    }
-}
-
-fn validate_runtime_span_matches_attempt(
-    attempt: &RuntimeSpanAuthorityAttempt,
-    span: &InstalledCompactSpan,
-    source: &str,
-) -> Result<(), SpineStoreError> {
-    if span.compact_id != attempt.compact_id
-        || span.node_id != attempt.node_id
-        || span.op != attempt.op
-        || span.cut_ordinal != attempt.cut_ordinal
-        || span.fold_end_ordinal != attempt.fold_end_ordinal
-    {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl {source} span does not match compact_started for {}",
-            attempt.compact_id
-        )));
-    }
-    if span.cut_ordinal >= span.fold_end_ordinal {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl {source} span for {} is empty or inverted: [{}, {})",
-            attempt.compact_id, span.cut_ordinal, span.fold_end_ordinal
-        )));
-    }
-    Ok(())
-}
-
-fn projection_epoch_metadata_from_event(
-    source_rollout_ref: Option<String>,
-    processed_rollout_len: Option<u64>,
-    processed_rollout_hash: Option<String>,
-    effective_raw_len: Option<u64>,
-    surviving_turn_ids_hash: Option<String>,
-    surviving_compact_ids: Option<Vec<String>>,
-    state_hash: Option<String>,
-) -> Result<Option<ProjectionEpochMetadata>, SpineStoreError> {
-    let fields_present = [
-        source_rollout_ref.is_some(),
-        processed_rollout_len.is_some(),
-        processed_rollout_hash.is_some(),
-        effective_raw_len.is_some(),
-        surviving_turn_ids_hash.is_some(),
-        surviving_compact_ids.is_some(),
-        state_hash.is_some(),
-    ];
-    if fields_present.iter().all(|present| !present) {
-        return Ok(None);
-    }
-    if fields_present.iter().any(|present| !present) {
-        return Err(SpineStoreError::InvalidLedger(
-            "projection_reset has partial projection epoch metadata".to_string(),
-        ));
-    }
-    Ok(Some(ProjectionEpochMetadata {
-        source_rollout_ref: source_rollout_ref.expect("checked some"),
-        processed_rollout_len: processed_rollout_len.expect("checked some"),
-        processed_rollout_hash: processed_rollout_hash.expect("checked some"),
-        effective_raw_len: effective_raw_len.expect("checked some"),
-        surviving_turn_ids_hash: surviving_turn_ids_hash.expect("checked some"),
-        surviving_compact_ids: surviving_compact_ids.expect("checked some"),
-        state_hash: state_hash.expect("checked some"),
-    }))
 }
 
 #[cfg(test)]
@@ -3183,16 +2000,7 @@ fn is_raw_mirror_failure_test_item(item: &RolloutItem) -> bool {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum RawMirrorEvent {
-    RawMirrorEvent {
-        compact_id: String,
-        message_hash: String,
-        replacement_history_len: usize,
-    },
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct StateSnapshot {
     cursor: String,
     nodes: Vec<NodeSnapshot>,
@@ -3211,8 +2019,6 @@ impl StateSnapshot {
                     raw_start_ordinal: node.raw_start_ordinal,
                     status: status_label(&node.status).to_string(),
                     summary: node.summary.clone(),
-                    memory_path: Some(relative_memory_path(&node.node_id)),
-                    plan_path: Some(relative_plan_path(&node.node_id)),
                 })
                 .collect(),
         }
@@ -3229,8 +2035,7 @@ fn spine_state_from_snapshot(snapshot: StateSnapshot) -> Result<SpineState, Spin
             raw_start_ordinal: node.raw_start_ordinal,
             status: match node.status.as_str() {
                 "live" => NodeStatus::Live,
-                "opened" => NodeStatus::Opened,
-                "finished" => NodeStatus::Finished,
+                "suspended" => NodeStatus::Suspended,
                 "closed" => NodeStatus::Closed,
                 other => {
                     return Err(SpineStoreError::InvalidLedger(format!(
@@ -3245,17 +2050,17 @@ fn spine_state_from_snapshot(snapshot: StateSnapshot) -> Result<SpineState, Spin
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct NodeSnapshot {
     node_id: String,
     parent_id: Option<String>,
     raw_start_ordinal: Option<u64>,
     status: String,
     summary: Option<String>,
-    memory_path: Option<String>,
-    plan_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct SpineBaseLocator {
     version: u32,
     base: String,
@@ -3294,8 +2099,7 @@ pub(crate) enum SpineStoreError {
 fn status_label(status: &NodeStatus) -> &'static str {
     match status {
         NodeStatus::Live => "live",
-        NodeStatus::Opened => "opened",
-        NodeStatus::Finished => "finished",
+        NodeStatus::Suspended => "suspended",
         NodeStatus::Closed => "closed",
     }
 }
@@ -3364,38 +2168,8 @@ fn validate_relative_base(base: &Path, rollout_path: &Path) -> Result<(), SpineS
     Ok(())
 }
 
-fn validate_plantree_scope_references(
-    state: &SpineState,
-    scope: &PlanTreeScope,
-    existing_scope_nodes: &mut HashSet<NodeId>,
-) -> Result<(), SpineStoreError> {
-    if let Some(existing_node_id) = &scope.existing_node_id {
-        let existing_node_id = NodeId::parse(existing_node_id)?;
-        if state.node(&existing_node_id).is_none() {
-            return Err(SpineStoreError::InvalidLedger(format!(
-                "task_plan_updated spine_plantree references unknown scope node {}",
-                existing_node_id.bracketed()
-            )));
-        }
-        if !existing_scope_nodes.insert(existing_node_id.clone()) {
-            return Err(SpineStoreError::InvalidLedger(format!(
-                "task_plan_updated spine_plantree duplicates scope node {}",
-                existing_node_id.bracketed()
-            )));
-        }
-    }
-    for child in &scope.children {
-        validate_plantree_scope_references(state, child, existing_scope_nodes)?;
-    }
-    Ok(())
-}
-
 fn relative_memory_path(node_id: &NodeId) -> String {
     relative_node_file_path(node_id, MEMORY_FILE)
-}
-
-fn relative_plan_path(node_id: &NodeId) -> String {
-    relative_node_file_path(node_id, PLAN_FILE)
 }
 
 fn relative_node_file_path(node_id: &NodeId, file_name: &str) -> String {
@@ -3403,87 +2177,6 @@ fn relative_node_file_path(node_id: &NodeId, file_name: &str) -> String {
     parts.extend(node_id.segments().iter().map(ToString::to_string));
     parts.push(file_name.to_string());
     parts.join("/")
-}
-
-fn is_direct_child_of(node_id: &NodeId, parent_id: &NodeId) -> bool {
-    node_id.segments().len() == parent_id.segments().len() + 1
-        && node_id.segments().starts_with(parent_id.segments())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RootMemInstallSurvivorAdmission {
-    OldEpochProjected,
-    PartialRootMemInstallFailClosed,
-    RootMemInstallAdmitted,
-}
-
-fn classify_root_meminstall_survivor(
-    root_epoch_reset: bool,
-    mem_install_committed: bool,
-    compact_span: bool,
-    body_artifact: bool,
-    projection_source_ref: bool,
-    bridge_checkpoint_ref: bool,
-) -> RootMemInstallSurvivorAdmission {
-    let survivors = [
-        root_epoch_reset,
-        mem_install_committed,
-        compact_span,
-        body_artifact,
-        projection_source_ref,
-        bridge_checkpoint_ref,
-    ];
-    if survivors.iter().all(|survives| *survives) {
-        RootMemInstallSurvivorAdmission::RootMemInstallAdmitted
-    } else if survivors.iter().all(|survives| !*survives) {
-        RootMemInstallSurvivorAdmission::OldEpochProjected
-    } else {
-        RootMemInstallSurvivorAdmission::PartialRootMemInstallFailClosed
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RuntimeSpanAuthorityAdmission {
-    NoSpan,
-    UseLegacyCompactInstalledSpan,
-    UseCommittedInstalledSpan,
-    DeferCommittedSpanUntilHostCheckpoint,
-    PoisonCommittedSpanWithoutBridgeTerminal,
-    InvalidHostCheckpointWithoutMemInstall,
-    InvalidCompactInstalledWithoutHostCheckpoint,
-}
-
-/// Presence-only gate for a future runtime span authority switch.
-///
-/// This does not prove that two concrete span sources are equal. Callers still
-/// need verified body/span evidence before admitting a concrete `Mem` span into
-/// runtime bridge mapping.
-pub(crate) fn classify_runtime_span_authority(
-    mem_install_committed: bool,
-    host_checkpoint_materialized: bool,
-    compact_installed: bool,
-) -> RuntimeSpanAuthorityAdmission {
-    match (
-        mem_install_committed,
-        host_checkpoint_materialized,
-        compact_installed,
-    ) {
-        (false, false, false) => RuntimeSpanAuthorityAdmission::NoSpan,
-        (false, true, false) => {
-            RuntimeSpanAuthorityAdmission::InvalidHostCheckpointWithoutMemInstall
-        }
-        (false, true, true) => RuntimeSpanAuthorityAdmission::UseLegacyCompactInstalledSpan,
-        (false, false, true) | (true, false, true) => {
-            RuntimeSpanAuthorityAdmission::InvalidCompactInstalledWithoutHostCheckpoint
-        }
-        (true, false, false) => {
-            RuntimeSpanAuthorityAdmission::DeferCommittedSpanUntilHostCheckpoint
-        }
-        (true, true, false) => {
-            RuntimeSpanAuthorityAdmission::PoisonCommittedSpanWithoutBridgeTerminal
-        }
-        (true, true, true) => RuntimeSpanAuthorityAdmission::UseCommittedInstalledSpan,
-    }
 }
 
 #[cfg(test)]

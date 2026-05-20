@@ -1,41 +1,17 @@
-#[cfg(test)]
-use super::candidate_mem_plan::CandidateMem;
-#[cfg(test)]
-use super::candidate_mem_plan::CandidateMemCover;
-#[cfg(test)]
-use super::candidate_mem_plan::CandidateMemPlan;
-#[cfg(test)]
-use super::candidate_mem_plan::plan_candidate_mem_cover;
-#[cfg(test)]
-pub(crate) use super::checkpoint_render::RenderPiOrigin;
-pub(crate) use super::checkpoint_render::build_root_archive_replacement_history;
 pub(crate) use super::checkpoint_render::build_root_archive_replacement_history_from_candidate_plan;
-#[cfg(test)]
-pub(crate) use super::checkpoint_render::build_suffix_replacement_history;
 pub(crate) use super::checkpoint_render::build_suffix_replacement_history_from_candidate_plan;
 pub(crate) use super::checkpoint_render::expand_spine_initial_context_items;
 pub(crate) use super::checkpoint_render::render_context_compacted_outline;
-#[cfg(test)]
-pub(crate) use super::checkpoint_render::render_pi_bridge_items;
-pub(crate) use super::checkpoint_render::render_slim_context_compacted_outline;
 pub(crate) use super::checkpoint_render::render_spine_handoff_item;
 pub(crate) use super::checkpoint_render::render_spine_initial_context_item;
 pub(crate) use super::checkpoint_render::render_spine_memory_item;
-#[cfg(test)]
-use super::host_bridge::HostBridgeProjection;
+pub(crate) use super::checkpoint_render::resolve_root_archive_cut;
 use super::ids::NodeId;
-#[cfg(test)]
-use super::segment::RawSpan;
-#[cfg(test)]
-use super::segment::Segment;
-#[cfg(test)]
-use super::segment::SegmentArtifacts;
 use super::store::InstalledCompactSpan;
 use super::store::SpineOperation;
 use super::store::SpineSidecarStore;
 use super::view::display_node_id;
 use super::view::op_label;
-use super::view::relative_memory_path;
 use super::view::relative_node_trajs_path;
 use crate::Prompt;
 use crate::client::ModelClientSession;
@@ -76,7 +52,6 @@ pub(crate) struct SpineCompactInput {
 pub(crate) struct SpineCompactBoundary {
     pub(crate) op: SpineOperation,
     pub(crate) node_id: NodeId,
-    pub(crate) scope_node_id: Option<NodeId>,
     pub(crate) cut_ordinal: u64,
     pub(crate) fold_end_ordinal: u64,
     pub(crate) transition_summary: String,
@@ -88,8 +63,6 @@ pub(crate) struct SpineCompactPlan {
     pub(crate) input: SpineCompactInput,
     pub(crate) cut_index: usize,
     pub(crate) fold_end_index: usize,
-    pub(crate) replacement_tail: Vec<ResponseItem>,
-    pub(crate) memory_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -117,7 +90,17 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
     input: SpineCompactInput,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<SpineCompactOutput> {
-    let prompt = build_codex_builtin_prompt(&input, prompt_envelope);
+    let prompt = Prompt {
+        input: build_codex_builtin_prompt_input(&input),
+        tools: prompt_envelope.tools.clone(),
+        parallel_tool_calls: prompt_envelope.parallel_tool_calls,
+        base_instructions: prompt_envelope.base_instructions.clone(),
+        personality: prompt_envelope.personality,
+        // Carrying a user turn final-output schema would make this internal compact response
+        // invalid or over-constrained.
+        output_schema: None,
+        output_schema_strict: true,
+    };
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let compacted_suffix = loop {
@@ -157,20 +140,6 @@ pub(crate) async fn compact_suffix_with_codex_builtin_text(
         memory_markdown,
         compacted_body: compacted_suffix,
     })
-}
-
-fn build_codex_builtin_prompt(input: &SpineCompactInput, prompt_envelope: &Prompt) -> Prompt {
-    Prompt {
-        input: build_codex_builtin_prompt_input(input),
-        tools: prompt_envelope.tools.clone(),
-        parallel_tool_calls: prompt_envelope.parallel_tool_calls,
-        base_instructions: prompt_envelope.base_instructions.clone(),
-        personality: prompt_envelope.personality,
-        // Carrying a user turn final-output schema would make this internal compact response
-        // invalid or over-constrained.
-        output_schema: None,
-        output_schema_strict: true,
-    }
 }
 
 fn build_codex_builtin_prompt_input(input: &SpineCompactInput) -> Vec<ResponseItem> {
@@ -305,68 +274,6 @@ pub(crate) fn render_auto_compact_memory(
 }
 
 #[cfg(test)]
-pub(crate) fn build_suffix_replacement_history_from_pi(
-    old_history: &[ResponseItem],
-    runtime_spans: &[InstalledCompactSpan],
-    compact_id: &str,
-    boundary: &SpineCompactBoundary,
-    memory_item: ResponseItem,
-    note_items: Vec<ResponseItem>,
-) -> CodexResult<Vec<ResponseItem>> {
-    let projection = HostBridgeProjection::build(old_history, runtime_spans)?;
-    let raw_len = projection
-        .raw_for_effective_index(old_history.len())
-        .ok_or_else(|| {
-            CodexErr::Fatal("spine suffix render(Pi) could not map history end".to_string())
-        })?;
-    let new_span = RawSpan {
-        start: boundary.cut_ordinal,
-        end: boundary.fold_end_ordinal,
-    };
-    let candidate = CandidateMem::new(
-        compact_id.to_string(),
-        boundary.node_id.clone(),
-        boundary.op,
-        new_span,
-    );
-    let CandidateMemCover { pi, artifacts } =
-        plan_candidate_mem_cover(raw_len, runtime_spans, &candidate).map_err(pi_render_error)?;
-    let candidate_plan = CandidateMemPlan {
-        pi,
-        artifacts,
-        admitted_candidate: true,
-        rejected_candidate_reason: None,
-    };
-    build_suffix_replacement_history_from_candidate_plan(
-        old_history,
-        runtime_spans,
-        compact_id,
-        &candidate_plan,
-        memory_item,
-        note_items,
-    )
-}
-
-#[cfg(test)]
-fn pi_render_error(error: impl std::fmt::Display) -> CodexErr {
-    CodexErr::Fatal(format!(
-        "render(Pi) failed to build canonical cover: {error}"
-    ))
-}
-
-pub(crate) fn validate_spine_replacement_history_admissible(
-    history: &[ResponseItem],
-    runtime_spans: &[InstalledCompactSpan],
-    required_raw_ordinals: &[u64],
-) -> CodexResult<()> {
-    super::host_bridge::validate_spine_replacement_history_admissible(
-        history,
-        runtime_spans,
-        required_raw_ordinals,
-    )
-}
-
-#[cfg(test)]
 pub(crate) fn plan_suffix_fold(
     history: &[ResponseItem],
     cut_ordinal: u64,
@@ -434,10 +341,6 @@ pub(crate) fn plan_suffix_fold_with_spans(
     input.suffix_items = history[cut_index..fold_end_index].to_vec();
 
     Ok(SpineCompactPlan {
-        memory_path: input
-            .sidecar_root
-            .join(relative_memory_path(&input.node_id)),
-        replacement_tail: history[fold_end_index..].to_vec(),
         input,
         cut_index,
         fold_end_index,
@@ -450,7 +353,7 @@ pub(crate) fn prepare_spine_compact_plan(
     history: &[ResponseItem],
     rollout_path: PathBuf,
     spine_tree: String,
-    surviving_compact_hashes: Option<&HashSet<String>>,
+    surviving_compact_ids: Option<&HashSet<String>>,
 ) -> CodexResult<SpineCompactPreparation> {
     let compact_index_rollout_path = rollout_path
         .file_name()
@@ -471,10 +374,10 @@ pub(crate) fn prepare_spine_compact_plan(
         sidecar_root: store.root().to_path_buf(),
     };
     let runtime_spans = store
-        .bridge_checkpoint_committed_spans_matching_hashes(surviving_compact_hashes)
+        .committed_mem_install_spans_matching_ids(surviving_compact_ids)
         .map_err(|err| {
             CodexErr::Fatal(format!(
-                "failed to load spine bridge checkpoint span ledger: {err}"
+                "failed to load spine MemInstall span ledger: {err}"
             ))
         })?;
     let plan = plan_suffix_fold_with_spans(
