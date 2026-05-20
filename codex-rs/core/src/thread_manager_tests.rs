@@ -81,6 +81,38 @@ fn function_call_output(call_id: &str) -> ResponseItem {
     }
 }
 
+fn append_root_archive_meminstall_evidence_without_tree_reset(
+    store: &crate::spine::store::SpineSidecarStore,
+    compact_id: &str,
+) -> anyhow::Result<()> {
+    let root = crate::spine::ids::NodeId::from_segments(vec![1]);
+    let attempt = crate::spine::store::CompactAttemptRecord {
+        compact_id: compact_id.to_string(),
+        node_id: root.clone(),
+        op: crate::spine::store::SpineOperation::Archive,
+        cut_ordinal: 0,
+        fold_end_ordinal: 1,
+    };
+    store.append_compact_started(crate::spine::store::CompactStartedRecord {
+        attempt: attempt.clone(),
+        strategy: "codex_builtin_text".to_string(),
+        rollout: "../rollout.jsonl".to_string(),
+    })?;
+    store.append_memory_section(&root, "\n\n## Auto Compact\n\nroot archive body\n")?;
+    let body_ref = store
+        .generated_memory_sections(&root)?
+        .last()
+        .expect("root archive memory section")
+        .body_ref();
+    store.append_mem_install_committed(crate::spine::store::MemInstallCommittedRecord {
+        attempt,
+        body_ref,
+        projection_ref: "projection:test".to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    })?;
+    Ok(())
+}
+
 fn contextual_user_interrupted_marker() -> ResponseItem {
     interrupted_turn_history_marker(InterruptedTurnHistoryMarker::ContextualUser)
         .expect("contextual-user interrupted marker should be enabled")
@@ -1054,7 +1086,7 @@ async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
         .stage_transition(
             "next-child",
             "turn-child",
-            crate::spine::store::SpineOperation::Next,
+            crate::spine::store::SpineOperation::Close,
             "child-only next",
             /*compact_instruction*/ None,
         )?;
@@ -1064,7 +1096,7 @@ async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
             &[
                 spine_transition_msg(
                     "next-child",
-                    crate::spine::SPINE_TOOL_NEXT,
+                    crate::spine::SPINE_TOOL_CLOSE,
                     "child-only next",
                 ),
                 function_call_output("next-child"),
@@ -1081,7 +1113,7 @@ async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn fork_inherited_close_precommit_rejects_without_open_evidence() -> anyhow::Result<()> {
+async fn fork_inherited_close_precommit_stages_without_parent_open_proof() -> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -1166,19 +1198,21 @@ async fn fork_inherited_close_precommit_rejects_without_open_evidence() -> anyho
     let mut runtime = child_runtime.lock().await;
     assert_eq!(runtime.cursor().to_string(), "1.1.1");
 
-    let err = runtime
-        .stage_transition_with_child_summary(
+    runtime
+        .stage_transition(
             "close-inherited",
             "turn-child",
             crate::spine::store::SpineOperation::Close,
-            "source scope complete",
             "child leaf complete",
             /*compact_instruction*/ None,
         )
-        .expect_err("inherited close should reject before staging");
-    assert!(err.to_string().contains("has no matching open transition"));
+        .expect("inherited close should stage");
     assert_eq!(runtime.cursor().to_string(), "1.1.1");
-    assert!(runtime.staged_transition().is_none());
+    let staged = runtime
+        .staged_transition()
+        .expect("close transition should be staged");
+    assert_eq!(staged.from_node.to_string(), "1.1.1");
+    assert_eq!(staged.to_node.to_string(), "1.1");
     drop(runtime);
 
     assert_eq!(
@@ -1193,7 +1227,8 @@ async fn fork_inherited_close_precommit_rejects_without_open_evidence() -> anyho
 }
 
 #[tokio::test]
-async fn fork_root_meminstall_survivor_matrix_rejects_partial_root_archive() -> anyhow::Result<()> {
+async fn fork_root_meminstall_survivor_validation_rejects_partial_root_archive()
+-> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -1233,6 +1268,10 @@ async fn fork_root_meminstall_survivor_matrix_rejects_partial_root_archive() -> 
         .persist_rollout_items(&[RolloutItem::Compacted(CompactedItem {
             message: "Spine compacted root epoch 1 [0, 1)".to_string(),
             replacement_history: Some(vec![assistant_msg("root archive prompt note")]),
+            spine: Some(codex_protocol::protocol::SpineCompactedCheckpoint {
+                compact_id: "compact-root".to_string(),
+                kind: codex_protocol::protocol::SpineCompactedCheckpointKind::RootEpoch,
+            }),
         })])
         .await;
     source.thread.flush_rollout().await?;
@@ -1240,6 +1279,8 @@ async fn fork_root_meminstall_survivor_matrix_rejects_partial_root_archive() -> 
         .thread
         .rollout_path()
         .expect("source rollout path should exist");
+    let source_store = crate::spine::store::SpineSidecarStore::for_rollout(&source_rollout_path)?;
+    append_root_archive_meminstall_evidence_without_tree_reset(&source_store, "compact-root")?;
 
     let result = manager
         .fork_thread(
@@ -1331,7 +1372,7 @@ async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> an
         .stage_transition(
             "next-rolled-back",
             "turn-2",
-            crate::spine::store::SpineOperation::Next,
+            crate::spine::store::SpineOperation::Close,
             "rolled back next",
             /*compact_instruction*/ None,
         )?;
@@ -1341,7 +1382,7 @@ async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> an
             &[
                 spine_transition_msg(
                     "next-rolled-back",
-                    crate::spine::SPINE_TOOL_NEXT,
+                    crate::spine::SPINE_TOOL_CLOSE,
                     "rolled back next",
                 ),
                 function_call_output("next-rolled-back"),
@@ -1394,7 +1435,7 @@ async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> an
 }
 
 #[tokio::test]
-async fn filtered_subagent_forked_spine_history_disables_spine() -> anyhow::Result<()> {
+async fn subagent_forked_spine_history_without_source_thread_fails_closed() -> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -1418,7 +1459,7 @@ async fn filtered_subagent_forked_spine_history_disables_spine() -> anyhow::Resu
         TEST_INSTALLATION_ID.to_string(),
     );
 
-    let forked = manager
+    let result = manager
         .state
         .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
             config,
@@ -1436,19 +1477,72 @@ async fn filtered_subagent_forked_spine_history_disables_spine() -> anyhow::Resu
             inherited_shell_snapshot: None,
             inherited_exec_policy: None,
         })
-        .await?;
+        .await;
+    let err = match result {
+        Ok(_) => panic!("source-less fork with Spine history should fail closed"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        CodexErr::Fatal(message)
+            if message.contains("forked spine history is missing a source thread id")
+    ));
+    Ok(())
+}
 
-    assert!(forked.thread.codex.session.spine.is_none());
-    assert!(
-        !forked
-            .thread
-            .codex
-            .session
-            .get_base_instructions()
-            .await
-            .text
-            .contains("<spine_view>")
+#[tokio::test]
+async fn subagent_forked_unknown_spine_tool_fails_projection_closed() -> anyhow::Result<()> {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
     );
+
+    let result = manager
+        .state
+        .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
+            config,
+            initial_history: InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+                spine_transition_msg("unknown-1", "unknown", "unsupported"),
+            )]),
+            agent_control: manager.agent_control(),
+            session_source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::new(),
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            inherited_shell_snapshot: None,
+            inherited_exec_policy: None,
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("fork with unknown namespaced Spine tool should fail closed"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        CodexErr::Fatal(message)
+            if message.contains("unsupported spine tool unknown in rollout projection for unknown-1")
+    ));
     Ok(())
 }
 

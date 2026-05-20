@@ -39,16 +39,18 @@ const OPEN_CALL_ID: &str = "spine-open-call";
 const NESTED_OPEN_CALL_ID: &str = "spine-nested-open-call";
 const CHILD_SHELL_CALL_ID: &str = "child-shell-call";
 const PLAN_CALL_ID: &str = "plan-call";
-const NEXT_CALL_ID: &str = "spine-next-call";
+const CHILD_CLOSE_CALL_ID: &str = "spine-child-close-call";
+const SIBLING_OPEN_CALL_ID: &str = "spine-sibling-open-call";
 const SIBLING_SHELL_CALL_ID: &str = "sibling-shell-call";
-const CLOSE_CALL_ID: &str = "spine-close-call";
+const SIBLING_CLOSE_CALL_ID: &str = "spine-sibling-close-call";
+const PARENT_CLOSE_CALL_ID: &str = "spine-parent-close-call";
 const ROOT_SHELL_CALL_ID: &str = "root-shell-call";
 
 const OPEN_SUMMARY: &str = "open root child scope";
 const NESTED_OPEN_SUMMARY: &str = "open focused child scope";
-const NEXT_SUMMARY: &str = "finish child scope";
-const CLOSE_CHILD_SUMMARY: &str = "finish sibling leaf";
-const CLOSE_SUMMARY: &str = "finish sibling scope";
+const CHILD_CLOSE_SUMMARY: &str = "finish child scope";
+const SIBLING_CLOSE_SUMMARY: &str = "finish sibling leaf";
+const PARENT_CLOSE_SUMMARY: &str = "finish focused scope";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_transitions_commit_and_compact_before_following_tools_in_same_response()
@@ -80,42 +82,52 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
                 ev_completed("resp-plan"),
             ]),
             sse(vec![
-                ev_response_created("resp-next"),
-                ev_spine_transition_call(NEXT_CALL_ID, "next", NEXT_SUMMARY, None),
+                ev_response_created("resp-child-close"),
+                ev_spine_transition_call(CHILD_CLOSE_CALL_ID, "close", CHILD_CLOSE_SUMMARY, None),
+                ev_completed("resp-child-close"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-spine-child-compact"),
+                ev_assistant_message("msg-spine-child-compact", "Compacted child findings."),
+                ev_completed("resp-spine-child-compact"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-sibling-open"),
+                ev_spine_transition_call(SIBLING_OPEN_CALL_ID, "open", "open sibling scope", None),
                 ev_function_call(
                     SIBLING_SHELL_CALL_ID,
                     "shell_command",
                     &shell_args("printf 'sibling-spine\\n'"),
                 ),
-                ev_completed("resp-next"),
+                ev_completed("resp-sibling-open"),
             ]),
             sse(vec![
-                ev_response_created("resp-spine-compact"),
-                ev_assistant_message("msg-spine-compact", "Compacted child findings."),
-                ev_completed("resp-spine-compact"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-close"),
+                ev_response_created("resp-sibling-close"),
                 ev_spine_transition_call(
-                    CLOSE_CALL_ID,
+                    SIBLING_CLOSE_CALL_ID,
                     "close",
-                    CLOSE_SUMMARY,
-                    Some(CLOSE_CHILD_SUMMARY),
+                    SIBLING_CLOSE_SUMMARY,
+                    None,
                 ),
                 ev_function_call(
                     ROOT_SHELL_CALL_ID,
                     "shell_command",
                     &shell_args("printf 'root-spine\\n'"),
                 ),
-                ev_completed("resp-close"),
+                ev_completed("resp-sibling-close"),
             ]),
             sse(vec![
-                ev_response_created("resp-spine-close-child-compact"),
+                ev_response_created("resp-spine-sibling-compact"),
                 ev_assistant_message(
-                    "msg-spine-close-child-compact",
+                    "msg-spine-sibling-compact",
                     "Compacted sibling leaf findings.",
                 ),
-                ev_completed("resp-spine-close-child-compact"),
+                ev_completed("resp-spine-sibling-compact"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-close"),
+                ev_spine_transition_call(PARENT_CLOSE_CALL_ID, "close", PARENT_CLOSE_SUMMARY, None),
+                ev_completed("resp-parent-close"),
             ]),
             sse(vec![
                 ev_response_created("resp-spine-close-parent-compact"),
@@ -132,7 +144,6 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     .await;
 
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
-        config.runtime_debug_checks = true;
         config
             .features
             .enable(Feature::SpineTaskTree)
@@ -145,7 +156,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
         .clone()
         .expect("session should expose rollout path");
 
-    let plan_turn_id = submit_turn_and_assert_plan_update(&test).await?;
+    submit_turn_and_assert_plan_update(&test).await?;
 
     let requests = responses.requests();
     let base_instructions = model_base_instructions(&test).await;
@@ -157,23 +168,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert_function_output_contains(&requests, CHILD_SHELL_CALL_ID, "child-spine");
     assert_function_output_contains(&requests, SIBLING_SHELL_CALL_ID, "sibling-spine");
     assert_function_output_contains(&requests, ROOT_SHELL_CALL_ID, "root-spine");
-    let plan_output = function_output_json(&requests, PLAN_CALL_ID)?;
-    assert_eq!(plan_output["status"], "plan_updated");
-    assert_eq!(plan_output["spine_tree"]["activeNodeId"], "1.1.1.1");
-    let output_active_node = plan_output["spine_tree"]["nodes"]
-        .as_array()
-        .expect("spine tree output nodes")
-        .iter()
-        .find(|node| node["nodeId"] == "1.1.1.1")
-        .expect("active node in output");
-    assert_eq!(
-        output_active_node["plan"]["items"][0]["step"],
-        "Exercise child node"
-    );
-    assert_eq!(
-        output_active_node["plan"]["spinePlantree"]["root"]["children"][0]["checkpoints"][0]["task"],
-        "Exercise future child scope"
-    );
+    assert_function_output_contains(&requests, PLAN_CALL_ID, "Plan updated");
 
     let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
     let tree_path = sidecar_dir.join("tree.jsonl");
@@ -192,23 +187,31 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert_spine_initialized(&tree);
     assert_transition(&tree, "open", "1.1", "1.1.1", None);
     assert_transition(&tree, "open", "1.1.1", "1.1.1.1", None);
-    let plan_event_seq = assert_plan_updated(&tree, "1.1.1.1", 1, &plan_turn_id);
-    assert_transition(&tree, "next", "1.1.1.1", "1.1.1.2", Some(NEXT_SUMMARY));
-    assert_transition_with_child_summary(
+    assert_transition(
+        &tree,
+        "close",
+        "1.1.1.1",
+        "1.1.1",
+        Some(CHILD_CLOSE_SUMMARY),
+    );
+    assert_transition(&tree, "open", "1.1.1", "1.1.1.2", None);
+    assert_transition(
         &tree,
         "close",
         "1.1.1.2",
-        "1.1.2",
-        Some(CLOSE_SUMMARY),
-        Some(CLOSE_CHILD_SUMMARY),
+        "1.1.1",
+        Some(SIBLING_CLOSE_SUMMARY),
     );
+    assert_transition(&tree, "close", "1.1.1", "1.1", Some(PARENT_CLOSE_SUMMARY));
     assert_transition_committed(&index, OPEN_CALL_ID, "1.1", "1.1.1");
     assert_transition_committed(&index, NESTED_OPEN_CALL_ID, "1.1.1", "1.1.1.1");
-    assert_transition_committed(&index, NEXT_CALL_ID, "1.1.1.1", "1.1.1.2");
-    assert_transition_committed(&index, CLOSE_CALL_ID, "1.1.1.2", "1.1.2");
+    assert_transition_committed(&index, CHILD_CLOSE_CALL_ID, "1.1.1.1", "1.1.1");
+    assert_transition_committed(&index, SIBLING_OPEN_CALL_ID, "1.1.1", "1.1.1.2");
+    assert_transition_committed(&index, SIBLING_CLOSE_CALL_ID, "1.1.1.2", "1.1.1");
+    assert_transition_committed(&index, PARENT_CLOSE_CALL_ID, "1.1.1", "1.1");
     assert_raw_range_for_node_after_transition(&index, NESTED_OPEN_CALL_ID, "1.1.1.1");
-    assert_raw_range_for_node_after_transition(&index, NEXT_CALL_ID, "1.1.1.2");
-    assert_raw_range_for_node_after_transition(&index, CLOSE_CALL_ID, "1.1.2");
+    assert_raw_range_for_node_after_transition(&index, SIBLING_OPEN_CALL_ID, "1.1.1.2");
+    assert_raw_range_for_node_after_transition(&index, SIBLING_CLOSE_CALL_ID, "1.1.1");
 
     let scope_memory = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/memory.md"))?;
     let base_line = format!("Base: {}", sidecar_dir.display());
@@ -216,9 +219,10 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert!(scope_memory.contains(&base_line));
     assert!(scope_memory.contains("Compacted root findings."));
     assert!(scope_memory.contains("## Context Compacted"));
-    assert!(scope_memory.contains("[1.1.1] finish sibling scope (nodes/1/1/1/memory.md)"));
-    assert!(scope_memory.contains("|-- [1.1.1.1] finish child scope (nodes/1/1/1/1/memory.md)"));
-    assert!(scope_memory.contains("|-- [1.1.1.2] finish sibling leaf (nodes/1/1/1/2/memory.md)"));
+    assert!(scope_memory.contains("[1.1.1] finish focused scope"));
+    assert!(scope_memory.contains("|-- [1.1.1.1] finish child scope"));
+    assert!(scope_memory.contains("|-- [1.1.1.2] finish sibling leaf"));
+    assert!(!scope_memory.contains("memory.md)"));
     let first_leaf_memory = std::fs::read_to_string(sidecar_dir.join("nodes/1/1/1/1/memory.md"))?;
     assert!(first_leaf_memory.contains("spine:auto-compact-generated"));
     assert!(first_leaf_memory.contains(&base_line));
@@ -227,30 +231,10 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
     assert!(closing_leaf_memory.contains("spine:auto-compact-generated"));
     assert!(closing_leaf_memory.contains(&base_line));
     assert!(closing_leaf_memory.contains("Compacted sibling leaf findings."));
-    assert_bridge_checkpoint_committed(&compact_index, "1.1.1.1", "next");
-    assert_bridge_checkpoint_committed_before(&compact_index, "1.1.1.2", "close", "1.1.1", "close");
-    assert_bridge_checkpoint_committed(&compact_index, "1.1.1", "close");
-    let plan_snapshot = read_json(sidecar_dir.join("nodes/1/1/1/1/plan.json"))?;
-    assert_eq!(plan_snapshot["node_id"], "1.1.1.1");
-    assert_eq!(plan_snapshot["revision"], 1);
-    assert_eq!(plan_snapshot["source_turn_id"], plan_turn_id);
-    assert_eq!(plan_snapshot["event_seq"], plan_event_seq);
-    assert_eq!(plan_snapshot["explanation"], "plan still works");
-    assert_eq!(plan_snapshot["items"][0]["stable_task_id"], "step-1");
-    assert_eq!(plan_snapshot["items"][0]["step"], "Exercise child node");
-    assert_eq!(plan_snapshot["items"][0]["status"], "completed");
-    assert_eq!(plan_snapshot["items"][1]["stable_task_id"], "step-2");
-    assert_eq!(plan_snapshot["items"][1]["step"], "Exercise sibling node");
-    assert_eq!(plan_snapshot["items"][1]["status"], "in_progress");
-    assert_eq!(
-        plan_snapshot["spine_plantree"]["root"]["children"][0]["checkpoints"][0]["task"],
-        "Exercise future child scope"
-    );
-    assert_eq!(
-        plan_snapshot["spine_plantree"]["root"]["children"][0]["existing_node_id"],
-        Value::Null,
-        "future planned child scope must not be materialized as a real node"
-    );
+    assert_mem_install_committed_before(&compact_index, "1.1.1.1", "close", "1.1.1.2", "close");
+    assert_mem_install_committed_before(&compact_index, "1.1.1.2", "close", "1.1.1", "close");
+    assert_mem_install_committed(&compact_index, "1.1.1.1", "close");
+    assert_mem_install_committed(&compact_index, "1.1.1", "close");
     assert!(
         !index_text.contains("child-spine") && !index_text.contains("sibling-spine"),
         "sidecar index must not duplicate raw shell output: {index_text}"
@@ -271,7 +255,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
         "rollout should remain the raw traj source for root shell output"
     );
     assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 3)?;
-    assert_raw_mirror_has_raw_items_and_compact_metadata(&sidecar_dir, 3)?;
+    assert_raw_mirror_has_only_raw_items(&sidecar_dir)?;
 
     Ok(())
 }
@@ -514,9 +498,9 @@ async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request(
                 ev_completed("resp-open-follow-up"),
             ]),
             sse(vec![
-                ev_response_created("resp-next"),
-                ev_spine_transition_call(NEXT_CALL_ID, "next", NEXT_SUMMARY, None),
-                ev_completed("resp-next"),
+                ev_response_created("resp-close"),
+                ev_spine_transition_call(CHILD_CLOSE_CALL_ID, "close", CHILD_CLOSE_SUMMARY, None),
+                ev_completed("resp-close"),
             ]),
             sse_failed(
                 "resp-spine-compact-fail-1",
@@ -549,18 +533,18 @@ async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request(
     test.submit_turn("open spine before failing suffix compact")
         .await?;
 
-    submit_turn_expect_spine_compact_error(&test, "trigger next with failing suffix compact")
+    submit_turn_expect_spine_compact_error(&test, "trigger close with failing suffix compact")
         .await?;
 
     let requests = responses.requests();
     assert_eq!(
         requests.len(),
         5,
-        "expected open, open follow-up, next, compact attempt, compact retry; failed compact must not replay the completed next sampling request"
+        "expected open, open follow-up, close, compact attempt, compact retry; failed compact must not replay the completed close sampling request"
     );
     assert!(
-        requests[2].body_contains_text("trigger next with failing suffix compact"),
-        "third request should be the original next sampling request"
+        requests[2].body_contains_text("trigger close with failing suffix compact"),
+        "third request should be the original close sampling request"
     );
     assert!(
         requests[3].body_contains_text("Compact only target Spine node")
@@ -577,19 +561,19 @@ async fn spine_suffix_compact_failure_does_not_retry_completed_sampling_request(
             .iter()
             .enumerate()
             .filter(|(_, request)| {
-                request.body_contains_text("trigger next with failing suffix compact")
+                request.body_contains_text("trigger close with failing suffix compact")
                     && !request.body_contains_text("Compact only target Spine node")
             })
             .map(|(index, _)| index)
             .eq([2]),
-        "failed compact must not replay the completed next sampling request"
+        "failed compact must not replay the completed close sampling request"
     );
 
     let sidecar_dir = sidecar_dir_for_rollout_path(&rollout_path);
     let compact_index_text = std::fs::read_to_string(sidecar_dir.join("compact.index.jsonl"))
         .with_context(|| format!("read {}", sidecar_dir.join("compact.index.jsonl").display()))?;
     let compact_index = parse_json_lines(&compact_index_text)?;
-    assert_compact_failed(&compact_index, "1.1.1", "next");
+    assert_compact_failed(&compact_index, "1.1.1", "close");
 
     Ok(())
 }
@@ -646,42 +630,62 @@ async fn spine_feature_off_exposes_no_task_tree_tools_or_sidecar() -> anyhow::Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_debug_feature_off_boundary_remains_inert() -> anyhow::Result<()> {
+async fn spine_feature_off_preserves_spine_shaped_history_as_plain_context() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let responses = mount_sse_sequence(
         &server,
-        vec![sse(vec![
-            ev_response_created("resp-debug-feature-off"),
-            ev_assistant_message("msg-debug-feature-off", "done"),
-            ev_completed("resp-debug-feature-off"),
-        ])],
+        vec![
+            sse(vec![
+                ev_response_created("resp-feature-off-seed"),
+                ev_assistant_message(
+                    "spine-memory:1:close",
+                    "## Spine Memory\n\nNode: 1\nOperation: close\nSummary: visible\n\nfacts",
+                ),
+                ev_completed("resp-feature-off-seed"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-feature-off-followup"),
+                ev_assistant_message("msg-feature-off-followup", "done"),
+                ev_completed("resp-feature-off-followup"),
+            ]),
+        ],
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_model("gpt-5.4")
-        .with_config(|config| config.runtime_debug_checks = true);
-    let test = builder.build(&server).await?;
-    test.submit_turn("feature off debug smoke").await?;
-
-    let request = responses.single_request();
-    assert_eq!(
-        request.instructions_text().as_bytes(),
-        model_base_instructions(&test).await.as_bytes(),
-        "runtime debug checks must not activate Spine instructions when the feature is off"
+    let wrapper_text = concat!(
+        "<spine_initial_context runtime_generated=\"true\">\n",
+        "[]\n",
+        "</spine_initial_context>"
     );
-    let sidecar_dir = sidecar_dir_for_rollout_path(
-        test.session_configured
-            .rollout_path
-            .as_ref()
-            .expect("session should expose rollout path"),
+    let mut builder = test_codex().with_model("gpt-5.4").with_config({
+        let wrapper_text = wrapper_text.to_string();
+        move |config| {
+            config.include_permissions_instructions = false;
+            config.include_apps_instructions = false;
+            config.include_skill_instructions = false;
+            config.include_environment_context = false;
+            config.developer_instructions = Some(wrapper_text);
+        }
+    });
+    let test = builder.build(&server).await?;
+    test.submit_turn("seed spine-shaped assistant").await?;
+    test.submit_turn("followup").await?;
+
+    let requests = responses.requests();
+    let followup = requests
+        .get(1)
+        .expect("expected followup request after seed turn");
+    assert!(
+        followup.body_contains_text(wrapper_text),
+        "feature-off prompt must preserve the Spine-shaped wrapper text verbatim"
     );
     assert!(
-        !sidecar_dir.exists(),
-        "feature-off runtime debug checks should not create spine sidecar at {}",
-        sidecar_dir.display()
+        followup.body_contains_text(
+            "## Spine Memory\n\nNode: 1\nOperation: close\nSummary: visible\n\nfacts"
+        ),
+        "feature-off prompt must preserve synthetic-id Spine memory as plain assistant history"
     );
 
     Ok(())
@@ -707,9 +711,10 @@ fn assert_spine_view_instructions(instructions: &str, base_instructions: &str) {
     assert_eq!(instructions.matches("</spine_view>").count(), 1);
 
     for required in [
-        "task_projection.current.checklist",
-        "task_projection.draft_nodes",
-        "never send spine_plantree as input",
+        "Use update_plan only as the ordinary short-lived checklist for the current live work.",
+        "does not create, finish, close, compact, or move Spine nodes.",
+        "spine.open: start a focused child scope",
+        "spine.close: finish the current scope",
         "Spine Memory is internal context; never expose or imitate it in user-visible messages.",
     ] {
         assert!(
@@ -718,12 +723,7 @@ fn assert_spine_view_instructions(instructions: &str, base_instructions: &str) {
         );
     }
 
-    for forbidden in [
-        "use update_plan with spine_plantree",
-        "spine_plantree.root.children",
-        "current spine_plantree",
-        "update spine_plantree first",
-    ] {
+    for forbidden in ["task_projection", "spine_plantree", "PlanTree"] {
         assert!(
             !instructions.contains(forbidden),
             "unexpected legacy Spine planning instruction {forbidden:?}"
@@ -733,7 +733,7 @@ fn assert_spine_view_instructions(instructions: &str, base_instructions: &str) {
 
 async fn submit_turn_and_assert_plan_update(
     test: &core_test_support::test_codex::TestCodex,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<()> {
     let cwd_path = test.cwd.path().to_path_buf();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
@@ -771,19 +771,14 @@ async fn submit_turn_and_assert_plan_update(
     let mut saw_plan_update = false;
     wait_for_event(&test.codex, |event| match event {
         EventMsg::SpineTreeUpdate(update) => {
-            let Some(plan) = update
-                .nodes
-                .iter()
-                .find(|node| node.node_id == "1.1.1.1")
-                .and_then(|node| node.plan.as_ref())
-            else {
-                return false;
-            };
             saw_spine_tree_update = true;
-            assert_eq!(plan.revision, 1);
-            assert_eq!(plan.items.len(), 2);
-            assert_eq!(plan.items[0].stable_task_id, "step-1");
-            assert_eq!(plan.items[0].step, "Exercise child node");
+            assert!(
+                update
+                    .nodes
+                    .iter()
+                    .any(|node| node.node_id == update.active_node_id),
+                "expected active node in SpineTreeUpdate"
+            );
             false
         }
         EventMsg::PlanUpdate(update) => {
@@ -802,8 +797,7 @@ async fn submit_turn_and_assert_plan_update(
     .await;
     assert!(saw_spine_tree_update, "expected SpineTreeUpdate event");
     assert!(saw_plan_update, "expected normal PlanUpdate event");
-
-    Ok(turn_id)
+    Ok(())
 }
 
 async fn submit_turn_expect_spine_compact_error(
@@ -873,14 +867,11 @@ fn ev_spine_transition_call(
     call_id: &str,
     name: &str,
     summary: &str,
-    child_summary: Option<&str>,
+    _summary: Option<&str>,
 ) -> Value {
     let arguments = match name {
         "open" => "{}".to_string(),
-        "close" => spine_close_args(
-            summary,
-            child_summary.expect("close spine call should include child summary"),
-        ),
+        "close" => spine_args(summary),
         _ => spine_args(summary),
     };
     ev_function_call_with_namespace(call_id, "spine", name, &arguments)
@@ -893,35 +884,13 @@ fn spine_args(summary: &str) -> String {
     .to_string()
 }
 
-fn spine_close_args(summary: &str, child_summary: &str) -> String {
-    json!({
-        "child_summary": child_summary,
-        "summary": summary,
-    })
-    .to_string()
-}
-
 fn plan_args() -> String {
     json!({
         "explanation": "plan still works",
-        "task_projection": {
-            "current": {
-                "node_id": "1.1.1.1",
-                "checklist": [
-                    {"step": "Exercise child node", "status": "completed"},
-                    {"step": "Exercise sibling node", "status": "in_progress"}
-                ]
-            },
-            "draft_nodes": [
-                {
-                    "parent": "1.1.1.1",
-                    "summary": "Future child scope",
-                    "checklist": [
-                        {"step": "Exercise future child scope", "status": "pending"}
-                    ]
-                }
-            ]
-        }
+        "plan": [
+            {"step": "Exercise child node", "status": "completed"},
+            {"step": "Exercise sibling node", "status": "in_progress"}
+        ]
     })
     .to_string()
 }
@@ -943,13 +912,6 @@ fn parse_json_lines(contents: &str) -> anyhow::Result<Vec<Value>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse jsonl line"))
         .collect()
-}
-
-fn read_json(path: impl AsRef<Path>) -> anyhow::Result<Value> {
-    let path = path.as_ref();
-    let contents =
-        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    serde_json::from_str(&contents).with_context(|| format!("parse {}", path.display()))
 }
 
 fn tool_names(req: &ResponsesRequest) -> Vec<String> {
@@ -976,11 +938,6 @@ fn assert_function_output_contains(requests: &[ResponsesRequest], call_id: &str,
         output.contains(expected),
         "expected output for {call_id} to contain {expected:?}, got {output:?}"
     );
-}
-
-fn function_output_json(requests: &[ResponsesRequest], call_id: &str) -> anyhow::Result<Value> {
-    let output = function_output_text(requests, call_id);
-    serde_json::from_str(&output).with_context(|| format!("parse function output for {call_id}"))
 }
 
 fn function_output_text(requests: &[ResponsesRequest], call_id: &str) -> String {
@@ -1022,7 +979,7 @@ fn assert_spine_initialized(tree: &[Value]) {
             node.get("node_id").and_then(Value::as_str) == Some("1")
                 && node.get("parent_id").is_some_and(Value::is_null)
                 && node.get("raw_start_ordinal").and_then(Value::as_u64) == Some(0)
-                && node.get("status").and_then(Value::as_str) == Some("opened")
+                && node.get("status").and_then(Value::as_str) == Some("suspended")
                 && node.get("summary").is_some_and(Value::is_null)
         }),
         "state should contain root epoch 1: {state:?}"
@@ -1046,17 +1003,6 @@ fn assert_transition(
     to_node: &str,
     summary: Option<&str>,
 ) {
-    assert_transition_with_child_summary(tree, op, from_node, to_node, summary, None);
-}
-
-fn assert_transition_with_child_summary(
-    tree: &[Value],
-    op: &str,
-    from_node: &str,
-    to_node: &str,
-    summary: Option<&str>,
-    child_summary: Option<&str>,
-) {
     let event = tree
         .iter()
         .find(|event| {
@@ -1068,38 +1014,6 @@ fn assert_transition_with_child_summary(
         .unwrap_or_else(|| panic!("missing {op} transition {from_node} -> {to_node}: {tree:?}"));
 
     assert_eq!(event.get("summary").and_then(Value::as_str), summary);
-    assert_eq!(
-        event.get("child_summary").and_then(Value::as_str),
-        child_summary
-    );
-}
-
-fn assert_plan_updated(tree: &[Value], node_id: &str, revision: u64, source_turn_id: &str) -> u64 {
-    let event = tree
-        .iter()
-        .find(|event| {
-            event.get("type").and_then(Value::as_str) == Some("task_plan_updated")
-                && event.get("node_id").and_then(Value::as_str) == Some(node_id)
-                && event.get("revision").and_then(Value::as_u64) == Some(revision)
-        })
-        .unwrap_or_else(|| panic!("missing plan update for {node_id} rev {revision}: {tree:?}"));
-
-    assert_eq!(
-        event.get("source_turn_id").and_then(Value::as_str),
-        Some(source_turn_id)
-    );
-    assert_eq!(
-        event.get("explanation").and_then(Value::as_str),
-        Some("plan still works")
-    );
-    assert_eq!(
-        event.get("items").and_then(Value::as_array).map(Vec::len),
-        Some(2)
-    );
-    event
-        .get("seq")
-        .and_then(Value::as_u64)
-        .expect("task_plan_updated should have seq")
 }
 
 fn assert_transition_committed(index: &[Value], call_id: &str, from_node: &str, to_node: &str) {
@@ -1147,7 +1061,7 @@ fn assert_raw_range_for_node_after_transition(index: &[Value], call_id: &str, no
     );
 }
 
-fn assert_bridge_checkpoint_committed(index: &[Value], node_id: &str, op: &str) {
+fn assert_mem_install_committed(index: &[Value], node_id: &str, op: &str) {
     assert!(
         index.iter().any(|event| {
             event.get("type").and_then(Value::as_str) == Some("compact_started")
@@ -1158,42 +1072,42 @@ fn assert_bridge_checkpoint_committed(index: &[Value], node_id: &str, op: &str) 
     );
     assert!(
         index.iter().any(|event| {
-            event.get("type").and_then(Value::as_str) == Some("bridge_checkpoint_committed")
+            event.get("type").and_then(Value::as_str) == Some("mem_install_committed")
                 && event.get("node_id").and_then(Value::as_str) == Some(node_id)
                 && event.get("op").and_then(Value::as_str) == Some(op)
                 && event
-                    .get("replacement_history_len")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|len| len > 0)
+                    .get("compact_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id.starts_with("sha1:"))
         }),
-        "compact index should contain bridge checkpoint for {node_id} {op}: {index:?}"
+        "compact index should contain MemInstall for {node_id} {op}: {index:?}"
     );
 }
 
-fn assert_bridge_checkpoint_committed_before(
+fn assert_mem_install_committed_before(
     index: &[Value],
     first_node_id: &str,
     first_op: &str,
     second_node_id: &str,
     second_op: &str,
 ) {
-    let first_index = bridge_checkpoint_committed_index(index, first_node_id, first_op);
-    let second_index = bridge_checkpoint_committed_index(index, second_node_id, second_op);
+    let first_index = mem_install_committed_index(index, first_node_id, first_op);
+    let second_index = mem_install_committed_index(index, second_node_id, second_op);
     assert!(
         first_index < second_index,
-        "expected bridge checkpoint {first_node_id} {first_op} before {second_node_id} {second_op}: {index:?}"
+        "expected MemInstall {first_node_id} {first_op} before {second_node_id} {second_op}: {index:?}"
     );
 }
 
-fn bridge_checkpoint_committed_index(index: &[Value], node_id: &str, op: &str) -> usize {
+fn mem_install_committed_index(index: &[Value], node_id: &str, op: &str) -> usize {
     index
         .iter()
         .position(|event| {
-            event.get("type").and_then(Value::as_str) == Some("bridge_checkpoint_committed")
+            event.get("type").and_then(Value::as_str) == Some("mem_install_committed")
                 && event.get("node_id").and_then(Value::as_str) == Some(node_id)
                 && event.get("op").and_then(Value::as_str) == Some(op)
         })
-        .unwrap_or_else(|| panic!("missing bridge checkpoint for {node_id} {op}: {index:?}"))
+        .unwrap_or_else(|| panic!("missing MemInstall for {node_id} {op}: {index:?}"))
 }
 
 fn assert_compact_failed(index: &[Value], node_id: &str, op: &str) {
@@ -1255,10 +1169,7 @@ fn assert_rollout_has_spine_compaction_checkpoint(
     Ok(())
 }
 
-fn assert_raw_mirror_has_raw_items_and_compact_metadata(
-    sidecar_dir: &Path,
-    expected_compact_metadata: usize,
-) -> anyhow::Result<()> {
+fn assert_raw_mirror_has_only_raw_items(sidecar_dir: &Path) -> anyhow::Result<()> {
     let raw_mirror_path = sidecar_dir.join("raw/rollout.raw.jsonl");
     let raw_mirror_text = std::fs::read_to_string(&raw_mirror_path)
         .with_context(|| format!("read {}", raw_mirror_path.display()))?;
@@ -1267,18 +1178,16 @@ fn assert_raw_mirror_has_raw_items_and_compact_metadata(
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("response_item"))
         .count();
-    let compact_metadata = raw_mirror
-        .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("raw_mirror_event"))
-        .count();
 
     assert!(
         response_items > 0,
         "raw mirror should contain raw response items: {raw_mirror_text}"
     );
-    assert_eq!(
-        compact_metadata, expected_compact_metadata,
-        "raw mirror should record compact checkpoints only as metadata: {raw_mirror_text}"
+    assert!(
+        raw_mirror
+            .iter()
+            .all(|item| item.get("type").and_then(Value::as_str) != Some("raw_mirror_event")),
+        "raw mirror must not store compact metadata events: {raw_mirror_text}"
     );
     assert!(
         raw_mirror
