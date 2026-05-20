@@ -35,6 +35,12 @@ impl SpineProjection {
     }
 }
 
+pub(crate) struct SpineProjectionInputs<'a> {
+    pub(crate) replay_items: &'a [RolloutItem],
+    pub(crate) branch_ref: String,
+    pub(crate) persisted_prefix_items: &'a [RolloutItem],
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum SpineProjectionError {
     #[error("failed to parse spine call arguments for {call_id}: {source}")]
@@ -68,7 +74,17 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
     source_rollout_ref: impl Into<String>,
     rollout_items: &[RolloutItem],
 ) -> Result<SpineProjection, SpineProjectionError> {
-    let effective_items = effective_rollout_items(rollout_items)?;
+    project_spine_state_from_inputs(SpineProjectionInputs {
+        replay_items: rollout_items,
+        branch_ref: source_rollout_ref.into(),
+        persisted_prefix_items: rollout_items,
+    })
+}
+
+pub(crate) fn project_spine_state_from_inputs(
+    inputs: SpineProjectionInputs<'_>,
+) -> Result<SpineProjection, SpineProjectionError> {
+    let effective_items = effective_rollout_items(inputs.replay_items)?;
     let initial_raw_start_ordinal = initial_context_prelude_len(&effective_items)?;
     let mut state = SpineState::new_with_initial_leaf_raw_start(initial_raw_start_ordinal);
     let mut checkpoint = StateCheckpoint::new(initial_raw_start_ordinal);
@@ -144,8 +160,8 @@ pub(crate) fn project_spine_state_from_rollout_with_source(
     }
 
     let epoch = projection_epoch_metadata(
-        source_rollout_ref,
-        rollout_items,
+        inputs.branch_ref,
+        inputs.persisted_prefix_items,
         &checkpoint,
         raw_ordinal,
         &surviving_turn_ids,
@@ -170,7 +186,7 @@ pub(crate) fn surviving_spine_compact_ids_from_rollout(
     Ok(surviving_compact_ids(&effective_items))
 }
 
-fn effective_rollout_items(
+pub(crate) fn effective_rollout_items(
     items: &[RolloutItem],
 ) -> Result<Vec<&RolloutItem>, SpineProjectionError> {
     let mut effective: Vec<&RolloutItem> = Vec::new();

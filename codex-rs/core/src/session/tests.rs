@@ -10,6 +10,7 @@ use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::spine::ids::NodeId;
+use crate::spine::store::SpineOperation;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
@@ -318,6 +319,42 @@ fn write_rollout_items_for_test(path: &Path, items: &[RolloutItem]) -> anyhow::R
         })?);
     }
     std::fs::write(path, format!("{}\n", lines.join("\n")))?;
+    Ok(())
+}
+
+fn install_test_spine_mem(
+    store: &crate::spine::store::SpineSidecarStore,
+    compact_id: &str,
+    node_id: NodeId,
+    op: SpineOperation,
+    cut_ordinal: u64,
+    fold_end_ordinal: u64,
+    body: &str,
+) -> anyhow::Result<()> {
+    let attempt = crate::spine::store::CompactAttemptRecord {
+        compact_id: compact_id.to_string(),
+        node_id: node_id.clone(),
+        op,
+        cut_ordinal,
+        fold_end_ordinal,
+    };
+    store.append_compact_started(crate::spine::store::CompactStartedRecord {
+        attempt: attempt.clone(),
+        strategy: "codex_builtin_text".to_string(),
+        rollout: "../rollout.jsonl".to_string(),
+    })?;
+    store.append_memory_section(&node_id, body)?;
+    let body_ref = store
+        .generated_memory_sections(&node_id)?
+        .last()
+        .expect("memory section")
+        .body_ref();
+    store.append_mem_install_committed(crate::spine::store::MemInstallCommittedRecord {
+        attempt,
+        body_ref,
+        projection_ref: format!("projection:test:{compact_id}"),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    })?;
     Ok(())
 }
 
@@ -1858,6 +1895,7 @@ fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()>
         false,
         &HashSet::new(),
         None,
+        true,
     )?;
 
     assert_eq!(
@@ -1883,6 +1921,7 @@ fn initial_spine_runtime_loads_existing_sidecar_without_transition_history() -> 
         false,
         &HashSet::new(),
         None,
+        true,
     )?;
 
     let runtime = session_integration::load_initial_spine_runtime(
@@ -1892,6 +1931,7 @@ fn initial_spine_runtime_loads_existing_sidecar_without_transition_history() -> 
         false,
         &HashSet::new(),
         None,
+        true,
     )?;
 
     assert_eq!(
@@ -1935,6 +1975,7 @@ fn initial_spine_runtime_rejects_non_initial_sidecar_without_spine_history() -> 
         /*has_non_spine_compaction*/ false,
         &HashSet::new(),
         None,
+        true,
     )
     .expect_err("stale sidecar must not be admitted without replay Spine evidence");
 
@@ -1959,6 +2000,7 @@ fn non_spine_compact_stop_initial_runtime_is_read_only() -> anyhow::Result<()> {
         true,
         &HashSet::new(),
         None,
+        true,
     )?;
 
     assert!(!runtime.is_mutable());
@@ -1978,6 +2020,7 @@ fn initial_spine_runtime_rejects_missing_sidecar_for_existing_spine_history() ->
         false,
         &HashSet::new(),
         None,
+        true,
     )
     .expect_err("existing Spine rollout history requires sidecar");
 
@@ -2038,6 +2081,7 @@ fn initial_spine_runtime_accepts_surviving_spine_checkpoint_with_meminstall() ->
         /*has_non_spine_compaction*/ false,
         &HashSet::from([compact_id.to_string()]),
         None,
+        true,
     )
     .expect("surviving Spine checkpoint with verified MemInstall should load");
     Ok(())
@@ -3656,6 +3700,187 @@ async fn reconstruct_history_replays_suffix_after_spine_compact_checkpoint() {
 }
 
 #[tokio::test]
+async fn reconstruct_history_materializes_spine_suffix_checkpoint_without_replacement_history()
+-> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let store = crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    let mut state = store.create()?;
+    store.record_transition(
+        &mut state,
+        SpineOperation::Open,
+        None::<String>,
+        3,
+        "turn-open",
+    )?;
+    store.record_transition(
+        &mut state,
+        SpineOperation::Close,
+        "child done",
+        7,
+        "turn-close",
+    )?;
+    install_test_spine_mem(
+        &store,
+        "compact-child",
+        NodeId::from_segments(vec![1, 1, 1]),
+        SpineOperation::Close,
+        3,
+        7,
+        "\n\n## Auto Compact\n\nchild facts\n",
+    )?;
+
+    let later = assistant_message("parent tail");
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("root prelude")),
+        RolloutItem::ResponseItem(spine_function_call("open-1")),
+        RolloutItem::ResponseItem(function_call_output("open-1")),
+        RolloutItem::ResponseItem(user_message("child raw")),
+        RolloutItem::ResponseItem(assistant_message("child result")),
+        RolloutItem::ResponseItem(spine_close_function_call("close-1", "child done")),
+        RolloutItem::ResponseItem(function_call_output("close-1")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted 1.1.1 [3, 7)".to_string(),
+            replacement_history: None,
+            spine: Some(spine_compact_checkpoint(
+                "compact-child",
+                SpineCompactedCheckpointKind::Suffix,
+            )),
+        }),
+        RolloutItem::ResponseItem(later.clone()),
+    ];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await
+        .expect("reconstruct rollout history from sidecar");
+    let rendered = serde_json::to_string(&reconstructed.history)?;
+
+    assert!(rendered.contains("root prelude"));
+    assert!(rendered.contains("Node: 1.1.1"));
+    assert!(rendered.contains("Summary: child done"));
+    assert!(rendered.contains("child facts"));
+    assert!(rendered.contains("<spine_handoff>"));
+    assert!(rendered.contains("parent tail"));
+    assert!(!rendered.contains("child raw"));
+    assert!(!rendered.contains("child result"));
+    assert_eq!(reconstructed.history.last(), Some(&later));
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconstruct_history_ignores_cached_spine_suffix_replacement_history_when_sidecar_exists()
+-> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let store = crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    let mut state = store.create()?;
+    store.record_transition(
+        &mut state,
+        SpineOperation::Open,
+        None::<String>,
+        3,
+        "turn-open",
+    )?;
+    store.record_transition(
+        &mut state,
+        SpineOperation::Close,
+        "child done",
+        7,
+        "turn-close",
+    )?;
+    install_test_spine_mem(
+        &store,
+        "compact-child",
+        NodeId::from_segments(vec![1, 1, 1]),
+        SpineOperation::Close,
+        3,
+        7,
+        "\n\n## Auto Compact\n\nsidecar facts\n",
+    )?;
+
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("root prelude")),
+        RolloutItem::ResponseItem(spine_function_call("open-1")),
+        RolloutItem::ResponseItem(function_call_output("open-1")),
+        RolloutItem::ResponseItem(user_message("child raw")),
+        RolloutItem::ResponseItem(assistant_message("child result")),
+        RolloutItem::ResponseItem(spine_close_function_call("close-1", "child done")),
+        RolloutItem::ResponseItem(function_call_output("close-1")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted 1.1.1 [3, 7)".to_string(),
+            replacement_history: Some(vec![user_message("stale cached spine replacement")]),
+            spine: Some(spine_compact_checkpoint(
+                "compact-child",
+                SpineCompactedCheckpointKind::Suffix,
+            )),
+        }),
+    ];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await
+        .expect("reconstruct rollout history from sidecar");
+    let rendered = serde_json::to_string(&reconstructed.history)?;
+
+    assert!(rendered.contains("sidecar facts"));
+    assert!(!rendered.contains("stale cached spine replacement"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconstruct_history_spine_suffix_without_replacement_history_missing_sidecar_fails_closed()
+-> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
+        message: "Spine compacted 1.1.1 [3, 7)".to_string(),
+        replacement_history: None,
+        spine: Some(spine_compact_checkpoint(
+            "compact-child",
+            SpineCompactedCheckpointKind::Suffix,
+        )),
+    })];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
+
+    let error = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await
+        .expect_err("missing sidecar should fail closed");
+
+    assert!(error.to_string().contains("failed to load Spine sidecar"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconstruct_history_spine_root_epoch_without_replacement_history_fails_closed()
+-> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let store = crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    store.create()?;
+    let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
+        message: "Spine compacted root epoch 1 [0, 3)".to_string(),
+        replacement_history: None,
+        spine: Some(spine_compact_checkpoint(
+            "compact-root",
+            SpineCompactedCheckpointKind::RootEpoch,
+        )),
+    })];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
+
+    let error = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await
+        .expect_err("root epoch without structured note evidence should fail closed");
+
+    assert!(error.to_string().contains("unsupported Spine RootEpoch"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn reconstruct_history_does_not_revive_rolled_back_spine_compact_checkpoint() {
     let (session, turn_context) = make_session_and_context().await;
     let turn_id = "spine-turn".to_string();
@@ -3860,6 +4085,7 @@ async fn spine_resume_projection_rollback_projection_epoch_repairs_missing_reset
         /*has_non_spine_compaction*/ false,
         &projection.surviving_compact_ids,
         Some(&projection),
+        true,
     )?;
     assert_eq!(projected_runtime.cursor().to_string(), "1.1.1");
     assert!(
@@ -4058,6 +4284,7 @@ async fn resume_projection_repairs_behind_projection_epoch() -> anyhow::Result<(
         /*has_non_spine_compaction*/ false,
         &projection.surviving_compact_ids,
         Some(&projection),
+        true,
     )?;
     assert_eq!(projected_runtime.cursor().to_string(), "1.1");
     let tree = std::fs::read_to_string(projected_runtime.store().tree_path())?;
@@ -4785,6 +5012,22 @@ async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
             .is_none()
     );
     assert!(std::fs::read_to_string(runtime.store().tree_path())?.contains("\"projection_reset\""));
+    let epoch = runtime
+        .store()
+        .latest_projection_epoch()?
+        .expect("rollback projection epoch");
+    assert_eq!(epoch.source_rollout_ref, rollout_path.to_string_lossy());
+    let (rollout_items, _, _) =
+        crate::rollout::RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    let position = crate::spine::projection_epoch::projection_rollout_position(
+        rollout_path.to_string_lossy(),
+        &rollout_items,
+    )?;
+    assert_eq!(epoch.processed_rollout_len, position.processed_rollout_len);
+    assert_eq!(
+        epoch.processed_rollout_hash,
+        position.processed_rollout_hash
+    );
     Ok(())
 }
 

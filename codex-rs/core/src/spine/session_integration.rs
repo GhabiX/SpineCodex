@@ -1,4 +1,6 @@
 use super::projection::SpineProjection;
+use super::projection::SpineProjectionInputs;
+use super::projection::project_spine_state_from_inputs;
 use super::projection::project_spine_state_from_rollout_with_source;
 use super::projection::surviving_spine_compact_ids_from_rollout;
 use super::projection_epoch::ProjectionEpochClassification;
@@ -25,6 +27,7 @@ pub(crate) struct InitialSpineScan {
     pub(crate) has_non_spine_compaction: bool,
     pub(crate) surviving_compact_ids: HashSet<String>,
     pub(crate) projection: Option<SpineProjection>,
+    pub(crate) projection_epoch_is_branch_local: bool,
 }
 
 impl InitialSpineScan {
@@ -35,6 +38,7 @@ impl InitialSpineScan {
             has_non_spine_compaction: false,
             surviving_compact_ids: HashSet::new(),
             projection: None,
+            projection_epoch_is_branch_local: true,
         }
     }
 }
@@ -52,6 +56,7 @@ pub(crate) async fn initial_spine_scan(
                     &resumed.history,
                     SpineProjectionPolicy::Resume,
                     rollout_path.to_string_lossy(),
+                    true,
                 )?;
                 if scan.has_spine_history {
                     scan.projection = resume_projection_from_sidecar_epoch(
@@ -67,6 +72,7 @@ pub(crate) async fn initial_spine_scan(
                     &resumed.history,
                     SpineProjectionPolicy::Resume,
                     "resumed_initial_history".into(),
+                    false,
                 )?)
             }
         }
@@ -74,6 +80,7 @@ pub(crate) async fn initial_spine_scan(
             items,
             SpineProjectionPolicy::Fork,
             "forked_initial_history".into(),
+            false,
         )?),
     }
 }
@@ -95,6 +102,7 @@ fn initial_spine_scan_items(
     items: &[RolloutItem],
     projection_policy: SpineProjectionPolicy,
     source_rollout_ref: std::borrow::Cow<'_, str>,
+    projection_epoch_is_branch_local: bool,
 ) -> anyhow::Result<InitialSpineScan> {
     let has_spine_history = has_spine_history_items(items);
     let needs_projection = match projection_policy {
@@ -109,6 +117,7 @@ fn initial_spine_scan_items(
         projection: needs_projection
             .then(|| project_spine_state_from_rollout_with_source(source_rollout_ref, items))
             .transpose()?,
+        projection_epoch_is_branch_local,
     })
 }
 
@@ -202,6 +211,7 @@ pub(crate) fn load_initial_spine_runtime(
     has_non_spine_compaction: bool,
     surviving_compact_ids: &HashSet<String>,
     projection: Option<&SpineProjection>,
+    projection_epoch_is_branch_local: bool,
 ) -> Result<SpineRuntime, SpineRuntimeError> {
     let mut runtime = if has_spine_history {
         let store = SpineSidecarStore::for_rollout(rollout_path)?;
@@ -235,27 +245,33 @@ pub(crate) fn load_initial_spine_runtime(
             .store()
             .validate_mem_install_survivors(surviving_compact_ids)?;
     }
-    if let Some(projection) = projection
-        && runtime.state() != &projection.state
-    {
-        runtime.record_projection_reset(
-            projection.state.clone(),
-            projection.checkpoint.clone(),
-            projection.response_item_count,
-            projection.surviving_turn_ids.clone(),
-            projection.surviving_compact_ids.clone(),
-            projection.epoch.clone(),
-            "resume_projection",
-            None,
-        )?;
-    }
-    if let Some(projection) = projection
-        && runtime.state() == &projection.state
-    {
-        runtime.record_projection_survivors(
-            projection.surviving_turn_ids.clone(),
-            projection.surviving_compact_ids.clone(),
-        );
+    if let Some(projection) = projection {
+        let latest_epoch = runtime.store().latest_projection_epoch()?;
+        if projection_epoch_is_branch_local
+            && (runtime.state() != &projection.state
+                || latest_epoch.as_ref() != Some(&projection.epoch))
+        {
+            runtime.record_projection_reset(
+                projection.state.clone(),
+                projection.checkpoint.clone(),
+                projection.response_item_count,
+                projection.surviving_turn_ids.clone(),
+                projection.surviving_compact_ids.clone(),
+                projection.epoch.clone(),
+                "resume_projection",
+                None,
+            )?;
+        } else if runtime.state() == &projection.state {
+            runtime.record_projection_survivors(
+                projection.surviving_turn_ids.clone(),
+                projection.surviving_compact_ids.clone(),
+            );
+        } else {
+            return Err(SpineStoreError::InvalidLedger(
+                "non-branch-local Spine projection does not match seeded sidecar state".to_string(),
+            )
+            .into());
+        }
     }
     if has_non_spine_compaction {
         runtime.mark_non_spine_compacted_history();
@@ -326,10 +342,14 @@ pub(crate) async fn seed_forked_spine_sidecar(
         );
     }
 
-    let projection = project_spine_state_from_rollout_with_source(
-        parent_rollout_path.to_string_lossy(),
-        rollout_items,
-    )?;
+    let (persisted_prefix_items, _, _) =
+        crate::rollout::RolloutRecorder::load_rollout_items(child_rollout_path).await?;
+    let branch_ref = child_rollout_path.to_string_lossy().into_owned();
+    let projection = project_spine_state_from_inputs(SpineProjectionInputs {
+        replay_items: rollout_items,
+        branch_ref,
+        persisted_prefix_items: &persisted_prefix_items,
+    })?;
     parent_store.validate_mem_install_survivors(&projection.surviving_compact_ids)?;
     parent_store.validate_root_meminstall_survivors(&projection.root_epoch_compact_ids)?;
     let projected_response_count = projection.response_item_count;

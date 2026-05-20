@@ -1345,9 +1345,27 @@ impl Session {
         let Some(spine) = self.spine.as_ref() else {
             return Ok(());
         };
-        let projection = crate::spine::projection::project_spine_state_from_rollout_with_source(
-            "active_rollout",
-            rollout_items,
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to resolve rollout path: {err:#}")))?
+            .ok_or_else(|| {
+                CodexErr::Fatal("spine projection requires a local rollout path".to_string())
+            })?;
+        let (persisted_prefix_items, _, _) =
+            crate::rollout::RolloutRecorder::load_rollout_items(&rollout_path)
+                .await
+                .map_err(|err| {
+                    CodexErr::Fatal(format!(
+                        "failed to load persisted rollout prefix for spine projection: {err}"
+                    ))
+                })?;
+        let projection = crate::spine::projection::project_spine_state_from_inputs(
+            crate::spine::projection::SpineProjectionInputs {
+                replay_items: rollout_items,
+                branch_ref: rollout_path.to_string_lossy().into_owned(),
+                persisted_prefix_items: &persisted_prefix_items,
+            },
         )
         .map_err(|err| CodexErr::Fatal(format!("failed to project spine state: {err}")))?;
         let snapshot = {
@@ -3341,7 +3359,7 @@ impl Session {
         ensure_meminstall_committed(&store, &compact_id, "checkpoint render")?;
         let compacted_item = CompactedItem {
             message: compact_output.compact_message.clone(),
-            replacement_history: Some(replacement_history.clone()),
+            replacement_history: None,
             spine: Some(SpineCompactedCheckpoint {
                 compact_id: compact_id.clone(),
                 kind: SpineCompactedCheckpointKind::Suffix,

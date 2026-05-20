@@ -1,6 +1,7 @@
 pub(crate) mod candidate_mem_plan;
 pub(crate) mod checkpoint_render;
 pub(crate) mod compact;
+pub(crate) mod context_materialization;
 pub(crate) mod fast_fail;
 pub(crate) mod host_bridge;
 pub(crate) mod ids;

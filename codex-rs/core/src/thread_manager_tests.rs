@@ -1113,6 +1113,182 @@ async fn user_forked_spine_history_seeds_child_sidecar() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn user_forked_spine_history_resumes_from_child_rollout() -> anyhow::Result<()> {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SpineTaskTree)
+        .expect("enable spine task tree");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("source start"))]),
+            auth_manager.clone(),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let source_session = &source.thread.codex.session;
+    let source_turn = source_session.new_default_turn().await;
+    source_session
+        .spine
+        .as_ref()
+        .expect("source spine")
+        .lock()
+        .await
+        .stage_transition(
+            "open-1",
+            "turn-1",
+            crate::spine::store::SpineOperation::Open,
+            None,
+            /*compact_instruction*/ None,
+        )?;
+    source_session
+        .try_record_conversation_items(
+            source_turn.as_ref(),
+            &[
+                spine_transition_msg("open-1", crate::spine::SPINE_TOOL_OPEN, "source scope"),
+                function_call_output("open-1"),
+            ],
+        )
+        .await?;
+    source.thread.flush_rollout().await?;
+    let source_rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config.clone(),
+            source_rollout_path,
+            Some(ThreadSource::User),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    forked.thread.flush_rollout().await?;
+    let child_rollout_path = forked
+        .thread
+        .rollout_path()
+        .expect("child rollout path should exist");
+    let child_store = crate::spine::store::SpineSidecarStore::for_rollout(&child_rollout_path)?;
+    let child_epoch = child_store
+        .latest_projection_epoch()?
+        .expect("child projection epoch");
+    assert_eq!(
+        child_epoch.source_rollout_ref,
+        child_rollout_path.to_string_lossy()
+    );
+    let (child_rollout_items, _, _) =
+        crate::rollout::RolloutRecorder::load_rollout_items(&child_rollout_path).await?;
+    let child_position = crate::spine::projection_epoch::projection_rollout_position(
+        child_rollout_path.to_string_lossy(),
+        &child_rollout_items,
+    )?;
+    assert!(
+        child_epoch.processed_rollout_len <= child_position.processed_rollout_len,
+        "fork seed epoch must describe a persisted child prefix"
+    );
+    let child_epoch_len =
+        usize::try_from(child_epoch.processed_rollout_len).expect("epoch len fits usize");
+    let child_epoch_position = crate::spine::projection_epoch::projection_rollout_position(
+        child_rollout_path.to_string_lossy(),
+        &child_rollout_items[..child_epoch_len],
+    )?;
+    assert_eq!(
+        child_epoch,
+        crate::spine::projection_epoch::ProjectionEpochMetadata {
+            source_rollout_ref: child_epoch_position.source_rollout_ref,
+            processed_rollout_len: child_epoch_position.processed_rollout_len,
+            processed_rollout_hash: child_epoch_position.processed_rollout_hash,
+            effective_raw_len: child_epoch.effective_raw_len,
+            surviving_turn_ids_hash: child_epoch.surviving_turn_ids_hash.clone(),
+            surviving_compact_ids: child_epoch.surviving_compact_ids.clone(),
+            checkpoint_hash: child_epoch.checkpoint_hash.clone(),
+        }
+    );
+    assert_eq!(
+        forked
+            .thread
+            .codex
+            .session
+            .spine
+            .as_ref()
+            .expect("forked spine")
+            .lock()
+            .await
+            .cursor()
+            .to_string(),
+        "1.1.1"
+    );
+
+    forked.thread.shutdown_and_wait().await?;
+    manager.remove_thread(&forked.thread_id).await;
+
+    let resumed = manager
+        .resume_thread_from_rollout(
+            config,
+            child_rollout_path.clone(),
+            auth_manager,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let child_store_after_resume =
+        crate::spine::store::SpineSidecarStore::for_rollout(&child_rollout_path)?;
+    let child_epoch_after_resume = child_store_after_resume
+        .latest_projection_epoch()?
+        .expect("child projection epoch after resume");
+    assert_eq!(
+        child_epoch_after_resume.source_rollout_ref,
+        child_rollout_path.to_string_lossy()
+    );
+    assert_eq!(
+        child_epoch_after_resume.processed_rollout_len,
+        child_position.processed_rollout_len
+    );
+    assert_eq!(
+        child_epoch_after_resume.processed_rollout_hash,
+        child_position.processed_rollout_hash
+    );
+    assert_eq!(
+        resumed
+            .thread
+            .codex
+            .session
+            .spine
+            .as_ref()
+            .expect("resumed spine")
+            .lock()
+            .await
+            .cursor()
+            .to_string(),
+        "1.1.1"
+    );
+    resumed.thread.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn fork_inherited_close_precommit_stages_without_parent_open_proof() -> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;

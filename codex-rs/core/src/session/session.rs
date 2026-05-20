@@ -375,6 +375,7 @@ pub(super) fn load_spine_runtime_for_state(
                 state.scan.has_non_spine_compaction,
                 &state.scan.surviving_compact_ids,
                 state.scan.projection.as_ref(),
+                state.scan.projection_epoch_is_branch_local,
             )
         })
         .transpose()?;
@@ -592,6 +593,15 @@ impl Session {
             } else {
                 None
             };
+            if initial_spine_state
+                .as_ref()
+                .is_some_and(|state| state.scan.has_spine_history)
+                && matches!(initial_history, InitialHistory::Forked(_))
+                && let Some(live_thread) = live_thread_init.as_ref()
+            {
+                live_thread.persist().await?;
+                live_thread.flush().await?;
+            }
             if let Some(initial_spine_state) = initial_spine_state.as_ref()
                 && initial_spine_state.scan.has_spine_history
                 && matches!(initial_history, InitialHistory::Forked(_))

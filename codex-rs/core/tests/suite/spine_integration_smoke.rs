@@ -1124,12 +1124,25 @@ fn assert_rollout_has_spine_compaction_checkpoint(
         let entry: RolloutLine = serde_json::from_str(line).context("parse rollout line")?;
         if let RolloutItem::Compacted(item) = entry.item {
             compacted += 1;
-            assert!(
-                item.replacement_history
-                    .as_ref()
-                    .is_some_and(|history| !history.is_empty()),
-                "spine compact checkpoint should include replacement_history: {line}"
-            );
+            let spine = item.spine.as_ref().unwrap_or_else(|| {
+                panic!("spine compact checkpoint should carry spine metadata: {line}")
+            });
+            match spine.kind {
+                codex_protocol::protocol::SpineCompactedCheckpointKind::Suffix => {
+                    assert!(
+                        item.replacement_history.is_none(),
+                        "spine suffix compact checkpoint should derive host history from sidecar, not persisted replacement_history: {line}"
+                    );
+                }
+                codex_protocol::protocol::SpineCompactedCheckpointKind::RootEpoch => {
+                    assert!(
+                        item.replacement_history
+                            .as_ref()
+                            .is_some_and(|history| !history.is_empty()),
+                        "spine root epoch checkpoint should keep replacement_history until structured initial-context evidence is implemented: {line}"
+                    );
+                }
+            }
             assert!(
                 item.message.contains("Spine compacted"),
                 "unexpected spine compact message: {line}"

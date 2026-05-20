@@ -1,5 +1,8 @@
 use super::*;
 use crate::context_manager::is_user_turn_boundary;
+use crate::spine::context_materialization::SpineMaterializationInput;
+use crate::spine::context_materialization::materialize_spine_context;
+use codex_protocol::protocol::SpineCompactedCheckpointKind;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -27,17 +30,17 @@ enum TurnReferenceContextItem {
 }
 
 #[derive(Debug, Default)]
-struct ActiveReplaySegment<'a> {
+struct ActiveReplaySegment {
     turn_id: Option<String>,
     counts_as_user_turn: bool,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
-    base: Option<ReplayBase<'a>>,
+    base: Option<ReplayBase>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ReplayBase<'a> {
-    replacement_history: &'a [ResponseItem],
+#[derive(Debug, Clone)]
+struct ReplayBase {
+    history: Vec<ResponseItem>,
     // The replay suffix belongs to the same checkpoint as this base, so rollback filtering must
     // accept or reject both together.
     suffix_start: usize,
@@ -48,9 +51,9 @@ fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&s
         .is_none_or(|turn_id| item_turn_id.is_none_or(|item_turn_id| item_turn_id == turn_id))
 }
 
-fn finalize_active_segment<'a>(
-    active_segment: ActiveReplaySegment<'a>,
-    base: &mut Option<ReplayBase<'a>>,
+fn finalize_active_segment(
+    active_segment: ActiveReplaySegment,
+    base: &mut Option<ReplayBase>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
     pending_rollback_turns: &mut usize,
@@ -92,6 +95,44 @@ fn finalize_active_segment<'a>(
 }
 
 impl Session {
+    fn materialize_replay_base_from_compacted(
+        &self,
+        compacted: &CompactedItem,
+        replay_items: &[RolloutItem],
+        rollout_path: &Path,
+        index: usize,
+    ) -> CodexResult<Vec<ResponseItem>> {
+        let Some(spine_checkpoint) = compacted.spine.as_ref() else {
+            if let Some(replacement_history) = &compacted.replacement_history {
+                return Ok(replacement_history.clone());
+            }
+            return Err(CodexErr::Fatal(format!(
+                "unsupported compacted rollout item at index {index}: missing replacement_history"
+            )));
+        };
+        if spine_checkpoint.kind != SpineCompactedCheckpointKind::Suffix {
+            if let Some(replacement_history) = &compacted.replacement_history {
+                return Ok(replacement_history.clone());
+            }
+            return Err(CodexErr::Fatal(format!(
+                "unsupported Spine {:?} compacted rollout item at index {index}: missing replacement_history",
+                spine_checkpoint.kind
+            )));
+        }
+        let store = SpineSidecarStore::for_rollout(rollout_path).map_err(|err| {
+            CodexErr::Fatal(format!(
+                "failed to load Spine sidecar for compacted rollout item at index {index}: {err}"
+            ))
+        })?;
+        materialize_spine_context(SpineMaterializationInput {
+            replay_items,
+            branch_ref: rollout_path.to_string_lossy().into_owned(),
+            persisted_prefix_items: replay_items,
+            store: &store,
+        })
+        .map(|materialized| materialized.history)
+    }
+
     pub(super) async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
@@ -102,7 +143,11 @@ impl Session {
         // stopping once a surviving materialized compact checkpoint and the required resume
         // metadata are both known; then replay only the buffered surviving tail forward to
         // preserve exact host-history materialization.
-        let mut base: Option<ReplayBase<'_>> = None;
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to resolve rollout path: {err:#}")))?;
+        let mut base: Option<ReplayBase> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
@@ -110,7 +155,7 @@ impl Session {
         let mut pending_rollback_turns = 0usize;
         // Reverse replay accumulates rollout items into the newest in-progress turn segment until
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
-        let mut active_segment: Option<ActiveReplaySegment<'_>> = None;
+        let mut active_segment: Option<ActiveReplaySegment> = None;
 
         for (index, item) in rollout_items.iter().enumerate().rev() {
             match item {
@@ -125,11 +170,27 @@ impl Session {
                     ) {
                         active_segment.reference_context_item = TurnReferenceContextItem::Cleared;
                     }
-                    if active_segment.base.is_none()
-                        && let Some(replacement_history) = &compacted.replacement_history
-                    {
+                    if active_segment.base.is_none() {
+                        let replay_items = &rollout_items[..=index];
+                        let history = match rollout_path.as_deref() {
+                            Some(rollout_path) => self.materialize_replay_base_from_compacted(
+                                compacted,
+                                replay_items,
+                                rollout_path,
+                                index,
+                            )?,
+                            None => {
+                                let Some(replacement_history) = &compacted.replacement_history
+                                else {
+                                    return Err(CodexErr::Fatal(format!(
+                                        "unsupported compacted rollout item at index {index}: missing replacement_history"
+                                    )));
+                                };
+                                replacement_history.clone()
+                            }
+                        };
                         active_segment.base = Some(ReplayBase {
-                            replacement_history,
+                            history,
                             suffix_start: index + 1,
                         });
                     }
@@ -252,7 +313,7 @@ impl Session {
 
         let mut history = ContextManager::new();
         let rollout_suffix_start = if let Some(base) = base {
-            history.replace(base.replacement_history.to_vec());
+            history.replace(base.history);
             base.suffix_start
         } else {
             0
@@ -270,15 +331,26 @@ impl Session {
                     );
                 }
                 RolloutItem::Compacted(compacted) => {
-                    if let Some(replacement_history) = &compacted.replacement_history {
-                        // A later compact checkpoint in the surviving suffix replaces the
-                        // materialized host history when replay admits it.
-                        history.replace(replacement_history.clone());
-                    } else {
-                        return Err(CodexErr::Fatal(format!(
-                            "unsupported compacted rollout item at index {index}: missing replacement_history"
-                        )));
-                    }
+                    // A later compact checkpoint in the surviving suffix replaces the
+                    // materialized host history when replay admits it.
+                    let replay_items = &rollout_items[..=index];
+                    let compacted_history = match rollout_path.as_deref() {
+                        Some(rollout_path) => self.materialize_replay_base_from_compacted(
+                            compacted,
+                            replay_items,
+                            rollout_path,
+                            index,
+                        )?,
+                        None => {
+                            let Some(replacement_history) = &compacted.replacement_history else {
+                                return Err(CodexErr::Fatal(format!(
+                                    "unsupported compacted rollout item at index {index}: missing replacement_history"
+                                )));
+                            };
+                            replacement_history.clone()
+                        }
+                    };
+                    history.replace(compacted_history);
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                     let rollback_turns = usize::try_from(rollback.num_turns).map_err(|_| {
