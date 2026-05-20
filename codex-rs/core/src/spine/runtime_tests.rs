@@ -11,6 +11,7 @@ use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::io::Write;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -32,6 +33,17 @@ fn read_json_lines(path: impl AsRef<Path>) -> Vec<Value> {
         .lines()
         .map(|line| serde_json::from_str(line).expect("parse json line"))
         .collect()
+}
+
+fn append_json_line(path: impl AsRef<Path>, value: &Value) {
+    let path = path.as_ref();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .expect("open jsonl");
+    serde_json::to_writer(&mut file, value).expect("write json");
+    file.write_all(b"\n").expect("write newline");
 }
 
 fn spine_call(call_id: &str) -> ResponseItem {
@@ -155,6 +167,44 @@ fn maybe_emit_size_hint_records_each_threshold_once_per_node() {
         .expect("second threshold should appear");
     assert_eq!(second.node_id, id(&[1, 1]));
     assert_eq!(second.threshold_tokens, 80_000);
+}
+
+#[test]
+fn maybe_emit_size_hint_skips_corrupt_non_semantic_cache() {
+    let (_temp, mut runtime) = temp_runtime();
+    let payload = "x".repeat(220_000);
+    runtime
+        .store()
+        .append_raw_mirror_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
+            response_item(&payload),
+        )])
+        .expect("append raw mirror");
+    runtime
+        .after_response_items_recorded("turn-1", &[response_item(&payload)], 0, 1)
+        .expect("record raw item");
+    runtime
+        .store()
+        .append_size_hint_emitted(&id(&[1, 1]), 20_000, 21_000, "setup")
+        .expect("create hint cache");
+    append_json_line(
+        runtime.store().hints_path(),
+        &json!({
+            "type": "size_hint_emitted",
+            "seq": 3,
+            "node_id": "1.1",
+            "threshold_tokens": 50000,
+            "estimated_tokens": 55000,
+            "source": "runtime_observation",
+        }),
+    );
+
+    assert_eq!(
+        runtime
+            .maybe_emit_size_hint("runtime_observation")
+            .expect("corrupt hint cache should not fail request"),
+        None
+    );
+    assert_eq!(runtime.cursor(), &id(&[1, 1]));
 }
 
 #[test]

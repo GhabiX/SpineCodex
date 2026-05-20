@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use super::SpineOperation;
 use super::SpineStoreError;
+use super::jsonl_ledger::SequencedLedgerEvent;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -49,7 +50,10 @@ pub(super) enum TreeEvent {
         checkpoint_hash: String,
         checkpoint: StateCheckpoint,
     },
-    SpineHintEmitted {
+    // Backward-compatible reader for sidecars written before size-hint dedup
+    // moved to cache/hints.jsonl. New code must not append this variant.
+    #[serde(rename = "spine_hint_emitted")]
+    LegacySpineHintEmitted {
         seq: u64,
         node_id: String,
         threshold_tokens: u64,
@@ -58,15 +62,26 @@ pub(super) enum TreeEvent {
     },
 }
 
-impl TreeEvent {
-    pub(super) fn seq(&self) -> u64 {
+impl SequencedLedgerEvent for TreeEvent {
+    fn seq(&self) -> u64 {
         match self {
             TreeEvent::SpineInitialized { seq, .. }
             | TreeEvent::TransitionApplied { seq, .. }
             | TreeEvent::RootEpochReset { seq, .. }
             | TreeEvent::RawStartOrdinalUpdated { seq, .. }
             | TreeEvent::ProjectionReset { seq, .. }
-            | TreeEvent::SpineHintEmitted { seq, .. } => *seq,
+            | TreeEvent::LegacySpineHintEmitted { seq, .. } => *seq,
+        }
+    }
+
+    fn set_seq(&mut self, next_seq: u64) {
+        match self {
+            TreeEvent::SpineInitialized { seq, .. }
+            | TreeEvent::TransitionApplied { seq, .. }
+            | TreeEvent::RootEpochReset { seq, .. }
+            | TreeEvent::RawStartOrdinalUpdated { seq, .. }
+            | TreeEvent::ProjectionReset { seq, .. }
+            | TreeEvent::LegacySpineHintEmitted { seq, .. } => *seq = next_seq,
         }
     }
 }

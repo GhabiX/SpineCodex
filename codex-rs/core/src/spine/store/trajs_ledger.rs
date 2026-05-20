@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::SpineOperation;
+use super::jsonl_ledger::SequencedLedgerEvent;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -22,4 +23,20 @@ pub(super) enum TrajsIndexEvent {
         call_start_ordinal: u64,
         boundary_end: u64,
     },
+}
+
+impl SequencedLedgerEvent for TrajsIndexEvent {
+    fn seq(&self) -> u64 {
+        match self {
+            TrajsIndexEvent::RawItemsRecorded { seq, .. }
+            | TrajsIndexEvent::TransitionCommitted { seq, .. } => *seq,
+        }
+    }
+
+    fn set_seq(&mut self, next_seq: u64) {
+        match self {
+            TrajsIndexEvent::RawItemsRecorded { seq, .. }
+            | TrajsIndexEvent::TransitionCommitted { seq, .. } => *seq = next_seq,
+        }
+    }
 }

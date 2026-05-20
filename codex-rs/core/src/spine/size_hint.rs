@@ -3,6 +3,7 @@ use super::runtime::SpineRuntimeError;
 use super::runtime::SpineRuntimeHint;
 use super::state::SpineState;
 use super::store::SpineSidecarStore;
+use tracing::warn;
 
 const SPINE_HINT_FIRST_THRESHOLD_TOKENS: u64 = 50_000;
 const SPINE_HINT_STEP_TOKENS: u64 = 30_000;
@@ -25,10 +26,20 @@ pub(crate) fn size_hint_for_cursor(
     let Some(threshold_tokens) = size_hint_threshold(estimated_tokens) else {
         return Ok(None);
     };
-    if store.has_size_hint_emitted(&node_id, threshold_tokens)? {
+    match store.has_size_hint_emitted(&node_id, threshold_tokens) {
+        Ok(true) => return Ok(None),
+        Ok(false) => {}
+        Err(err) => {
+            warn!("failed to read non-semantic Spine size hint cache; skipping hint: {err}");
+            return Ok(None);
+        }
+    }
+    if let Err(err) =
+        store.append_size_hint_emitted(&node_id, threshold_tokens, estimated_tokens, source)
+    {
+        warn!("failed to update non-semantic Spine size hint cache; skipping hint: {err}");
         return Ok(None);
     }
-    store.append_size_hint_emitted(&node_id, threshold_tokens, estimated_tokens, source)?;
     Ok(Some(SpineRuntimeHint {
         node_id,
         estimated_tokens,

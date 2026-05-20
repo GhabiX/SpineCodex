@@ -587,6 +587,7 @@ fn create_writes_root_ledger() {
     assert!(store.root().join("nodes").join("1").join("1").is_dir());
     assert!(store.trajs_index_path().exists());
     assert!(store.compact_index_path().exists());
+    assert!(!store.hints_path().exists());
     assert!(store.raw_rollout_path().exists());
 }
 
@@ -1134,16 +1135,162 @@ fn records_size_hint_emission_without_changing_replayed_state() {
     );
     assert_eq!(store.load().expect("load sidecar"), state);
     assert_eq!(
-        read_json_lines(store.tree_path())[1],
-        json!({
-            "type": "spine_hint_emitted",
-            "seq": 2,
+        read_json_lines(store.tree_path()),
+        vec![json!({
+            "type": "spine_initialized",
+            "seq": 1,
+            "initial_raw_start_ordinal": 0,
+        })]
+    );
+    assert_eq!(
+        read_json_lines(store.hints_path()),
+        vec![json!({
+            "type": "size_hint_emitted",
+            "seq": 1,
             "node_id": "1",
             "threshold_tokens": 30000,
             "estimated_tokens": 31200,
             "source": "runtime_observation",
-        })
+        })]
     );
+}
+
+#[test]
+fn legacy_tree_size_hint_emission_is_read_for_dedup_but_not_replayed() {
+    let (_temp, store) = temp_store();
+    let state = store.create().expect("create sidecar");
+    store
+        .append_json_line(
+            &store.tree_path(),
+            &json!({
+                "type": "spine_hint_emitted",
+                "seq": 2,
+                "node_id": "1",
+                "threshold_tokens": 30000,
+                "estimated_tokens": 31200,
+                "source": "runtime_observation",
+            }),
+        )
+        .expect("append legacy hint event");
+
+    assert!(
+        store
+            .has_size_hint_emitted(&id(&[1]), 30_000)
+            .expect("query legacy emitted hint")
+    );
+    assert_eq!(store.load().expect("load sidecar"), state);
+}
+
+#[test]
+fn size_hint_cache_seq_gap_fails_closed() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_size_hint_emitted(&id(&[1]), 20_000, 21_000, "setup")
+        .expect("create hint cache");
+    store
+        .append_json_line(
+            &store.hints_path(),
+            &json!({
+                "type": "size_hint_emitted",
+                "seq": 3,
+                "node_id": "1",
+                "threshold_tokens": 30000,
+                "estimated_tokens": 31200,
+                "source": "runtime_observation",
+            }),
+        )
+        .expect("append invalid hint event");
+
+    let error = store
+        .has_size_hint_emitted(&id(&[1]), 30_000)
+        .expect_err("hint cache seq gap should fail closed");
+
+    assert!(matches!(
+        error,
+        SpineStoreError::InvalidLedger(message)
+            if message.contains("cache/hints.jsonl line 2 has seq 3, expected 2")
+    ));
+}
+
+#[test]
+fn size_hint_cache_rejects_legacy_tree_event_shape() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_size_hint_emitted(&id(&[1]), 20_000, 21_000, "setup")
+        .expect("create hint cache");
+    store
+        .append_json_line(
+            &store.hints_path(),
+            &json!({
+                "type": "spine_hint_emitted",
+                "seq": 2,
+                "node_id": "1",
+                "threshold_tokens": 30000,
+                "estimated_tokens": 31200,
+                "source": "runtime_observation",
+            }),
+        )
+        .expect("append invalid hint event");
+
+    let error = store
+        .has_size_hint_emitted(&id(&[1]), 30_000)
+        .expect_err("hint cache event shape should fail closed");
+
+    assert!(matches!(
+        error,
+        SpineStoreError::Json { source, .. }
+            if source.to_string().contains("unknown variant `spine_hint_emitted`")
+    ));
+}
+
+#[test]
+fn legacy_tree_size_hint_no_longer_blocks_tree_seq() {
+    let (temp, store) = temp_store();
+    let rollout_path = temp.path().join("rollout-2026-05-10T15-38-00-thread.jsonl");
+    let mut state = store.create().expect("create sidecar");
+    store
+        .append_json_line(
+            &store.tree_path(),
+            &json!({
+                "type": "spine_hint_emitted",
+                "seq": 2,
+                "node_id": "1",
+                "threshold_tokens": 30000,
+                "estimated_tokens": 31200,
+                "source": "runtime_observation",
+            }),
+        )
+        .expect("append legacy hint event");
+
+    let store = SpineSidecarStore::for_rollout(&rollout_path).expect("reload store");
+    store
+        .record_transition(&mut state, SpineOperation::Open, None, 10, "turn-after")
+        .expect("append tree event after legacy hint");
+
+    let tree = read_json_lines(store.tree_path());
+    assert_eq!(tree[2]["type"], "transition_applied");
+    assert_eq!(tree[2]["seq"], 3);
+    assert_eq!(store.load().expect("load sidecar"), state);
+}
+
+#[test]
+fn size_hint_cache_emission_does_not_advance_tree_seq() {
+    let (_temp, store) = temp_store();
+    let mut state = store.create().expect("create sidecar");
+    store
+        .append_size_hint_emitted(&id(&[1]), 30_000, 31_200, "runtime_observation")
+        .expect("append hint event");
+
+    store
+        .record_transition(&mut state, SpineOperation::Open, None, 10, "turn-after")
+        .expect("append tree event after hint");
+
+    let tree = read_json_lines(store.tree_path());
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree[1]["type"], "transition_applied");
+    assert_eq!(tree[1]["seq"], 2);
 }
 
 #[test]

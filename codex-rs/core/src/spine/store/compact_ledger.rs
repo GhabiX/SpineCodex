@@ -19,6 +19,7 @@ use super::NOTE_EVIDENCE_COMMITTED_SCHEMA_VERSION;
 use super::SpineOperation;
 use super::SpineSidecarStore;
 use super::SpineStoreError;
+use super::jsonl_ledger::SequencedLedgerEvent;
 use super::validate_note_evidence_metadata;
 
 #[derive(Clone, Debug)]
@@ -174,8 +175,8 @@ pub(super) enum CompactIndexEvent {
     },
 }
 
-impl CompactIndexEvent {
-    pub(super) fn seq(&self) -> u64 {
+impl SequencedLedgerEvent for CompactIndexEvent {
+    fn seq(&self) -> u64 {
         match self {
             CompactIndexEvent::CompactStarted { seq, .. }
             | CompactIndexEvent::MemInstallCommitted { seq, .. }
@@ -185,7 +186,7 @@ impl CompactIndexEvent {
         }
     }
 
-    pub(super) fn set_seq(&mut self, next_seq: u64) {
+    fn set_seq(&mut self, next_seq: u64) {
         match self {
             CompactIndexEvent::CompactStarted { seq, .. }
             | CompactIndexEvent::MemInstallCommitted { seq, .. }

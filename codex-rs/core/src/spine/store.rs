@@ -38,6 +38,8 @@ use std::sync::MutexGuard;
 use thiserror::Error;
 
 mod compact_ledger;
+mod hint_ledger;
+mod jsonl_ledger;
 mod operation;
 mod trajs_ledger;
 mod tree_ledger;
@@ -57,6 +59,9 @@ use compact_ledger::note_evidence_items_hash;
 use compact_ledger::record_compact_terminal;
 use compact_ledger::record_mem_install_committed;
 use compact_ledger::record_note_evidence_committed;
+use hint_ledger::HintEvent;
+use jsonl_ledger::JsonlLedger;
+use jsonl_ledger::SequencedLedgerEvent;
 pub(crate) use operation::SpineOperation;
 pub(crate) use operation::TransitionSummaryArg;
 use trajs_ledger::TrajsIndexEvent;
@@ -68,6 +73,8 @@ const TREE_FILE: &str = "tree.jsonl";
 const NODES_DIR: &str = "nodes";
 const MEMORY_FILE: &str = "memory.md";
 const NODE_TRAJS_FILE: &str = "trajs.jsonl";
+const CACHE_DIR: &str = "cache";
+const HINTS_FILE: &str = "hints.jsonl";
 const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
 pub(super) const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
@@ -95,6 +102,12 @@ struct SpineStoreMetadataCache {
     // The JSONL ledger remains authoritative. This cache is replay-derived and advances only after
     // a tree event append succeeds.
     next_tree_seq: Option<u64>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LegacySizeHintRecord {
+    node_id: String,
+    threshold_tokens: u64,
 }
 
 impl SpineSidecarStore {
@@ -215,6 +228,10 @@ impl SpineSidecarStore {
         self.root.join(COMPACT_INDEX_FILE)
     }
 
+    pub(crate) fn hints_path(&self) -> PathBuf {
+        self.root.join(CACHE_DIR).join(HINTS_FILE)
+    }
+
     pub(crate) fn raw_rollout_path(&self) -> PathBuf {
         self.root.join(RAW_DIR).join(RAW_ROLLOUT_FILE)
     }
@@ -246,9 +263,9 @@ impl SpineSidecarStore {
         self.ensure_sidecar_dir()?;
         self.ensure_node_dir(&NodeId::root_epoch(1))?;
         self.ensure_node_dir(&NodeId::root_epoch(1).child(1))?;
-        self.create_trajs_index_file()?;
-        self.create_compact_index_file()?;
-        self.create_raw_rollout_file()?;
+        self.ensure_jsonl_file(&self.trajs_index_path(), TRAJS_INDEX_FILE)?;
+        self.ensure_jsonl_file(&self.compact_index_path(), COMPACT_INDEX_FILE)?;
+        self.ensure_jsonl_file(&self.raw_rollout_path(), RAW_ROLLOUT_FILE)?;
 
         let initial_raw_start_ordinal = 0;
         let state = SpineState::new_with_initial_leaf_raw_start(initial_raw_start_ordinal);
@@ -510,14 +527,15 @@ impl SpineSidecarStore {
         end: u64,
     ) -> Result<(), SpineStoreError> {
         let path = self.trajs_index_path();
-        let event = TrajsIndexEvent::RawItemsRecorded {
-            seq: self.next_jsonl_seq(&path)?,
-            node_id: node_id.to_string(),
-            turn_id: turn_id.into(),
-            start,
-            end,
-        };
-        self.append_json_line(&path, &event)
+        JsonlLedger::<TrajsIndexEvent>::required(&path, TRAJS_INDEX_FILE).append_next_seq(|seq| {
+            TrajsIndexEvent::RawItemsRecorded {
+                seq,
+                node_id: node_id.to_string(),
+                turn_id: turn_id.into(),
+                start,
+                end,
+            }
+        })
     }
 
     pub(crate) fn estimate_raw_response_tokens(
@@ -614,16 +632,18 @@ impl SpineSidecarStore {
         threshold_tokens: u64,
     ) -> Result<bool, SpineStoreError> {
         let node_id = node_id.to_string();
-        for event in self.read_tree_events()? {
-            let TreeEvent::SpineHintEmitted {
+        for event in self.read_hint_events()? {
+            let HintEvent::SizeHintEmitted {
                 node_id: event_node_id,
                 threshold_tokens: event_threshold_tokens,
                 ..
-            } = event
-            else {
-                continue;
-            };
+            } = event;
             if event_node_id == node_id && event_threshold_tokens == threshold_tokens {
+                return Ok(true);
+            }
+        }
+        for event in self.read_legacy_tree_hint_events()? {
+            if event.node_id == node_id && event.threshold_tokens == threshold_tokens {
                 return Ok(true);
             }
         }
@@ -637,14 +657,16 @@ impl SpineSidecarStore {
         estimated_tokens: u64,
         source: impl Into<String>,
     ) -> Result<(), SpineStoreError> {
-        let event = TreeEvent::SpineHintEmitted {
-            seq: self.next_tree_seq()?,
-            node_id: node_id.to_string(),
-            threshold_tokens,
-            estimated_tokens,
-            source: source.into(),
-        };
-        self.append_tree_event(&event)
+        let path = self.hints_path();
+        JsonlLedger::<HintEvent>::optional(&path, "cache/hints.jsonl").append_next_seq(|seq| {
+            HintEvent::SizeHintEmitted {
+                seq,
+                node_id: node_id.to_string(),
+                threshold_tokens,
+                estimated_tokens,
+                source: source.into(),
+            }
+        })
     }
 
     pub(crate) fn append_transition_committed(
@@ -664,16 +686,17 @@ impl SpineSidecarStore {
                 "injected transition commit failure".to_string(),
             ));
         }
-        let event = TrajsIndexEvent::TransitionCommitted {
-            seq: self.next_jsonl_seq(&path)?,
-            call_id,
-            op,
-            from_node: from_node.to_string(),
-            to_node: to_node.to_string(),
-            call_start_ordinal,
-            boundary_end,
-        };
-        self.append_json_line(&path, &event)
+        JsonlLedger::<TrajsIndexEvent>::required(&path, TRAJS_INDEX_FILE).append_next_seq(|seq| {
+            TrajsIndexEvent::TransitionCommitted {
+                seq,
+                call_id,
+                op,
+                from_node: from_node.to_string(),
+                to_node: to_node.to_string(),
+                call_start_ordinal,
+                boundary_end,
+            }
+        })
     }
 
     pub(crate) fn append_raw_mirror_items(
@@ -722,17 +745,18 @@ impl SpineSidecarStore {
             rollout,
         } = record;
         let path = self.compact_index_path();
-        let event = CompactIndexEvent::CompactStarted {
-            seq: self.next_jsonl_seq(&path)?,
-            compact_id,
-            node_id: node_id.to_string(),
-            op,
-            cut_ordinal,
-            fold_end_ordinal,
-            strategy,
-            rollout,
-        };
-        self.append_json_line(&path, &event)
+        JsonlLedger::<CompactIndexEvent>::required(&path, COMPACT_INDEX_FILE).append_next_seq(
+            |seq| CompactIndexEvent::CompactStarted {
+                seq,
+                compact_id,
+                node_id: node_id.to_string(),
+                op,
+                cut_ordinal,
+                fold_end_ordinal,
+                strategy,
+                rollout,
+            },
+        )
     }
 
     pub(crate) fn append_mem_install_committed(
@@ -767,24 +791,24 @@ impl SpineSidecarStore {
         )?;
 
         let path = self.compact_index_path();
-        let seq = self.next_jsonl_seq(&path)?;
         let memory_section_id = body_ref.section_id.to_string();
         let storage_ref = body_ref.section_id.storage_ref.clone();
-        let event = CompactIndexEvent::MemInstallCommitted {
-            seq,
-            schema_version: MEM_INSTALL_COMMITTED_SCHEMA_VERSION,
-            compact_id: attempt.compact_id,
-            node_id: attempt.node_id.to_string(),
-            op: attempt.op,
-            cut_ordinal: attempt.cut_ordinal,
-            fold_end_ordinal: attempt.fold_end_ordinal,
-            memory_section_id,
-            body_hash: body_ref.body_hash,
-            storage_ref,
-            projection_ref,
-            source_rollout_ref,
-        };
-        self.append_json_line(&path, &event)
+        JsonlLedger::<CompactIndexEvent>::required(&path, COMPACT_INDEX_FILE).append_next_seq(
+            |seq| CompactIndexEvent::MemInstallCommitted {
+                seq,
+                schema_version: MEM_INSTALL_COMMITTED_SCHEMA_VERSION,
+                compact_id: attempt.compact_id,
+                node_id: attempt.node_id.to_string(),
+                op: attempt.op,
+                cut_ordinal: attempt.cut_ordinal,
+                fold_end_ordinal: attempt.fold_end_ordinal,
+                memory_section_id,
+                body_hash: body_ref.body_hash,
+                storage_ref,
+                projection_ref,
+                source_rollout_ref,
+            },
+        )
     }
 
     pub(crate) fn append_note_evidence_committed(
@@ -809,18 +833,20 @@ impl SpineSidecarStore {
         )?;
 
         let path = self.compact_index_path();
-        let event = CompactIndexEvent::NoteEvidenceCommitted {
-            seq: self.next_jsonl_seq(&path)?,
-            schema_version: NOTE_EVIDENCE_COMMITTED_SCHEMA_VERSION,
-            compact_id,
-            placement,
-            kind,
-            items_hash: note_evidence_items_hash(&items)?,
-            items,
-            projection_ref,
-            source_rollout_ref,
-        };
-        self.append_json_line(&path, &event)
+        let items_hash = note_evidence_items_hash(&items)?;
+        JsonlLedger::<CompactIndexEvent>::required(&path, COMPACT_INDEX_FILE).append_next_seq(
+            |seq| CompactIndexEvent::NoteEvidenceCommitted {
+                seq,
+                schema_version: NOTE_EVIDENCE_COMMITTED_SCHEMA_VERSION,
+                compact_id,
+                placement,
+                kind,
+                items_hash,
+                items,
+                projection_ref,
+                source_rollout_ref,
+            },
+        )
     }
 
     pub(crate) fn append_compact_failed(
@@ -840,17 +866,18 @@ impl SpineSidecarStore {
             error,
         } = record;
         let path = self.compact_index_path();
-        let event = CompactIndexEvent::CompactFailed {
-            seq: self.next_jsonl_seq(&path)?,
-            compact_id,
-            node_id: node_id.to_string(),
-            op,
-            cut_ordinal,
-            fold_end_ordinal,
-            strategy,
-            error,
-        };
-        self.append_json_line(&path, &event)
+        JsonlLedger::<CompactIndexEvent>::required(&path, COMPACT_INDEX_FILE).append_next_seq(
+            |seq| CompactIndexEvent::CompactFailed {
+                seq,
+                compact_id,
+                node_id: node_id.to_string(),
+                op,
+                cut_ordinal,
+                fold_end_ordinal,
+                strategy,
+                error,
+            },
+        )
     }
 
     pub(crate) fn append_compact_interrupted(
@@ -870,17 +897,18 @@ impl SpineSidecarStore {
             error,
         } = record;
         let path = self.compact_index_path();
-        let event = CompactIndexEvent::CompactInterrupted {
-            seq: self.next_jsonl_seq(&path)?,
-            compact_id,
-            node_id: node_id.to_string(),
-            op,
-            cut_ordinal,
-            fold_end_ordinal,
-            strategy,
-            error,
-        };
-        self.append_json_line(&path, &event)
+        JsonlLedger::<CompactIndexEvent>::required(&path, COMPACT_INDEX_FILE).append_next_seq(
+            |seq| CompactIndexEvent::CompactInterrupted {
+                seq,
+                compact_id,
+                node_id: node_id.to_string(),
+                op,
+                cut_ordinal,
+                fold_end_ordinal,
+                strategy,
+                error,
+            },
+        )
     }
 
     pub(crate) fn append_memory_section(
@@ -1021,19 +1049,8 @@ impl SpineSidecarStore {
                 TreeEvent::ProjectionReset { checkpoint, .. } => {
                     state = Some(checkpoint.replay()?);
                 }
-                TreeEvent::SpineHintEmitted { node_id, .. } => {
-                    let state = state.as_ref().ok_or_else(|| {
-                        SpineStoreError::InvalidLedger(
-                            "spine_hint_emitted appeared before root node creation".to_string(),
-                        )
-                    })?;
-                    let node_id = NodeId::parse(&node_id)?;
-                    if state.node(&node_id).is_none() {
-                        return Err(SpineStoreError::InvalidLedger(format!(
-                            "spine_hint_emitted references unknown node {}",
-                            node_id.bracketed()
-                        )));
-                    }
+                TreeEvent::LegacySpineHintEmitted { .. } => {
+                    // Legacy UX cache event: it must not affect task-tree replay.
                 }
             }
         }
@@ -1045,45 +1062,33 @@ impl SpineSidecarStore {
 
     fn read_tree_events(&self) -> Result<Vec<TreeEvent>, SpineStoreError> {
         let path = self.tree_path();
-        let file = File::open(&path).map_err(|source| SpineStoreError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let reader = BufReader::new(file);
-        let mut events = Vec::new();
-
-        for (index, line) in reader.lines().enumerate() {
-            let line = line.map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-            if line.trim().is_empty() {
-                return Err(SpineStoreError::InvalidLedger(format!(
-                    "tree.jsonl line {} is empty",
-                    index + 1
-                )));
-            }
-            let event: TreeEvent =
-                serde_json::from_str(&line).map_err(|source| SpineStoreError::Json {
-                    path: path.clone(),
-                    source,
-                })?;
-            let expected_seq = u64::try_from(index + 1).map_err(|_| {
-                SpineStoreError::InvalidLedger("tree.jsonl has too many events".to_string())
-            })?;
-            if event.seq() != expected_seq {
-                return Err(SpineStoreError::InvalidLedger(format!(
-                    "tree.jsonl line {} has seq {}, expected {}",
-                    index + 1,
-                    event.seq(),
-                    expected_seq
-                )));
-            }
-            events.push(event);
-        }
-
+        let events = JsonlLedger::<TreeEvent>::required(&path, TREE_FILE).read_sequenced()?;
         self.set_cached_next_tree_seq(next_tree_seq_for_event_count(events.len())?)?;
         Ok(events)
+    }
+
+    fn read_hint_events(&self) -> Result<Vec<HintEvent>, SpineStoreError> {
+        let path = self.hints_path();
+        JsonlLedger::<HintEvent>::optional(&path, "cache/hints.jsonl").read_sequenced()
+    }
+
+    fn read_legacy_tree_hint_events(&self) -> Result<Vec<LegacySizeHintRecord>, SpineStoreError> {
+        let mut records = Vec::new();
+        for event in self.read_tree_events()? {
+            let TreeEvent::LegacySpineHintEmitted {
+                node_id,
+                threshold_tokens,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            records.push(LegacySizeHintRecord {
+                node_id,
+                threshold_tokens,
+            });
+        }
+        Ok(records)
     }
 
     pub(crate) fn latest_projection_epoch(
@@ -1119,46 +1124,7 @@ impl SpineSidecarStore {
 
     fn read_compact_index_events(&self) -> Result<Vec<CompactIndexEvent>, SpineStoreError> {
         let path = self.compact_index_path();
-        let file = File::open(&path).map_err(|source| SpineStoreError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let reader = BufReader::new(file);
-        let mut events = Vec::new();
-
-        for (index, line) in reader.lines().enumerate() {
-            let line = line.map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-            if line.trim().is_empty() {
-                return Err(SpineStoreError::InvalidLedger(format!(
-                    "compact.index.jsonl line {} is empty",
-                    index + 1
-                )));
-            }
-            let event: CompactIndexEvent =
-                serde_json::from_str(&line).map_err(|source| SpineStoreError::Json {
-                    path: path.clone(),
-                    source,
-                })?;
-            let expected_seq = u64::try_from(index + 1).map_err(|_| {
-                SpineStoreError::InvalidLedger(
-                    "compact.index.jsonl has too many events".to_string(),
-                )
-            })?;
-            if event.seq() != expected_seq {
-                return Err(SpineStoreError::InvalidLedger(format!(
-                    "compact.index.jsonl line {} has seq {}, expected {}",
-                    index + 1,
-                    event.seq(),
-                    expected_seq
-                )));
-            }
-            events.push(event);
-        }
-
-        Ok(events)
+        JsonlLedger::<CompactIndexEvent>::required(&path, COMPACT_INDEX_FILE).read_sequenced()
     }
 
     pub(crate) fn committed_mem_installs(
@@ -1608,25 +1574,8 @@ impl SpineSidecarStore {
         events: Vec<CompactIndexEvent>,
     ) -> Result<(), SpineStoreError> {
         let path = self.compact_index_path();
-        let mut file = File::create(&path).map_err(|source| SpineStoreError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        for (index, mut event) in events.into_iter().enumerate() {
-            let seq = u64::try_from(index + 1).map_err(|_| {
-                SpineStoreError::InvalidLedger("compact.index.jsonl has too many events".into())
-            })?;
-            event.set_seq(seq);
-            let line = serde_json::to_string(&event).map_err(|source| SpineStoreError::Json {
-                path: path.clone(),
-                source,
-            })?;
-            writeln!(file, "{line}").map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        }
-        Ok(())
+        JsonlLedger::<CompactIndexEvent>::required(&path, COMPACT_INDEX_FILE)
+            .rewrite_resequenced(events)
     }
 
     fn next_tree_seq(&self) -> Result<u64, SpineStoreError> {
@@ -1642,27 +1591,9 @@ impl SpineSidecarStore {
         self.next_tree_seq()
     }
 
+    #[cfg(test)]
     fn next_jsonl_seq(&self, path: &Path) -> Result<u64, SpineStoreError> {
-        if !path.exists() {
-            return Ok(1);
-        }
-
-        let file = File::open(path).map_err(|source| SpineStoreError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let reader = BufReader::new(file);
-        let mut count = 0_u64;
-        for line in reader.lines() {
-            line.map_err(|source| SpineStoreError::Io {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            count = count.checked_add(1).ok_or_else(|| {
-                SpineStoreError::InvalidLedger(format!("{} has too many events", path.display()))
-            })?;
-        }
-        Ok(count + 1)
+        JsonlLedger::<Value>::optional(path, "jsonl").next_seq()
     }
 
     fn append_json_line<T: Serialize>(
@@ -1670,22 +1601,7 @@ impl SpineSidecarStore {
         path: &Path,
         value: &T,
     ) -> Result<(), SpineStoreError> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|source| SpineStoreError::Io {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        serde_json::to_writer(&mut file, value).map_err(|source| SpineStoreError::Json {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        file.write_all(b"\n").map_err(|source| SpineStoreError::Io {
-            path: path.to_path_buf(),
-            source,
-        })
+        JsonlLedger::<T>::required(path, "jsonl").append(value)
     }
 
     fn append_tree_event(&self, event: &TreeEvent) -> Result<(), SpineStoreError> {
@@ -1724,49 +1640,8 @@ impl SpineSidecarStore {
         std::fs::create_dir_all(&path).map_err(|source| SpineStoreError::Io { path, source })
     }
 
-    fn create_trajs_index_file(&self) -> Result<(), SpineStoreError> {
-        let path = self.trajs_index_path();
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        Ok(())
-    }
-
-    fn create_compact_index_file(&self) -> Result<(), SpineStoreError> {
-        let path = self.compact_index_path();
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        Ok(())
-    }
-
-    fn create_raw_rollout_file(&self) -> Result<(), SpineStoreError> {
-        let path = self.raw_rollout_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| SpineStoreError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|source| SpineStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        Ok(())
+    fn ensure_jsonl_file(&self, path: &Path, label: &'static str) -> Result<(), SpineStoreError> {
+        JsonlLedger::<Value>::required(path, label).ensure_exists()
     }
 
     fn read_memory_file(&self, node_id: &NodeId) -> Result<String, SpineStoreError> {
