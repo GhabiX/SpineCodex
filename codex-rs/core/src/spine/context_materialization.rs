@@ -1,12 +1,17 @@
 use super::checkpoint_render::render_spine_handoff_item;
 use super::checkpoint_render::render_spine_memory_item;
+use super::host_materialization::SpineHostMaterializationInput;
+use super::host_materialization::SpineHostRawSource;
+use super::host_materialization::materialize_spine_host_history;
 use super::project_pi::ProjectInput;
 use super::project_pi::ProjectMemInstall;
 use super::project_pi::project_pi;
 use super::projection::SpineProjectionInputs;
 use super::projection::effective_rollout_items;
 use super::projection::project_spine_state_from_inputs;
+use super::segment::RawSpan;
 use super::segment::Segment;
+use super::segment::SegmentArtifacts;
 use super::state::SpineState;
 use super::store::CommittedMemInstall;
 use super::store::CommittedNoteEvidence;
@@ -134,62 +139,20 @@ pub(crate) fn materialize_spine_context(
         .iter()
         .map(|install| (install.compact_id.as_str(), install))
         .collect::<BTreeMap<_, _>>();
-    let mut history = Vec::new();
-    for segment in projected.pi {
-        match segment {
-            Segment::Raw(raw_span) => {
-                let start = usize::try_from(raw_span.start).map_err(|_| {
-                    CodexErr::Fatal(format!(
-                        "Spine materialization raw start {} cannot fit usize",
-                        raw_span.start
-                    ))
-                })?;
-                let end = usize::try_from(raw_span.end).map_err(|_| {
-                    CodexErr::Fatal(format!(
-                        "Spine materialization raw end {} cannot fit usize",
-                        raw_span.end
-                    ))
-                })?;
-                if end > raw_items.len() || start > end {
-                    return Err(CodexErr::Fatal(format!(
-                        "Spine materialization Raw {} is outside effective raw item length {}",
-                        raw_span,
-                        raw_items.len()
-                    )));
-                }
-                history.extend(raw_items[start..end].iter().cloned());
-            }
-            Segment::Mem { compact_id } => {
-                if let Some(notes) =
-                    note_items_for_mem(&note_evidence, &compact_id, NotePlacement::BeforeMem)
-                {
-                    history.extend(notes);
-                }
-                let item = memory_items.get(&compact_id).ok_or_else(|| {
-                    CodexErr::Fatal(format!(
-                        "Spine materialization missing rendered Mem item for {compact_id}"
-                    ))
-                })?;
-                history.push(item.clone());
-                if let Some(handoff) = handoff_note_for_mem(
-                    &projected_state,
-                    install_by_id.get(compact_id.as_str()).copied(),
-                ) {
-                    history.push(handoff);
-                }
-                if let Some(notes) =
-                    note_items_for_mem(&note_evidence, &compact_id, NotePlacement::AfterMem)
-                {
-                    history.extend(notes);
-                }
-            }
-            Segment::Note { kind } => {
-                return Err(CodexErr::Fatal(format!(
-                    "Spine materialization cannot render Note({kind}) without structured note evidence"
-                )));
-            }
-        }
-    }
+    let artifacts = segment_artifacts(&surviving_installs);
+    let (pi, note_items) = attach_host_notes(
+        &note_evidence,
+        projected.pi,
+        &projected_state,
+        &install_by_id,
+    );
+    let history = materialize_spine_host_history(SpineHostMaterializationInput {
+        pi: &pi,
+        artifacts: &artifacts,
+        raw_source: SpineHostRawSource::Direct(&raw_items),
+        mem_items: &memory_items,
+        note_items: &note_items,
+    })?;
     Ok(SpineMaterialization { history })
 }
 
@@ -253,6 +216,56 @@ fn note_items_for_mem(
     placement: NotePlacement,
 ) -> Option<Vec<ResponseItem>> {
     notes.get(&(compact_id.to_string(), placement)).cloned()
+}
+
+fn attach_host_notes(
+    notes: &BTreeMap<(String, NotePlacement), Vec<ResponseItem>>,
+    pi: Vec<Segment>,
+    state: &SpineState,
+    install_by_id: &BTreeMap<&str, &CommittedMemInstall>,
+) -> (Vec<Segment>, BTreeMap<String, Vec<ResponseItem>>) {
+    let mut rendered_pi = Vec::new();
+    let mut note_items = BTreeMap::new();
+    for segment in pi {
+        let Segment::Mem { compact_id } = segment else {
+            rendered_pi.push(segment);
+            continue;
+        };
+        if let Some(items) = note_items_for_mem(notes, &compact_id, NotePlacement::BeforeMem) {
+            let kind = format!("before_mem:{compact_id}");
+            note_items.insert(kind.clone(), items);
+            rendered_pi.push(Segment::note(kind));
+        }
+        rendered_pi.push(Segment::mem(compact_id.clone()));
+        if let Some(handoff) =
+            handoff_note_for_mem(state, install_by_id.get(compact_id.as_str()).copied())
+        {
+            let kind = format!("handoff:{compact_id}");
+            note_items.insert(kind.clone(), vec![handoff]);
+            rendered_pi.push(Segment::note(kind));
+        }
+        if let Some(items) = note_items_for_mem(notes, &compact_id, NotePlacement::AfterMem) {
+            let kind = format!("after_mem:{compact_id}");
+            note_items.insert(kind.clone(), items);
+            rendered_pi.push(Segment::note(kind));
+        }
+    }
+    (rendered_pi, note_items)
+}
+
+fn segment_artifacts(installs: &[CommittedMemInstall]) -> SegmentArtifacts {
+    installs
+        .iter()
+        .map(|install| {
+            (
+                install.compact_id.clone(),
+                RawSpan {
+                    start: install.cut_ordinal,
+                    end: install.fold_end_ordinal,
+                },
+            )
+        })
+        .collect()
 }
 
 fn render_memory_items(

@@ -4,11 +4,13 @@ use super::host_bridge::SPINE_INITIAL_CONTEXT_CLOSE_TAG;
 use super::host_bridge::SPINE_INITIAL_CONTEXT_OPEN_TAG;
 use super::host_bridge::parse_spine_initial_context_item;
 use super::host_bridge::spine_memory_text_marker;
+use super::host_materialization::SpineHostMaterializationInput;
+use super::host_materialization::SpineHostRawSource;
+use super::host_materialization::insert_spine_host_note_segments;
+use super::host_materialization::materialize_spine_host_history;
 use super::ids::NodeId;
-use super::segment::Segment;
-use super::segment::SegmentArtifacts;
-use super::segment::span;
 use super::store::InstalledCompactSpan;
+use super::store::NotePlacement;
 use super::store::SpineOperation;
 use super::view::op_label;
 use codex_protocol::error::CodexErr;
@@ -17,73 +19,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use std::collections::BTreeMap;
 use std::path::Path;
-
-/// Render a structured `Pi` into the host checkpoint shape that Codex replay
-/// currently persists as `replacement_history`.
-///
-/// This is an H-layer bridge materialization. It must be derivable from
-/// structured Spine evidence and must not become the semantic source for Mem,
-/// rollback, fork, or audit.
-pub(crate) fn render_pi_bridge_replacement_history(
-    history: &[ResponseItem],
-    runtime_spans: &[InstalledCompactSpan],
-    pi: &[Segment],
-    artifacts: &SegmentArtifacts,
-    mem_items: &BTreeMap<String, ResponseItem>,
-    note_items: &BTreeMap<String, Vec<ResponseItem>>,
-) -> CodexResult<Vec<ResponseItem>> {
-    let projection = HostBridgeProjection::build(history, runtime_spans)?;
-    let mut rendered = Vec::new();
-    for segment in pi {
-        match segment {
-            Segment::Raw(raw_span) => {
-                let start_index = projection
-                    .effective_index_for_raw_boundary(raw_span.start)
-                    .ok_or_else(|| {
-                        CodexErr::Fatal(format!(
-                            "render(Pi) Raw {} start does not map to an effective index",
-                            raw_span
-                        ))
-                    })?;
-                let end_index = projection
-                    .effective_index_for_raw_boundary(raw_span.end)
-                    .ok_or_else(|| {
-                        CodexErr::Fatal(format!(
-                            "render(Pi) Raw {} end does not map to an effective index",
-                            raw_span
-                        ))
-                    })?;
-                if start_index > end_index {
-                    return Err(CodexErr::Fatal(format!(
-                        "render(Pi) Raw {} maps to inverted effective range [{start_index}, {end_index})",
-                        raw_span
-                    )));
-                }
-                rendered.extend(history[start_index..end_index].iter().cloned());
-            }
-            Segment::Mem { compact_id } => {
-                span(segment, artifacts).map_err(pi_render_error)?;
-                let item = mem_items.get(compact_id).ok_or_else(|| {
-                    CodexErr::Fatal(format!("render(Pi) missing Mem item for {compact_id}"))
-                })?;
-                rendered.push(item.clone());
-            }
-            Segment::Note { kind } => {
-                let items = note_items.get(kind).ok_or_else(|| {
-                    CodexErr::Fatal(format!("render(Pi) missing Note item for {kind}"))
-                })?;
-                rendered.extend(items.iter().cloned());
-            }
-        }
-    }
-    Ok(rendered)
-}
-
-fn pi_render_error(error: impl std::fmt::Display) -> CodexErr {
-    CodexErr::Fatal(format!(
-        "render(Pi) failed to build canonical cover: {error}"
-    ))
-}
 
 pub(crate) fn build_suffix_replacement_history_from_candidate_plan(
     old_history: &[ResponseItem],
@@ -100,24 +35,24 @@ pub(crate) fn build_suffix_replacement_history_from_candidate_plan(
         .enumerate()
         .map(|(index, item)| (format!("suffix_note_{index}"), vec![item]))
         .collect::<BTreeMap<_, _>>();
-    if !note_items.is_empty() {
-        pi = insert_notes(
-            pi,
-            compact_id,
-            note_items.keys().cloned().collect(),
-            NotePlacement::AfterMem,
-        )?;
-    }
+    pi = insert_spine_host_note_segments(
+        pi,
+        compact_id,
+        note_items.keys().cloned().collect(),
+        NotePlacement::AfterMem,
+    )?;
     let mut mem_items = memory_items_from_runtime_spans(old_history, runtime_spans)?;
     mem_items.insert(compact_id.to_string(), memory_item);
-    render_pi_bridge_replacement_history(
-        old_history,
-        runtime_spans,
-        &pi,
+    materialize_spine_host_history(SpineHostMaterializationInput {
+        pi: &pi,
         artifacts,
-        &mem_items,
-        &note_items,
-    )
+        raw_source: SpineHostRawSource::HostBridge {
+            history: old_history,
+            runtime_spans,
+        },
+        mem_items: &mem_items,
+        note_items: &note_items,
+    })
 }
 
 pub(crate) fn resolve_root_archive_cut(
@@ -166,24 +101,24 @@ pub(crate) fn build_root_archive_replacement_history_from_candidate_plan(
         .enumerate()
         .map(|(index, item)| (format!("initial_context_{index}"), vec![item]))
         .collect::<BTreeMap<_, _>>();
-    if !note_items.is_empty() {
-        pi = insert_notes(
-            pi,
-            root_compact_id,
-            note_items.keys().cloned().collect(),
-            NotePlacement::BeforeMem,
-        )?;
-    }
+    pi = insert_spine_host_note_segments(
+        pi,
+        root_compact_id,
+        note_items.keys().cloned().collect(),
+        NotePlacement::BeforeMem,
+    )?;
     let mut mem_items = memory_items_from_runtime_spans(history, runtime_spans)?;
     mem_items.insert(root_compact_id.to_string(), root_memory_item);
-    let replacement_history = render_pi_bridge_replacement_history(
-        history,
-        runtime_spans,
-        &pi,
+    let replacement_history = materialize_spine_host_history(SpineHostMaterializationInput {
+        pi: &pi,
         artifacts,
-        &mem_items,
-        &note_items,
-    )?;
+        raw_source: SpineHostRawSource::HostBridge {
+            history,
+            runtime_spans,
+        },
+        mem_items: &mem_items,
+        note_items: &note_items,
+    })?;
     Ok(replacement_history)
 }
 
@@ -198,51 +133,6 @@ fn memory_items_from_runtime_spans(
         items.insert(span.compact_id.clone(), item);
     }
     Ok(items)
-}
-
-#[derive(Clone, Copy)]
-enum NotePlacement {
-    BeforeMem,
-    AfterMem,
-}
-
-fn insert_notes(
-    pi: Vec<Segment>,
-    compact_id: &str,
-    note_kinds: Vec<String>,
-    placement: NotePlacement,
-) -> CodexResult<Vec<Segment>> {
-    let notes = note_kinds
-        .into_iter()
-        .map(Segment::note)
-        .collect::<Vec<_>>();
-    let Some(target_index) = pi
-        .iter()
-        .position(|segment| matches!(segment, Segment::Mem { compact_id: id } if id == compact_id))
-    else {
-        return Err(CodexErr::Fatal(format!(
-            "render(Pi) could not place notes {} Mem {compact_id}",
-            match placement {
-                NotePlacement::BeforeMem => "before",
-                NotePlacement::AfterMem => "after",
-            }
-        )));
-    };
-
-    let mut result = Vec::with_capacity(pi.len() + notes.len());
-    match placement {
-        NotePlacement::BeforeMem => {
-            result.extend(pi[..target_index].iter().cloned());
-            result.extend(notes.iter().cloned());
-            result.extend(pi[target_index..].iter().cloned());
-        }
-        NotePlacement::AfterMem => {
-            result.extend(pi[..=target_index].iter().cloned());
-            result.extend(notes.iter().cloned());
-            result.extend(pi[target_index + 1..].iter().cloned());
-        }
-    }
-    Ok(result)
 }
 
 pub(crate) fn render_spine_memory_item(

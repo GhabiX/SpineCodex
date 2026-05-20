@@ -104,7 +104,6 @@ impl<'a> HostBridgeProjection<'a> {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn raw_len(&self) -> u64 {
         self.raw_len
     }
