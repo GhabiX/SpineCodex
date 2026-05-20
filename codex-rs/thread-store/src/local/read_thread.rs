@@ -15,7 +15,6 @@ use codex_state::ThreadMetadata;
 use super::LocalThreadStore;
 use super::helpers::distinct_thread_metadata_title;
 use super::helpers::git_info_from_parts;
-use super::helpers::repair_spine_artifacts_after_relocation;
 use super::helpers::rollout_path_is_archived;
 use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
@@ -47,12 +46,6 @@ pub(super) async fn read_thread(
             .await)
     {
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
-        if let Some(rollout_path) = thread.rollout_path.as_ref() {
-            repair_spine_artifacts_after_relocation(
-                store.config.codex_home.as_path(),
-                rollout_path.as_path(),
-            )?;
-        }
         if !params.include_history
             && let Some(rollout_path) = thread.rollout_path.clone()
             && let Ok(mut rollout_thread) = read_thread_from_rollout_path(store, rollout_path).await
@@ -222,7 +215,6 @@ async fn read_thread_from_rollout_path(
     store: &LocalThreadStore,
     path: std::path::PathBuf,
 ) -> ThreadStoreResult<StoredThread> {
-    repair_spine_artifacts_after_relocation(store.config.codex_home.as_path(), path.as_path())?;
     let Some(item) = read_thread_item_from_rollout(path.clone()).await else {
         return stored_thread_from_session_meta(store, path).await;
     };
@@ -460,16 +452,6 @@ mod tests {
         (locator_path, sidecar_path)
     }
 
-    fn archived_path_for(home: &Path, active_path: &Path) -> PathBuf {
-        home.join(ARCHIVED_SESSIONS_SUBDIR)
-            .join(active_path.file_name().expect("file name"))
-    }
-
-    fn restored_path_for(home: &Path, archived_path: &Path) -> PathBuf {
-        home.join("sessions/2025/01/03")
-            .join(archived_path.file_name().expect("file name"))
-    }
-
     #[tokio::test]
     async fn read_thread_returns_active_rollout_summary() {
         let home = TempDir::new().expect("temp dir");
@@ -499,7 +481,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spine_relocation_repairs_archived_rollout_with_active_locator_and_sidecar() {
+    async fn read_thread_does_not_repair_spine_artifacts_after_manual_archive_move() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(240);
@@ -507,7 +489,10 @@ mod tests {
         let active_path =
             write_session_file(home.path(), "2025-01-03T12-40-00", uuid).expect("session file");
         let (active_locator, active_sidecar) = write_spine_artifacts(&active_path);
-        let archived_path = archived_path_for(home.path(), &active_path);
+        let archived_path = home
+            .path()
+            .join(ARCHIVED_SESSIONS_SUBDIR)
+            .join(active_path.file_name().expect("file name"));
         std::fs::create_dir_all(archived_path.parent().expect("archived parent"))
             .expect("archived parent");
         std::fs::rename(&active_path, &archived_path).expect("simulate rollout move");
@@ -519,50 +504,18 @@ mod tests {
                 include_history: true,
             })
             .await
-            .expect("read repaired archived thread");
+            .expect("read archived thread");
 
         let (archived_locator, archived_sidecar) = spine_paths(&archived_path);
         assert_eq!(thread.rollout_path, Some(archived_path));
-        assert!(!active_locator.exists());
-        assert!(!active_sidecar.exists());
-        assert!(archived_locator.exists());
-        assert!(archived_sidecar.join("tree.jsonl").exists());
-    }
-
-    #[tokio::test]
-    async fn spine_relocation_repairs_active_rollout_with_archived_locator() {
-        let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
-        let uuid = Uuid::from_u128(241);
-        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        let archived_path = write_archived_session_file(home.path(), "2025-01-03T12-41-00", uuid)
-            .expect("archived session file");
-        let (archived_locator, archived_sidecar) = write_spine_artifacts(&archived_path);
-        let restored_path = restored_path_for(home.path(), &archived_path);
-        std::fs::create_dir_all(restored_path.parent().expect("restored parent"))
-            .expect("restored parent");
-        let (_restored_locator, restored_sidecar) = spine_paths(&restored_path);
-        std::fs::rename(&archived_sidecar, &restored_sidecar).expect("simulate sidecar move");
-        std::fs::rename(&archived_path, &restored_path).expect("simulate rollout move");
-
-        let thread = store
-            .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
-                include_history: true,
-            })
-            .await
-            .expect("read repaired active thread");
-
-        let (restored_locator, restored_sidecar) = spine_paths(&restored_path);
-        assert_eq!(thread.rollout_path, Some(restored_path));
+        assert!(active_locator.exists());
+        assert!(active_sidecar.join("tree.jsonl").exists());
         assert!(!archived_locator.exists());
-        assert!(restored_locator.exists());
-        assert!(restored_sidecar.join("tree.jsonl").exists());
+        assert!(!archived_sidecar.exists());
     }
 
     #[tokio::test]
-    async fn spine_relocation_repairs_destination_sidecar_missing_locator() {
+    async fn read_thread_does_not_create_spine_locator_for_orphan_sidecar() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(242);
@@ -580,40 +533,10 @@ mod tests {
                 include_history: true,
             })
             .await
-            .expect("read repaired sidecar locator");
+            .expect("read thread");
 
-        assert!(active_locator.exists());
+        assert!(!active_locator.exists());
         assert!(active_sidecar.join("tree.jsonl").exists());
-    }
-
-    #[tokio::test]
-    async fn spine_relocation_fails_when_source_and_destination_sidecars_conflict() {
-        let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
-        let uuid = Uuid::from_u128(243);
-        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        let active_path =
-            write_session_file(home.path(), "2025-01-03T12-43-00", uuid).expect("session file");
-        write_spine_artifacts(&active_path);
-        let archived_path = archived_path_for(home.path(), &active_path);
-        std::fs::create_dir_all(archived_path.parent().expect("archived parent"))
-            .expect("archived parent");
-        std::fs::rename(&active_path, &archived_path).expect("simulate rollout move");
-        write_spine_artifacts(&archived_path);
-
-        let err = store
-            .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: true,
-                include_history: true,
-            })
-            .await
-            .expect_err("conflicting sidecars must fail closed");
-
-        let ThreadStoreError::Internal { message } = err else {
-            panic!("expected internal relocation error");
-        };
-        assert!(message.contains("SpineRelocationDestinationConflict"));
     }
 
     #[tokio::test]

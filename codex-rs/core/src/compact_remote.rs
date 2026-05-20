@@ -235,6 +235,7 @@ async fn run_remote_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
+        spine: None,
     };
     // Install is the semantic boundary where the compact endpoint's output becomes live
     // thread history. Keep it distinct from the later inference request so the reducer can

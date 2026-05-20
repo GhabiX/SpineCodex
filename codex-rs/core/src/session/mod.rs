@@ -101,7 +101,6 @@ use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -125,7 +124,6 @@ use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_rollout_trace::AgentResultTracePayload;
@@ -182,14 +180,12 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
-use crate::spine::candidate_mem_plan::CandidateAdmissionPolicy;
 use crate::spine::candidate_mem_plan::CandidateMem;
 use crate::spine::candidate_mem_plan::CandidateMemPlan;
 use crate::spine::candidate_mem_plan::CandidateMemPlanMode;
 use crate::spine::candidate_mem_plan::plan_candidate_mem;
 use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
 use crate::spine::compact::SpineCompactBoundary;
-use crate::spine::compact::build_root_archive_replacement_history;
 use crate::spine::compact::build_root_archive_replacement_history_from_candidate_plan;
 use crate::spine::compact::build_suffix_replacement_history_from_candidate_plan;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
@@ -199,15 +195,11 @@ use crate::spine::compact::render_auto_compact_memory;
 use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_initial_context_item;
 use crate::spine::compact::render_spine_memory_item;
-use crate::spine::debug_audit::RuntimeDebugBoundary;
-use crate::spine::debug_audit::audit_bridge_checkpoint_span_source;
-use crate::spine::debug_audit::audit_compact_checkpoint;
-use crate::spine::debug_audit::audit_compact_plan_boundaries;
+use crate::spine::compact::resolve_root_archive_cut;
+use crate::spine::mem_install::MemoryBodyRef;
 use crate::spine::segment::RawSpan;
 use crate::spine::session_integration::after_prelude_items_recorded;
 use crate::spine::session_integration::after_response_items_recorded;
-use crate::spine::session_integration::record_plan_update_snapshot;
-use crate::spine::store::BridgeCheckpointCommittedRecord;
 use crate::spine::store::CompactAttemptRecord;
 use crate::spine::store::CompactStartedRecord;
 use crate::spine::store::CompactTerminalRecord;
@@ -215,7 +207,6 @@ use crate::spine::store::InstalledCompactSpan;
 use crate::spine::store::MemInstallCommittedRecord;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::SpineSidecarStore;
-use crate::spine::store::compact_message_hash;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -387,6 +378,8 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
+use codex_protocol::protocol::SpineCompactedCheckpoint;
+use codex_protocol::protocol::SpineCompactedCheckpointKind;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
@@ -460,24 +453,6 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
-
-fn should_disable_spine_for_filtered_fork(
-    conversation_history: &InitialHistory,
-    session_source: &SessionSource,
-    thread_source: Option<ThreadSource>,
-) -> bool {
-    matches!(conversation_history, InitialHistory::Forked(_))
-        && (session_source.is_non_root_agent() || thread_source == Some(ThreadSource::Subagent))
-        && conversation_history.scan_rollout_items(|item| match item {
-            RolloutItem::Compacted(compacted) => compacted.message.starts_with("Spine compacted "),
-            RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::FunctionCall {
-                name,
-                namespace,
-                ..
-            }) => crate::spine::is_spine_history_tool(name, namespace.as_deref()),
-            _ => false,
-        })
-}
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -556,14 +531,9 @@ impl Codex {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
         }
-        if should_disable_spine_for_filtered_fork(
-            &conversation_history,
-            &session_source,
-            thread_source,
-        ) {
-            let _ = config.features.disable(Feature::SpineTaskTree);
-        }
-
+        let provider_capabilities =
+            create_model_provider(config.model_provider.clone(), Some(auth_manager.clone()))
+                .capabilities();
         let primary_environment = environment_selections.primary_environment();
         let user_instructions = AgentsMdManager::new(&config)
             .user_instructions(primary_environment.as_deref())
@@ -609,9 +579,6 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let provider_capabilities =
-            create_model_provider(config.model_provider.clone(), Some(auth_manager.clone()))
-                .capabilities();
         let spine_task_tree_enabled = codex_tools::spine_task_tree_enabled(
             config.features.enabled(Feature::SpineTaskTree),
             provider_capabilities.namespace_tools,
@@ -1247,8 +1214,20 @@ impl Session {
         state.clear_connector_selection();
     }
 
-    async fn record_initial_history(&self, conversation_history: InitialHistory) {
+    async fn record_initial_history(
+        &self,
+        conversation_history: InitialHistory,
+    ) -> CodexResult<()> {
         let turn_context = self.new_default_turn().await;
+        if self.spine.is_none()
+            && crate::spine::session_integration::initial_history_has_spine_history(
+                &conversation_history,
+            )
+        {
+            return Err(CodexErr::Fatal(
+                "unsupported Spine rollout history: Spine is disabled or unavailable".to_string(),
+            ));
+        }
         let is_subagent = {
             let state = self.state.lock().await;
             state
@@ -1267,12 +1246,13 @@ impl Session {
                 // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(/*previous_turn_settings*/ None)
                     .await;
+                Ok(())
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
-                    .await;
+                    .await?;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info.slug.as_str();
@@ -1306,10 +1286,11 @@ impl Session {
                 if !is_subagent {
                     let _ = self.flush_rollout().await;
                 }
+                Ok(())
             }
             InitialHistory::Forked(rollout_items) => {
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
-                    .await;
+                    .await?;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
@@ -1330,6 +1311,7 @@ impl Session {
                 if !is_subagent {
                     let _ = self.flush_rollout().await;
                 }
+                Ok(())
             }
         }
     }
@@ -1338,10 +1320,10 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) -> Option<PreviousTurnSettings> {
+    ) -> CodexResult<Option<PreviousTurnSettings>> {
         let reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
-            .await;
+            .await?;
         let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
         self.replace_history(
             reconstructed_rollout.history,
@@ -1350,7 +1332,7 @@ impl Session {
         .await;
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
-        previous_turn_settings
+        Ok(previous_turn_settings)
     }
 
     pub(crate) async fn project_spine_from_rollout(
@@ -1375,7 +1357,7 @@ impl Session {
                     projection.state,
                     projection.response_item_count,
                     projection.surviving_turn_ids,
-                    projection.surviving_compact_hashes,
+                    projection.surviving_compact_ids,
                     projection.epoch,
                     reason,
                     source_turn_id,
@@ -1673,33 +1655,6 @@ impl Session {
         self.send_event(turn_context, EventMsg::PlanUpdate(args))
             .await;
         Ok(())
-    }
-
-    pub(crate) async fn record_spine_plan_update_and_emit_progress(
-        &self,
-        turn_context: &TurnContext,
-        args: SpineUpdatePlanArgs,
-    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
-        let flat_args = args.flat.clone();
-        let Some(spine) = self.spine.as_ref() else {
-            self.send_event(turn_context, EventMsg::PlanUpdate(flat_args))
-                .await;
-            return Ok(None);
-        };
-
-        let snapshot = {
-            let mut spine = spine.lock().await;
-            record_plan_update_snapshot(&mut spine, &turn_context.sub_id, args).map_err(|err| {
-                CodexErr::Fatal(format!("failed to record spine plan update: {err}"))
-            })?
-        };
-        if let Some(snapshot) = snapshot.as_ref() {
-            self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot.clone()))
-                .await;
-        }
-        self.send_event(turn_context, EventMsg::PlanUpdate(flat_args))
-            .await;
-        Ok(snapshot)
     }
 
     pub(crate) async fn emit_initial_spine_tree_if_needed(
@@ -2618,7 +2573,7 @@ impl Session {
             .await
         {
             error!("failed to record conversation items: {err}");
-            if self.spine.is_some() {
+            if Box::pin(self.spine_runtime_is_mutable()).await {
                 let _ = self
                     .poison_spine_compact(format!(
                         "failed to record Spine conversation items: {err}"
@@ -2633,7 +2588,8 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        let spine_start_ordinal = if self.spine.is_some() {
+        let spine_is_mutable = Box::pin(self.spine_runtime_is_mutable()).await;
+        let spine_start_ordinal = if spine_is_mutable {
             Box::pin(self.spine_current_ordinal()).await
         } else {
             None
@@ -2641,7 +2597,7 @@ impl Session {
         self.record_into_history(items, turn_context).await;
         self.try_persist_rollout_response_items(items).await?;
         self.send_raw_response_items(turn_context, items).await;
-        if self.spine.is_some() {
+        if spine_is_mutable {
             Box::pin(self.after_spine_response_items_recorded(
                 turn_context,
                 items,
@@ -2822,7 +2778,7 @@ impl Session {
             .cloned()
             .map(RolloutItem::ResponseItem)
             .collect();
-        if self.spine.is_none() {
+        if !Box::pin(self.spine_runtime_is_mutable()).await {
             self.persist_rollout_items(&rollout_items).await;
             return Ok(());
         }
@@ -2998,11 +2954,11 @@ impl Session {
             .spine
             .as_ref()
             .ok_or_else(|| CodexErr::Fatal("spine runtime is not initialized".to_string()))?;
-        let (store, surviving_compact_hashes) = {
+        let (store, surviving_compact_ids) = {
             let runtime = spine.lock().await;
             (
                 runtime.store().clone(),
-                runtime.surviving_compact_hashes().cloned(),
+                runtime.surviving_compact_ids().cloned(),
             )
         };
         let boundary = spine
@@ -3028,7 +2984,7 @@ impl Session {
             &history,
             rollout_path,
             spine_tree,
-            surviving_compact_hashes.as_ref(),
+            surviving_compact_ids.as_ref(),
         )?;
         let acknowledged_raw_ordinal = spine.lock().await.current_ordinal();
         if prep.effective_boundary.fold_end_ordinal > acknowledged_raw_ordinal {
@@ -3058,34 +3014,19 @@ impl Session {
         } else {
             Vec::new()
         };
-        let root_replacement = build_root_archive_replacement_history(
+        let (archive_cut_ordinal, archive_cut_index) = resolve_root_archive_cut(
             &history,
             prep.plan.cut_index,
             prep.effective_boundary.fold_end_ordinal,
-            initial_context_items.clone(),
-            rendered_memory_item.clone(),
             &prep.runtime_spans,
         )?;
         let root_boundary = SpineCompactBoundary {
-            cut_ordinal: root_replacement.archive_cut_ordinal,
+            cut_ordinal: archive_cut_ordinal,
             ..prep.effective_boundary.clone()
         };
-        if turn_context.config.runtime_debug_checks {
-            audit_compact_plan_boundaries(
-                &history,
-                &prep.runtime_spans,
-                &root_boundary,
-                format!(
-                    "{} root archive node {}",
-                    store.root().display(),
-                    root_boundary.node_id
-                ),
-            )?;
-        }
         let mut memory_input = prep.plan.input.clone();
         memory_input.cut_ordinal = root_boundary.cut_ordinal;
-        memory_input.suffix_items =
-            history[root_replacement.archive_cut_index..prep.plan.fold_end_index].to_vec();
+        memory_input.suffix_items = history[archive_cut_index..prep.plan.fold_end_index].to_vec();
         let memory_markdown = render_auto_compact_memory(&memory_input, compacted_body);
         let compact_message = format!(
             "Spine compacted root epoch {} [{}, {})",
@@ -3110,86 +3051,29 @@ impl Session {
                 return Err(err);
             }
         };
-        let root_replacement = match build_root_archive_replacement_history_from_candidate_plan(
+        let replacement_history = match build_root_archive_replacement_history_from_candidate_plan(
             &history,
             &prep.runtime_spans,
             &compact_id,
-            root_boundary.cut_ordinal,
-            root_replacement.archive_cut_index,
-            initial_context_items.clone(),
-            rendered_memory_item.clone(),
+            initial_context_items,
+            rendered_memory_item,
             &candidate_plan,
         ) {
-            Ok(root_replacement) => root_replacement,
+            Ok(replacement_history) => replacement_history,
             Err(err) => {
                 record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
                 return Err(err);
             }
         };
-        let replacement_history = root_replacement.replacement_history;
-        let message_hash = compact_message_hash(&compact_message);
-        if turn_context.config.runtime_debug_checks {
-            let spans_after_install = spine_compact_spans_after_install(
-                &prep.runtime_spans,
-                compact_id.clone(),
-                &root_boundary,
-                replacement_history.len(),
-                message_hash.clone(),
-            );
-            if let Err(err) = audit_compact_checkpoint(
-                RuntimeDebugBoundary::BeforeCheckpointInstall,
-                &replacement_history,
-                &spans_after_install,
-                &[root_boundary.cut_ordinal, root_boundary.fold_end_ordinal],
-                format!("{} compact_id={compact_id}", store.root().display()),
-            ) {
-                record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-                return Err(err.into());
-            }
-        }
-
-        if let Err(err) = store.append_memory_section(&boundary.node_id, &memory_markdown) {
-            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-            return Err(CodexErr::Fatal(format!(
-                "failed to stage spine root archive memory before MemInstall commit: {err}"
-            )));
-        }
-        let body_ref = store
-            .generated_memory_sections(&boundary.node_id)
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "failed to read staged spine root archive memory: {err}"
-                ))
-            })?
-            .last()
-            .map(|section| section.body_ref())
-            .ok_or_else(|| {
-                CodexErr::Fatal(
-                    "staged spine root archive memory has no generated section".to_string(),
-                )
-            })?;
-        let node_trajs_items = memory_input
-            .suffix_items
-            .iter()
-            .cloned()
-            .map(RolloutItem::ResponseItem)
-            .collect::<Vec<_>>();
-        if let Err(err) = store.append_node_trajs_items(&boundary.node_id, &node_trajs_items) {
-            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-            return Err(CodexErr::Fatal(format!(
-                "failed to archive spine root epoch trajs before MemInstall commit: {err}"
-            )));
-        }
-        if let Err(err) = store.append_raw_mirror_compact_checkpoint(
-            &compact_id,
-            &message_hash,
-            replacement_history.len(),
-        ) {
-            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-            return Err(CodexErr::Fatal(format!(
-                "failed to stage spine root archive raw mirror checkpoint before MemInstall commit: {err}"
-            )));
-        }
+        let body_ref = stage_spine_memory_before_meminstall(
+            &store,
+            &boundary,
+            &compact_attempt,
+            &memory_markdown,
+            &memory_input.suffix_items,
+            "root archive",
+            "root epoch",
+        )?;
         #[cfg(test)]
         if compacted_body.contains("__spine_fail_root_archive_before_meminstall__") {
             let err = "injected spine root archive failure before MemInstall commit";
@@ -3199,8 +3083,6 @@ impl Session {
         if let Err(err) = store.append_mem_install_committed(MemInstallCommittedRecord {
             attempt: compact_attempt.clone(),
             body_ref,
-            replacement_history_len: replacement_history.len(),
-            message_hash: message_hash.clone(),
             projection_ref: root_mem_install_projection_ref(&compact_id, &root_boundary),
             source_rollout_ref: prep.compact_index_rollout_path.clone(),
         }) {
@@ -3226,20 +3108,13 @@ impl Session {
             }
         }
         ensure_meminstall_committed(&store, &compact_id, "root checkpoint render")?;
-        let root_replacement = build_root_archive_replacement_history_from_candidate_plan(
-            &history,
-            &prep.runtime_spans,
-            &compact_id,
-            root_boundary.cut_ordinal,
-            root_replacement.archive_cut_index,
-            initial_context_items,
-            rendered_memory_item,
-            &candidate_plan,
-        )?;
-        let replacement_history = root_replacement.replacement_history;
         let compacted_item = CompactedItem {
             message: compact_message.clone(),
             replacement_history: Some(replacement_history.clone()),
+            spine: Some(SpineCompactedCheckpoint {
+                compact_id: compact_id.clone(),
+                kind: SpineCompactedCheckpointKind::RootEpoch,
+            }),
         };
         if let Err(err) = self
             .try_replace_compacted_history(
@@ -3263,39 +3138,18 @@ impl Session {
                 )
                 .await);
         }
-        if let Err(err) =
-            store.append_bridge_checkpoint_committed(BridgeCheckpointCommittedRecord {
-                attempt: compact_attempt,
-                replacement_history_len: replacement_history.len(),
-                message_hash: message_hash.clone(),
-                source_rollout_ref: prep.compact_index_rollout_path.clone(),
-            })
+        if let Err(err) = store.validate_mem_install_survivors(&HashSet::from([compact_id.clone()]))
         {
             return Err(self
                 .poison_spine_compact(format!(
-                    "failed to record spine root archive bridge checkpoint after host checkpoint: {err}"
+                    "failed to validate spine root archive MemInstall after host checkpoint: {err}"
                 ))
                 .await);
         }
-        if turn_context.config.runtime_debug_checks {
-            let current_message_hashes = HashSet::from([message_hash.clone()]);
-            if let Err(err) = audit_bridge_checkpoint_span_source(
-                &store,
-                Some(&current_message_hashes),
-                format!("{} compact_id={compact_id}", store.root().display()),
-            ) {
-                return Err(self
-                    .poison_spine_compact(format!(
-                        "spine root archive bridge checkpoint span source mismatch: {err}"
-                    ))
-                    .await);
-            }
-        }
-        // Only emit the reset snapshot after BridgeCheckpointCommitted is durable; otherwise the UI
-        // could display a root archive that reload validation may still reject.
+        // Only emit the reset snapshot after host checkpoint install and MemInstall revalidation.
         let snapshot = {
             let mut runtime = spine.lock().await;
-            runtime.record_surviving_compact_hash(message_hash);
+            runtime.record_surviving_compact_id(compact_id);
             match runtime.build_tree_snapshot() {
                 Ok(snapshot) => snapshot,
                 Err(err) => {
@@ -3324,11 +3178,11 @@ impl Session {
             .spine
             .as_ref()
             .ok_or_else(|| CodexErr::Fatal("spine runtime is not initialized".to_string()))?;
-        let (store, surviving_compact_hashes) = {
+        let (store, surviving_compact_ids) = {
             let runtime = spine.lock().await;
             (
                 runtime.store().clone(),
-                runtime.surviving_compact_hashes().cloned(),
+                runtime.surviving_compact_ids().cloned(),
             )
         };
         let close_outlines = if boundary.op == SpineOperation::Close {
@@ -3370,20 +3224,8 @@ impl Session {
             &history,
             rollout_path,
             spine_tree,
-            surviving_compact_hashes.as_ref(),
+            surviving_compact_ids.as_ref(),
         )?;
-        if turn_context.config.runtime_debug_checks {
-            audit_compact_plan_boundaries(
-                &history,
-                &prep.runtime_spans,
-                &prep.effective_boundary,
-                format!(
-                    "{} suffix compact node {}",
-                    store.root().display(),
-                    prep.effective_boundary.node_id
-                ),
-            )?;
-        }
         let (compact_id, compact_attempt, compact_started) = spine_compact_attempt_records(
             &prep.effective_boundary,
             prep.compact_index_rollout_path.clone(),
@@ -3442,6 +3284,7 @@ impl Session {
             &boundary.transition_summary,
             &model_memory_body,
         );
+        let handoff_item = render_spine_handoff_item(&boundary.node_id, &to_node);
         let projected_state = {
             let runtime = spine.lock().await;
             runtime.state().clone()
@@ -3458,83 +3301,18 @@ impl Session {
             &prep.runtime_spans,
             &compact_id,
             &candidate_plan,
-            rendered_memory_item.clone(),
-            vec![render_spine_handoff_item(&boundary.node_id, &to_node)],
+            rendered_memory_item,
+            vec![handoff_item],
         )?;
-        let message_hash = compact_message_hash(&compact_output.compact_message);
-        if turn_context.config.runtime_debug_checks {
-            let spans_after_install = spine_compact_spans_after_install(
-                &prep.runtime_spans,
-                compact_id.clone(),
-                &prep.effective_boundary,
-                replacement_history.len(),
-                message_hash.clone(),
-            );
-            if let Err(err) = audit_compact_checkpoint(
-                RuntimeDebugBoundary::BeforeCheckpointInstall,
-                &replacement_history,
-                &spans_after_install,
-                &[
-                    prep.effective_boundary.cut_ordinal,
-                    prep.effective_boundary.fold_end_ordinal,
-                ],
-                format!("{} compact_id={compact_id}", store.root().display()),
-            ) {
-                store
-                    .append_compact_failed(CompactTerminalRecord {
-                        attempt: compact_attempt.clone(),
-                        strategy: CODEX_BUILTIN_TEXT_STRATEGY.to_string(),
-                        error: err.to_string(),
-                    })
-                    .map_err(|store_err| {
-                        CodexErr::Fatal(format!(
-                            "failed to record spine compact install failure after invariant error {err}: {store_err}"
-                        ))
-                    })?;
-                return Err(err.into());
-            }
-        }
-
-        if let Err(err) = store.append_memory_section(&boundary.node_id, &memory_markdown) {
-            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-            return Err(CodexErr::Fatal(format!(
-                "failed to stage spine compact memory before MemInstall commit: {err}"
-            )));
-        }
-        let body_ref = store
-            .generated_memory_sections(&boundary.node_id)
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to read staged spine compact memory: {err}"))
-            })?
-            .last()
-            .map(|section| section.body_ref())
-            .ok_or_else(|| {
-                CodexErr::Fatal("staged spine compact memory has no generated section".to_string())
-            })?;
-        let node_trajs_items = prep
-            .plan
-            .input
-            .suffix_items
-            .iter()
-            .cloned()
-            .map(RolloutItem::ResponseItem)
-            .collect::<Vec<_>>();
-        if let Err(err) = store.append_node_trajs_items(&boundary.node_id, &node_trajs_items) {
-            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-            return Err(CodexErr::Fatal(format!(
-                "failed to archive spine compact node trajs before MemInstall commit: {err}"
-            )));
-        }
-        if let Err(err) = store.append_raw_mirror_compact_checkpoint(
-            &compact_id,
-            &message_hash,
-            replacement_history.len(),
-        ) {
-            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-            return Err(CodexErr::Fatal(format!(
-                "failed to stage spine raw mirror checkpoint before MemInstall commit: {err}"
-            )));
-        }
+        let body_ref = stage_spine_memory_before_meminstall(
+            &store,
+            &boundary,
+            &compact_attempt,
+            &memory_markdown,
+            &prep.plan.input.suffix_items,
+            "compact",
+            "compact node",
+        )?;
         #[cfg(test)]
         if compact_output
             .compacted_body
@@ -3548,8 +3326,6 @@ impl Session {
         if let Err(err) = store.append_mem_install_committed(MemInstallCommittedRecord {
             attempt: compact_attempt.clone(),
             body_ref,
-            replacement_history_len: replacement_history.len(),
-            message_hash: message_hash.clone(),
             projection_ref: suffix_mem_install_projection_ref(
                 &compact_id,
                 &prep.effective_boundary,
@@ -3562,17 +3338,13 @@ impl Session {
             )));
         }
         ensure_meminstall_committed(&store, &compact_id, "checkpoint render")?;
-        let replacement_history = build_suffix_replacement_history_from_candidate_plan(
-            &history,
-            &prep.runtime_spans,
-            &compact_id,
-            &candidate_plan,
-            rendered_memory_item.clone(),
-            vec![render_spine_handoff_item(&boundary.node_id, &to_node)],
-        )?;
         let compacted_item = CompactedItem {
             message: compact_output.compact_message.clone(),
             replacement_history: Some(replacement_history.clone()),
+            spine: Some(SpineCompactedCheckpoint {
+                compact_id: compact_id.clone(),
+                kind: SpineCompactedCheckpointKind::Suffix,
+            }),
         };
         if let Err(err) = self
             .try_replace_compacted_history(replacement_history.clone(), None, compacted_item)
@@ -3595,38 +3367,15 @@ impl Session {
                 )
                 .await);
         }
-        if let Err(err) =
-            store.append_bridge_checkpoint_committed(BridgeCheckpointCommittedRecord {
-                attempt: compact_attempt,
-                replacement_history_len: replacement_history.len(),
-                message_hash: message_hash.clone(),
-                source_rollout_ref: prep.compact_index_rollout_path.clone(),
-            })
+        if let Err(err) = store.validate_mem_install_survivors(&HashSet::from([compact_id.clone()]))
         {
             return Err(self
                 .poison_spine_compact(format!(
-                    "failed to record spine bridge checkpoint after host checkpoint: {err}"
+                    "failed to validate spine MemInstall after host checkpoint: {err}"
                 ))
                 .await);
         }
-        if turn_context.config.runtime_debug_checks {
-            let current_message_hashes = HashSet::from([message_hash.clone()]);
-            if let Err(err) = audit_bridge_checkpoint_span_source(
-                &store,
-                Some(&current_message_hashes),
-                format!("{} compact_id={compact_id}", store.root().display()),
-            ) {
-                return Err(self
-                    .poison_spine_compact(format!(
-                        "spine suffix bridge checkpoint span source mismatch: {err}"
-                    ))
-                    .await);
-            }
-        }
-        spine
-            .lock()
-            .await
-            .record_surviving_compact_hash(message_hash);
+        spine.lock().await.record_surviving_compact_id(compact_id);
         Ok(())
     }
 
@@ -3875,7 +3624,7 @@ impl Session {
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         if let Err(err) = self.try_persist_rollout_items(items).await {
             error!("failed to persist rollout items: {err}");
-            if self.spine.is_some() {
+            if Box::pin(self.spine_runtime_is_mutable()).await {
                 let _ = self
                     .poison_spine_compact(format!("failed to persist Spine rollout items: {err}"))
                     .await;
@@ -3892,13 +3641,16 @@ impl Session {
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to record rollout items: {err:#}")))?;
 
-        if self.spine.is_some() {
+        if Box::pin(self.spine_runtime_is_mutable()).await {
             Box::pin(self.mirror_spine_rollout_items(items)).await?;
         }
         Ok(())
     }
 
     async fn mirror_spine_rollout_items(&self, items: &[RolloutItem]) -> CodexResult<()> {
+        if !Box::pin(self.spine_runtime_is_mutable()).await {
+            return Ok(());
+        }
         let Some(spine) = self.spine.as_ref() else {
             return Ok(());
         };
@@ -3962,7 +3714,7 @@ impl Session {
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
-            if should_inject_full_context && self.spine.is_some() {
+            if should_inject_full_context && Box::pin(self.spine_runtime_is_mutable()).await {
                 Box::pin(self.record_spine_prelude_items(turn_context, &context_items)).await;
             } else {
                 self.record_conversation_items(turn_context, &context_items)
@@ -4503,14 +4255,9 @@ fn sha1_digest(value: &str) -> String {
 
 fn deterministic_spine_compact_id(boundary: &SpineCompactBoundary) -> String {
     sha1_digest(&format!(
-        "spine-compact-v3\nop={:?}\nnode={}\nscope={}\ncut={}\nfold_end={}\nsummary={}\ninstruction={}",
+        "spine-compact-v3\nop={:?}\nnode={}\ncut={}\nfold_end={}\nsummary={}\ninstruction={}",
         boundary.op,
         boundary.node_id,
-        boundary
-            .scope_node_id
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default(),
         boundary.cut_ordinal,
         boundary.fold_end_ordinal,
         boundary.transition_summary,
@@ -4562,10 +4309,7 @@ fn validate_suffix_mem_install_segment_plan(
         raw_len,
         runtime_spans,
         &candidate,
-        CandidateMemPlanMode::ProjectionBacked {
-            state,
-            admission: CandidateAdmissionPolicy::AdmitOrRejectNodeNotVisible,
-        },
+        CandidateMemPlanMode::ProjectionBacked { state },
     )
 }
 
@@ -4594,7 +4338,6 @@ fn validate_root_mem_install_segment_plan(
         &candidate,
         CandidateMemPlanMode::CoverOnly {
             live_boundaries: &[boundary.fold_end_ordinal],
-            admission: CandidateAdmissionPolicy::MustAdmit,
         },
     )
 }
@@ -4611,6 +4354,49 @@ fn root_mem_install_projection_ref(compact_id: &str, boundary: &SpineCompactBoun
         "projection:root-archive:{compact_id}:node={}:span={}-{}",
         boundary.node_id, boundary.cut_ordinal, boundary.fold_end_ordinal
     )
+}
+
+fn stage_spine_memory_before_meminstall(
+    store: &SpineSidecarStore,
+    boundary: &SpineCompactBoundary,
+    attempt: &CompactAttemptRecord,
+    memory_markdown: &str,
+    folded_items: &[ResponseItem],
+    memory_context: &str,
+    trajs_context: &str,
+) -> CodexResult<MemoryBodyRef> {
+    if let Err(err) = store.append_memory_section(&boundary.node_id, memory_markdown) {
+        record_pre_meminstall_compact_failed(store, attempt, err.to_string())?;
+        return Err(CodexErr::Fatal(format!(
+            "failed to stage spine {memory_context} memory before MemInstall commit: {err}"
+        )));
+    }
+    let body_ref = store
+        .generated_memory_sections(&boundary.node_id)
+        .map_err(|err| {
+            CodexErr::Fatal(format!(
+                "failed to read staged spine {memory_context} memory: {err}"
+            ))
+        })?
+        .last()
+        .map(|section| section.body_ref())
+        .ok_or_else(|| {
+            CodexErr::Fatal(format!(
+                "staged spine {memory_context} memory has no generated section"
+            ))
+        })?;
+    let node_trajs_items = folded_items
+        .iter()
+        .cloned()
+        .map(RolloutItem::ResponseItem)
+        .collect::<Vec<_>>();
+    if let Err(err) = store.append_node_trajs_items(&boundary.node_id, &node_trajs_items) {
+        record_pre_meminstall_compact_failed(store, attempt, err.to_string())?;
+        return Err(CodexErr::Fatal(format!(
+            "failed to archive spine {trajs_context} trajs before MemInstall commit: {err}"
+        )));
+    }
+    Ok(body_ref)
 }
 
 fn ensure_meminstall_committed(
@@ -4650,26 +4436,6 @@ fn record_pre_meminstall_compact_failed(
                 "failed to record spine compact failure before MemInstall commit after error {error}: {store_err}"
             ))
         })
-}
-
-fn spine_compact_spans_after_install(
-    runtime_spans: &[InstalledCompactSpan],
-    compact_id: String,
-    boundary: &SpineCompactBoundary,
-    replacement_history_len: usize,
-    message_hash: String,
-) -> Vec<InstalledCompactSpan> {
-    let mut spans = runtime_spans.to_vec();
-    spans.push(InstalledCompactSpan {
-        compact_id,
-        node_id: boundary.node_id.clone(),
-        op: boundary.op,
-        cut_ordinal: boundary.cut_ordinal,
-        fold_end_ordinal: boundary.fold_end_ordinal,
-        replacement_history_len,
-        message_hash,
-    });
-    spans
 }
 
 #[cfg(test)]

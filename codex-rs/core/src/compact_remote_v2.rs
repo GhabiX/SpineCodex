@@ -225,6 +225,7 @@ async fn run_remote_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
+        spine: None,
     };
     compaction_trace.record_installed(&CompactionCheckpointTracePayload {
         input_history: &trace_input_history,

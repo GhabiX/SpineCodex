@@ -150,7 +150,7 @@ fn last_assistant_message_from_item_strips_citations_and_plan_blocks() {
         "before<oai-mem-citation>doc1</oai-mem-citation>\n<proposed_plan>\n- x\n</proposed_plan>\nafter",
     );
 
-    let message = last_assistant_message_from_item(&item, /*plan_mode*/ true)
+    let message = last_assistant_message_from_item(&item, /*plan_mode*/ true, false)
         .expect("assistant text should remain after stripping");
 
     assert_eq!(message, "before\nafter");
@@ -161,7 +161,7 @@ fn last_assistant_message_from_item_returns_none_for_citation_only_message() {
     let item = assistant_output_text("<oai-mem-citation>doc1</oai-mem-citation>");
 
     assert_eq!(
-        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        last_assistant_message_from_item(&item, /*plan_mode*/ false, false),
         None
     );
 }
@@ -171,7 +171,7 @@ fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() 
     let item = assistant_output_text("<proposed_plan>\n- x\n</proposed_plan>");
 
     assert_eq!(
-        last_assistant_message_from_item(&item, /*plan_mode*/ true),
+        last_assistant_message_from_item(&item, /*plan_mode*/ true, false),
         None
     );
 }
@@ -188,25 +188,63 @@ fn last_assistant_message_from_item_keeps_legacy_spine_ir_as_plain_text() {
     };
 
     assert_eq!(
-        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        last_assistant_message_from_item(&item, /*plan_mode*/ false, false),
         Some("<spine_ir id=\"spine-ir:1:2-3:next\" node=\"1\" op=\"next\" runtime_generated=\"true\" fold_start=\"2\" fold_end=\"3\">\n<memory>\ninternal\n</memory>\n</spine_ir>".to_string())
     );
 }
 
 #[test]
-fn last_assistant_message_from_item_returns_none_for_generated_spine_memory() {
+fn last_assistant_message_from_item_keeps_generated_spine_memory_by_default() {
     let item = ResponseItem::Message {
-        id: Some("spine-memory:1:next".to_string()),
+        id: Some("spine-memory:1:close".to_string()),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: "## Spine Memory\n\nNode: 1\nOperation: next\nSummary: leaf\n\nfacts".to_string(),
+            text: "## Spine Memory\n\nNode: 1\nOperation: close\nSummary: leaf\n\nfacts"
+                .to_string(),
         }],
         phase: None,
     };
 
     assert_eq!(
-        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        last_assistant_message_from_item(&item, /*plan_mode*/ false, false),
+        Some("## Spine Memory\n\nNode: 1\nOperation: close\nSummary: leaf\n\nfacts".to_string())
+    );
+}
+
+#[test]
+fn spine_last_assistant_message_from_item_returns_none_for_generated_spine_memory() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text:
+                "<!-- codex-spine-memory:1:close -->\n## Spine Memory\n\nNode: 1\nOperation: close\nSummary: leaf\n\nfacts"
+                    .to_string(),
+        }],
+        phase: None,
+    };
+
+    assert_eq!(
+        last_assistant_message_from_item(&item, /*plan_mode*/ false, true),
         None
+    );
+}
+
+#[test]
+fn spine_last_assistant_message_keeps_legacy_id_only_memory_as_plain_text() {
+    let item = ResponseItem::Message {
+        id: Some("spine-memory:1:close".to_string()),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "## Spine Memory\n\nNode: 1\nOperation: close\nSummary: visible\n\nfacts"
+                .to_string(),
+        }],
+        phase: None,
+    };
+
+    assert_eq!(
+        last_assistant_message_from_item(&item, /*plan_mode*/ false, true),
+        Some("## Spine Memory\n\nNode: 1\nOperation: close\nSummary: visible\n\nfacts".to_string())
     );
 }
 
@@ -223,7 +261,7 @@ fn last_assistant_message_from_item_keeps_plain_final_answer_markdown_spine_memo
     };
 
     assert_eq!(
-        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        last_assistant_message_from_item(&item, /*plan_mode*/ false, false),
         Some("## Spine Memory\n\nNode: 1\nOperation: next\nSummary: visible\n\nfacts".to_string())
     );
 }
@@ -241,7 +279,7 @@ fn last_assistant_message_from_item_keeps_legacy_xml_spine_memory_as_plain_text(
     };
 
     assert_eq!(
-        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        last_assistant_message_from_item(&item, /*plan_mode*/ false, false),
         Some(
             "<spine_memory node=\"1\" op=\"next\">\nSummary: leaf\n\nfacts\n</spine_memory>"
                 .to_string()

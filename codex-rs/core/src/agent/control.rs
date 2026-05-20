@@ -11,7 +11,6 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
-use crate::thread_rollout_truncation::downgrade_spine_compactions_to_read_only_notes;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
@@ -393,13 +392,9 @@ impl AgentControl {
             })?;
 
         let mut forked_rollout_items = parent_history.items;
-        let mut downgrade_spine_compactions = false;
         if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
-            if config.features.enabled(Feature::SpineTaskTree) {
-                downgrade_spine_compactions = true;
-            }
         }
         // MultiAgentV2 root/subagent usage hints are injected as standalone developer
         // messages at thread start. When forking history, drop hints from the parent
@@ -435,10 +430,6 @@ impl AgentControl {
 
             keep_forked_rollout_item(item)
         });
-        if downgrade_spine_compactions {
-            forked_rollout_items =
-                downgrade_spine_compactions_to_read_only_notes(forked_rollout_items);
-        }
 
         state
             .fork_thread_with_source(

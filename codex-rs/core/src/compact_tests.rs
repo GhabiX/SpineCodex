@@ -274,13 +274,21 @@ async fn spine_native_text_outcome_installs_root_epoch_memory() {
         compacted_item: CompactedItem {
             message: native_summary.clone(),
             replacement_history: Some(replacement_history),
+            spine: None,
         },
         summary_text: native_summary,
     };
 
-    install_spine_native_text_compaction_outcome(&session, &turn_context, outcome)
-        .await
-        .expect("install spine native compact outcome");
+    install_native_text_compaction_outcome(
+        &session,
+        &turn_context,
+        outcome,
+        NativeTextInstallMode::Spine {
+            emit_install_error: false,
+        },
+    )
+    .await
+    .expect("install spine native compact outcome");
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())
         .expect("serialize history");
@@ -310,14 +318,18 @@ async fn spine_native_text_install_failure_emits_error_event() {
         compacted_item: CompactedItem {
             message: native_summary.clone(),
             replacement_history: Some(replacement_history),
+            spine: None,
         },
         summary_text: native_summary,
     };
 
-    let error = install_spine_native_text_compaction_outcome_or_emit_error(
+    let error = install_native_text_compaction_outcome(
         &session,
         &turn_context,
         outcome,
+        NativeTextInstallMode::Spine {
+            emit_install_error: true,
+        },
     )
     .await
     .expect_err("injected install failure should fail");

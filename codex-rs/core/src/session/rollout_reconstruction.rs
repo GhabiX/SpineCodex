@@ -65,8 +65,8 @@ fn finalize_active_segment<'a>(
         return;
     }
 
-    // A surviving replacement-history checkpoint is a complete history base. Once we
-    // know the newest surviving one, older rollout items do not affect rebuilt history.
+    // A surviving compact checkpoint is a complete materialized host-history base.
+    // Once we know the newest surviving one, older rollout items do not affect rebuilt history.
     if base.is_none()
         && let Some(segment_base) = active_segment.base
     {
@@ -96,12 +96,12 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) -> RolloutReconstruction {
+    ) -> CodexResult<RolloutReconstruction> {
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
-        // stopping once a surviving replacement-history checkpoint and the required resume metadata
-        // are both known; then replay only the buffered surviving tail forward to preserve exact
-        // history semantics.
+        // stopping once a surviving materialized compact checkpoint and the required resume
+        // metadata are both known; then replay only the buffered surviving tail forward to
+        // preserve exact host-history materialization.
         let mut base: Option<ReplayBase<'_>> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
@@ -135,8 +135,20 @@ impl Session {
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    let rollback_turns = usize::try_from(rollback.num_turns).map_err(|_| {
+                        CodexErr::Fatal(format!(
+                            "unsupported rolled-back turn count {} in rollout reconstruction",
+                            rollback.num_turns
+                        ))
+                    })?;
                     pending_rollback_turns = pending_rollback_turns
-                        .saturating_add(usize::try_from(rollback.num_turns).unwrap_or(usize::MAX));
+                        .checked_add(rollback_turns)
+                        .ok_or_else(|| {
+                            CodexErr::Fatal(
+                                "rolled-back turn count overflowed rollout reconstruction"
+                                    .to_string(),
+                            )
+                        })?;
                 }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
                     let active_segment =
@@ -221,9 +233,9 @@ impl Session {
                 && previous_turn_settings.is_some()
                 && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
             {
-                // At this point we have both eager resume metadata values and the replacement-
-                // history base for the surviving tail, so older rollout items cannot affect this
-                // result.
+                // At this point we have both eager resume metadata values and the materialized
+                // compact checkpoint base for the surviving tail, so older rollout items cannot
+                // affect this result.
                 break;
             }
         }
@@ -245,10 +257,11 @@ impl Session {
         } else {
             0
         };
-        // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
+        // Materialize exact host-history state from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
         // instead of an eagerly loaded `&[RolloutItem]`.
-        for item in &rollout_items[rollout_suffix_start..] {
+        for (suffix_offset, item) in rollout_items[rollout_suffix_start..].iter().enumerate() {
+            let index = rollout_suffix_start + suffix_offset;
             match item {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
@@ -258,18 +271,23 @@ impl Session {
                 }
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement_history) = &compacted.replacement_history {
-                        // This should actually never happen, because the reverse loop above (to build rollout_suffix)
-                        // should stop before any compaction that has Some replacement_history
+                        // A later compact checkpoint in the surviving suffix replaces the
+                        // materialized host history when replay admits it.
                         history.replace(replacement_history.clone());
                     } else {
-                        // Old compaction checkpoints without replacement_history are unsupported.
-                        // Fail closed: do not revive folded raw items and do not synthesize a
-                        // guessed summary-shaped prompt.
-                        history.replace(Vec::new());
+                        return Err(CodexErr::Fatal(format!(
+                            "unsupported compacted rollout item at index {index}: missing replacement_history"
+                        )));
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                    history.drop_last_n_user_turns(rollback.num_turns);
+                    let rollback_turns = usize::try_from(rollback.num_turns).map_err(|_| {
+                        CodexErr::Fatal(format!(
+                            "unsupported rolled-back turn count {} in rollout reconstruction",
+                            rollback.num_turns
+                        ))
+                    })?;
+                    history.drop_last_n_user_turns(rollback_turns);
                 }
                 RolloutItem::EventMsg(_)
                 | RolloutItem::TurnContext(_)
@@ -283,10 +301,10 @@ impl Session {
                 Some(*turn_reference_context_item)
             }
         };
-        RolloutReconstruction {
+        Ok(RolloutReconstruction {
             history: history.raw_items().to_vec(),
             previous_turn_settings,
             reference_context_item,
-        }
+        })
     }
 }

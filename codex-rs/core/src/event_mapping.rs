@@ -133,10 +133,6 @@ fn parse_agent_message(
 }
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
-    if crate::spine::compact::is_spine_internal_render_item(item) {
-        return None;
-    }
-
     match item {
         ResponseItem::Message {
             role,
@@ -210,6 +206,13 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
         )),
         _ => None,
     }
+}
+
+pub(crate) fn parse_spine_visible_turn_item(item: &ResponseItem) -> Option<TurnItem> {
+    if crate::spine::compact::is_spine_internal_render_item(item) {
+        return None;
+    }
+    parse_turn_item(item)
 }
 
 #[cfg(test)]

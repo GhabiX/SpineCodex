@@ -148,6 +148,7 @@ fn builder_from_items_falls_back_to_filename() {
     let items = vec![RolloutItem::Compacted(CompactedItem {
         message: "noop".to_string(),
         replacement_history: None,
+        spine: None,
     })];
 
     let builder = builder_from_items(items.as_slice(), path.as_path()).expect("builder");

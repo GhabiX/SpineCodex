@@ -48,10 +48,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::SpineUpdatePlanArgs;
 use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::TaskProjectionArg;
-use codex_protocol::plan_tool::TaskProjectionCurrentArg;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
@@ -122,6 +119,8 @@ use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::SpineCompactedCheckpoint;
+use codex_protocol::protocol::SpineCompactedCheckpointKind;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -174,6 +173,7 @@ use codex_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -211,6 +211,16 @@ fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
+fn spine_compact_checkpoint(
+    compact_id: &str,
+    kind: SpineCompactedCheckpointKind,
+) -> SpineCompactedCheckpoint {
+    SpineCompactedCheckpoint {
+        compact_id: compact_id.to_string(),
+        kind,
+    }
+}
+
 fn spine_function_call(call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
@@ -221,10 +231,10 @@ fn spine_function_call(call_id: &str) -> ResponseItem {
     }
 }
 
-fn spine_next_function_call(call_id: &str, summary: &str) -> ResponseItem {
+fn spine_close_function_call(call_id: &str, summary: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
-        name: crate::spine::SPINE_TOOL_NEXT.to_string(),
+        name: crate::spine::SPINE_TOOL_CLOSE.to_string(),
         namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
         arguments: format!(r#"{{"summary":"{summary}"}}"#),
         call_id: call_id.to_string(),
@@ -326,20 +336,6 @@ fn update_plan_args_for_test(step: &str, status: StepStatus) -> UpdatePlanArgs {
             step: step.to_string(),
             status,
         }],
-    }
-}
-
-fn spine_update_plan_args_for_test(step: &str, status: StepStatus) -> SpineUpdatePlanArgs {
-    let flat = update_plan_args_for_test(step, status);
-    SpineUpdatePlanArgs {
-        task_projection: TaskProjectionArg {
-            current: TaskProjectionCurrentArg {
-                node_id: "1.1".to_string(),
-                checklist: flat.plan.clone(),
-            },
-            draft_nodes: Vec::new(),
-        },
-        flat,
     }
 }
 
@@ -1386,6 +1382,61 @@ async fn spine_runtime_is_inert_when_feature_is_off() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn feature_off_rejects_structured_spine_history() -> anyhow::Result<()> {
+    let session = make_session_with_config(|_| {}).await?;
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::new(),
+        history: vec![RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted 1 [0, 1)".to_string(),
+            replacement_history: Some(vec![user_message("spine memory")]),
+            spine: Some(spine_compact_checkpoint(
+                "compact-feature-off",
+                SpineCompactedCheckpointKind::Suffix,
+            )),
+        })],
+        rollout_path: None,
+    });
+
+    let error = session
+        .record_initial_history(initial_history)
+        .await
+        .expect_err("feature-off Spine history should fail closed");
+
+    assert!(
+        error.to_string().contains("Spine is disabled"),
+        "unexpected error: {error:#}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn feature_off_accepts_plain_resumed_history() -> anyhow::Result<()> {
+    let session = make_session_with_config(|_| {}).await?;
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::new(),
+        history: vec![
+            RolloutItem::ResponseItem(user_message("plain user")),
+            RolloutItem::ResponseItem(assistant_message("plain assistant")),
+        ],
+        rollout_path: Some(PathBuf::from("/tmp/plain-resume.jsonl")),
+    });
+
+    session
+        .record_initial_history(initial_history)
+        .await
+        .expect("plain feature-off resume should succeed");
+
+    assert_eq!(
+        session.clone_history().await.raw_items().to_vec(),
+        vec![
+            user_message("plain user"),
+            assistant_message("plain assistant")
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_runtime_initializes_root_when_feature_is_on() -> anyhow::Result<()> {
     let session = make_session_with_config(|config| {
         config
@@ -1417,6 +1468,35 @@ async fn spine_runtime_is_inert_when_provider_lacks_namespace_tools() -> anyhow:
     .await?;
 
     assert!(session.spine.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_resume_rejects_existing_spine_history_without_rollout_path() -> anyhow::Result<()> {
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::new(),
+        history: vec![RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted 1 [0, 1)".to_string(),
+            replacement_history: Some(vec![user_message("spine memory")]),
+            spine: Some(spine_compact_checkpoint(
+                "compact-no-rollout",
+                SpineCompactedCheckpointKind::Suffix,
+            )),
+        })],
+        rollout_path: None,
+    });
+    let initial_spine_state = super::session::prepare_initial_spine_state(&initial_history).await?;
+
+    let result = super::session::load_spine_runtime_for_state(None, &initial_spine_state);
+
+    let error = match result {
+        Ok(_) => panic!("existing Spine history without rollout path should fail closed"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("requires a local rollout path"),
+        "unexpected error: {error:#}"
+    );
     Ok(())
 }
 
@@ -1455,69 +1535,22 @@ async fn initial_spine_tree_is_emitted_once_before_first_user_prompt() -> anyhow
 }
 
 #[tokio::test]
-async fn update_plan_after_non_spine_compact_emits_flat_plan_without_sidecar_write()
--> anyhow::Result<()> {
-    let (mut session, turn_context, rx) = make_session_and_context_with_rx().await;
-    let session_mut = Arc::get_mut(&mut session).expect("fresh test session has no other refs");
-    let rollout_path = attach_thread_persistence(session_mut).await;
-    let spine = crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0)?;
-    let plan_path = spine
-        .store()
-        .plan_path(&crate::spine::ids::NodeId::from_segments(vec![1, 1]));
-    session_mut.spine = Some(Arc::new(Mutex::new(spine)));
-
-    let mutable_snapshot = session
-        .record_spine_plan_update_and_emit_progress(
-            turn_context.as_ref(),
-            spine_update_plan_args_for_test("mutable sidecar plan", StepStatus::InProgress),
-        )
-        .await?;
-    let mutable_snapshot = mutable_snapshot.expect("mutable spine plan should return snapshot");
-    assert_eq!(mutable_snapshot.active_node_id, "1.1");
-    let returned_plan = mutable_snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == "1.1")
-        .and_then(|node| node.plan.as_ref())
-        .expect("current node plan");
-    assert_eq!(returned_plan.items[0].step, "mutable sidecar plan");
-    let initial_plan = std::fs::read_to_string(&plan_path)?;
-    assert!(initial_plan.contains("mutable sidecar plan"));
-
-    let first = rx.recv().await.expect("spine tree update");
-    assert!(matches!(first.msg, EventMsg::SpineTreeUpdate(_)));
-    let second = rx.recv().await.expect("flat plan update");
-    assert!(matches!(second.msg, EventMsg::PlanUpdate(_)));
-    assert!(rx.try_recv().is_err(), "only initial spine and plan events");
+async fn flat_plan_updates_emit_without_spine_runtime() -> anyhow::Result<()> {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
 
     session
-        .spine
-        .as_ref()
-        .expect("spine")
-        .lock()
-        .await
-        .mark_non_spine_compacted_history();
-    let readonly_snapshot = session
-        .record_spine_plan_update_and_emit_progress(
+        .record_plan_update_and_emit_progress(
             turn_context.as_ref(),
-            spine_update_plan_args_for_test("flat only after compact", StepStatus::Completed),
+            update_plan_args_for_test("flat only after compact", StepStatus::Completed),
         )
         .await?;
-    assert!(
-        readonly_snapshot.is_none(),
-        "read-only sidecar should not return stale SpineTreeUpdate"
-    );
 
-    assert_eq!(std::fs::read_to_string(&plan_path)?, initial_plan);
     let event = rx.recv().await.expect("flat plan update after compact");
     let EventMsg::PlanUpdate(args) = event.msg else {
         panic!("expected flat PlanUpdate after non-Spine compact");
     };
     assert_eq!(args.plan[0].step, "flat only after compact");
-    assert!(
-        rx.try_recv().is_err(),
-        "read-only sidecar should not emit SpineTreeUpdate"
-    );
+    assert!(rx.try_recv().is_err(), "only flat PlanUpdate should emit");
     Ok(())
 }
 
@@ -1624,34 +1657,69 @@ async fn spine_resume_emits_initial_tree_update_after_session_configured() -> an
 }
 
 #[tokio::test]
-async fn spine_resume_ordinal_counts_raw_rollout_items_not_filtered_history() -> anyhow::Result<()>
+async fn spine_resume_rejects_compacted_history_without_replacement_history() -> anyhow::Result<()>
 {
-    let temp = tempfile::tempdir()?;
-    let rollout_path = temp.path().join("rollout.jsonl");
-    write_rollout_items_for_test(
-        &rollout_path,
-        &[
+    let (session, _turn_context) = make_session_and_context().await;
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: vec![
             RolloutItem::ResponseItem(user_message("raw one")),
             RolloutItem::Compacted(CompactedItem {
                 message: "summary".to_string(),
                 replacement_history: None,
+                spine: None,
             }),
             RolloutItem::ResponseItem(assistant_message("raw two")),
             RolloutItem::ResponseItem(user_message("raw three")),
         ],
-    )?;
-
-    let initial_history = InitialHistory::Resumed(ResumedHistory {
-        conversation_id: ThreadId::default(),
-        history: vec![RolloutItem::ResponseItem(user_message(
-            "filtered prompt item",
-        ))],
-        rollout_path: Some(rollout_path),
+        rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
     });
 
-    assert_eq!(
-        session_integration::initial_spine_response_item_count(&initial_history).await?,
-        3
+    let error = session
+        .record_initial_history(initial_history)
+        .await
+        .expect_err("unsupported compacted history should fail closed");
+    assert!(error.to_string().contains("missing replacement_history"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_resume_scans_actual_history_when_rollout_path_differs() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    write_rollout_items_for_test(
+        &rollout_path,
+        &[RolloutItem::ResponseItem(user_message(
+            "clean rollout file",
+        ))],
+    )?;
+    crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?.create()?;
+
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::new(),
+        history: vec![RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted 1 [0, 1)".to_string(),
+            replacement_history: Some(vec![user_message("actual replay spine memory")]),
+            spine: Some(spine_compact_checkpoint(
+                "compact-missing-evidence",
+                SpineCompactedCheckpointKind::Suffix,
+            )),
+        })],
+        rollout_path: Some(rollout_path.clone()),
+    });
+    let initial_spine_state = super::session::prepare_initial_spine_state(&initial_history).await?;
+
+    let error = super::session::load_spine_runtime_for_state(
+        Some(rollout_path.as_path()),
+        &initial_spine_state,
+    )
+    .expect_err("actual replay Spine checkpoint without MemInstall evidence should fail closed");
+
+    assert!(
+        error
+            .to_string()
+            .contains("has no committed MemInstall evidence"),
+        "unexpected error: {error:#}"
     );
     Ok(())
 }
@@ -1660,23 +1728,26 @@ async fn spine_resume_ordinal_counts_raw_rollout_items_not_filtered_history() ->
 async fn spine_resume_detects_latest_non_spine_compaction() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    write_rollout_items_for_test(
-        &rollout_path,
-        &[
-            RolloutItem::Compacted(CompactedItem {
-                message: "Spine compacted 1 [0, 2)".to_string(),
-                replacement_history: Some(vec![user_message("spine ir")]),
-            }),
-            RolloutItem::Compacted(CompactedItem {
-                message: "native summary".to_string(),
-                replacement_history: Some(vec![user_message("summary")]),
-            }),
-        ],
-    )?;
+    let rollout_items = vec![
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted 1 [0, 2)".to_string(),
+            replacement_history: Some(vec![user_message("spine ir")]),
+            spine: Some(spine_compact_checkpoint(
+                "compact-before-native",
+                SpineCompactedCheckpointKind::Suffix,
+            )),
+        }),
+        RolloutItem::Compacted(CompactedItem {
+            message: "native summary".to_string(),
+            replacement_history: Some(vec![user_message("summary")]),
+            spine: None,
+        }),
+    ];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: ThreadId::default(),
-        history: Vec::new(),
+        history: rollout_items,
         rollout_path: Some(rollout_path),
     });
 
@@ -1691,17 +1762,19 @@ async fn spine_resume_detects_latest_non_spine_compaction() -> anyhow::Result<()
 async fn spine_resume_detects_existing_spine_compaction_from_rollout() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    write_rollout_items_for_test(
-        &rollout_path,
-        &[RolloutItem::Compacted(CompactedItem {
-            message: "Spine compacted 1 [0, 1)".to_string(),
-            replacement_history: Some(vec![user_message("spine memory")]),
-        })],
-    )?;
+    let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
+        message: "Spine compacted 1 [0, 1)".to_string(),
+        replacement_history: Some(vec![user_message("spine memory")]),
+        spine: Some(spine_compact_checkpoint(
+            "compact-detected",
+            SpineCompactedCheckpointKind::Suffix,
+        )),
+    })];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: ThreadId::default(),
-        history: Vec::new(),
+        history: rollout_items,
         rollout_path: Some(rollout_path),
     });
 
@@ -1714,20 +1787,18 @@ async fn spine_resume_detects_existing_namespaced_spine_history_from_rollout() -
 {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    write_rollout_items_for_test(
-        &rollout_path,
-        &[RolloutItem::ResponseItem(ResponseItem::FunctionCall {
-            id: None,
-            name: "tree".to_string(),
-            namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
-            arguments: "{}".to_string(),
-            call_id: "call-spine-tree".to_string(),
-        })],
-    )?;
+    let rollout_items = vec![RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+        id: None,
+        name: "tree".to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+        call_id: "call-spine-tree".to_string(),
+    })];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: ThreadId::default(),
-        history: Vec::new(),
+        history: rollout_items,
         rollout_path: Some(rollout_path),
     });
 
@@ -1739,31 +1810,28 @@ async fn spine_resume_detects_existing_namespaced_spine_history_from_rollout() -
 async fn initial_spine_scan_derives_resume_state_from_one_rollout() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    let next_call = spine_next_function_call("next-1", "rolled back next");
-    write_rollout_items_for_test(
-        &rollout_path,
-        &[
-            RolloutItem::ResponseItem(user_message("turn 1 user")),
-            RolloutItem::ResponseItem(spine_function_call("open-1")),
-            RolloutItem::ResponseItem(function_call_output("open-1")),
-            RolloutItem::Compacted(CompactedItem {
-                message: "native summary".to_string(),
-                replacement_history: Some(vec![assistant_message("native compact summary")]),
-            }),
-            RolloutItem::ResponseItem(user_message("turn 2 user")),
-            RolloutItem::ResponseItem(next_call),
-            RolloutItem::ResponseItem(function_call_output("next-1")),
-            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
-                num_turns: 1,
-            })),
-        ],
-    )?;
+    let close_call = spine_close_function_call("close-1", "rolled back close");
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("turn 1 user")),
+        RolloutItem::ResponseItem(spine_function_call("open-1")),
+        RolloutItem::ResponseItem(function_call_output("open-1")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "native summary".to_string(),
+            replacement_history: Some(vec![assistant_message("native compact summary")]),
+            spine: None,
+        }),
+        RolloutItem::ResponseItem(user_message("turn 2 user")),
+        RolloutItem::ResponseItem(close_call),
+        RolloutItem::ResponseItem(function_call_output("close-1")),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    ];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: ThreadId::default(),
-        history: vec![RolloutItem::ResponseItem(user_message(
-            "filtered prompt item",
-        ))],
+        history: rollout_items,
         rollout_path: Some(rollout_path),
     });
     let scan = session_integration::initial_spine_scan(&initial_history).await?;
@@ -1783,8 +1851,14 @@ async fn initial_spine_scan_derives_resume_state_from_one_rollout() -> anyhow::R
 fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    let runtime =
-        session_integration::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
+    let runtime = session_integration::load_initial_spine_runtime(
+        &rollout_path,
+        0,
+        false,
+        false,
+        &HashSet::new(),
+        None,
+    )?;
 
     assert_eq!(
         runtime.cursor(),
@@ -1802,10 +1876,23 @@ fn initial_spine_runtime_creates_sidecar_for_new_history() -> anyhow::Result<()>
 fn initial_spine_runtime_loads_existing_sidecar_without_transition_history() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    session_integration::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
+    session_integration::load_initial_spine_runtime(
+        &rollout_path,
+        0,
+        false,
+        false,
+        &HashSet::new(),
+        None,
+    )?;
 
-    let runtime =
-        session_integration::load_initial_spine_runtime(&rollout_path, 0, false, false, None)?;
+    let runtime = session_integration::load_initial_spine_runtime(
+        &rollout_path,
+        0,
+        false,
+        false,
+        &HashSet::new(),
+        None,
+    )?;
 
     assert_eq!(
         runtime.cursor(),
@@ -1820,12 +1907,59 @@ fn initial_spine_runtime_loads_existing_sidecar_without_transition_history() -> 
 }
 
 #[test]
+fn initial_spine_runtime_rejects_non_initial_sidecar_without_spine_history() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let mut runtime = crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0)?;
+    runtime.stage_transition(
+        "open-1",
+        "turn-1",
+        crate::spine::store::SpineOperation::Open,
+        None,
+        /*compact_instruction*/ None,
+    )?;
+    runtime.after_response_items_recorded(
+        "turn-1",
+        &[
+            spine_function_call("open-1"),
+            function_call_output("open-1"),
+        ],
+        0,
+        2,
+    )?;
+
+    let error = session_integration::load_initial_spine_runtime(
+        &rollout_path,
+        0,
+        /*has_spine_history*/ false,
+        /*has_non_spine_compaction*/ false,
+        &HashSet::new(),
+        None,
+    )
+    .expect_err("stale sidecar must not be admitted without replay Spine evidence");
+
+    assert!(
+        error
+            .to_string()
+            .contains("not admissible for history without Spine evidence"),
+        "unexpected error: {error:#}"
+    );
+    Ok(())
+}
+
+#[test]
 fn non_spine_compact_stop_initial_runtime_is_read_only() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
 
-    let runtime =
-        session_integration::load_initial_spine_runtime(&rollout_path, 0, false, true, None)?;
+    let runtime = session_integration::load_initial_spine_runtime(
+        &rollout_path,
+        0,
+        false,
+        true,
+        &HashSet::new(),
+        None,
+    )?;
 
     assert!(!runtime.is_mutable());
     Ok(())
@@ -1837,14 +1971,75 @@ fn initial_spine_runtime_rejects_missing_sidecar_for_existing_spine_history() ->
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
 
-    let error =
-        session_integration::load_initial_spine_runtime(&rollout_path, 3, true, false, None)
-            .expect_err("existing Spine rollout history requires sidecar");
+    let error = session_integration::load_initial_spine_runtime(
+        &rollout_path,
+        3,
+        true,
+        false,
+        &HashSet::new(),
+        None,
+    )
+    .expect_err("existing Spine rollout history requires sidecar");
 
     assert!(error.to_string().contains("rollout.spine.json"));
     assert!(
         !crate::spine::store::SpineSidecarStore::locator_path_for_rollout(&rollout_path)?.exists()
     );
+    Ok(())
+}
+
+#[test]
+fn initial_spine_runtime_accepts_surviving_spine_checkpoint_with_meminstall() -> anyhow::Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let store = crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    store.create()?;
+    store
+        .append_memory_section(
+            &crate::spine::ids::NodeId::from_segments(vec![1]),
+            "\n\n## Auto Compact\n\norphaned bridge body\n",
+        )
+        .expect("append memory section");
+    let body_ref = store
+        .generated_memory_sections(&crate::spine::ids::NodeId::from_segments(vec![1]))?
+        .last()
+        .expect("memory section")
+        .body_ref();
+    let compact_id = "compact-orphan";
+    store.append_compact_started(crate::spine::store::CompactStartedRecord {
+        attempt: crate::spine::store::CompactAttemptRecord {
+            compact_id: compact_id.to_string(),
+            node_id: crate::spine::ids::NodeId::from_segments(vec![1]),
+            op: SpineOperation::Close,
+            cut_ordinal: 0,
+            fold_end_ordinal: 2,
+        },
+        strategy: "codex_builtin_text".to_string(),
+        rollout: "../rollout.jsonl".to_string(),
+    })?;
+    store.append_mem_install_committed(crate::spine::store::MemInstallCommittedRecord {
+        attempt: crate::spine::store::CompactAttemptRecord {
+            compact_id: compact_id.to_string(),
+            node_id: crate::spine::ids::NodeId::from_segments(vec![1]),
+            op: SpineOperation::Close,
+            cut_ordinal: 0,
+            fold_end_ordinal: 2,
+        },
+        body_ref,
+        projection_ref: "projection:test".to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    })?;
+
+    session_integration::load_initial_spine_runtime(
+        &rollout_path,
+        2,
+        /*has_spine_history*/ true,
+        /*has_non_spine_compaction*/ false,
+        &HashSet::from([compact_id.to_string()]),
+        None,
+    )
+    .expect("surviving Spine checkpoint with verified MemInstall should load");
     Ok(())
 }
 
@@ -1901,6 +2096,7 @@ async fn spine_raw_mirror_tracks_metadata_without_compacted_history() -> anyhow:
             RolloutItem::Compacted(CompactedItem {
                 message: "effective checkpoint".to_string(),
                 replacement_history: Some(vec![assistant_message("compacted")]),
+                spine: None,
             }),
         ])
         .await;
@@ -1911,6 +2107,28 @@ async fn spine_raw_mirror_tracks_metadata_without_compacted_history() -> anyhow:
         .map(|item| item["type"].as_str().unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(item_types, vec!["turn_context", "event_msg"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_only_spine_runtime_does_not_mirror_new_host_items() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let mut spine =
+        crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
+    spine.mark_non_spine_compacted_history();
+    let raw_mirror_path = spine.store().raw_rollout_path();
+    session.spine = Some(Arc::new(Mutex::new(spine)));
+
+    session
+        .try_record_conversation_items(&turn_context, &[user_message("host-only after Stop")])
+        .await?;
+
+    let raw_mirror_text = std::fs::read_to_string(raw_mirror_path)?;
+    assert!(
+        !raw_mirror_text.contains("host-only after Stop"),
+        "read-only Stop boundary must not extend Spine raw mirror"
+    );
     Ok(())
 }
 
@@ -1944,9 +2162,8 @@ async fn spine_raw_mirror_metadata_failure_poison_session() -> anyhow::Result<()
 #[test]
 fn spine_compact_id_is_deterministic_for_same_boundary() {
     let boundary = SpineCompactBoundary {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: crate::spine::ids::NodeId::from_segments(vec![1, 2]),
-        scope_node_id: None,
         cut_ordinal: 4,
         fold_end_ordinal: 9,
         transition_summary: "leaf done".to_string(),
@@ -1962,9 +2179,8 @@ fn spine_compact_id_is_deterministic_for_same_boundary() {
 #[test]
 fn spine_compact_id_changes_when_instruction_changes() {
     let mut without_instruction = SpineCompactBoundary {
-        op: SpineOperation::Next,
+        op: SpineOperation::Close,
         node_id: crate::spine::ids::NodeId::from_segments(vec![1, 2]),
-        scope_node_id: None,
         cut_ordinal: 4,
         fold_end_ordinal: 9,
         transition_summary: "leaf done".to_string(),
@@ -1987,6 +2203,7 @@ async fn try_replace_compacted_history_persists_checkpoint_before_replacing_hist
     let compacted_item = CompactedItem {
         message: "spine checkpoint".to_string(),
         replacement_history: Some(replacement.clone()),
+        spine: None,
     };
 
     session
@@ -2007,6 +2224,7 @@ async fn try_replace_compacted_history_persists_checkpoint_before_replacing_hist
             RolloutItem::Compacted(CompactedItem {
                 message,
                 replacement_history: Some(history),
+                spine: None,
             }) if message == "spine checkpoint" && history == &replacement
         )
     }));
@@ -2064,19 +2282,19 @@ async fn spine_transition_compaction_boundary_waits_for_sampling_completion() ->
     runtime.take_last_committed_transition();
     runtime
         .stage_transition(
-            "next-1",
+            "close-1",
             "turn-2",
-            SpineOperation::Next,
+            SpineOperation::Close,
             "leaf done",
             /*compact_instruction*/ None,
         )
-        .expect("stage next");
+        .expect("stage close");
     session.spine = Some(Arc::new(Mutex::new(runtime)));
 
     let items = [
         user_message("current turn direct instruction"),
-        spine_function_call("next-1"),
-        function_call_output("next-1"),
+        spine_close_function_call("close-1", "leaf done"),
+        function_call_output("close-1"),
     ];
     session
         .try_record_conversation_items(&turn_context, &items)
@@ -2238,14 +2456,11 @@ async fn spine_root_epoch_compaction_installs_slim_native_history() -> anyhow::R
         &crate::spine::ids::NodeId::from_segments(vec![2, 1])
     );
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    let bridge_checkpoint = compact_events
+    let mem_install = compact_events
         .iter()
-        .find(|event| event["type"] == "bridge_checkpoint_committed")
-        .expect("bridge checkpoint event");
-    assert_eq!(
-        bridge_checkpoint["replacement_history_len"],
-        json!(replacement.len())
-    );
+        .find(|event| event["type"] == "mem_install_committed")
+        .expect("MemInstall event");
+    assert!(mem_install["compact_id"].as_str() == Some("compact-root"));
     Ok(())
 }
 
@@ -2320,8 +2535,8 @@ async fn spine_root_archive_rejects_fold_end_beyond_recorded_raw_ordinal() -> an
     assert!(
         !compact_events
             .iter()
-            .any(|event| event["type"] == "bridge_checkpoint_committed"),
-        "admissibility failure must happen before bridge_checkpoint_committed"
+            .any(|event| event["type"] == "mem_install_committed"),
+        "admissibility failure must happen before mem_install_committed"
     );
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(!tree.contains("\"type\":\"root_epoch_reset\""));
@@ -2396,10 +2611,9 @@ async fn root_archive_meminstall_order_recovers_checkpoint_after_commit() -> any
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 3);
+    assert_eq!(compact_events.len(), 2);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
-    assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
     let committed = runtime.store().committed_mem_installs()?;
     assert_eq!(committed.len(), 1);
     assert_eq!(
@@ -2647,7 +2861,7 @@ async fn repeated_spine_root_compaction_does_not_leave_orphan_tree_output() -> a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Result<()> {
+async fn spine_close_installs_compaction_before_followup_sampling() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config
@@ -2665,15 +2879,15 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
                 ev_completed("resp-open"),
             ]),
             sse(vec![
-                ev_response_created("resp-next"),
+                ev_response_created("resp-close"),
                 ev_assistant_message("msg-raw-suffix", "RAW_SUFFIX_DETAIL should be folded"),
                 ev_function_call_with_namespace(
-                    "call-next",
+                    "call-close",
                     "spine",
-                    "next",
+                    "close",
                     r#"{"summary":"leaf done"}"#,
                 ),
-                ev_completed("resp-next"),
+                ev_completed("resp-close"),
             ]),
             sse(vec![
                 ev_response_created("resp-compact"),
@@ -2709,13 +2923,13 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     assert_eq!(requests.len(), 4);
     let compact_request = &requests[2];
     assert!(compact_request.body_contains_text("Compact only target Spine node"));
-    assert!(compact_request.tool_by_name("spine", "next").is_some());
+    assert!(compact_request.tool_by_name("spine", "close").is_some());
 
     let followup_request = &requests[3];
     assert!(!followup_request.body_contains_text("<spine_memory"));
     assert!(followup_request.body_contains_text("## Spine Memory"));
     assert!(followup_request.body_contains_text("Node: 1.1.1"));
-    assert!(followup_request.body_contains_text("Operation: next"));
+    assert!(followup_request.body_contains_text("Operation: close"));
     assert!(followup_request.body_contains_text("compact leaf fact"));
     assert!(!followup_request.body_contains_text("fold_start"));
     assert!(!followup_request.body_contains_text("fold_end"));
@@ -2725,7 +2939,8 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
     assert!(followup_request.body_contains_text("FINAL_AFTER_SPINE_COMPACT"));
     assert!(!followup_request.body_contains_text("Continue the active user turn"));
     assert!(followup_request.body_contains_text("<spine_handoff>"));
-    assert!(followup_request.body_contains_text("Spine transition completed: 1.1.1 -> 1.1.2"));
+    assert!(followup_request.body_contains_text("Spine transition completed: 1.1.1 -> 1.1"));
+    assert!(followup_request.body_contains_text("current scope handoff"));
     assert!(followup_request.body_contains_text(
         "Continue following preserved system, developer, and project instructions."
     ));
@@ -2736,7 +2951,7 @@ async fn spine_next_installs_compaction_before_followup_sampling() -> anyhow::Re
         "unresolved user-facing conclusions, decisions, blockers, and next actions captured in the generated memory as current obligations"
     ));
     assert!(followup_request.body_contains_text(
-        "If the latest user request or generated memory indicates unfinished work, reconstruct the current node plan from the generated memory, latest user intent, and current evidence before continuing."
+        "If the latest user request or generated memory indicates unfinished work, reconstruct the current scope state from the generated memory, latest user intent, and current evidence before continuing."
     ));
     assert!(followup_request.body_contains_text(
         "Before asking for new instructions, answer or continue any pending latest user request using that context."
@@ -2759,20 +2974,20 @@ async fn spine_suffix_compaction_cancellation_records_interrupted_terminal() -> 
         crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
     runtime
         .stage_transition(
-            "next-1",
+            "close-1",
             "turn-1",
-            SpineOperation::Next,
+            SpineOperation::Close,
             "leaf done",
             /*compact_instruction*/ None,
         )
-        .expect("stage next");
+        .expect("stage close");
     session.spine = Some(Arc::new(Mutex::new(runtime)));
     session
         .try_record_conversation_items(
             &turn_context,
             &[
-                spine_function_call("next-1"),
-                function_call_output("next-1"),
+                spine_close_function_call("close-1", "leaf done"),
+                function_call_output("close-1"),
             ],
         )
         .await?;
@@ -2876,16 +3091,15 @@ async fn suffix_meminstall_order_recovers_checkpoint_after_commit() -> anyhow::R
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
     assert!(rendered_history.contains("## Spine Memory"));
-    assert!(rendered_history.contains("Operation: next"));
+    assert!(rendered_history.contains("Operation: close"));
     assert!(rendered_history.contains("compact leaf fact"));
     assert!(rendered_history.contains("<spine_handoff>"));
 
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 3);
+    assert_eq!(compact_events.len(), 2);
     assert_eq!(compact_events[0]["type"], "compact_started");
     assert_eq!(compact_events[1]["type"], "mem_install_committed");
-    assert_eq!(compact_events[2]["type"], "bridge_checkpoint_committed");
     let committed = runtime.store().committed_mem_installs()?;
     assert_eq!(committed.len(), 1);
     assert_eq!(
@@ -2924,12 +3138,9 @@ async fn spine_suffix_compaction_post_checkpoint_failure_poisons() -> anyhow::Re
 
     let rendered_history = serde_json::to_string(session.clone_history().await.raw_items())?;
     assert!(rendered_history.contains("## Spine Memory"));
-    assert!(rendered_history.contains("Operation: next"));
+    assert!(rendered_history.contains("Operation: close"));
     assert!(rendered_history.contains("compact leaf fact"));
-    assert!(
-        rendered_history.contains("<spine_handoff>"),
-        "rollout checkpoint was installed after semantic MemInstall committed"
-    );
+    assert!(rendered_history.contains("<spine_handoff>"));
 
     let runtime = session.spine.as_ref().expect("spine").lock().await;
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
@@ -2968,20 +3179,20 @@ async fn run_suffix_compaction_with_body(
         crate::spine::runtime::SpineRuntime::load_or_init(&rollout_path, 0).expect("spine runtime");
     runtime
         .stage_transition(
-            "next-1",
+            "close-1",
             "turn-1",
-            SpineOperation::Next,
+            SpineOperation::Close,
             "leaf done",
             /*compact_instruction*/ None,
         )
-        .expect("stage next");
+        .expect("stage close");
     session.spine = Some(Arc::new(Mutex::new(runtime)));
     session
         .try_record_conversation_items(
             &turn_context,
             &[
-                spine_function_call("next-1"),
-                function_call_output("next-1"),
+                spine_close_function_call("close-1", "leaf done"),
+                function_call_output("close-1"),
                 assistant_message("RAW_SUFFIX_DETAIL should be folded before failure"),
             ],
         )
@@ -3334,13 +3545,14 @@ async fn reconstruct_history_matches_live_compactions() {
     let reconstruction_turn = session.new_default_turn().await;
     let reconstructed = session
         .reconstruct_history_from_rollout(reconstruction_turn.as_ref(), &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert_eq!(expected, reconstructed.history);
 }
 
 #[tokio::test]
-async fn reconstruct_history_uses_replacement_history_verbatim() {
+async fn reconstruct_history_uses_materialized_compact_checkpoint_as_host_base() {
     let (session, turn_context) = make_session_and_context().await;
     let summary_item = ResponseItem::Message {
         id: None,
@@ -3364,11 +3576,13 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
     let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
         message: String::new(),
         replacement_history: Some(replacement_history.clone()),
+        spine: None,
     })];
 
     let reconstructed = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert_eq!(reconstructed.history, replacement_history);
 }
@@ -3385,13 +3599,18 @@ async fn reconstruct_history_replays_suffix_after_spine_compact_checkpoint() {
         RolloutItem::Compacted(CompactedItem {
             message: "Spine compacted 1.1 [0, 2)".to_string(),
             replacement_history: Some(replacement_history.clone()),
+            spine: Some(spine_compact_checkpoint(
+                "compact-child",
+                SpineCompactedCheckpointKind::Suffix,
+            )),
         }),
         RolloutItem::ResponseItem(later.clone()),
     ];
 
     let reconstructed = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert_eq!(reconstructed.history, vec![spine_ir, later]);
     assert_eq!(
@@ -3432,6 +3651,10 @@ async fn reconstruct_history_does_not_revive_rolled_back_spine_compact_checkpoin
         RolloutItem::Compacted(CompactedItem {
             message: "Spine compacted 1 [0, 1)".to_string(),
             replacement_history: Some(replacement_history),
+            spine: Some(spine_compact_checkpoint(
+                "compact-rolled-back",
+                SpineCompactedCheckpointKind::Suffix,
+            )),
         }),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id,
@@ -3447,7 +3670,8 @@ async fn reconstruct_history_does_not_revive_rolled_back_spine_compact_checkpoin
 
     let reconstructed = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert!(
         reconstructed.history.is_empty(),
@@ -3505,6 +3729,10 @@ async fn reconstruct_history_rollback_preserves_older_raw_history_after_compact_
                 turn_one_assistant.clone(),
                 user_message("rolled-back compact ir"),
             ]),
+            spine: Some(spine_compact_checkpoint(
+                "compact-rolled-back",
+                SpineCompactedCheckpointKind::Suffix,
+            )),
         }),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: rolled_back_turn_id,
@@ -3520,7 +3748,8 @@ async fn reconstruct_history_rollback_preserves_older_raw_history_after_compact_
 
     let reconstructed = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert_eq!(
         reconstructed.history,
@@ -3534,14 +3763,14 @@ async fn spine_resume_projection_rollback_projection_epoch_repairs_missing_reset
 -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let rollout_path = temp.path().join("rollout.jsonl");
-    let next_call = spine_next_function_call("next-1", "rolled back next");
+    let close_call = spine_close_function_call("close-1", "rolled back close");
     let rollout_items = vec![
         RolloutItem::ResponseItem(user_message("turn 1 user")),
         RolloutItem::ResponseItem(spine_function_call("open-1")),
         RolloutItem::ResponseItem(function_call_output("open-1")),
         RolloutItem::ResponseItem(user_message("turn 2 user")),
-        RolloutItem::ResponseItem(next_call.clone()),
-        RolloutItem::ResponseItem(function_call_output("next-1")),
+        RolloutItem::ResponseItem(close_call.clone()),
+        RolloutItem::ResponseItem(function_call_output("close-1")),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
         })),
@@ -3567,27 +3796,27 @@ async fn spine_resume_projection_rollback_projection_epoch_repairs_missing_reset
         3,
     )?;
     runtime.stage_transition(
-        "next-1",
+        "close-1",
         "turn-2",
-        crate::spine::store::SpineOperation::Next,
-        "rolled back next",
+        crate::spine::store::SpineOperation::Close,
+        "rolled back close",
         /*compact_instruction*/ None,
     )?;
     runtime.after_response_items_recorded(
         "turn-2",
         &[
             user_message("turn 2 user"),
-            next_call,
-            function_call_output("next-1"),
+            close_call,
+            function_call_output("close-1"),
         ],
         3,
         6,
     )?;
-    assert_eq!(runtime.cursor().to_string(), "1.1.2");
+    assert_eq!(runtime.cursor().to_string(), "1.1");
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: ThreadId::default(),
-        history: Vec::new(),
+        history: rollout_items.clone(),
         rollout_path: Some(rollout_path.clone()),
     });
     let projection = session_integration::initial_spine_projection(&initial_history)
@@ -3601,6 +3830,7 @@ async fn spine_resume_projection_rollback_projection_epoch_repairs_missing_reset
         projection.response_item_count,
         /*has_spine_history*/ true,
         /*has_non_spine_compaction*/ false,
+        &projection.surviving_compact_ids,
         Some(&projection),
     )?;
     assert_eq!(projected_runtime.cursor().to_string(), "1.1.1");
@@ -3762,10 +3992,10 @@ async fn resume_projection_repairs_behind_projection_epoch() -> anyhow::Result<(
         RolloutItem::ResponseItem(function_call_output("open-1")),
     ];
     let mut rollout_items = prefix_items.clone();
-    rollout_items.push(RolloutItem::ResponseItem(spine_next_function_call(
-        "next-1", "done",
+    rollout_items.push(RolloutItem::ResponseItem(spine_close_function_call(
+        "close-1", "done",
     )));
-    rollout_items.push(RolloutItem::ResponseItem(function_call_output("next-1")));
+    rollout_items.push(RolloutItem::ResponseItem(function_call_output("close-1")));
     write_rollout_items_for_test(&rollout_path, &rollout_items)?;
 
     let prefix_projection = crate::spine::projection::project_spine_state_from_rollout_with_source(
@@ -3783,23 +4013,24 @@ async fn resume_projection_repairs_behind_projection_epoch() -> anyhow::Result<(
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: ThreadId::default(),
-        history: Vec::new(),
+        history: rollout_items.clone(),
         rollout_path: Some(rollout_path.clone()),
     });
     let projection = session_integration::initial_spine_projection(&initial_history)
         .await?
         .expect("behind projection epoch should request repair projection");
     assert_eq!(projection.response_item_count, 5);
-    assert_eq!(projection.state.cursor().to_string(), "1.1.2");
+    assert_eq!(projection.state.cursor().to_string(), "1.1");
 
     let projected_runtime = session_integration::load_initial_spine_runtime(
         &rollout_path,
         projection.response_item_count,
         /*has_spine_history*/ true,
         /*has_non_spine_compaction*/ false,
+        &projection.surviving_compact_ids,
         Some(&projection),
     )?;
-    assert_eq!(projected_runtime.cursor().to_string(), "1.1.2");
+    assert_eq!(projected_runtime.cursor().to_string(), "1.1");
     let tree = std::fs::read_to_string(projected_runtime.store().tree_path())?;
     assert_eq!(tree.matches("\"type\":\"projection_reset\"").count(), 2);
     Ok(())
@@ -3815,10 +4046,10 @@ async fn resume_projection_rejects_ahead_projection_epoch() -> anyhow::Result<()
         RolloutItem::ResponseItem(function_call_output("open-1")),
     ];
     let mut future_items = prefix_items.clone();
-    future_items.push(RolloutItem::ResponseItem(spine_next_function_call(
-        "next-1", "done",
+    future_items.push(RolloutItem::ResponseItem(spine_close_function_call(
+        "close-1", "done",
     )));
-    future_items.push(RolloutItem::ResponseItem(function_call_output("next-1")));
+    future_items.push(RolloutItem::ResponseItem(function_call_output("close-1")));
     write_rollout_items_for_test(&rollout_path, &prefix_items)?;
 
     let future_projection = crate::spine::projection::project_spine_state_from_rollout_with_source(
@@ -3836,7 +4067,7 @@ async fn resume_projection_rejects_ahead_projection_epoch() -> anyhow::Result<()
 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: ThreadId::default(),
-        history: Vec::new(),
+        history: prefix_items.clone(),
         rollout_path: Some(rollout_path),
     });
     let error = session_integration::initial_spine_projection(&initial_history)
@@ -3861,7 +4092,8 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
@@ -3871,7 +4103,10 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     let (session, _turn_context) = make_session_and_context().await;
 
-    session.record_initial_history(InitialHistory::New).await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("record initial history");
 
     let history = session.clone_history().await;
     assert_eq!(history.raw_items().to_vec(), Vec::<ResponseItem>::new());
@@ -3890,7 +4125,8 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     let history_before_seed = session.state.lock().await.clone_history();
     assert_eq!(expected, history_before_seed.raw_items());
@@ -3983,7 +4219,8 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     let actual = session.state.lock().await.token_info();
     assert_eq!(actual, Some(info2));
@@ -4058,7 +4295,8 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
-        .await;
+        .await
+        .expect("record initial history");
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
@@ -4280,7 +4518,8 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
-        .await;
+        .await
+        .expect("record initial history");
 
     let history = session.clone_history().await;
     assert_eq!(
@@ -4461,10 +4700,10 @@ async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
         .lock()
         .await
         .stage_transition(
-            "next-1",
+            "close-1",
             "turn-2",
-            SpineOperation::Next,
-            "rolled back next",
+            SpineOperation::Close,
+            "rolled back close",
             /*compact_instruction*/ None,
         )?;
     sess.try_record_conversation_items(
@@ -4472,12 +4711,12 @@ async fn thread_rollback_projects_spine_runtime() -> anyhow::Result<()> {
         &[
             ResponseItem::FunctionCall {
                 id: None,
-                name: "next".to_string(),
+                name: crate::spine::SPINE_TOOL_CLOSE.to_string(),
                 namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
-                arguments: r#"{"summary":"rolled back next"}"#.to_string(),
-                call_id: "next-1".to_string(),
+                arguments: r#"{"summary":"rolled back close"}"#.to_string(),
+                call_id: "close-1".to_string(),
             },
-            function_call_output("next-1"),
+            function_call_output("close-1"),
         ],
     )
     .await?;
@@ -4589,10 +4828,10 @@ async fn spine_rollback_projection_epoch_flush_failure_blocks_reset() -> anyhow:
         .lock()
         .await
         .stage_transition(
-            "next-1",
+            "close-1",
             "turn-2",
-            SpineOperation::Next,
-            "rolled back next",
+            SpineOperation::Close,
+            "rolled back close",
             /*compact_instruction*/ None,
         )?;
     sess.try_record_conversation_items(
@@ -4600,12 +4839,12 @@ async fn spine_rollback_projection_epoch_flush_failure_blocks_reset() -> anyhow:
         &[
             ResponseItem::FunctionCall {
                 id: None,
-                name: "next".to_string(),
+                name: crate::spine::SPINE_TOOL_CLOSE.to_string(),
                 namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
-                arguments: r#"{"summary":"rolled back next"}"#.to_string(),
-                call_id: "next-1".to_string(),
+                arguments: r#"{"summary":"rolled back close"}"#.to_string(),
+                call_id: "close-1".to_string(),
             },
-            function_call_output("next-1"),
+            function_call_output("close-1"),
         ],
     )
     .await?;
@@ -4647,7 +4886,7 @@ async fn spine_rollback_projection_epoch_flush_failure_blocks_reset() -> anyhow:
             .contains("failed to flush Spine rollback marker")
     );
     let runtime = sess.spine.as_ref().expect("spine").lock().await;
-    assert_eq!(runtime.cursor().to_string(), "1.1.2");
+    assert_eq!(runtime.cursor().to_string(), "1.1");
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(!tree.contains("\"projection_reset\""));
     let raw_mirror_text = std::fs::read_to_string(runtime.store().raw_rollout_path())?;
@@ -4834,6 +5073,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::Compacted(CompactedItem {
             message: "summary after compaction".to_string(),
             replacement_history: Some(compacted_history.clone()),
+            spine: None,
         }),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: compact_turn_id,
@@ -11104,6 +11344,7 @@ async fn sample_rollout(
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary1.to_string(),
         replacement_history: Some(rebuilt1),
+        spine: None,
     }));
 
     let user2 = ResponseItem::Message {
@@ -11144,6 +11385,7 @@ async fn sample_rollout(
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary2.to_string(),
         replacement_history: Some(rebuilt2),
+        spine: None,
     }));
 
     let user3 = ResponseItem::Message {

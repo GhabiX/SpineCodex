@@ -116,10 +116,17 @@ impl ContextManager {
     /// normalization and drops un-suited items. When `input_modalities` does not
     /// include `InputModality::Image`, images are stripped from messages and tool
     /// outputs.
-    pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
-        crate::spine::compact::expand_spine_initial_context_items(&mut self.items);
-        self.normalize_history(input_modalities);
-        self.items
+    pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
+        let mut this = self;
+        this.normalize_history(input_modalities);
+        this.items
+    }
+
+    pub(crate) fn for_spine_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
+        let mut this = self;
+        crate::spine::compact::expand_spine_initial_context_items(&mut this.items);
+        this.normalize_history(input_modalities);
+        this.items
     }
 
     /// Returns raw items in the history.
@@ -235,7 +242,7 @@ impl ContextManager {
     /// `reference_context_item`. The surviving history no longer contains the full bundle that
     /// established the prior baseline, so future turns must fall back to full reinjection instead
     /// of diffing against stale state.
-    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) {
+    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: usize) {
         if num_turns == 0 {
             return;
         }
@@ -247,11 +254,10 @@ impl ContextManager {
             return;
         };
 
-        let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
-        let mut cut_idx = if n_from_end >= user_positions.len() {
+        let mut cut_idx = if num_turns >= user_positions.len() {
             first_instruction_turn_idx
         } else {
-            user_positions[user_positions.len() - n_from_end]
+            user_positions[user_positions.len() - num_turns]
         };
 
         cut_idx =

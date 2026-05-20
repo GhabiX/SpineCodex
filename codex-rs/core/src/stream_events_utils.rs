@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::ContextualUserFragment;
 use crate::context::ImageGenerationInstructions;
+use crate::event_mapping::parse_spine_visible_turn_item;
 use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
 use crate::session::session::Session;
@@ -286,7 +287,11 @@ pub(crate) async fn handle_output_item_done(
             }
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await?;
-            let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
+            let last_agent_message = last_assistant_message_from_item(
+                &item,
+                plan_mode,
+                Box::pin(ctx.sess.spine_runtime_is_mutable()).await,
+            );
 
             output.last_agent_message = last_agent_message;
         }
@@ -356,13 +361,18 @@ pub(crate) async fn handle_non_tool_response_item(
     plan_mode: bool,
 ) -> Option<TurnItem> {
     debug!(?item, "Output item");
+    let hide_spine_internal = Box::pin(sess.spine_runtime_is_mutable()).await;
 
     match item {
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. } => {
-            let mut turn_item = parse_turn_item(item)?;
+            let mut turn_item = if hide_spine_internal {
+                parse_spine_visible_turn_item(item)
+            } else {
+                parse_turn_item(item)
+            }?;
             if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
                 let combined = agent_message
                     .content
@@ -437,8 +447,9 @@ pub(crate) async fn handle_non_tool_response_item(
 pub(crate) fn last_assistant_message_from_item(
     item: &ResponseItem,
     plan_mode: bool,
+    hide_spine_internal: bool,
 ) -> Option<String> {
-    if crate::spine::compact::is_spine_internal_render_item(item) {
+    if hide_spine_internal && crate::spine::compact::is_spine_internal_render_item(item) {
         return None;
     }
 
@@ -466,7 +477,7 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
             }
             // Treat `None` like final-answer text so untagged providers default
             // to the safer "defer mailbox mail" behavior.
-            last_assistant_message_from_item(item, plan_mode).is_some()
+            last_assistant_message_from_item(item, plan_mode, false).is_some()
         }
         ResponseItem::ImageGenerationCall { .. } => true,
         _ => false,

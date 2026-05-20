@@ -12,8 +12,6 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::RolloutItem;
 
-const SPINE_COMPACT_MESSAGE_PREFIX: &str = "Spine compacted ";
-
 pub(crate) fn initial_history_has_prior_user_turns(conversation_history: &InitialHistory) -> bool {
     conversation_history.scan_rollout_items(rollout_item_is_user_turn_boundary)
 }
@@ -148,22 +146,6 @@ pub(crate) fn truncate_rollout_to_last_n_fork_turns(
 
     let keep_idx = fork_turn_positions[fork_turn_positions.len() - n_from_end];
     items[keep_idx..].to_vec()
-}
-
-pub(crate) fn downgrade_spine_compactions_to_read_only_notes(
-    items: Vec<RolloutItem>,
-) -> Vec<RolloutItem> {
-    items
-        .into_iter()
-        .map(|item| match item {
-            RolloutItem::Compacted(compacted)
-                if compacted.message.starts_with(SPINE_COMPACT_MESSAGE_PREFIX) =>
-            {
-                RolloutItem::ResponseItem(compacted.into())
-            }
-            other => other,
-        })
-        .collect()
 }
 
 fn is_real_user_message_boundary(item: &ResponseItem) -> bool {

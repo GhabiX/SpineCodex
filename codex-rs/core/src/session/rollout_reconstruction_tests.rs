@@ -87,7 +87,8 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
@@ -161,7 +162,8 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -256,7 +258,8 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
 
     let reconstructed = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert_eq!(
         reconstructed.history,
@@ -343,7 +346,8 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
 
     let reconstructed = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert_eq!(
         reconstructed.history,
@@ -461,7 +465,8 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
 
     let reconstructed = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert_eq!(
         reconstructed.history,
@@ -554,7 +559,8 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
 
     let reconstructed = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert_eq!(
         reconstructed.history,
@@ -622,7 +628,8 @@ async fn reconstruct_history_rollback_clears_history_and_metadata_when_exceeding
 
     let reconstructed = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+        .await
+        .expect("reconstruct rollout history");
 
     assert_eq!(reconstructed.history, Vec::new());
     assert_eq!(reconstructed.previous_turn_settings, None);
@@ -694,7 +701,8 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
@@ -756,6 +764,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            spine: None,
         }),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
             codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
@@ -768,7 +777,8 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -797,7 +807,8 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_seed_referenc
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert!(session.reference_context_item().await.is_none());
 }
@@ -811,6 +822,7 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            spine: None,
         }),
     ];
 
@@ -820,14 +832,15 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
 }
 
 #[tokio::test]
-async fn reconstruct_history_compaction_without_replacement_history_discards_precompact_history() {
+async fn reconstruct_history_compaction_without_replacement_history_fails_closed() {
     let (session, turn_context) = make_session_and_context().await;
     let rollout_items = vec![
         RolloutItem::ResponseItem(user_message("before compact")),
@@ -835,42 +848,36 @@ async fn reconstruct_history_compaction_without_replacement_history_discards_pre
         RolloutItem::Compacted(CompactedItem {
             message: "unsupported old summary".to_string(),
             replacement_history: None,
+            spine: None,
         }),
     ];
 
-    let reconstructed = session
+    let error = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
-
-    assert_eq!(reconstructed.history, Vec::<ResponseItem>::new());
-    assert!(reconstructed.reference_context_item.is_none());
+        .await
+        .expect_err("unsupported old compaction should fail closed");
+    assert!(error.to_string().contains("missing replacement_history"));
 }
 
 #[tokio::test]
-async fn reconstruct_history_compaction_without_replacement_history_replays_later_tail() {
+async fn reconstruct_history_compaction_without_replacement_history_fails_closed_with_later_tail() {
     let (session, turn_context) = make_session_and_context().await;
     let rollout_items = vec![
         RolloutItem::ResponseItem(user_message("before compact")),
         RolloutItem::Compacted(CompactedItem {
             message: "unsupported old summary".to_string(),
             replacement_history: None,
+            spine: None,
         }),
         RolloutItem::ResponseItem(user_message("after compact")),
         RolloutItem::ResponseItem(assistant_message("after reply")),
     ];
 
-    let reconstructed = session
+    let error = session
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
-
-    assert_eq!(
-        reconstructed.history,
-        vec![
-            user_message("after compact"),
-            assistant_message("after reply"),
-        ]
-    );
-    assert!(reconstructed.reference_context_item.is_none());
+        .await
+        .expect_err("unsupported old compaction should fail closed");
+    assert!(error.to_string().contains("missing replacement_history"));
 }
 
 #[tokio::test]
@@ -925,6 +932,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            spine: None,
         }),
         RolloutItem::TurnContext(previous_context_item),
         RolloutItem::EventMsg(EventMsg::TurnComplete(
@@ -944,7 +952,8 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1069,6 +1078,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            spine: None,
         }),
     ];
 
@@ -1078,7 +1088,8 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1194,7 +1205,8 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1290,6 +1302,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            spine: None,
         }),
     ];
 
@@ -1299,7 +1312,8 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1346,7 +1360,8 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_preserves_turn_
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1443,6 +1458,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            spine: None,
         }),
         // A newer TurnStarted replaces the incomplete compacted turn without a matching
         // completion/abort for the old one.
@@ -1462,7 +1478,8 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,

@@ -1,10 +1,6 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
 use crate::spine::compact::SpineCompactBoundary;
-use crate::spine::debug_audit::RuntimeDebugBoundary;
-use crate::spine::debug_audit::audit_feature_off_boundary;
-use crate::spine::debug_audit::audit_projection_epoch;
-use crate::spine::debug_audit::audit_projection_state_matches_runtime;
 use crate::spine::runtime::SpineRuntime;
 use crate::spine::session_integration::InitialSpineScan;
 use crate::spine::session_integration::initial_spine_scan;
@@ -346,24 +342,15 @@ pub(crate) struct AppServerClientMetadata {
     pub(crate) client_version: Option<String>,
 }
 
-struct InitialSpineState {
+pub(super) struct InitialSpineState {
     scan: InitialSpineScan,
     ordinal: u64,
 }
 
-async fn prepare_initial_spine_state(
+pub(super) async fn prepare_initial_spine_state(
     initial_history: &InitialHistory,
-    runtime_debug_checks: bool,
 ) -> anyhow::Result<Box<InitialSpineState>> {
     let scan = initial_spine_scan(initial_history).await?;
-    if runtime_debug_checks && let Some(projection) = scan.projection.as_ref() {
-        audit_projection_epoch(
-            RuntimeDebugBoundary::StartupResume,
-            projection.response_item_count,
-            &projection.epoch,
-            "initial spine scan",
-        )?;
-    }
     let ordinal = scan
         .projection
         .as_ref()
@@ -372,11 +359,13 @@ async fn prepare_initial_spine_state(
     Ok(Box::new(InitialSpineState { scan, ordinal }))
 }
 
-fn load_spine_runtime_for_state(
+pub(super) fn load_spine_runtime_for_state(
     rollout_path: Option<&std::path::Path>,
     state: &InitialSpineState,
-    runtime_debug_checks: bool,
 ) -> anyhow::Result<Option<Arc<Mutex<SpineRuntime>>>> {
+    if state.scan.has_spine_history && rollout_path.is_none() {
+        anyhow::bail!("existing Spine rollout history requires a local rollout path and sidecar");
+    }
     let runtime = rollout_path
         .map(|path| {
             load_initial_spine_runtime(
@@ -384,20 +373,11 @@ fn load_spine_runtime_for_state(
                 state.ordinal,
                 state.scan.has_spine_history,
                 state.scan.has_non_spine_compaction,
+                &state.scan.surviving_compact_ids,
                 state.scan.projection.as_ref(),
             )
         })
         .transpose()?;
-    if runtime_debug_checks
-        && let (Some(runtime), Some(projection)) = (&runtime, state.scan.projection.as_ref())
-    {
-        audit_projection_state_matches_runtime(
-            RuntimeDebugBoundary::StartupResume,
-            runtime.state(),
-            &projection.state,
-            "initial spine runtime",
-        )?;
-    }
     Ok(runtime.map(|runtime| Arc::new(Mutex::new(runtime))))
 }
 
@@ -465,7 +445,7 @@ impl Session {
                     .filter(|item| matches!(item, RolloutItem::Compacted(_)))
                     .count(),
             )
-            .unwrap_or(u64::MAX),
+            .map_err(|_| anyhow::anyhow!("resumed rollout has too many compacted checkpoints"))?,
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
         let provider_capabilities = create_model_provider(
@@ -478,13 +458,7 @@ impl Session {
             provider_capabilities.namespace_tools,
         );
         let initial_spine_state = if spine_task_tree_enabled {
-            Some(
-                Box::pin(prepare_initial_spine_state(
-                    &initial_history,
-                    config.runtime_debug_checks,
-                ))
-                .await?,
-            )
+            Some(Box::pin(prepare_initial_spine_state(&initial_history)).await?)
         } else {
             None
         };
@@ -627,22 +601,14 @@ impl Session {
                     &thread_store,
                     &initial_history,
                     path,
-                    config.runtime_debug_checks,
                 )
                 .await?;
             }
             let spine = if let Some(initial_spine_state) = initial_spine_state.as_ref() {
-                load_spine_runtime_for_state(
-                    rollout_path.as_deref(),
-                    initial_spine_state,
-                    config.runtime_debug_checks,
-                )?
+                load_spine_runtime_for_state(rollout_path.as_deref(), initial_spine_state)?
             } else {
                 None
             };
-            if config.runtime_debug_checks && !spine_task_tree_enabled {
-                audit_feature_off_boundary(spine.is_some(), "session init")?;
-            }
             let trace_agent_path = session_configuration
                 .session_source
                 .get_agent_path()
@@ -1193,7 +1159,7 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            sess.record_initial_history(initial_history).await;
+            sess.record_initial_history(initial_history).await?;
             {
                 let mut state = sess.state.lock().await;
                 state.set_pending_session_start_source(Some(session_start_source));

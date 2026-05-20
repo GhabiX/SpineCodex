@@ -955,8 +955,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
 }
 
 #[tokio::test]
-async fn spawn_agent_last_n_turns_downgrades_spine_compaction_to_read_only_note()
--> anyhow::Result<()> {
+async fn spawn_agent_last_n_turns_retained_spine_compaction_fails_closed() -> anyhow::Result<()> {
     let (_home, mut config) = test_config().await;
     config
         .features
@@ -994,6 +993,10 @@ async fn spawn_agent_last_n_turns_downgrades_spine_compaction_to_read_only_note(
                     namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
                     arguments: "{}".to_string(),
                 }]),
+                spine: Some(codex_protocol::protocol::SpineCompactedCheckpoint {
+                    compact_id: "compact-hidden".to_string(),
+                    kind: codex_protocol::protocol::SpineCompactedCheckpointKind::Suffix,
+                }),
             }),
             RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
         ])
@@ -1010,7 +1013,7 @@ async fn spawn_agent_last_n_turns_downgrades_spine_compaction_to_read_only_note(
         .await
         .expect("parent rollout should flush");
 
-    let child_thread_id = control
+    let err = control
         .spawn_agent_with_metadata(
             config,
             text_input("child task"),
@@ -1028,39 +1031,12 @@ async fn spawn_agent_last_n_turns_downgrades_spine_compaction_to_read_only_note(
             },
         )
         .await
-        .expect("last-N fork should keep Spine compaction as read-only context")
-        .thread_id;
-
-    let child_thread = manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("child thread should be registered");
-    let history = child_thread.codex.session.clone_history().await;
-    assert!(
-        history_contains_text(history.raw_items(), "Spine compacted hidden ancestor"),
-        "retained Spine compact message should remain visible as read-only host context"
-    );
-
-    let child_rollout_path = child_thread
-        .rollout_path()
-        .expect("child rollout path should exist");
-    let child_store = crate::spine::store::SpineSidecarStore::for_rollout(&child_rollout_path)?;
-    let child_tree = std::fs::read_to_string(child_store.tree_path())?;
-    assert!(
-        !child_tree.contains("\"projection_reset\""),
-        "LastNTurns should not seed mutable Spine projection from a read-only compact note"
-    );
-    let compact_index =
-        std::fs::read_to_string(child_store.compact_index_path()).unwrap_or_else(|_| String::new());
-    assert!(
-        !compact_index.contains("mem_install_committed"),
-        "LastNTurns should not import compact Mem evidence from outside the retained window"
-    );
-
-    let _ = control
-        .shutdown_live_agent(child_thread_id)
-        .await
-        .expect("child shutdown should submit");
+        .expect_err("last-N fork should fail closed on source-less Spine history");
+    assert!(matches!(
+        err,
+        CodexErr::Fatal(message)
+            if message.contains("forked spine history is missing a source thread id")
+    ));
     let _ = parent_thread
         .submit(Op::Shutdown {})
         .await

@@ -65,6 +65,18 @@ pub(crate) enum InitialContextInjection {
     DoNotInject,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeTextInstallMode {
+    Host,
+    Spine { emit_install_error: bool },
+}
+
+impl NativeTextInstallMode {
+    fn expand_spine_initial_context(self) -> bool {
+        matches!(self, Self::Spine { .. })
+    }
+}
+
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.supports_remote_compaction()
 }
@@ -91,6 +103,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         CompactionTrigger::Auto,
         reason,
         phase,
+        NativeTextInstallMode::Host,
     )
     .await?;
     Ok(())
@@ -109,51 +122,19 @@ pub(crate) async fn run_inline_spine_native_text_auto_compact_task(
         // Compaction prompt is synthesized; no UI element ranges to preserve.
         text_elements: Vec::new(),
     }];
-    let attempt = CompactionAnalyticsAttempt::begin(
-        sess.as_ref(),
-        turn_context.as_ref(),
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        input,
+        initial_context_injection,
         CompactionTrigger::Auto,
         reason,
-        CompactionImplementation::Responses,
         phase,
+        NativeTextInstallMode::Spine {
+            emit_install_error: false,
+        },
     )
-    .await;
-    let pre_compact_outcome =
-        run_pre_compact_hooks(&sess, &turn_context, CompactionTrigger::Auto).await;
-    match pre_compact_outcome {
-        PreCompactHookOutcome::Continue => {}
-        PreCompactHookOutcome::Stopped { reason } => {
-            let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
-            attempt
-                .track(sess.as_ref(), CompactionStatus::Interrupted, Some(error))
-                .await;
-            return Err(CodexErr::TurnAborted);
-        }
-    }
-
-    let result = async {
-        let outcome = produce_native_text_compaction_outcome(
-            Arc::clone(&sess),
-            Arc::clone(&turn_context),
-            input,
-            initial_context_injection,
-        )
-        .await?;
-        install_spine_native_text_compaction_outcome(&sess, &turn_context, outcome).await
-    }
-    .await;
-    let status = compaction_status_from_result(&result);
-    let error = result.as_ref().err().map(ToString::to_string);
-    if result.is_ok() {
-        let post_compact_outcome =
-            run_post_compact_hooks(&sess, &turn_context, CompactionTrigger::Auto).await;
-        if let PostCompactHookOutcome::Stopped = post_compact_outcome {
-            attempt.track(sess.as_ref(), status, error).await;
-            return Err(CodexErr::TurnAborted);
-        }
-    }
-    attempt.track(sess.as_ref(), status, error).await;
-    result.map(|_| ())
+    .await
 }
 
 pub(crate) async fn run_compact_task(
@@ -176,6 +157,7 @@ pub(crate) async fn run_compact_task(
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
         CompactionPhase::StandaloneTurn,
+        NativeTextInstallMode::Host,
     )
     .await?;
     Ok(())
@@ -193,52 +175,19 @@ pub(crate) async fn run_spine_native_text_compact_task(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-    let attempt = CompactionAnalyticsAttempt::begin(
-        sess.as_ref(),
-        turn_context.as_ref(),
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        input,
+        InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
-        CompactionImplementation::Responses,
         CompactionPhase::StandaloneTurn,
+        NativeTextInstallMode::Spine {
+            emit_install_error: true,
+        },
     )
-    .await;
-    let pre_compact_outcome =
-        run_pre_compact_hooks(&sess, &turn_context, CompactionTrigger::Manual).await;
-    match pre_compact_outcome {
-        PreCompactHookOutcome::Continue => {}
-        PreCompactHookOutcome::Stopped { reason } => {
-            let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
-            attempt
-                .track(sess.as_ref(), CompactionStatus::Interrupted, Some(error))
-                .await;
-            return Err(CodexErr::TurnAborted);
-        }
-    }
-
-    let result = async {
-        let outcome = produce_native_text_compaction_outcome(
-            Arc::clone(&sess),
-            Arc::clone(&turn_context),
-            input,
-            InitialContextInjection::DoNotInject,
-        )
-        .await?;
-        install_spine_native_text_compaction_outcome_or_emit_error(&sess, &turn_context, outcome)
-            .await
-    }
-    .await;
-    let status = compaction_status_from_result(&result);
-    let error = result.as_ref().err().map(ToString::to_string);
-    if result.is_ok() {
-        let post_compact_outcome =
-            run_post_compact_hooks(&sess, &turn_context, CompactionTrigger::Manual).await;
-        if let PostCompactHookOutcome::Stopped = post_compact_outcome {
-            attempt.track(sess.as_ref(), status, error).await;
-            return Err(CodexErr::TurnAborted);
-        }
-    }
-    attempt.track(sess.as_ref(), status, error).await;
-    result.map(|_| ())
+    .await
 }
 
 async fn emit_spine_native_text_compaction_error(
@@ -262,6 +211,7 @@ async fn run_compact_task_inner(
     trigger: CompactionTrigger,
     reason: CompactionReason,
     phase: CompactionPhase,
+    install_mode: NativeTextInstallMode,
 ) -> CodexResult<()> {
     let attempt = CompactionAnalyticsAttempt::begin(
         sess.as_ref(),
@@ -289,9 +239,10 @@ async fn run_compact_task_inner(
             Arc::clone(&turn_context),
             input,
             initial_context_injection,
+            install_mode.expand_spine_initial_context(),
         )
         .await?;
-        install_native_text_compaction_outcome(&sess, &turn_context, outcome).await
+        install_native_text_compaction_outcome(&sess, &turn_context, outcome, install_mode).await
     }
     .await;
     let status = compaction_status_from_result(&result);
@@ -320,62 +271,65 @@ async fn install_native_text_compaction_outcome(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     outcome: NativeTextCompactionOutcome,
+    mode: NativeTextInstallMode,
 ) -> CodexResult<()> {
-    let NativeTextCompactionOutcome {
-        compaction_item,
-        replacement_history,
-        reference_context_item,
-        compacted_item,
-        ..
-    } = outcome;
-    sess.replace_compacted_history(replacement_history, reference_context_item, compacted_item)
-        .await;
+    let install_result = match mode {
+        NativeTextInstallMode::Host => {
+            let NativeTextCompactionOutcome {
+                replacement_history,
+                reference_context_item,
+                compacted_item,
+                ..
+            } = &outcome;
+            sess.replace_compacted_history(
+                replacement_history.clone(),
+                reference_context_item.clone(),
+                compacted_item.clone(),
+            )
+            .await;
+            Ok(())
+        }
+        NativeTextInstallMode::Spine { .. } => {
+            install_spine_native_text_compaction_outcome(sess, turn_context, &outcome).await
+        }
+    };
+    if let Err(err) = &install_result
+        && matches!(
+            mode,
+            NativeTextInstallMode::Spine {
+                emit_install_error: true
+            }
+        )
+    {
+        emit_spine_native_text_compaction_error(sess, turn_context, err).await;
+    }
+    install_result?;
     sess.recompute_token_usage(turn_context).await;
-    complete_native_text_compaction(sess, turn_context, compaction_item).await;
+    complete_native_text_compaction(sess, turn_context, outcome.compaction_item).await;
     Ok(())
 }
 
 async fn install_spine_native_text_compaction_outcome(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    outcome: NativeTextCompactionOutcome,
+    outcome: &NativeTextCompactionOutcome,
 ) -> CodexResult<()> {
-    let NativeTextCompactionOutcome {
-        compaction_item,
-        pre_compact_history,
-        reference_context_item,
-        summary_text,
-        ..
-    } = outcome;
     #[cfg(test)]
-    if summary_text.contains(SPINE_NATIVE_TEXT_INSTALL_FAILURE_MARKER) {
+    if outcome
+        .summary_text
+        .contains(SPINE_NATIVE_TEXT_INSTALL_FAILURE_MARKER)
+    {
         return Err(CodexErr::Fatal(
             "injected Spine native text compaction install failure".to_string(),
         ));
     }
     sess.install_spine_root_epoch_compaction(
         turn_context.as_ref(),
-        pre_compact_history,
-        summary_text,
-        reference_context_item,
+        outcome.pre_compact_history.clone(),
+        outcome.summary_text.clone(),
+        outcome.reference_context_item.clone(),
     )
-    .await?;
-    sess.recompute_token_usage(turn_context).await;
-    complete_native_text_compaction(sess, turn_context, compaction_item).await;
-    Ok(())
-}
-
-async fn install_spine_native_text_compaction_outcome_or_emit_error(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    outcome: NativeTextCompactionOutcome,
-) -> CodexResult<()> {
-    let install_result =
-        install_spine_native_text_compaction_outcome(sess, turn_context, outcome).await;
-    if let Err(err) = &install_result {
-        emit_spine_native_text_compaction_error(sess, turn_context, err).await;
-    }
-    install_result
+    .await
 }
 
 async fn complete_native_text_compaction(
@@ -396,6 +350,7 @@ async fn produce_native_text_compaction_outcome(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
+    expand_spine_initial_context: bool,
 ) -> CodexResult<NativeTextCompactionOutcome> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -418,9 +373,12 @@ async fn produce_native_text_compaction_outcome(
 
     loop {
         // Clone is required because of the loop
-        let turn_input = history
-            .clone()
-            .for_prompt(&turn_context.model_info.input_modalities);
+        let history_for_prompt = history.clone();
+        let turn_input = if expand_spine_initial_context {
+            history_for_prompt.for_spine_prompt(&turn_context.model_info.input_modalities)
+        } else {
+            history_for_prompt.for_prompt(&turn_context.model_info.input_modalities)
+        };
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,
@@ -504,6 +462,7 @@ async fn produce_native_text_compaction_outcome(
     let compacted_item = CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
+        spine: None,
     };
     client_session.reset_websocket_session();
 

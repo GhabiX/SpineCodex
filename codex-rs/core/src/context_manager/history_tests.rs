@@ -313,7 +313,28 @@ fn for_prompt_preserves_inter_agent_assistant_messages() {
 }
 
 #[test]
-fn for_prompt_expands_spine_initial_context_wrapper() {
+fn for_prompt_preserves_spine_initial_context_wrapper() {
+    let initial_context = vec![developer_msg("fresh permissions")];
+    let wrapper = crate::spine::compact::render_spine_initial_context_item(initial_context.clone())
+        .expect("wrap initial context");
+    let history = create_history_with_items(vec![
+        developer_msg("prefix"),
+        wrapper.clone(),
+        user_input_text_msg("do work"),
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![
+            developer_msg("prefix"),
+            wrapper,
+            user_input_text_msg("do work"),
+        ]
+    );
+}
+
+#[test]
+fn for_spine_prompt_expands_spine_initial_context_wrapper() {
     let initial_context = vec![developer_msg("fresh permissions")];
     let wrapper = crate::spine::compact::render_spine_initial_context_item(initial_context.clone())
         .expect("wrap initial context");
@@ -324,7 +345,7 @@ fn for_prompt_expands_spine_initial_context_wrapper() {
     ]);
 
     assert_eq!(
-        history.for_prompt(&default_input_modalities()),
+        history.for_spine_prompt(&default_input_modalities()),
         vec![
             developer_msg("prefix"),
             initial_context[0].clone(),

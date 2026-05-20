@@ -323,7 +323,7 @@ pub(crate) async fn run_turn(
     } else {
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
         let response_item: ResponseItem = initial_input_for_turn.clone().into();
-        if sess.spine.is_some() {
+        if Box::pin(sess.spine_runtime_is_mutable()).await {
             if let Err(err) = Box::pin(emit_initial_spine_tree_for_turn(&sess, &turn_context)).await
             {
                 info!("Turn error: {err:#}");
@@ -458,9 +458,12 @@ pub(crate) async fn run_turn(
 
         // Construct the input that we will send to the model.
         let sampling_request_input: Vec<ResponseItem> = {
-            sess.clone_history()
-                .await
-                .for_prompt(&turn_context.model_info.input_modalities)
+            let history = sess.clone_history().await;
+            if Box::pin(sess.spine_runtime_is_mutable()).await {
+                history.for_spine_prompt(&turn_context.model_info.input_modalities)
+            } else {
+                history.for_prompt(&turn_context.model_info.input_modalities)
+            }
         };
 
         let sampling_request_input_messages = sampling_request_input
@@ -855,7 +858,7 @@ async fn run_auto_compact(
     _base_instructions: BaseInstructions,
     _cancellation_token: &CancellationToken,
 ) -> CodexResult<bool> {
-    if sess.spine.is_some() && Box::pin(sess.spine_runtime_is_mutable()).await {
+    if Box::pin(sess.spine_runtime_is_mutable()).await {
         Box::pin(run_spine_native_text_auto_compact(
             sess,
             turn_context,
@@ -1160,7 +1163,7 @@ async fn run_sampling_request(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    if sess.spine.is_some() {
+    if Box::pin(sess.spine_runtime_is_mutable()).await {
         Box::pin(sess.ensure_spine_compact_not_poisoned()).await?;
     }
     let router = built_tools(
@@ -1197,11 +1200,14 @@ async fn run_sampling_request(
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
-            sess.clone_history()
-                .await
-                .for_prompt(&turn_context.model_info.input_modalities)
+            let history = sess.clone_history().await;
+            if Box::pin(sess.spine_runtime_is_mutable()).await {
+                history.for_spine_prompt(&turn_context.model_info.input_modalities)
+            } else {
+                history.for_prompt(&turn_context.model_info.input_modalities)
+            }
         };
-        let prompt_input = if sess.spine.is_some() {
+        let prompt_input = if Box::pin(sess.spine_runtime_is_mutable()).await {
             Box::pin(prepare_spine_sampling_prompt_input(
                 &sess,
                 turn_context.as_ref(),
@@ -1954,7 +1960,11 @@ async fn handle_assistant_item_done_in_plan_mode(
         }
 
         record_completed_response_item(sess, turn_context, item).await?;
-        if let Some(agent_message) = last_assistant_message_from_item(item, /*plan_mode*/ true) {
+        if let Some(agent_message) = last_assistant_message_from_item(
+            item,
+            /*plan_mode*/ true,
+            Box::pin(sess.spine_runtime_is_mutable()).await,
+        ) {
             *last_agent_message = Some(agent_message);
         }
         return Ok(true);
@@ -2072,8 +2082,7 @@ impl SpineToolOrderGuard {
                 namespace,
                 call_id,
                 ..
-            } if crate::spine::is_spine_transition_tool(name, namespace.as_deref()) =>
-            {
+            } if crate::spine::is_spine_transition_tool(name, namespace.as_deref()) => {
                 SpineToolKind::Spine {
                     call_id: call_id.clone(),
                 }
@@ -2607,7 +2616,7 @@ async fn try_run_sampling_request(
         return Err(CodexErr::TurnAborted);
     }
 
-    if outcome.is_ok() && sess.spine.is_some() {
+    if outcome.is_ok() && Box::pin(sess.spine_runtime_is_mutable()).await {
         if let Err(err) = Box::pin(finish_spine_sampling_request(
             &sess,
             turn_context.as_ref(),
@@ -2647,7 +2656,9 @@ async fn try_run_sampling_request(
 
 pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
     for item in responses.iter().rev() {
-        if let Some(message) = last_assistant_message_from_item(item, /*plan_mode*/ false) {
+        if let Some(message) =
+            last_assistant_message_from_item(item, /*plan_mode*/ false, false)
+        {
             return Some(message);
         }
     }
@@ -2735,7 +2746,7 @@ mod spine_tool_order_tests {
         );
 
         assert_eq!(
-            guard.observe(&spine_function_call("next", "call-spine-2")),
+            guard.observe(&spine_function_call("close", "call-spine-2")),
             SpineToolOrderOutcome::Reject {
                 call_id: "call-spine-2".to_string(),
                 message: "only one spine transition is allowed per model response".to_string(),
@@ -2937,9 +2948,9 @@ mod spine_tool_order_tests {
         assert_eq!(role, "developer");
         assert!(matches!(
             content.as_slice(),
-            [ContentItem::InputText { text }]
-                if text.contains("Spine warning: current live node is about")
-                    && text.contains("At a natural boundary, use spine.next/close to move finished work into a memory.")
+                [ContentItem::InputText { text }]
+                    if text.contains("Spine warning: current live node is about")
+                    && text.contains("At a natural boundary, use spine.close to finish the current scope.")
                     && !text.contains("/900k tokens")
         ));
         let history_after_first = session.clone_history().await.raw_items().to_vec();
@@ -2951,9 +2962,9 @@ mod spine_tool_order_tests {
                             && matches!(
                                 content.as_slice(),
                                 [ContentItem::InputText { text }]
-	                                    if text.contains("Spine warning: current live node is about")
-	                                        && text.contains("At a natural boundary, use spine.next/close to move finished work into a memory.")
-	                                        && !text.contains("/900k tokens")
+		                                    if text.contains("Spine warning: current live node is about")
+		                                        && text.contains("At a natural boundary, use spine.close to finish the current scope.")
+		                                        && !text.contains("/900k tokens")
                             )
             )),
             "warning must be persisted into history so the next request preserves the previous request prefix"
