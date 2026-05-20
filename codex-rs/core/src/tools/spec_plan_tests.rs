@@ -1444,6 +1444,40 @@ fn namespace_specs_are_hidden_when_namespace_tools_are_disabled() {
 }
 
 #[test]
+fn spine_namespace_is_registered_only_when_feature_enabled() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let features = Features::with_defaults();
+    let mut config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    config.spine_task_tree = false;
+    let (specs, registry) = build_specs(&config, None, None, &[]);
+    assert!(!specs.iter().any(|spec| spec.name() == "spine"));
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "open"))
+            .is_none()
+    );
+
+    config.spine_task_tree = true;
+    let (specs, registry) = build_specs(&config, None, None, &[]);
+    assert!(specs.iter().any(|spec| spec.name() == "spine"));
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "open"))
+            .is_some()
+    );
+}
+
+#[test]
 fn namespaced_dynamic_specs_are_hidden_when_namespace_tools_are_disabled() {
     let model_info = model_info();
     let features = Features::with_defaults();

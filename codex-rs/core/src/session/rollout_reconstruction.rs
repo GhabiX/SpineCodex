@@ -6,6 +6,7 @@ use crate::context_manager::is_user_turn_boundary;
 #[derive(Debug)]
 pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
+    pub(super) raw_response_items: Vec<Option<ResponseItem>>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
 }
@@ -292,10 +293,40 @@ impl Session {
             reference_context_item
         };
 
+        let raw_response_items = spine_raw_items_after_rollback(rollout_items);
+
         RolloutReconstruction {
             history: history.raw_items().to_vec(),
+            raw_response_items,
             previous_turn_settings,
             reference_context_item,
         }
     }
+}
+
+fn spine_raw_items_after_rollback(rollout_items: &[RolloutItem]) -> Vec<Option<ResponseItem>> {
+    let mut raw_items = Vec::<Option<ResponseItem>>::new();
+    let mut user_boundaries = Vec::<usize>::new();
+    for item in rollout_items {
+        match item {
+            RolloutItem::ResponseItem(response_item) => {
+                if is_user_turn_boundary(response_item) {
+                    user_boundaries.push(raw_items.len());
+                }
+                raw_items.push(Some(response_item.clone()));
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                for _ in 0..rollback.num_turns {
+                    let Some(cut) = user_boundaries.pop() else {
+                        break;
+                    };
+                    for item in raw_items.iter_mut().skip(cut) {
+                        *item = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    raw_items
 }

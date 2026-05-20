@@ -13,6 +13,7 @@ use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::spine::SpineStore;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
@@ -22,6 +23,7 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::empty_extension_registry;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
@@ -877,12 +879,24 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
+        let spine_source_rollout_path = match &history {
+            InitialHistory::Resumed(resumed) if config.features.enabled(Feature::SpineTaskTree) => {
+                resumed.rollout_path.clone()
+            }
+            _ => None,
+        };
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
+        let spine_fork_rollout_items = history.get_rollout_items();
+        let spine_raw_len = history
+            .get_rollout_items()
+            .iter()
+            .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
+            .count();
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
-        Box::pin(self.state.spawn_thread(
+        let new_thread = Box::pin(self.state.spawn_thread(
             config,
             history,
             Arc::clone(&self.state.auth_manager),
@@ -895,7 +909,25 @@ impl ThreadManager {
             environments,
             /*user_shell_override*/ None,
         ))
-        .await
+        .await?;
+        if let Some(source_rollout_path) = spine_source_rollout_path
+            && let Some(target_rollout_path) = new_thread.session_configured.rollout_path.as_deref()
+        {
+            let raw_len = u64::try_from(spine_raw_len)
+                .map_err(|_| CodexErr::Fatal("Spine fork raw item count overflow".to_string()))?;
+            SpineStore::clone_for_rollout(&source_rollout_path, target_rollout_path, raw_len)
+                .map_err(|err| {
+                    CodexErr::Fatal(format!("failed to clone Spine sidecar for fork: {err}"))
+                })?;
+            let turn_context = new_thread.thread.codex.session.new_default_turn().await;
+            new_thread
+                .thread
+                .codex
+                .session
+                .apply_rollout_reconstruction(turn_context.as_ref(), &spine_fork_rollout_items)
+                .await;
+        }
+        Ok(new_thread)
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {

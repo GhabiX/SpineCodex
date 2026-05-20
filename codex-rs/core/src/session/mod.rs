@@ -38,6 +38,9 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
+use crate::spine::SpineError;
+use crate::spine::SpineRuntime;
+use crate::spine::SpineSessionState;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -1250,7 +1253,7 @@ impl Session {
         }
     }
 
-    async fn apply_rollout_reconstruction(
+    pub(super) async fn apply_rollout_reconstruction(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
@@ -1264,9 +1267,133 @@ impl Session {
             reconstructed_rollout.reference_context_item,
         )
         .await;
+        if let Err(err) = self
+            .rebuild_spine_from_rollout_items(&reconstructed_rollout.raw_response_items)
+            .await
+        {
+            panic!("failed to rebuild Spine runtime from rollout: {err}");
+        }
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
         previous_turn_settings
+    }
+
+    async fn rebuild_spine_from_rollout_items(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let Some(rollout_path) = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+        else {
+            return Ok(());
+        };
+        let raw_len = u64::try_from(raw_items.len())
+            .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
+        let runtime = SpineRuntime::load_for_rollout(&rollout_path, raw_len)?;
+        let materialized = runtime
+            .as_ref()
+            .map(|runtime| runtime.materialize_history(raw_items))
+            .transpose()?;
+        spine_slot.lock().await.set_replayed(raw_len, runtime)?;
+        if let Some(materialized) = materialized {
+            self.replace_history(materialized, self.reference_context_item().await)
+                .await;
+        }
+        Ok(())
+    }
+
+    async fn observe_spine_raw_items(&self, count: usize) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        spine_slot.lock().await.observe_raw_items(count)
+    }
+
+    async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineSessionState>, SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Err(SpineError::InvalidStore(
+                "spine_task_tree is disabled or this session has no persisted rollout".to_string(),
+            ));
+        };
+        let Some(rollout_path) = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+        else {
+            return Err(SpineError::InvalidStore(
+                "spine_task_tree requires a persisted rollout".to_string(),
+            ));
+        };
+        let mut guard = spine_slot.lock().await;
+        guard.ensure_runtime(&rollout_path)?;
+        drop(guard);
+        Ok(spine_slot)
+    }
+
+    pub(crate) async fn spine_tree(&self) -> Result<String, SpineError> {
+        let spine = self.ensure_spine_runtime().await?;
+        let guard = spine.lock().await;
+        Ok(guard
+            .runtime()
+            .expect("spine runtime initialized")
+            .state()
+            .render_tree())
+    }
+
+    pub(crate) async fn stage_spine_open(&self, call_id: String) -> Result<(), SpineError> {
+        let spine = self.ensure_spine_runtime().await?;
+        spine
+            .lock()
+            .await
+            .runtime_mut()
+            .expect("spine runtime initialized")
+            .stage_open(call_id)
+    }
+
+    pub(crate) async fn stage_spine_close(
+        &self,
+        call_id: String,
+        summary: String,
+        instruction: Option<String>,
+    ) -> Result<(), SpineError> {
+        let spine = self.ensure_spine_runtime().await?;
+        spine
+            .lock()
+            .await
+            .runtime_mut()
+            .expect("spine runtime initialized")
+            .stage_close(call_id, summary, instruction)
+    }
+
+    pub(crate) async fn maybe_commit_spine_tool_output(
+        &self,
+        item: &ResponseItem,
+    ) -> Result<(), SpineError> {
+        let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
+            return Ok(());
+        };
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        if let Some(spine) = spine_slot.lock().await.runtime_mut() {
+            spine.maybe_commit_output(call_id)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn install_spine_root_compact(&self, body: String) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        if let Some(spine) = spine_slot.lock().await.runtime_mut() {
+            spine.root_compact(body)?;
+        }
+        Ok(())
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -2503,6 +2630,9 @@ impl Session {
     ) {
         self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
+        if let Err(err) = self.observe_spine_raw_items(items.len()).await {
+            panic!("failed to observe Spine raw items: {err}");
+        }
         self.send_raw_response_items(turn_context, items).await;
     }
 

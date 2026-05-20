@@ -1,5 +1,6 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
+use crate::spine::SpineSessionState;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -33,6 +34,7 @@ pub(crate) struct Session {
     pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
+    pub(crate) spine: Option<Mutex<SpineSessionState>>,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -938,6 +940,10 @@ impl Session {
             services
                 .model_client
                 .set_window_generation(window_generation);
+            let spine = config
+                .features
+                .enabled(Feature::SpineTaskTree)
+                .then(|| Mutex::new(SpineSessionState::new()));
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
 
@@ -960,6 +966,7 @@ impl Session {
                 goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
+                spine,
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {

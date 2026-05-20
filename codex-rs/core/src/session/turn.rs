@@ -1814,6 +1814,11 @@ async fn drain_in_flight(
                 let response_item = response_input.into();
                 sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
                     .await;
+                sess.maybe_commit_spine_tool_output(&response_item)
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!("failed to commit Spine tool output: {err}"))
+                    })?;
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),

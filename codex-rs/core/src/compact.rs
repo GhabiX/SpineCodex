@@ -280,6 +280,9 @@ async fn run_compact_task_inner_impl(
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
     };
+    sess.install_spine_root_compact(summary_text.clone())
+        .await
+        .map_err(|err| CodexErr::Fatal(format!("failed to install Spine root compact: {err}")))?;
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
     client_session.reset_websocket_session();

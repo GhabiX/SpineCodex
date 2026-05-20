@@ -20,6 +20,7 @@ use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
+use crate::tools::handlers::SpineHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandler;
 use crate::tools::handlers::UpdateGoalHandler;
@@ -389,6 +390,13 @@ fn collect_tool_executors(
     }
 
     executors.push(Arc::new(PlanHandler));
+    if config.spine_task_tree {
+        executors.extend(
+            SpineHandler::all()
+                .into_iter()
+                .map(|handler| Arc::new(handler) as Arc<dyn CoreToolRuntime>),
+        );
+    }
     if config.goal_tools {
         executors.push(Arc::new(GetGoalHandler));
         executors.push(Arc::new(CreateGoalHandler));
