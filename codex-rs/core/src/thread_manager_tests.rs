@@ -1611,6 +1611,274 @@ async fn user_forked_spine_history_after_rollback_uses_projected_ordinal() -> an
 }
 
 #[tokio::test]
+async fn user_fork_resume_rollback_resume_refork_preserves_spine_projection() -> anyhow::Result<()>
+{
+    Box::pin(async move {
+        let temp_dir = tempdir().expect("tempdir");
+        let mut config = test_config().await;
+        config.codex_home = temp_dir.path().join("codex-home").abs();
+        config.cwd = config.codex_home.abs();
+        config
+            .features
+            .enable(Feature::SpineTaskTree)
+            .expect("enable spine task tree");
+        std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ThreadManager::new(
+            &config,
+            auth_manager.clone(),
+            SessionSource::Exec,
+            Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            /*analytics_events_client*/ None,
+            thread_store_from_config(&config, /*state_db*/ None),
+            /*state_db*/ None,
+            TEST_INSTALLATION_ID.to_string(),
+        );
+
+        let source = manager
+            .resume_thread_with_history(
+                config.clone(),
+                InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("source start"))]),
+                auth_manager.clone(),
+                /*persist_extended_history*/ false,
+                /*parent_trace*/ None,
+            )
+            .await?;
+        let source_session = &source.thread.codex.session;
+        let source_turn = source_session.new_default_turn().await;
+        source_session
+            .spine
+            .as_ref()
+            .expect("source spine")
+            .lock()
+            .await
+            .stage_transition(
+                "open-source",
+                "turn-source",
+                crate::spine::store::SpineOperation::Open,
+                None,
+                /*compact_instruction*/ None,
+            )?;
+        source_session
+            .try_record_conversation_items(
+                source_turn.as_ref(),
+                &[
+                    spine_transition_msg(
+                        "open-source",
+                        crate::spine::SPINE_TOOL_OPEN,
+                        "source scope",
+                    ),
+                    function_call_output("open-source"),
+                ],
+            )
+            .await?;
+        source.thread.flush_rollout().await?;
+        let source_rollout_path = source
+            .thread
+            .rollout_path()
+            .expect("source rollout path should exist");
+
+        let child = manager
+            .fork_thread(
+                ForkSnapshot::Interrupted,
+                config.clone(),
+                source_rollout_path,
+                Some(ThreadSource::User),
+                /*persist_extended_history*/ false,
+                /*parent_trace*/ None,
+            )
+            .await?;
+        child.thread.flush_rollout().await?;
+        let child_rollout_path = child
+            .thread
+            .rollout_path()
+            .expect("child rollout path should exist");
+        let child_session = &child.thread.codex.session;
+        let child_turn = child_session.new_default_turn().await;
+        child_session
+            .spine
+            .as_ref()
+            .expect("child spine")
+            .lock()
+            .await
+            .stage_transition(
+                "close-rolled-back",
+                "turn-child-rollback",
+                crate::spine::store::SpineOperation::Close,
+                "rolled back child close",
+                /*compact_instruction*/ None,
+            )?;
+        child_session
+            .try_record_conversation_items(
+                child_turn.as_ref(),
+                &[
+                    user_msg("rolled back child user turn"),
+                    spine_transition_msg(
+                        "close-rolled-back",
+                        crate::spine::SPINE_TOOL_CLOSE,
+                        "rolled back child close",
+                    ),
+                    function_call_output("close-rolled-back"),
+                ],
+            )
+            .await?;
+        child.thread.flush_rollout().await?;
+        child.thread.shutdown_and_wait().await?;
+        manager.remove_thread(&child.thread_id).await;
+
+        let resumed_child = manager
+            .resume_thread_from_rollout(
+                config.clone(),
+                child_rollout_path.clone(),
+                auth_manager.clone(),
+                /*parent_trace*/ None,
+            )
+            .await?;
+        let resumed_session = &resumed_child.thread.codex.session;
+        resumed_session
+            .persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+                ThreadRolledBackEvent { num_turns: 1 },
+            ))])
+            .await;
+        resumed_child.thread.flush_rollout().await?;
+
+        let resumed_turn = resumed_session.new_default_turn().await;
+        resumed_session
+            .try_record_conversation_items(
+                resumed_turn.as_ref(),
+                &[user_msg("surviving child user turn")],
+            )
+            .await?;
+        resumed_session
+            .spine
+            .as_ref()
+            .expect("resumed child spine")
+            .lock()
+            .await
+            .stage_transition(
+                "close-surviving",
+                "turn-child-surviving",
+                crate::spine::store::SpineOperation::Close,
+                "surviving child close",
+                /*compact_instruction*/ None,
+            )?;
+        resumed_session
+            .try_record_conversation_items(
+                resumed_turn.as_ref(),
+                &[
+                    spine_transition_msg(
+                        "close-surviving",
+                        crate::spine::SPINE_TOOL_CLOSE,
+                        "surviving child close",
+                    ),
+                    function_call_output("close-surviving"),
+                ],
+            )
+            .await?;
+        resumed_child.thread.flush_rollout().await?;
+        resumed_child.thread.shutdown_and_wait().await?;
+        manager.remove_thread(&resumed_child.thread_id).await;
+
+        let resumed_again = manager
+            .resume_thread_from_rollout(
+                config.clone(),
+                child_rollout_path.clone(),
+                auth_manager.clone(),
+                /*parent_trace*/ None,
+            )
+            .await?;
+        {
+            let runtime = resumed_again
+                .thread
+                .codex
+                .session
+                .spine
+                .as_ref()
+                .expect("resumed-again spine")
+                .lock()
+                .await;
+            assert_eq!(runtime.cursor().to_string(), "1.1");
+            assert!(
+                runtime
+                    .state()
+                    .node(&crate::spine::ids::NodeId::from_segments(vec![1, 1, 2]))
+                    .is_none(),
+                "rolled-back close should not survive replay"
+            );
+        }
+
+        let child_rollout_items = RolloutRecorder::load_rollout_items(&child_rollout_path)
+            .await?
+            .0;
+        let rendered_rollout = serde_json::to_string(&child_rollout_items)?;
+        let effective_child_rollout =
+            crate::spine::projection::effective_rollout_items(&child_rollout_items)?;
+        let rendered_effective_rollout = serde_json::to_string(&effective_child_rollout)?;
+        assert!(rendered_rollout.contains("surviving child user turn"));
+        assert!(rendered_rollout.contains("rolled back child close"));
+        assert!(rendered_effective_rollout.contains("surviving child user turn"));
+        assert!(
+            !rendered_effective_rollout.contains("rolled back child close"),
+            "effective rollout projection must drop rolled-back Spine transition"
+        );
+        let child_store = crate::spine::store::SpineSidecarStore::for_rollout(&child_rollout_path)?;
+        let child_epoch = child_store
+            .latest_projection_epoch()?
+            .expect("child projection epoch after rollback/resume");
+        assert_eq!(
+            child_epoch.source_rollout_ref,
+            child_rollout_path.to_string_lossy()
+        );
+
+        let refork = manager
+            .fork_thread(
+                ForkSnapshot::Interrupted,
+                config,
+                child_rollout_path.clone(),
+                Some(ThreadSource::User),
+                /*persist_extended_history*/ false,
+                /*parent_trace*/ None,
+            )
+            .await?;
+        refork.thread.flush_rollout().await?;
+        let refork_rollout_path = refork
+            .thread
+            .rollout_path()
+            .expect("refork rollout path should exist");
+        let refork_store =
+            crate::spine::store::SpineSidecarStore::for_rollout(&refork_rollout_path)?;
+        let refork_epoch = refork_store
+            .latest_projection_epoch()?
+            .expect("refork projection epoch");
+        assert_eq!(
+            refork_epoch.source_rollout_ref,
+            refork_rollout_path.to_string_lossy()
+        );
+        assert_eq!(
+            refork
+                .thread
+                .codex
+                .session
+                .spine
+                .as_ref()
+                .expect("refork spine")
+                .lock()
+                .await
+                .cursor()
+                .to_string(),
+            "1.1"
+        );
+
+        refork.thread.shutdown_and_wait().await?;
+        resumed_again.thread.shutdown_and_wait().await?;
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
 async fn subagent_forked_spine_history_without_source_thread_fails_closed() -> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
