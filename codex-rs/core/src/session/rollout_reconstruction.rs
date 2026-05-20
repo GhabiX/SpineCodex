@@ -1,8 +1,6 @@
 use super::*;
 use crate::context_manager::is_user_turn_boundary;
-use crate::spine::context_materialization::SpineMaterializationInput;
-use crate::spine::context_materialization::materialize_spine_context;
-use codex_protocol::protocol::SpineCompactedCheckpointKind;
+use crate::spine::context_materialization::materialize_spine_checkpoint_history;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -102,35 +100,15 @@ impl Session {
         rollout_path: &Path,
         index: usize,
     ) -> CodexResult<Vec<ResponseItem>> {
-        let Some(spine_checkpoint) = compacted.spine.as_ref() else {
+        if compacted.spine.is_none() {
             if let Some(replacement_history) = &compacted.replacement_history {
                 return Ok(replacement_history.clone());
             }
             return Err(CodexErr::Fatal(format!(
                 "unsupported compacted rollout item at index {index}: missing replacement_history"
             )));
-        };
-        if spine_checkpoint.kind != SpineCompactedCheckpointKind::Suffix {
-            if let Some(replacement_history) = &compacted.replacement_history {
-                return Ok(replacement_history.clone());
-            }
-            return Err(CodexErr::Fatal(format!(
-                "unsupported Spine {:?} compacted rollout item at index {index}: missing replacement_history",
-                spine_checkpoint.kind
-            )));
         }
-        let store = SpineSidecarStore::for_rollout(rollout_path).map_err(|err| {
-            CodexErr::Fatal(format!(
-                "failed to load Spine sidecar for compacted rollout item at index {index}: {err}"
-            ))
-        })?;
-        materialize_spine_context(SpineMaterializationInput {
-            replay_items,
-            branch_ref: rollout_path.to_string_lossy().into_owned(),
-            persisted_prefix_items: replay_items,
-            store: &store,
-        })
-        .map(|materialized| materialized.history)
+        materialize_spine_checkpoint_history(compacted, replay_items, rollout_path, index)
     }
 
     pub(super) async fn reconstruct_history_from_rollout(

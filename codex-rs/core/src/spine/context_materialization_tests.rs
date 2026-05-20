@@ -3,6 +3,8 @@ use crate::spine::ids::NodeId;
 use crate::spine::store::CompactAttemptRecord;
 use crate::spine::store::CompactStartedRecord;
 use crate::spine::store::MemInstallCommittedRecord;
+use crate::spine::store::NoteEvidenceCommittedRecord;
+use crate::spine::store::NotePlacement;
 use crate::spine::store::SpineOperation;
 use crate::spine::store::SpineSidecarStore;
 use codex_protocol::models::ContentItem;
@@ -34,6 +36,23 @@ fn assistant_message(text: &str) -> RolloutItem {
         }],
         phase: None,
     })
+}
+
+fn response_message(role: &str, text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: role.to_string(),
+        content: vec![if role == "assistant" {
+            ContentItem::OutputText {
+                text: text.to_string(),
+            }
+        } else {
+            ContentItem::InputText {
+                text: text.to_string(),
+            }
+        }],
+        phase: None,
+    }
 }
 
 fn spine_call(call_id: &str, op: &str, arguments: &str) -> RolloutItem {
@@ -140,5 +159,207 @@ fn materialize_suffix_compact_from_sidecar_without_replacement_history() -> anyh
     assert!(rendered.contains("parent tail"));
     assert!(!rendered.contains("child raw"));
     assert!(!rendered.contains("child result"));
+    Ok(())
+}
+
+#[test]
+fn materialize_root_epoch_from_sidecar_without_replacement_history() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    let mut state = store.create()?;
+    store.record_root_epoch_archive(
+        &mut state,
+        "Context compacted",
+        2,
+        "compact-root",
+        "turn-root",
+    )?;
+    let root_id = NodeId::from_segments(vec![1]);
+    let attempt = CompactAttemptRecord {
+        compact_id: "compact-root".to_string(),
+        node_id: root_id.clone(),
+        op: SpineOperation::Archive,
+        cut_ordinal: 0,
+        fold_end_ordinal: 2,
+    };
+    store.append_compact_started(CompactStartedRecord {
+        attempt: attempt.clone(),
+        strategy: "test".to_string(),
+        rollout: "../rollout.jsonl".to_string(),
+    })?;
+    store.append_note_evidence_committed(NoteEvidenceCommittedRecord {
+        compact_id: "compact-root".to_string(),
+        placement: NotePlacement::BeforeMem,
+        kind: "initial_context_0".to_string(),
+        items: vec![response_message(
+            "developer",
+            "<spine_initial_context>structured initial context</spine_initial_context>",
+        )],
+        projection_ref: "projection:test:root".to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    })?;
+    store.append_memory_section(&root_id, "\n\n## Auto Compact\n\nroot facts\n")?;
+    let body_ref = store
+        .generated_memory_sections(&root_id)?
+        .last()
+        .expect("memory section")
+        .body_ref();
+    store.append_mem_install_committed(MemInstallCommittedRecord {
+        attempt,
+        body_ref,
+        projection_ref: "projection:test:root".to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    })?;
+
+    let replay_items = vec![
+        user_message("root raw one"),
+        assistant_message("root raw two"),
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted root epoch 1 [0, 2)".to_string(),
+            replacement_history: None,
+            spine: Some(SpineCompactedCheckpoint {
+                compact_id: "compact-root".to_string(),
+                kind: SpineCompactedCheckpointKind::RootEpoch,
+            }),
+        }),
+        user_message("new epoch tail"),
+    ];
+    let materialized = materialize_spine_context(SpineMaterializationInput {
+        replay_items: &replay_items,
+        branch_ref: rollout_path.to_string_lossy().into_owned(),
+        persisted_prefix_items: &replay_items,
+        store: &store,
+    })?;
+    let rendered = serde_json::to_string(&materialized.history)?;
+
+    assert!(rendered.contains("structured initial context"));
+    assert!(rendered.contains("Node: 1"));
+    assert!(rendered.contains("root facts"));
+    assert!(rendered.contains("new epoch tail"));
+    assert!(!rendered.contains("root raw one"));
+    assert!(!rendered.contains("root raw two"));
+    Ok(())
+}
+
+#[test]
+fn materialize_root_epoch_without_note_evidence_fails_meminstall() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    let mut state = store.create()?;
+    store.record_root_epoch_archive(
+        &mut state,
+        "Context compacted",
+        2,
+        "compact-root",
+        "turn-root",
+    )?;
+    let root_id = NodeId::from_segments(vec![1]);
+    let attempt = CompactAttemptRecord {
+        compact_id: "compact-root".to_string(),
+        node_id: root_id.clone(),
+        op: SpineOperation::Archive,
+        cut_ordinal: 0,
+        fold_end_ordinal: 2,
+    };
+    store.append_compact_started(CompactStartedRecord {
+        attempt: attempt.clone(),
+        strategy: "test".to_string(),
+        rollout: "../rollout.jsonl".to_string(),
+    })?;
+    store.append_memory_section(&root_id, "\n\n## Auto Compact\n\nroot facts\n")?;
+    let body_ref = store
+        .generated_memory_sections(&root_id)?
+        .last()
+        .expect("memory section")
+        .body_ref();
+    let error = store
+        .append_mem_install_committed(MemInstallCommittedRecord {
+            attempt,
+            body_ref,
+            projection_ref: "projection:test:root".to_string(),
+            source_rollout_ref: "../rollout.jsonl".to_string(),
+        })
+        .expect_err("root MemInstall without Note evidence must fail closed");
+    assert!(error.to_string().contains("missing NoteEvidenceCommitted"));
+    Ok(())
+}
+
+#[test]
+fn materialize_root_epoch_with_empty_context_note_replays_memory() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let store = SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    let mut state = store.create()?;
+    store.record_root_epoch_archive(
+        &mut state,
+        "Context compacted",
+        2,
+        "compact-root",
+        "turn-root",
+    )?;
+    let root_id = NodeId::from_segments(vec![1]);
+    let attempt = CompactAttemptRecord {
+        compact_id: "compact-root".to_string(),
+        node_id: root_id.clone(),
+        op: SpineOperation::Archive,
+        cut_ordinal: 0,
+        fold_end_ordinal: 2,
+    };
+    store.append_compact_started(CompactStartedRecord {
+        attempt: attempt.clone(),
+        strategy: "test".to_string(),
+        rollout: "../rollout.jsonl".to_string(),
+    })?;
+    store.append_note_evidence_committed(NoteEvidenceCommittedRecord {
+        compact_id: "compact-root".to_string(),
+        placement: NotePlacement::BeforeMem,
+        kind: "initial_context_empty".to_string(),
+        items: vec![response_message(
+            "developer",
+            r#"<spine_initial_context_empty runtime_generated="true" />"#,
+        )],
+        projection_ref: "projection:test:root".to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    })?;
+    store.append_memory_section(&root_id, "\n\n## Auto Compact\n\nroot facts\n")?;
+    let body_ref = store
+        .generated_memory_sections(&root_id)?
+        .last()
+        .expect("memory section")
+        .body_ref();
+    store.append_mem_install_committed(MemInstallCommittedRecord {
+        attempt,
+        body_ref,
+        projection_ref: "projection:test:root".to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    })?;
+
+    let replay_items = vec![
+        user_message("root raw one"),
+        assistant_message("root raw two"),
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted root epoch 1 [0, 2)".to_string(),
+            replacement_history: None,
+            spine: Some(SpineCompactedCheckpoint {
+                compact_id: "compact-root".to_string(),
+                kind: SpineCompactedCheckpointKind::RootEpoch,
+            }),
+        }),
+    ];
+    let materialized = materialize_spine_context(SpineMaterializationInput {
+        replay_items: &replay_items,
+        branch_ref: rollout_path.to_string_lossy().into_owned(),
+        persisted_prefix_items: &replay_items,
+        store: &store,
+    })?;
+    let rendered = serde_json::to_string(&materialized.history)?;
+
+    assert!(rendered.contains("spine_initial_context_empty"));
+    assert!(rendered.contains("Node: 1"));
+    assert!(rendered.contains("root facts"));
+    assert!(!rendered.contains("root raw one"));
+    assert!(!rendered.contains("root raw two"));
     Ok(())
 }

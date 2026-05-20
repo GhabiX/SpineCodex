@@ -9,6 +9,7 @@ use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
+use crate::spine::compact::SpineCompactBoundary;
 use crate::spine::ids::NodeId;
 use crate::spine::store::SpineOperation;
 use crate::test_support::models_manager_with_provider;
@@ -330,6 +331,7 @@ fn install_test_spine_mem(
     cut_ordinal: u64,
     fold_end_ordinal: u64,
     body: &str,
+    root_note_items: Option<Vec<ResponseItem>>,
 ) -> anyhow::Result<()> {
     let attempt = crate::spine::store::CompactAttemptRecord {
         compact_id: compact_id.to_string(),
@@ -343,6 +345,31 @@ fn install_test_spine_mem(
         strategy: "codex_builtin_text".to_string(),
         rollout: "../rollout.jsonl".to_string(),
     })?;
+    if op == SpineOperation::Archive {
+        store.append_note_evidence_committed(crate::spine::store::NoteEvidenceCommittedRecord {
+            compact_id: compact_id.to_string(),
+            placement: crate::spine::store::NotePlacement::BeforeMem,
+            kind: if root_note_items.is_some() {
+                "initial_context_0"
+            } else {
+                "initial_context_empty"
+            }
+            .to_string(),
+            items: root_note_items.unwrap_or_else(|| {
+                vec![ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: r#"<spine_initial_context_empty runtime_generated="true" />"#
+                            .to_string(),
+                    }],
+                    phase: None,
+                }]
+            }),
+            projection_ref: format!("projection:test:{compact_id}"),
+            source_rollout_ref: "../rollout.jsonl".to_string(),
+        })?;
+    }
     store.append_memory_section(&node_id, body)?;
     let body_ref = store
         .generated_memory_sections(&node_id)?
@@ -2781,10 +2808,11 @@ async fn spine_root_epoch_compaction_post_checkpoint_failure_poisons_without_tre
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 2);
+    assert_eq!(compact_events.len(), 3);
     assert_eq!(compact_events[0]["type"], "compact_started");
-    assert_eq!(compact_events[1]["type"], "mem_install_committed");
-    let storage_ref = compact_events[1]["storage_ref"]
+    assert_eq!(compact_events[1]["type"], "note_evidence_committed");
+    assert_eq!(compact_events[2]["type"], "mem_install_committed");
+    let storage_ref = compact_events[2]["storage_ref"]
         .as_str()
         .expect("MemInstall storage ref");
     assert!(
@@ -3728,6 +3756,7 @@ async fn reconstruct_history_materializes_spine_suffix_checkpoint_without_replac
         3,
         7,
         "\n\n## Auto Compact\n\nchild facts\n",
+        None,
     )?;
 
     let later = assistant_message("parent tail");
@@ -3798,6 +3827,7 @@ async fn reconstruct_history_ignores_cached_spine_suffix_replacement_history_whe
         3,
         7,
         "\n\n## Auto Compact\n\nsidecar facts\n",
+        None,
     )?;
 
     let rollout_items = vec![
@@ -3876,7 +3906,68 @@ async fn reconstruct_history_spine_root_epoch_without_replacement_history_fails_
         .await
         .expect_err("root epoch without structured note evidence should fail closed");
 
-    assert!(error.to_string().contains("unsupported Spine RootEpoch"));
+    assert!(
+        error
+            .to_string()
+            .contains("no committed MemInstall evidence")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconstruct_history_materializes_spine_root_epoch_checkpoint_without_replacement_history()
+-> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let store = crate::spine::store::SpineSidecarStore::create_for_rollout(&rollout_path)?;
+    let mut state = store.create()?;
+    store.record_root_epoch_archive(
+        &mut state,
+        "Context compacted",
+        2,
+        "compact-root",
+        "turn-root",
+    )?;
+    install_test_spine_mem(
+        &store,
+        "compact-root",
+        NodeId::from_segments(vec![1]),
+        SpineOperation::Archive,
+        0,
+        2,
+        "\n\n## Auto Compact\n\nroot facts\n",
+        Some(vec![user_message("structured initial context")]),
+    )?;
+
+    let later = assistant_message("new epoch tail");
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("root raw one")),
+        RolloutItem::ResponseItem(assistant_message("root raw two")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "Spine compacted root epoch 1 [0, 2)".to_string(),
+            replacement_history: None,
+            spine: Some(spine_compact_checkpoint(
+                "compact-root",
+                SpineCompactedCheckpointKind::RootEpoch,
+            )),
+        }),
+        RolloutItem::ResponseItem(later.clone()),
+    ];
+    write_rollout_items_for_test(&rollout_path, &rollout_items)?;
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await
+        .expect("reconstruct root epoch history from sidecar");
+    let rendered = serde_json::to_string(&reconstructed.history)?;
+
+    assert!(rendered.contains("structured initial context"));
+    assert!(rendered.contains("Node: 1"));
+    assert!(rendered.contains("root facts"));
+    assert!(rendered.contains("new epoch tail"));
+    assert!(!rendered.contains("root raw one"));
+    assert!(!rendered.contains("root raw two"));
+    assert_eq!(reconstructed.history.last(), Some(&later));
     Ok(())
 }
 

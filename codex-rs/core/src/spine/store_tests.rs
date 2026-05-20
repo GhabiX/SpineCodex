@@ -6,6 +6,8 @@ use crate::spine::mem_install::MemorySectionId;
 use crate::spine::mem_install::memory_body_hash;
 use crate::spine::state::NodeStatus;
 use crate::spine::state::StateCheckpoint;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -134,6 +136,65 @@ fn mem_install_committed(
     }
 }
 
+fn note_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
+fn note_evidence_committed(
+    compact_id: &str,
+    placement: NotePlacement,
+    kind: &str,
+    items: Vec<ResponseItem>,
+) -> NoteEvidenceCommittedRecord {
+    NoteEvidenceCommittedRecord {
+        compact_id: compact_id.to_string(),
+        placement,
+        kind: kind.to_string(),
+        items,
+        projection_ref: "projection:note".to_string(),
+        source_rollout_ref: "../rollout.jsonl".to_string(),
+    }
+}
+
+fn append_root_compact_started(store: &SpineSidecarStore, compact_id: &str) {
+    store
+        .append_compact_started(compact_started(
+            compact_id,
+            id(&[1]),
+            SpineOperation::Archive,
+            0,
+            7,
+        ))
+        .expect("append root compact started");
+}
+
+fn append_root_memory_install_after_started(store: &SpineSidecarStore, compact_id: &str) {
+    store
+        .append_memory_section(&id(&[1]), "\n\n## Auto Compact\n\nroot body\n")
+        .expect("append root memory section");
+    let body_ref = store
+        .generated_memory_sections(&id(&[1]))
+        .expect("generated sections")[0]
+        .body_ref();
+    store
+        .append_mem_install_committed(mem_install_committed(
+            compact_id,
+            id(&[1]),
+            SpineOperation::Archive,
+            0,
+            7,
+            body_ref,
+        ))
+        .expect("append root mem install");
+}
+
 fn append_root_meminstall_evidence(store: &SpineSidecarStore, compact_id: &str) {
     store
         .append_compact_started(compact_started(
@@ -144,6 +205,14 @@ fn append_root_meminstall_evidence(store: &SpineSidecarStore, compact_id: &str) 
             7,
         ))
         .expect("append root compact started");
+    store
+        .append_note_evidence_committed(note_evidence_committed(
+            compact_id,
+            NotePlacement::BeforeMem,
+            "initial_context_empty",
+            vec![note_item("root initial context sentinel")],
+        ))
+        .expect("append root note evidence");
     store
         .append_memory_section(
             &id(&[1]),
@@ -1240,6 +1309,91 @@ fn runtime_fast_fail_compact_index_mem_install_missing_started_fails_closed() {
         error,
         SpineStoreError::RuntimeFastFail(RuntimeFastFailError::MemInstallMissingStarted { .. })
     ));
+}
+
+#[test]
+fn compact_index_note_evidence_commits_structured_items() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_root_compact_started(&store, "compact-root");
+    let item = note_item("structured initial context");
+    store
+        .append_note_evidence_committed(note_evidence_committed(
+            "compact-root",
+            NotePlacement::BeforeMem,
+            "initial_context_0",
+            vec![item.clone()],
+        ))
+        .expect("append note evidence");
+    append_root_memory_install_after_started(&store, "compact-root");
+
+    let evidence = store
+        .committed_note_evidence()
+        .expect("committed note evidence");
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].compact_id, "compact-root");
+    assert_eq!(evidence[0].placement, NotePlacement::BeforeMem);
+    assert_eq!(evidence[0].kind, "initial_context_0");
+    assert_eq!(evidence[0].items, vec![item]);
+    assert!(evidence[0].items_hash.starts_with("sha256:"));
+}
+
+#[test]
+fn compact_index_note_evidence_duplicate_kind_fails_closed() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    append_root_compact_started(&store, "compact-root");
+    store
+        .append_note_evidence_committed(note_evidence_committed(
+            "compact-root",
+            NotePlacement::BeforeMem,
+            "initial_context_0",
+            vec![note_item("first")],
+        ))
+        .expect("append first note evidence");
+
+    let error = store
+        .append_note_evidence_committed(note_evidence_committed(
+            "compact-root",
+            NotePlacement::BeforeMem,
+            "initial_context_0",
+            vec![note_item("second")],
+        ))
+        .expect_err("duplicate note evidence kind should fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate NoteEvidenceCommitted")
+    );
+}
+
+#[test]
+fn compact_index_note_evidence_before_mem_for_non_root_fails_closed() {
+    let (_temp, store) = temp_store();
+    store.create().expect("create sidecar");
+    store
+        .append_compact_started(compact_started(
+            "compact-child",
+            id(&[1, 1]),
+            SpineOperation::Close,
+            3,
+            7,
+        ))
+        .expect("append child compact started");
+
+    let error = store
+        .append_note_evidence_committed(note_evidence_committed(
+            "compact-child",
+            NotePlacement::BeforeMem,
+            "initial_context_0",
+            vec![note_item("not allowed")],
+        ))
+        .expect_err("before_mem note evidence is root-only");
+    assert!(
+        error
+            .to_string()
+            .contains("before_mem placement for non-root")
+    );
 }
 
 #[test]

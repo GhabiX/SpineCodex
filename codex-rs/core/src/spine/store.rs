@@ -18,10 +18,13 @@ use super::state::SpineStateError;
 use super::state::StateCheckpoint;
 use super::state::StateCheckpointError;
 use super::state::Transition;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::Digest;
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -48,6 +51,7 @@ const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
 const SPINE_BASE_LOCATOR_VERSION: u32 = 1;
 const MEM_INSTALL_COMMITTED_SCHEMA_VERSION: u32 = 3;
+const NOTE_EVIDENCE_COMMITTED_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineSidecarStore {
@@ -401,7 +405,8 @@ impl SpineSidecarStore {
             .into_iter()
             .filter(|event| match event {
                 CompactIndexEvent::CompactStarted { compact_id, .. }
-                | CompactIndexEvent::MemInstallCommitted { compact_id, .. } => {
+                | CompactIndexEvent::MemInstallCommitted { compact_id, .. }
+                | CompactIndexEvent::NoteEvidenceCommitted { compact_id, .. } => {
                     surviving_compact_ids.contains(compact_id)
                 }
                 CompactIndexEvent::CompactFailed { .. }
@@ -753,6 +758,42 @@ impl SpineSidecarStore {
             memory_section_id,
             body_hash: body_ref.body_hash,
             storage_ref,
+            projection_ref,
+            source_rollout_ref,
+        };
+        self.append_json_line(&path, &event)
+    }
+
+    pub(crate) fn append_note_evidence_committed(
+        &self,
+        record: NoteEvidenceCommittedRecord,
+    ) -> Result<(), SpineStoreError> {
+        let NoteEvidenceCommittedRecord {
+            compact_id,
+            placement,
+            kind,
+            items,
+            projection_ref,
+            source_rollout_ref,
+        } = record;
+        self.validate_note_evidence_commit_preconditions(
+            &compact_id,
+            placement,
+            &kind,
+            &items,
+            &projection_ref,
+            &source_rollout_ref,
+        )?;
+
+        let path = self.compact_index_path();
+        let event = CompactIndexEvent::NoteEvidenceCommitted {
+            seq: self.next_jsonl_seq(&path)?,
+            schema_version: NOTE_EVIDENCE_COMMITTED_SCHEMA_VERSION,
+            compact_id,
+            placement,
+            kind,
+            items_hash: note_evidence_items_hash(&items)?,
+            items,
             projection_ref,
             source_rollout_ref,
         };
@@ -1136,6 +1177,38 @@ impl SpineSidecarStore {
         Ok(installs)
     }
 
+    pub(crate) fn committed_note_evidence(
+        &self,
+    ) -> Result<Vec<CommittedNoteEvidence>, SpineStoreError> {
+        self.validate_compact_index()?;
+        let mut evidence = Vec::new();
+        for event in self.read_compact_index_events()? {
+            let CompactIndexEvent::NoteEvidenceCommitted {
+                compact_id,
+                placement,
+                kind,
+                items_hash,
+                items,
+                projection_ref,
+                source_rollout_ref,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            evidence.push(CommittedNoteEvidence {
+                compact_id,
+                placement,
+                kind,
+                items_hash,
+                items,
+                projection_ref,
+                source_rollout_ref,
+            });
+        }
+        Ok(evidence)
+    }
+
     #[cfg(test)]
     pub(crate) fn committed_mem_install_spans(
         &self,
@@ -1181,6 +1254,7 @@ impl SpineSidecarStore {
         let mut started_rollout = None;
         let mut duplicate_commit = false;
         let mut terminal_before_commit = None;
+        let mut has_root_note_evidence = false;
 
         for event in self.read_compact_index_events()? {
             match event {
@@ -1215,6 +1289,16 @@ impl SpineSidecarStore {
                 {
                     duplicate_commit = true;
                 }
+                CompactIndexEvent::NoteEvidenceCommitted {
+                    compact_id,
+                    placement,
+                    ..
+                } if compact_id == attempt.compact_id
+                    && placement == NotePlacement::BeforeMem
+                    && attempt.op == SpineOperation::Archive =>
+                {
+                    has_root_note_evidence = true;
+                }
                 CompactIndexEvent::CompactFailed { compact_id, .. }
                     if compact_id == attempt.compact_id =>
                 {
@@ -1242,6 +1326,12 @@ impl SpineSidecarStore {
             }
             .into());
         }
+        if attempt.op == SpineOperation::Archive && !has_root_note_evidence {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "compact.index.jsonl root archive MemInstall {} is missing NoteEvidenceCommitted",
+                attempt.compact_id
+            )));
+        }
         validate_mem_install_pre_commit(
             &attempt.compact_id,
             started_rollout.is_some(),
@@ -1261,6 +1351,92 @@ impl SpineSidecarStore {
             Err(err) => return Err(err),
         }
         Ok(())
+    }
+
+    fn validate_note_evidence_commit_preconditions(
+        &self,
+        compact_id: &str,
+        placement: NotePlacement,
+        kind: &str,
+        items: &[ResponseItem],
+        projection_ref: &str,
+        source_rollout_ref: &str,
+    ) -> Result<(), SpineStoreError> {
+        if kind.trim().is_empty() {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "compact.index.jsonl NoteEvidenceCommitted for {compact_id} has empty kind"
+            )));
+        }
+        if items.is_empty() {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} has empty items"
+            )));
+        }
+        let mut started_rollout = None;
+        for event in self.read_compact_index_events()? {
+            match event {
+                CompactIndexEvent::CompactStarted {
+                    compact_id: started_id,
+                    op,
+                    rollout,
+                    ..
+                } if started_id == compact_id => {
+                    if placement == NotePlacement::BeforeMem && op != SpineOperation::Archive {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} uses before_mem placement for non-root {:?} compact",
+                            op
+                        )));
+                    }
+                    if started_rollout.replace(rollout).is_some() {
+                        return Err(SpineStoreError::InvalidLedger(format!(
+                            "compact.index.jsonl has duplicate compact_started for {compact_id}"
+                        )));
+                    }
+                }
+                CompactIndexEvent::NoteEvidenceCommitted {
+                    compact_id: event_compact_id,
+                    kind: event_kind,
+                    ..
+                } if event_compact_id == compact_id && event_kind == kind => {
+                    return Err(SpineStoreError::InvalidLedger(format!(
+                        "compact.index.jsonl has duplicate NoteEvidenceCommitted for {compact_id}/{kind}"
+                    )));
+                }
+                CompactIndexEvent::MemInstallCommitted {
+                    compact_id: event_compact_id,
+                    ..
+                } if event_compact_id == compact_id => {
+                    return Err(SpineStoreError::InvalidLedger(format!(
+                        "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} follows MemInstallCommitted"
+                    )));
+                }
+                CompactIndexEvent::CompactFailed {
+                    compact_id: event_compact_id,
+                    ..
+                }
+                | CompactIndexEvent::CompactInterrupted {
+                    compact_id: event_compact_id,
+                    ..
+                } if event_compact_id == compact_id => {
+                    return Err(SpineStoreError::InvalidLedger(format!(
+                        "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} follows terminal compact event"
+                    )));
+                }
+                _ => {}
+            }
+        }
+        let Some(started_rollout) = started_rollout else {
+            return Err(SpineStoreError::InvalidLedger(format!(
+                "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} has no matching CompactStarted"
+            )));
+        };
+        validate_note_evidence_metadata(
+            compact_id,
+            kind,
+            projection_ref,
+            source_rollout_ref,
+            started_rollout == source_rollout_ref,
+        )
     }
 
     fn validate_compact_index(&self) -> Result<(), SpineStoreError> {
@@ -1288,6 +1464,8 @@ impl SpineSidecarStore {
                                 rollout,
                                 terminal: None,
                                 mem_install_committed: false,
+                                root_note_evidence_committed: false,
+                                note_evidence_kinds: HashSet::new(),
                             },
                         )
                         .is_some()
@@ -1324,6 +1502,30 @@ impl SpineSidecarStore {
                         memory_section_id,
                         body_hash,
                         storage_ref,
+                        projection_ref,
+                        source_rollout_ref,
+                    )?;
+                }
+                CompactIndexEvent::NoteEvidenceCommitted {
+                    seq,
+                    schema_version,
+                    compact_id,
+                    placement,
+                    kind,
+                    items_hash,
+                    items,
+                    projection_ref,
+                    source_rollout_ref,
+                } => {
+                    record_note_evidence_committed(
+                        &mut attempts,
+                        seq,
+                        schema_version,
+                        compact_id,
+                        placement,
+                        kind,
+                        items_hash,
+                        items,
                         projection_ref,
                         source_rollout_ref,
                     )?;
@@ -1633,6 +1835,23 @@ pub(crate) struct MemInstallCommittedRecord {
     pub(crate) source_rollout_ref: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NotePlacement {
+    BeforeMem,
+    AfterMem,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct NoteEvidenceCommittedRecord {
+    pub(crate) compact_id: String,
+    pub(crate) placement: NotePlacement,
+    pub(crate) kind: String,
+    pub(crate) items: Vec<ResponseItem>,
+    pub(crate) projection_ref: String,
+    pub(crate) source_rollout_ref: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CommittedMemInstall {
     pub(crate) compact_id: String,
@@ -1641,6 +1860,17 @@ pub(crate) struct CommittedMemInstall {
     pub(crate) cut_ordinal: u64,
     pub(crate) fold_end_ordinal: u64,
     pub(crate) body_ref: MemoryBodyRef,
+    pub(crate) projection_ref: String,
+    pub(crate) source_rollout_ref: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CommittedNoteEvidence {
+    pub(crate) compact_id: String,
+    pub(crate) placement: NotePlacement,
+    pub(crate) kind: String,
+    pub(crate) items_hash: String,
+    pub(crate) items: Vec<ResponseItem>,
     pub(crate) projection_ref: String,
     pub(crate) source_rollout_ref: String,
 }
@@ -1790,6 +2020,8 @@ struct CompactAttemptState {
     rollout: String,
     terminal: Option<&'static str>,
     mem_install_committed: bool,
+    root_note_evidence_committed: bool,
+    note_evidence_kinds: HashSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1801,7 +2033,7 @@ pub(crate) struct InstalledCompactSpan {
     pub(crate) fold_end_ordinal: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum CompactIndexEvent {
     CompactStarted {
@@ -1825,6 +2057,17 @@ enum CompactIndexEvent {
         memory_section_id: String,
         body_hash: String,
         storage_ref: String,
+        projection_ref: String,
+        source_rollout_ref: String,
+    },
+    NoteEvidenceCommitted {
+        seq: u64,
+        schema_version: u32,
+        compact_id: String,
+        placement: NotePlacement,
+        kind: String,
+        items_hash: String,
+        items: Vec<ResponseItem>,
         projection_ref: String,
         source_rollout_ref: String,
     },
@@ -1855,6 +2098,7 @@ impl CompactIndexEvent {
         match self {
             CompactIndexEvent::CompactStarted { seq, .. }
             | CompactIndexEvent::MemInstallCommitted { seq, .. }
+            | CompactIndexEvent::NoteEvidenceCommitted { seq, .. }
             | CompactIndexEvent::CompactFailed { seq, .. }
             | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq,
         }
@@ -1864,6 +2108,7 @@ impl CompactIndexEvent {
         match self {
             CompactIndexEvent::CompactStarted { seq, .. }
             | CompactIndexEvent::MemInstallCommitted { seq, .. }
+            | CompactIndexEvent::NoteEvidenceCommitted { seq, .. }
             | CompactIndexEvent::CompactFailed { seq, .. }
             | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq = next_seq,
         }
@@ -1970,7 +2215,11 @@ fn record_mem_install_committed(
         &source_rollout_ref,
         attempt.rollout == source_rollout_ref,
     )?;
-
+    if op == SpineOperation::Archive && !attempt.root_note_evidence_committed {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl root archive MemInstall {compact_id} is missing NoteEvidenceCommitted"
+        )));
+    }
     let node_id = NodeId::parse(&node_id)?;
     let body_ref = MemoryBodyRef {
         section_id: MemorySectionId::parse(memory_section_id, storage_ref)
@@ -1986,6 +2235,106 @@ fn record_mem_install_committed(
     }
     attempt.mem_install_committed = true;
     Ok(())
+}
+
+fn record_note_evidence_committed(
+    attempts: &mut HashMap<String, CompactAttemptState>,
+    _seq: u64,
+    schema_version: u32,
+    compact_id: String,
+    placement: NotePlacement,
+    kind: String,
+    items_hash: String,
+    items: Vec<ResponseItem>,
+    projection_ref: String,
+    source_rollout_ref: String,
+) -> Result<(), SpineStoreError> {
+    if schema_version != NOTE_EVIDENCE_COMMITTED_SCHEMA_VERSION {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} has unsupported schema_version {schema_version}"
+        )));
+    }
+    let Some(attempt) = attempts.get_mut(&compact_id) else {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} has no matching CompactStarted"
+        )));
+    };
+    if let Some(terminal) = attempt.terminal {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} follows {terminal}"
+        )));
+    }
+    if attempt.mem_install_committed {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} follows MemInstallCommitted"
+        )));
+    }
+    validate_note_evidence_metadata(
+        &compact_id,
+        &kind,
+        &projection_ref,
+        &source_rollout_ref,
+        attempt.rollout == source_rollout_ref,
+    )?;
+    if items.is_empty() {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} has empty items"
+        )));
+    }
+    if !attempt.note_evidence_kinds.insert(kind.clone()) {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl has duplicate NoteEvidenceCommitted for {compact_id}/{kind}"
+        )));
+    }
+    if placement == NotePlacement::BeforeMem && attempt.op != SpineOperation::Archive {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} uses before_mem placement for non-root {:?} compact",
+            attempt.op
+        )));
+    }
+    if placement == NotePlacement::BeforeMem {
+        attempt.root_note_evidence_committed = true;
+    }
+    let actual_hash = note_evidence_items_hash(&items)?;
+    if items_hash != actual_hash {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} items hash mismatch: expected {items_hash}, actual {actual_hash}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_note_evidence_metadata(
+    compact_id: &str,
+    kind: &str,
+    projection_ref: &str,
+    source_rollout_ref: &str,
+    source_rollout_matches_started: bool,
+) -> Result<(), SpineStoreError> {
+    if projection_ref.trim().is_empty() {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} is missing projection_ref"
+        )));
+    }
+    if source_rollout_ref.trim().is_empty() {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} is missing source_rollout_ref"
+        )));
+    }
+    if !source_rollout_matches_started {
+        return Err(SpineStoreError::InvalidLedger(format!(
+            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} source_rollout_ref does not match CompactStarted rollout"
+        )));
+    }
+    Ok(())
+}
+
+fn note_evidence_items_hash(items: &[ResponseItem]) -> Result<String, SpineStoreError> {
+    let encoded = serde_json::to_string(items).map_err(|source| SpineStoreError::Json {
+        path: PathBuf::from(COMPACT_INDEX_FILE),
+        source,
+    })?;
+    Ok(format!("sha256:{:x}", Sha256::digest(encoded.as_bytes())))
 }
 
 #[cfg(test)]

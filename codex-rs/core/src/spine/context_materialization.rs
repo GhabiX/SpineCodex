@@ -9,14 +9,19 @@ use super::projection::project_spine_state_from_inputs;
 use super::segment::Segment;
 use super::state::SpineState;
 use super::store::CommittedMemInstall;
+use super::store::CommittedNoteEvidence;
+use super::store::NotePlacement;
 use super::store::SpineOperation;
 use super::store::SpineSidecarStore;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SpineCompactedCheckpointKind;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::path::Path;
 
 pub(crate) struct SpineMaterializationInput<'a> {
     pub(crate) replay_items: &'a [RolloutItem],
@@ -25,8 +30,43 @@ pub(crate) struct SpineMaterializationInput<'a> {
     pub(crate) store: &'a SpineSidecarStore,
 }
 
+#[derive(Debug)]
 pub(crate) struct SpineMaterialization {
     pub(crate) history: Vec<ResponseItem>,
+}
+
+pub(crate) fn materialize_spine_checkpoint_history(
+    compacted: &CompactedItem,
+    replay_items: &[RolloutItem],
+    rollout_path: &Path,
+    index: usize,
+) -> CodexResult<Vec<ResponseItem>> {
+    let Some(spine_checkpoint) = compacted.spine.as_ref() else {
+        return Err(CodexErr::Fatal(format!(
+            "unsupported compacted rollout item at index {index}: missing Spine checkpoint"
+        )));
+    };
+    if !matches!(
+        spine_checkpoint.kind,
+        SpineCompactedCheckpointKind::Suffix | SpineCompactedCheckpointKind::RootEpoch
+    ) {
+        return Err(CodexErr::Fatal(format!(
+            "unsupported Spine {:?} compacted rollout item at index {index}",
+            spine_checkpoint.kind
+        )));
+    }
+    let store = SpineSidecarStore::for_rollout(rollout_path).map_err(|err| {
+        CodexErr::Fatal(format!(
+            "failed to load Spine sidecar for compacted rollout item at index {index}: {err}"
+        ))
+    })?;
+    materialize_spine_context(SpineMaterializationInput {
+        replay_items,
+        branch_ref: rollout_path.to_string_lossy().into_owned(),
+        persisted_prefix_items: replay_items,
+        store: &store,
+    })
+    .map(|materialized| materialized.history)
 }
 
 pub(crate) fn materialize_spine_context(
@@ -58,6 +98,16 @@ pub(crate) fn materialize_spine_context(
         ))
     })?;
     let surviving_installs = surviving_installs(&installs, &projection.surviving_compact_ids);
+    let note_evidence = input.store.committed_note_evidence().map_err(|err| {
+        CodexErr::Fatal(format!(
+            "failed to load Spine materialization Note evidence ledger: {err}"
+        ))
+    })?;
+    let note_evidence = note_evidence_by_mem(
+        &note_evidence,
+        &projection.surviving_compact_ids,
+        &projection.root_epoch_compact_ids,
+    )?;
     let projected_state = projection.state.clone();
     let mut project_input = ProjectInput::new(projection.response_item_count, projection.state);
     for install in &surviving_installs {
@@ -110,6 +160,11 @@ pub(crate) fn materialize_spine_context(
                 history.extend(raw_items[start..end].iter().cloned());
             }
             Segment::Mem { compact_id } => {
+                if let Some(notes) =
+                    note_items_for_mem(&note_evidence, &compact_id, NotePlacement::BeforeMem)
+                {
+                    history.extend(notes);
+                }
                 let item = memory_items.get(&compact_id).ok_or_else(|| {
                     CodexErr::Fatal(format!(
                         "Spine materialization missing rendered Mem item for {compact_id}"
@@ -121,6 +176,11 @@ pub(crate) fn materialize_spine_context(
                     install_by_id.get(compact_id.as_str()).copied(),
                 ) {
                     history.push(handoff);
+                }
+                if let Some(notes) =
+                    note_items_for_mem(&note_evidence, &compact_id, NotePlacement::AfterMem)
+                {
+                    history.extend(notes);
                 }
             }
             Segment::Note { kind } => {
@@ -152,6 +212,47 @@ fn surviving_installs(
         .filter(|install| surviving_ids.contains(&install.compact_id))
         .cloned()
         .collect()
+}
+
+fn note_evidence_by_mem(
+    evidence: &[CommittedNoteEvidence],
+    surviving_ids: &HashSet<String>,
+    root_epoch_ids: &HashSet<String>,
+) -> CodexResult<BTreeMap<(String, NotePlacement), Vec<ResponseItem>>> {
+    let mut notes = BTreeMap::<(String, NotePlacement), Vec<ResponseItem>>::new();
+    for item in evidence {
+        if !surviving_ids.contains(&item.compact_id) {
+            continue;
+        }
+        if item.items.is_empty() {
+            return Err(CodexErr::Fatal(format!(
+                "Spine materialization invalid Note evidence {}/{}",
+                item.compact_id, item.kind
+            )));
+        }
+        notes
+            .entry((item.compact_id.clone(), item.placement))
+            .or_default()
+            .extend(item.items.iter().cloned());
+    }
+    for compact_id in root_epoch_ids {
+        if surviving_ids.contains(compact_id)
+            && !notes.contains_key(&(compact_id.clone(), NotePlacement::BeforeMem))
+        {
+            return Err(CodexErr::Fatal(format!(
+                "Spine materialization missing Note evidence for root compact {compact_id}"
+            )));
+        }
+    }
+    Ok(notes)
+}
+
+fn note_items_for_mem(
+    notes: &BTreeMap<(String, NotePlacement), Vec<ResponseItem>>,
+    compact_id: &str,
+    placement: NotePlacement,
+) -> Option<Vec<ResponseItem>> {
+    notes.get(&(compact_id.to_string(), placement)).cloned()
 }
 
 fn render_memory_items(

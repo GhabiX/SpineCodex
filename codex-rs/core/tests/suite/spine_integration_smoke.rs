@@ -254,7 +254,7 @@ async fn spine_transitions_commit_and_compact_before_following_tools_in_same_res
         rollout_text.contains(ROOT_SHELL_CALL_ID) && rollout_text.contains("root-spine"),
         "rollout should remain the raw traj source for root shell output"
     );
-    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 3)?;
+    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 3, Some(&compact_index))?;
     assert_raw_mirror_has_only_raw_items(&sidecar_dir)?;
 
     Ok(())
@@ -354,7 +354,10 @@ async fn spine_auto_compact_archives_root_epoch_and_stays_mutable() -> anyhow::R
     );
     let rollout_text = std::fs::read_to_string(&rollout_path)
         .with_context(|| format!("read {}", rollout_path.display()))?;
-    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 1)?;
+    let compact_index_text = std::fs::read_to_string(sidecar_dir.join("compact.index.jsonl"))
+        .with_context(|| format!("read {}", sidecar_dir.join("compact.index.jsonl").display()))?;
+    let compact_index = parse_json_lines(&compact_index_text)?;
+    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 1, Some(&compact_index))?;
 
     Ok(())
 }
@@ -473,7 +476,10 @@ async fn spine_manual_compact_uses_native_text_and_archives_root_epoch() -> anyh
     );
     let rollout_text = std::fs::read_to_string(&rollout_path)
         .with_context(|| format!("read {}", rollout_path.display()))?;
-    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 1)?;
+    let compact_index_text = std::fs::read_to_string(sidecar_dir.join("compact.index.jsonl"))
+        .with_context(|| format!("read {}", sidecar_dir.join("compact.index.jsonl").display()))?;
+    let compact_index = parse_json_lines(&compact_index_text)?;
+    assert_rollout_has_spine_compaction_checkpoint(&rollout_text, 1, Some(&compact_index))?;
 
     Ok(())
 }
@@ -1118,6 +1124,7 @@ fn assert_compact_failed(index: &[Value], node_id: &str, op: &str) {
 fn assert_rollout_has_spine_compaction_checkpoint(
     rollout_text: &str,
     expected_count: usize,
+    compact_index: Option<&[Value]>,
 ) -> anyhow::Result<()> {
     let mut compacted = 0;
     for line in rollout_text.lines().filter(|line| !line.trim().is_empty()) {
@@ -1136,10 +1143,17 @@ fn assert_rollout_has_spine_compaction_checkpoint(
                 }
                 codex_protocol::protocol::SpineCompactedCheckpointKind::RootEpoch => {
                     assert!(
-                        item.replacement_history
-                            .as_ref()
-                            .is_some_and(|history| !history.is_empty()),
-                        "spine root epoch checkpoint should keep replacement_history until structured initial-context evidence is implemented: {line}"
+                        item.replacement_history.is_none(),
+                        "spine root epoch checkpoint should derive host history from sidecar Note/Mem evidence, not persisted replacement_history: {line}"
+                    );
+                    let compact_index = compact_index.unwrap_or_else(|| {
+                        panic!(
+                            "spine root epoch checkpoint requires compact index evidence: {line}"
+                        )
+                    });
+                    assert_root_epoch_note_evidence_before_mem_install(
+                        compact_index,
+                        &spine.compact_id,
                     );
                 }
             }
@@ -1162,6 +1176,37 @@ fn assert_rollout_has_spine_compaction_checkpoint(
         "unexpected spine compact checkpoint count"
     );
     Ok(())
+}
+
+fn assert_root_epoch_note_evidence_before_mem_install(index: &[Value], compact_id: &str) {
+    let note_index = index
+        .iter()
+        .position(|event| {
+            event.get("type").and_then(Value::as_str) == Some("note_evidence_committed")
+                && event.get("compact_id").and_then(Value::as_str) == Some(compact_id)
+                && event.get("placement").and_then(Value::as_str) == Some("before_mem")
+                && event
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind.starts_with("initial_context_"))
+        })
+        .unwrap_or_else(|| {
+            panic!("missing root epoch NoteEvidenceCommitted for {compact_id}: {index:?}")
+        });
+    let mem_index = index
+        .iter()
+        .position(|event| {
+            event.get("type").and_then(Value::as_str) == Some("mem_install_committed")
+                && event.get("compact_id").and_then(Value::as_str) == Some(compact_id)
+                && event.get("op").and_then(Value::as_str) == Some("archive")
+        })
+        .unwrap_or_else(|| {
+            panic!("missing root epoch MemInstallCommitted for {compact_id}: {index:?}")
+        });
+    assert!(
+        note_index < mem_index,
+        "root epoch NoteEvidenceCommitted should precede MemInstallCommitted for {compact_id}: {index:?}"
+    );
 }
 
 fn assert_raw_mirror_has_only_raw_items(sidecar_dir: &Path) -> anyhow::Result<()> {
