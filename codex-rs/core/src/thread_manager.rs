@@ -887,11 +887,8 @@ impl ThreadManager {
         };
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let spine_fork_rollout_items = history.get_rollout_items();
-        let spine_raw_len = history
-            .get_rollout_items()
-            .iter()
-            .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
-            .count();
+        let spine_raw_items =
+            crate::session::spine_raw_items_after_rollback(&spine_fork_rollout_items);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -913,12 +910,18 @@ impl ThreadManager {
         if let Some(source_rollout_path) = spine_source_rollout_path
             && let Some(target_rollout_path) = new_thread.session_configured.rollout_path.as_deref()
         {
-            let raw_len = u64::try_from(spine_raw_len)
-                .map_err(|_| CodexErr::Fatal("Spine fork raw item count overflow".to_string()))?;
-            SpineStore::clone_for_rollout(&source_rollout_path, target_rollout_path, raw_len)
-                .map_err(|err| {
-                    CodexErr::Fatal(format!("failed to clone Spine sidecar for fork: {err}"))
-                })?;
+            let raw_live = spine_raw_items
+                .iter()
+                .map(Option::is_some)
+                .collect::<Vec<_>>();
+            SpineStore::clone_for_rollout_with_raw_live(
+                &source_rollout_path,
+                target_rollout_path,
+                &raw_live,
+            )
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to clone Spine sidecar for fork: {err}"))
+            })?;
             let turn_context = new_thread.thread.codex.session.new_default_turn().await;
             new_thread
                 .thread

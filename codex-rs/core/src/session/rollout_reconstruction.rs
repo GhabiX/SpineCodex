@@ -304,7 +304,9 @@ impl Session {
     }
 }
 
-fn spine_raw_items_after_rollback(rollout_items: &[RolloutItem]) -> Vec<Option<ResponseItem>> {
+pub(crate) fn spine_raw_items_after_rollback(
+    rollout_items: &[RolloutItem],
+) -> Vec<Option<ResponseItem>> {
     let mut raw_items = Vec::<Option<ResponseItem>>::new();
     let mut user_boundaries = Vec::<usize>::new();
     for item in rollout_items {

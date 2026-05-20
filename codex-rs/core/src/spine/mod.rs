@@ -84,6 +84,7 @@ struct Node {
 pub(crate) struct SpineState {
     nodes: BTreeMap<NodeId, Node>,
     stack: Vec<NodeId>,
+    root_mem: Option<String>,
 }
 
 impl SpineState {
@@ -118,6 +119,7 @@ impl SpineState {
         Self {
             nodes,
             stack: vec![epoch, leaf],
+            root_mem: None,
         }
     }
 
@@ -225,7 +227,7 @@ impl SpineState {
         if let Some(epoch) = self.nodes.get_mut(node) {
             epoch.status = NodeStatus::Closed;
             epoch.raw_end = Some(boundary);
-            epoch.mem = Some(mem);
+            epoch.mem = Some(mem.clone());
         }
         for item in self.stack.iter().skip(1) {
             if let Some(node) = self.nodes.get_mut(item) {
@@ -268,6 +270,7 @@ impl SpineState {
             },
         );
         self.stack = vec![epoch, leaf];
+        self.root_mem = Some(mem);
         Ok(())
     }
 
@@ -345,6 +348,7 @@ enum KEvent {
         node: NodeId,
         boundary: u64,
         mem: String,
+        raw_live_hash: String,
     },
 }
 
@@ -355,6 +359,8 @@ struct MemRecord {
     node: NodeId,
     start: u64,
     end: u64,
+    #[serde(default)]
+    raw_live_hash: Option<String>,
     body_path: String,
     body_hash: String,
 }
@@ -375,6 +381,55 @@ struct Locator {
 #[derive(Clone, Debug)]
 pub(crate) struct SpineStore {
     root: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+struct RawMask<'a> {
+    live: Option<&'a [bool]>,
+}
+
+impl<'a> RawMask<'a> {
+    fn new(live: &'a [bool]) -> Self {
+        Self { live: Some(live) }
+    }
+
+    fn boundary_live(self, boundary: u64) -> Result<bool, SpineError> {
+        let Some(live) = self.live else {
+            return Ok(true);
+        };
+        if boundary == 0 {
+            return Ok(true);
+        }
+        let index = usize::try_from(boundary - 1)
+            .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
+        Ok(live.get(index).copied().unwrap_or(false))
+    }
+
+    fn span_live(self, start: u64, end: u64) -> Result<bool, SpineError> {
+        let Some(live) = self.live else {
+            return Ok(true);
+        };
+        let start = usize::try_from(start)
+            .map_err(|_| SpineError::InvalidEvent("raw start overflow".to_string()))?;
+        let end = usize::try_from(end)
+            .map_err(|_| SpineError::InvalidEvent("raw end overflow".to_string()))?;
+        if end > live.len() || start > end {
+            return Ok(false);
+        }
+        Ok(live[start..end].iter().all(|item| *item))
+    }
+
+    fn prefix_hash_matches(self, end: u64, expected: &str) -> Result<bool, SpineError> {
+        let end = usize::try_from(end)
+            .map_err(|_| SpineError::InvalidEvent("raw end overflow".to_string()))?;
+        let Some(live) = self.live else {
+            return Ok(hash_raw_live_prefix_all_true(end) == expected);
+        };
+        if end > live.len() {
+            return Ok(false);
+        }
+        Ok(hash_raw_live(&live[..end]) == expected)
+    }
 }
 
 impl SpineStore {
@@ -409,10 +464,10 @@ impl SpineStore {
         Ok(Self { root })
     }
 
-    pub(crate) fn clone_for_rollout(
+    pub(crate) fn clone_for_rollout_with_raw_live(
         source_rollout_path: &Path,
         target_rollout_path: &Path,
-        raw_len: u64,
+        raw_live: &[bool],
     ) -> Result<(), SpineError> {
         if !Self::has_for_rollout(source_rollout_path)? {
             return Ok(());
@@ -422,13 +477,14 @@ impl SpineStore {
         }
         let source = Self::for_rollout(source_rollout_path)?;
         let target = Self::create_for_rollout(target_rollout_path)?;
+        let mask = RawMask::new(raw_live);
         for event in source.events()? {
-            if event.boundary() <= raw_len {
+            if event.allowed_by(mask)? {
                 target.append_event(&event)?;
             }
         }
         for mem in source.mems()? {
-            if mem.end <= raw_len {
+            if mem.allowed_by(mask)? {
                 let body = source.read_memory_body(&mem)?;
                 let body_path = target.write_memory_body(&mem.compact_id, &body)?;
                 let cloned = MemRecord { body_path, ..mem };
@@ -490,12 +546,30 @@ impl SpineStore {
 }
 
 impl KEvent {
-    fn boundary(&self) -> u64 {
+    fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         match self {
-            KEvent::Init { raw_start } => *raw_start,
-            KEvent::Open { boundary, .. }
-            | KEvent::Close { boundary, .. }
-            | KEvent::RootCompact { boundary, .. } => *boundary,
+            KEvent::Init { .. } => Ok(true),
+            KEvent::Open { boundary, .. } | KEvent::Close { boundary, .. } => {
+                raw_mask.boundary_live(*boundary)
+            }
+            KEvent::RootCompact {
+                boundary,
+                raw_live_hash,
+                ..
+            } => raw_mask.prefix_hash_matches(*boundary, raw_live_hash),
+        }
+    }
+}
+
+impl MemRecord {
+    fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
+        match self.kind {
+            MemKind::Suffix => raw_mask.span_live(self.start, self.end),
+            MemKind::RootEpoch => self
+                .raw_live_hash
+                .as_deref()
+                .map(|hash| raw_mask.prefix_hash_matches(self.end, hash))
+                .unwrap_or(Ok(false)),
         }
     }
 }
@@ -505,6 +579,7 @@ pub(crate) struct SpineRuntime {
     store: SpineStore,
     state: SpineState,
     raw_len: u64,
+    raw_live: Vec<bool>,
     pending: Option<PendingTransition>,
 }
 
@@ -591,6 +666,21 @@ impl SpineRuntime {
         Self::load(store, raw_len)
     }
 
+    pub(crate) fn load_for_rollout_items(
+        rollout_path: &Path,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<Self>, SpineError> {
+        if !SpineStore::has_for_rollout(rollout_path)? {
+            return Ok(None);
+        }
+        Self::load_with_raw_live(
+            SpineStore::for_rollout(rollout_path)?,
+            raw_items.iter().map(Option::is_some).collect(),
+        )
+        .map(Some)
+    }
+
+    #[cfg(test)]
     pub(crate) fn load_for_rollout(
         rollout_path: &Path,
         raw_len: u64,
@@ -602,11 +692,19 @@ impl SpineRuntime {
     }
 
     pub(crate) fn load(store: SpineStore, raw_len: u64) -> Result<Self, SpineError> {
-        let state = replay(&store.events()?)?;
+        let raw_len_usize = usize::try_from(raw_len)
+            .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
+        Self::load_with_raw_live(store, vec![true; raw_len_usize])
+    }
+
+    fn load_with_raw_live(store: SpineStore, raw_live: Vec<bool>) -> Result<Self, SpineError> {
+        let state = replay(&store.events()?, RawMask::new(&raw_live))?;
         Ok(Self {
             store,
             state,
-            raw_len,
+            raw_len: u64::try_from(raw_live.len())
+                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
+            raw_live,
             pending: None,
         })
     }
@@ -622,6 +720,9 @@ impl SpineRuntime {
             .raw_len
             .checked_add(count)
             .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+        let count = usize::try_from(count)
+            .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
+        self.raw_live.extend(std::iter::repeat(true).take(count));
         Ok(())
     }
 
@@ -710,12 +811,14 @@ impl SpineRuntime {
             .ok_or_else(|| SpineError::InvalidEvent("missing root epoch".to_string()))?;
         let compact_id = format!("root-{}-{}", node.as_path().replace('.', "-"), self.raw_len);
         let body_path = self.store.write_memory_body(&compact_id, &body)?;
+        let raw_live_hash = hash_raw_live(&self.raw_live);
         let mem = MemRecord {
             compact_id: compact_id.clone(),
             kind: MemKind::RootEpoch,
             node: node.clone(),
             start: 0,
             end: self.raw_len,
+            raw_live_hash: Some(raw_live_hash.clone()),
             body_path,
             body_hash: sha1_hex(body.as_bytes()),
         };
@@ -726,6 +829,7 @@ impl SpineRuntime {
             node,
             boundary: self.raw_len,
             mem: compact_id,
+            raw_live_hash,
         })?;
         Ok(())
     }
@@ -757,6 +861,7 @@ impl SpineRuntime {
             node: node_id.clone(),
             start: node.raw_start,
             end,
+            raw_live_hash: None,
             body_path,
             body_hash: sha1_hex(body.as_bytes()),
         };
@@ -771,7 +876,13 @@ impl SpineRuntime {
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        let mems = self.store.mems()?;
+        let raw_mask = RawMask::new(&self.raw_live);
+        let mems = self
+            .store
+            .mems()?
+            .into_iter()
+            .filter(|mem| mem.allowed_by(raw_mask).unwrap_or(false))
+            .collect::<Vec<_>>();
         let pi = project(self.raw_len, &self.state, &mems)?;
         let mut out = Vec::new();
         for seg in pi {
@@ -797,9 +908,12 @@ impl SpineRuntime {
     }
 }
 
-fn replay(events: &[KEvent]) -> Result<SpineState, SpineError> {
+fn replay(events: &[KEvent], raw_mask: RawMask<'_>) -> Result<SpineState, SpineError> {
     let mut state = None;
     for event in events {
+        if !event.allowed_by(raw_mask)? {
+            continue;
+        }
         match event {
             KEvent::Init { raw_start } => {
                 if state.is_some() {
@@ -824,6 +938,7 @@ fn replay(events: &[KEvent]) -> Result<SpineState, SpineError> {
                 node,
                 boundary,
                 mem,
+                ..
             } => state
                 .as_mut()
                 .ok_or_else(|| SpineError::InvalidEvent("root compact before init".to_string()))?
@@ -845,6 +960,11 @@ fn project(
     mems: &[MemRecord],
 ) -> Result<Vec<Segment>, SpineError> {
     let visible = state.visible_nodes().into_iter().collect::<BTreeSet<_>>();
+    let root_mem = state
+        .root_mem
+        .as_ref()
+        .and_then(|compact_id| mems.iter().find(|mem| &mem.compact_id == compact_id))
+        .cloned();
     let mut admitted = mems
         .iter()
         .filter(|mem| visible.contains(&mem.node))
@@ -856,6 +976,9 @@ fn project(
         })
         .cloned()
         .collect::<Vec<_>>();
+    if let Some(root_mem) = root_mem {
+        admitted.push(root_mem);
+    }
     admitted.sort_by_key(|mem| (mem.start, std::cmp::Reverse(mem.end)));
     let mut selected: Vec<MemRecord> = Vec::new();
     for mem in admitted {
@@ -1003,6 +1126,24 @@ fn sha1_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn hash_raw_live(raw_live: &[bool]) -> String {
+    use sha1::Digest;
+    let mut hasher = sha1::Sha1::new();
+    for live in raw_live {
+        hasher.update(if *live { b"1" } else { b"0" });
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn hash_raw_live_prefix_all_true(len: usize) -> String {
+    use sha1::Digest;
+    let mut hasher = sha1::Sha1::new();
+    for _ in 0..len {
+        hasher.update(b"1");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum SpineError {
     #[error("spine store error: {0}")]
@@ -1091,5 +1232,93 @@ mod tests {
             materialized,
             vec![text_item("kept"), text_item("after rollback")]
         );
+    }
+
+    #[test]
+    fn rollback_skips_stale_spine_transition_events() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rollout = rollout_path(&dir);
+        let raw = vec![Some(text_item("before")), None];
+
+        let mut runtime = SpineRuntime::load_or_create(&rollout, 1).expect("create spine");
+        runtime.stage_open("open".to_string()).expect("stage open");
+        runtime.observe_raw_items(1).expect("record open output");
+        runtime.maybe_commit_output("open").expect("commit open");
+
+        let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw)
+            .expect("load spine")
+            .expect("sidecar exists");
+        assert_eq!(replayed.state().render_tree(), "[1] Open \n  [1.1] Current ");
+        assert_eq!(
+            replayed.materialize_history(&raw).expect("materialize"),
+            vec![text_item("before")]
+        );
+    }
+
+    #[test]
+    fn rollback_hole_rejects_suffix_memory_span() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rollout = rollout_path(&dir);
+        let raw = vec![
+            Some(text_item("before")),
+            Some(text_item("open output")),
+            None,
+            Some(text_item("close output")),
+        ];
+
+        let mut runtime = SpineRuntime::load_or_create(&rollout, 1).expect("create spine");
+        runtime.stage_open("open".to_string()).expect("stage open");
+        runtime.observe_raw_items(1).expect("record open output");
+        runtime.maybe_commit_output("open").expect("commit open");
+        runtime.observe_raw_items(1).expect("record rolled-back child raw");
+        runtime
+            .stage_close("close".to_string(), "child done".to_string(), None)
+            .expect("stage close");
+        runtime.observe_raw_items(1).expect("record close output");
+        runtime.maybe_commit_output("close").expect("commit close");
+
+        let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw)
+            .expect("load spine")
+            .expect("sidecar exists");
+        let materialized = replayed.materialize_history(&raw).expect("materialize");
+        assert_eq!(
+            materialized,
+            vec![
+                text_item("before"),
+                text_item("open output"),
+                text_item("close output"),
+            ]
+        );
+    }
+
+    #[test]
+    fn root_compact_survives_rollback_without_new_raw_items() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rollout = rollout_path(&dir);
+        let raw_after_rollback = vec![Some(text_item("kept")), None];
+
+        let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+        runtime.observe_raw_items(2).expect("record raw");
+        runtime.raw_live = vec![true, false];
+        runtime
+            .root_compact("root summary after rollback".to_string())
+            .expect("compact root");
+
+        let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw_after_rollback)
+            .expect("load spine")
+            .expect("sidecar exists");
+        let materialized = replayed
+            .materialize_history(&raw_after_rollback)
+            .expect("materialize");
+        assert_eq!(materialized.len(), 1);
+        assert!(matches!(
+            &materialized[0],
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("root summary after rollback")
+                )
+        ));
     }
 }

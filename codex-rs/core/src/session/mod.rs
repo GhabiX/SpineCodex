@@ -199,6 +199,7 @@ mod mcp;
 mod multi_agents;
 mod review;
 mod rollout_reconstruction;
+pub(crate) use rollout_reconstruction::spine_raw_items_after_rollback;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 pub(crate) mod turn;
@@ -1294,7 +1295,7 @@ impl Session {
         };
         let raw_len = u64::try_from(raw_items.len())
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
-        let runtime = SpineRuntime::load_for_rollout(&rollout_path, raw_len)?;
+        let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, raw_items)?;
         let materialized = runtime
             .as_ref()
             .map(|runtime| runtime.materialize_history(raw_items))
