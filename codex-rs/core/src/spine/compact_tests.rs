@@ -89,23 +89,23 @@ fn test_candidate_plan(
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct RootArchiveReplacementHistory {
+struct RootArchiveLiveCheckpoint {
     replacement_history: Vec<ResponseItem>,
     archive_cut_ordinal: u64,
     archive_cut_index: usize,
 }
 
-fn build_root_archive_replacement_history(
+fn build_root_archive_live_checkpoint(
     history: &[ResponseItem],
     planned_cut_index: usize,
     fold_end_ordinal: u64,
     initial_context_items: Vec<ResponseItem>,
     root_memory_item: ResponseItem,
     runtime_spans: &[InstalledCompactSpan],
-) -> CodexResult<RootArchiveReplacementHistory> {
+) -> CodexResult<RootArchiveLiveCheckpoint> {
     const ROOT_ARCHIVE_COMPACT_ID: &str = "__spine_root_archive_render_pi__";
     let (archive_cut_ordinal, archive_cut_index) =
-        resolve_root_archive_cut(history, planned_cut_index, fold_end_ordinal, runtime_spans)?;
+        resolve_live_root_archive_cut(history, planned_cut_index, fold_end_ordinal, runtime_spans)?;
     let raw_len = raw_ordinal_for_effective_index_with_spans(history, history.len(), runtime_spans)
         .ok_or_else(|| {
             CodexErr::Fatal("spine root archive render(Pi) could not map history end".to_string())
@@ -120,7 +120,7 @@ fn build_root_archive_replacement_history(
         },
     );
     let candidate_plan = test_candidate_plan(raw_len, runtime_spans, &candidate)?;
-    let replacement_history = build_root_archive_replacement_history_from_candidate_plan(
+    let replacement_history = materialize_live_root_epoch_checkpoint(
         history,
         runtime_spans,
         ROOT_ARCHIVE_COMPACT_ID,
@@ -128,7 +128,7 @@ fn build_root_archive_replacement_history(
         root_memory_item,
         &candidate_plan,
     )?;
-    Ok(RootArchiveReplacementHistory {
+    Ok(RootArchiveLiveCheckpoint {
         replacement_history,
         archive_cut_ordinal,
         archive_cut_index,
@@ -238,7 +238,7 @@ fn build_test_splice_replacement_history(
     replacement_history
 }
 
-fn build_suffix_replacement_history_from_pi(
+fn materialize_suffix_live_checkpoint_from_pi(
     old_history: &[ResponseItem],
     runtime_spans: &[InstalledCompactSpan],
     compact_id: &str,
@@ -262,7 +262,7 @@ fn build_suffix_replacement_history_from_pi(
         new_span,
     );
     let candidate_plan = test_candidate_plan(raw_len, runtime_spans, &candidate)?;
-    build_suffix_replacement_history_from_candidate_plan(
+    materialize_live_suffix_checkpoint(
         old_history,
         runtime_spans,
         compact_id,
@@ -1125,7 +1125,7 @@ fn root_archive_replacement_folds_prior_spine_memory_into_archive_span() {
     let mut history = prefix_history.clone();
     history.extend(live_tail.clone());
 
-    let replacement = build_root_archive_replacement_history(
+    let replacement = build_root_archive_live_checkpoint(
         &history,
         prefix_history.len(),
         5,
@@ -1183,7 +1183,7 @@ fn root_archive_replacement_must_not_emit_discontinuous_memory_spans() {
     let live_tail = vec![text_item("future live raw 50")];
     let mut history = prefix_history.clone();
     history.extend(live_tail.clone());
-    let replacement = build_root_archive_replacement_history(
+    let replacement = build_root_archive_live_checkpoint(
         &history,
         prefix_history.len(),
         50,
@@ -1251,7 +1251,7 @@ fn render_pi_bridge_suffix_matches_direct_splice() {
         vec![memory_item.clone(), handoff_item.clone()],
     );
 
-    let rendered = build_suffix_replacement_history_from_pi(
+    let rendered = materialize_suffix_live_checkpoint_from_pi(
         &old_history,
         &[],
         "compact-new",

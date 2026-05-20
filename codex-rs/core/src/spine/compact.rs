@@ -1,11 +1,11 @@
-pub(crate) use super::checkpoint_render::build_root_archive_replacement_history_from_candidate_plan;
-pub(crate) use super::checkpoint_render::build_suffix_replacement_history_from_candidate_plan;
 pub(crate) use super::checkpoint_render::expand_spine_initial_context_items;
 pub(crate) use super::checkpoint_render::render_context_compacted_outline;
 pub(crate) use super::checkpoint_render::render_spine_handoff_item;
 pub(crate) use super::checkpoint_render::render_spine_initial_context_item;
 pub(crate) use super::checkpoint_render::render_spine_memory_item;
-pub(crate) use super::checkpoint_render::resolve_root_archive_cut;
+pub(crate) use super::host_context::materialize_live_root_epoch_checkpoint;
+pub(crate) use super::host_context::materialize_live_suffix_checkpoint;
+pub(crate) use super::host_context::resolve_live_root_archive_cut;
 use super::ids::NodeId;
 use super::store::InstalledCompactSpan;
 use super::store::SpineOperation;

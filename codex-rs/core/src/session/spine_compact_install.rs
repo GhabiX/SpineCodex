@@ -12,16 +12,16 @@ use crate::spine::candidate_mem_plan::CandidateMemPlanMode;
 use crate::spine::candidate_mem_plan::plan_candidate_mem;
 use crate::spine::compact::CODEX_BUILTIN_TEXT_STRATEGY;
 use crate::spine::compact::SpineCompactBoundary;
-use crate::spine::compact::build_root_archive_replacement_history_from_candidate_plan;
-use crate::spine::compact::build_suffix_replacement_history_from_candidate_plan;
 use crate::spine::compact::compact_suffix_with_codex_builtin_text;
+use crate::spine::compact::materialize_live_root_epoch_checkpoint;
+use crate::spine::compact::materialize_live_suffix_checkpoint;
 use crate::spine::compact::prepare_spine_compact_plan;
 use crate::spine::compact::raw_ordinal_for_effective_index_with_spans;
 use crate::spine::compact::render_auto_compact_memory;
 use crate::spine::compact::render_spine_handoff_item;
 use crate::spine::compact::render_spine_initial_context_item;
 use crate::spine::compact::render_spine_memory_item;
-use crate::spine::compact::resolve_root_archive_cut;
+use crate::spine::compact::resolve_live_root_archive_cut;
 use crate::spine::mem_install::MemoryBodyRef;
 use crate::spine::segment::RawSpan;
 use crate::spine::store::CompactAttemptRecord;
@@ -116,7 +116,7 @@ impl Session {
         } else {
             Vec::new()
         };
-        let (archive_cut_ordinal, archive_cut_index) = resolve_root_archive_cut(
+        let (archive_cut_ordinal, archive_cut_index) = resolve_live_root_archive_cut(
             &history,
             prep.plan.cut_index,
             prep.effective_boundary.fold_end_ordinal,
@@ -153,7 +153,7 @@ impl Session {
                 return Err(err);
             }
         };
-        let replacement_history = match build_root_archive_replacement_history_from_candidate_plan(
+        let live_checkpoint_history = match materialize_live_root_epoch_checkpoint(
             &history,
             &prep.runtime_spans,
             &compact_id,
@@ -161,7 +161,7 @@ impl Session {
             rendered_memory_item,
             &candidate_plan,
         ) {
-            Ok(replacement_history) => replacement_history,
+            Ok(live_checkpoint_history) => live_checkpoint_history,
             Err(err) => {
                 record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
                 return Err(err);
@@ -194,24 +194,24 @@ impl Session {
                 "failed to commit spine root archive Note evidence before MemInstall commit: {err}"
             )));
         }
-        if let Err(err) = store.append_mem_install_committed(MemInstallCommittedRecord {
-            attempt: compact_attempt.clone(),
-            body_ref,
-            projection_ref: root_mem_install_projection_ref(&compact_id, &root_boundary),
-            source_rollout_ref: prep.compact_index_rollout_path.clone(),
-        }) {
-            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-            return Err(CodexErr::Fatal(format!(
-                "failed to commit spine root archive MemInstall before host checkpoint: {err}"
-            )));
-        }
-        ensure_meminstall_committed(&store, &compact_id, "root epoch reset")?;
+        let meminstall_guard = commit_meminstall_before_host_checkpoint(
+            &store,
+            &compact_attempt,
+            MemInstallCommittedRecord {
+                attempt: compact_attempt.clone(),
+                body_ref,
+                projection_ref: root_mem_install_projection_ref(&compact_id, &root_boundary),
+                source_rollout_ref: prep.compact_index_rollout_path.clone(),
+            },
+            "root archive",
+        )?;
+        meminstall_guard.ensure_before("root epoch reset")?;
         {
             let mut runtime = spine.lock().await;
             if let Err(err) = runtime.record_root_epoch_archive(
                 boundary.transition_summary.clone(),
                 root_boundary.fold_end_ordinal,
-                &compact_id,
+                meminstall_guard.compact_id(),
                 &turn_context.sub_id,
             ) {
                 return Err(self
@@ -221,7 +221,6 @@ impl Session {
                     .await);
             }
         }
-        ensure_meminstall_committed(&store, &compact_id, "root checkpoint render")?;
         let compacted_item = CompactedItem {
             message: compact_message.clone(),
             replacement_history: None,
@@ -231,8 +230,9 @@ impl Session {
             }),
         };
         if let Err(err) = self
-            .try_replace_compacted_history(
-                replacement_history.clone(),
+            .install_host_checkpoint_after_meminstall(
+                &meminstall_guard,
+                live_checkpoint_history,
                 reference_context_item,
                 compacted_item,
             )
@@ -409,7 +409,7 @@ impl Session {
             &compact_id,
             &projected_state,
         )?;
-        let replacement_history = build_suffix_replacement_history_from_candidate_plan(
+        let live_checkpoint_history = materialize_live_suffix_checkpoint(
             &history,
             &prep.runtime_spans,
             &compact_id,
@@ -436,21 +436,20 @@ impl Session {
             return Err(CodexErr::Fatal(err.to_string()));
         }
 
-        if let Err(err) = store.append_mem_install_committed(MemInstallCommittedRecord {
-            attempt: compact_attempt.clone(),
-            body_ref,
-            projection_ref: suffix_mem_install_projection_ref(
-                &compact_id,
-                &prep.effective_boundary,
-            ),
-            source_rollout_ref: prep.compact_index_rollout_path.clone(),
-        }) {
-            record_pre_meminstall_compact_failed(&store, &compact_attempt, err.to_string())?;
-            return Err(CodexErr::Fatal(format!(
-                "failed to commit spine compact MemInstall before host checkpoint: {err}"
-            )));
-        }
-        ensure_meminstall_committed(&store, &compact_id, "checkpoint render")?;
+        let meminstall_guard = commit_meminstall_before_host_checkpoint(
+            &store,
+            &compact_attempt,
+            MemInstallCommittedRecord {
+                attempt: compact_attempt.clone(),
+                body_ref,
+                projection_ref: suffix_mem_install_projection_ref(
+                    &compact_id,
+                    &prep.effective_boundary,
+                ),
+                source_rollout_ref: prep.compact_index_rollout_path.clone(),
+            },
+            "compact",
+        )?;
         let compacted_item = CompactedItem {
             message: compact_output.compact_message.clone(),
             replacement_history: None,
@@ -460,7 +459,12 @@ impl Session {
             }),
         };
         if let Err(err) = self
-            .try_replace_compacted_history(replacement_history.clone(), None, compacted_item)
+            .install_host_checkpoint_after_meminstall(
+                &meminstall_guard,
+                live_checkpoint_history,
+                None,
+                compacted_item,
+            )
             .await
         {
             return Err(self
@@ -490,6 +494,22 @@ impl Session {
         }
         spine.lock().await.record_surviving_compact_id(compact_id);
         Ok(())
+    }
+
+    async fn install_host_checkpoint_after_meminstall(
+        &self,
+        guard: &CommittedMemInstallGuard,
+        live_checkpoint_history: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+        compacted_item: CompactedItem,
+    ) -> CodexResult<()> {
+        guard.ensure_before("host checkpoint install")?;
+        self.try_replace_compacted_history(
+            live_checkpoint_history,
+            reference_context_item,
+            compacted_item,
+        )
+        .await
     }
 }
 fn sha1_digest(value: &str) -> String {
@@ -691,6 +711,43 @@ pub(super) fn stage_spine_memory_before_meminstall(
         )));
     }
     Ok(body_ref)
+}
+
+#[derive(Debug)]
+pub(super) struct CommittedMemInstallGuard {
+    compact_id: String,
+}
+
+impl CommittedMemInstallGuard {
+    fn compact_id(&self) -> &str {
+        &self.compact_id
+    }
+
+    fn ensure_before(&self, boundary: &str) -> CodexResult<()> {
+        if self.compact_id.is_empty() {
+            return Err(CodexErr::Fatal(format!(
+                "{boundary} cannot proceed without committed MemInstall evidence"
+            )));
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn commit_meminstall_before_host_checkpoint(
+    store: &SpineSidecarStore,
+    attempt: &CompactAttemptRecord,
+    record: MemInstallCommittedRecord,
+    context: &str,
+) -> CodexResult<CommittedMemInstallGuard> {
+    let compact_id = record.attempt.compact_id.clone();
+    if let Err(err) = store.append_mem_install_committed(record) {
+        record_pre_meminstall_compact_failed(store, attempt, err.to_string())?;
+        return Err(CodexErr::Fatal(format!(
+            "failed to commit spine {context} MemInstall before host checkpoint: {err}"
+        )));
+    }
+    ensure_meminstall_committed(store, &compact_id, "host checkpoint render")?;
+    Ok(CommittedMemInstallGuard { compact_id })
 }
 
 pub(super) fn ensure_meminstall_committed(

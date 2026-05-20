@@ -2710,9 +2710,10 @@ async fn root_archive_meminstall_order_recovers_checkpoint_after_commit() -> any
     let tree = std::fs::read_to_string(runtime.store().tree_path())?;
     assert!(tree.contains("\"type\":\"root_epoch_reset\""));
     let compact_events = read_json_lines_for_test(&runtime.store().compact_index_path())?;
-    assert_eq!(compact_events.len(), 2);
+    assert_eq!(compact_events.len(), 3);
     assert_eq!(compact_events[0]["type"], "compact_started");
-    assert_eq!(compact_events[1]["type"], "mem_install_committed");
+    assert_eq!(compact_events[1]["type"], "note_evidence_committed");
+    assert_eq!(compact_events[2]["type"], "mem_install_committed");
     let committed = runtime.store().committed_mem_installs()?;
     assert_eq!(committed.len(), 1);
     assert_eq!(
