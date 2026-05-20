@@ -440,9 +440,6 @@ pub struct Config {
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: bool,
 
-    /// Enables explicit runtime invariant checks with fatal diagnostic errors.
-    pub runtime_debug_checks: bool,
-
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
@@ -3082,11 +3079,6 @@ impl Config {
             show_raw_agent_reasoning: cfg
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)
-                .unwrap_or(false),
-            runtime_debug_checks: cfg
-                .debug
-                .as_ref()
-                .and_then(|debug| debug.runtime_checks)
                 .unwrap_or(false),
             guardian_policy_config,
             model_reasoning_effort: config_profile

@@ -13,9 +13,7 @@ use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
-use crate::tools::handlers::plan_spec::UpdatePlanToolOptions;
 use crate::tools::handlers::plan_spec::create_update_plan_tool;
-use crate::tools::handlers::plan_spec::create_update_plan_tool_with_options;
 use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::tools::handlers::request_user_input_spec::create_request_user_input_tool;
 use crate::tools::handlers::request_user_input_spec::request_user_input_tool_description;
@@ -190,7 +188,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
 }
 
 #[test]
-fn update_plan_schema_includes_task_projection_when_spine_is_effectively_enabled() {
+fn update_plan_schema_stays_flat_when_spine_is_enabled() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::SpineTaskTree);
@@ -220,66 +218,10 @@ fn update_plan_schema_includes_task_projection_when_spine_is_effectively_enabled
         .properties
         .as_ref()
         .expect("update_plan object properties");
-    assert!(!properties.contains_key("plan"));
+    assert!(properties.contains_key("plan"));
     assert!(!properties.contains_key("spine_plantree"));
     assert!(!properties.contains_key("clear_spine_plantree"));
-    assert!(properties.contains_key("task_projection"));
-}
-
-#[test]
-fn update_plan_schema_exposes_task_projection() {
-    let ToolSpec::Function(tool) = create_update_plan_tool_with_options(UpdatePlanToolOptions {
-        include_task_projection: true,
-    }) else {
-        panic!("expected function tool");
-    };
-    for required in [
-        "task_projection.current.checklist",
-        "task_projection.draft_nodes",
-        "does not create, finish, close, compact, or move Spine nodes",
-        "never send spine_plantree as input",
-    ] {
-        assert!(
-            tool.description.contains(required),
-            "missing update_plan description contract anchor {required:?}"
-        );
-    }
-    assert!(!tool.description.contains("clear_spine_plantree"));
-    assert!(
-        !tool
-            .description
-            .contains("use update_plan with spine_plantree")
-    );
-
-    let properties = tool
-        .parameters
-        .properties
-        .as_ref()
-        .expect("update_plan object properties");
-    assert!(!properties.contains_key("plan"));
-    assert!(!properties.contains_key("spine_plantree"));
-    assert!(!properties.contains_key("clear_spine_plantree"));
-    assert!(properties.contains_key("task_projection"));
-    assert_eq!(tool.parameters.required, Some(vec!["task_projection".to_string()]));
-    let task_projection = properties
-        .get("task_projection")
-        .expect("task_projection schema");
-    assert_eq!(
-        task_projection.required,
-        Some(vec!["current".to_string(), "draft_nodes".to_string()])
-    );
-    let task_projection_properties = task_projection
-        .properties
-        .as_ref()
-        .expect("task_projection object properties");
-    let current = task_projection_properties
-        .get("current")
-        .expect("task_projection current schema");
-    assert_eq!(
-        current.required,
-        Some(vec!["node_id".to_string(), "checklist".to_string()])
-    );
-    assert!(task_projection_properties.contains_key("draft_nodes"));
+    assert!(!properties.contains_key("task_projection"));
 }
 
 #[test]
@@ -326,7 +268,6 @@ fn spine_tool_is_feature_gated() {
     for name in [
         crate::spine::SPINE_TOOL_TREE,
         crate::spine::SPINE_TOOL_OPEN,
-        crate::spine::SPINE_TOOL_NEXT,
         crate::spine::SPINE_TOOL_CLOSE,
     ] {
         assert!(
@@ -356,7 +297,6 @@ fn spine_tool_is_feature_gated() {
     for name in [
         crate::spine::SPINE_TOOL_TREE,
         crate::spine::SPINE_TOOL_OPEN,
-        crate::spine::SPINE_TOOL_NEXT,
         crate::spine::SPINE_TOOL_CLOSE,
     ] {
         assert!(
@@ -369,7 +309,7 @@ fn spine_tool_is_feature_gated() {
     assert_eq!(spine_tool.spec, create_spine_namespace_tool());
     assert_eq!(
         namespace_function_names(&enabled_tools, crate::spine::SPINE_NAMESPACE),
-        vec!["tree", "open", "next", "close"]
+        vec!["tree", "open", "close"]
     );
     assert_lacks_tool_name(&enabled_tools, "read_spine");
     assert_lacks_tool_name(&enabled_tools, "spine_state");
@@ -1545,7 +1485,6 @@ fn spine_is_disabled_when_namespace_tools_are_disabled() {
     for name in [
         crate::spine::SPINE_TOOL_TREE,
         crate::spine::SPINE_TOOL_OPEN,
-        crate::spine::SPINE_TOOL_NEXT,
         crate::spine::SPINE_TOOL_CLOSE,
     ] {
         assert!(!registry.has_handler(&ToolName::namespaced(crate::spine::SPINE_NAMESPACE, name)));

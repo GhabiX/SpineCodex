@@ -2966,12 +2966,6 @@ pub(crate) fn new_spine_tree_update(
     SpineTreeUpdateCell { turn_id, snapshot }
 }
 
-pub(crate) fn new_spine_plantree_update(
-    snapshot: SpineTreeUpdatedNotification,
-) -> SpinePlanTreeCell {
-    SpinePlanTreeCell { snapshot }
-}
-
 /// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
 ///
 /// The plan body is stored as raw markdown so terminal resize reflow can render it again at the
@@ -3168,21 +3162,6 @@ impl HistoryCell for SpineTreeUpdateCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         spine_tree::tree_raw_lines(&self.turn_id, &self.snapshot)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct SpinePlanTreeCell {
-    snapshot: SpineTreeUpdatedNotification,
-}
-
-impl HistoryCell for SpinePlanTreeCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        spine_tree::plantree_display_lines(&self.snapshot, width)
-    }
-
-    fn raw_lines(&self) -> Vec<Line<'static>> {
-        spine_tree::plantree_raw_lines(&self.snapshot)
     }
 }
 

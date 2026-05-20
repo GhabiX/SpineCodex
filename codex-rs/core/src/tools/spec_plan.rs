@@ -196,12 +196,7 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(ReadMcpResourceHandler));
     }
 
-    let plan_handler = if config.spine_task_tree {
-        PlanHandler::new(true)
-    } else {
-        PlanHandler::default()
-    };
-    builder.register_handler(Arc::new(plan_handler));
+    builder.register_handler(Arc::new(PlanHandler));
     if config.spine_task_tree {
         if config.namespace_tools {
             builder.push_spec(

@@ -14,6 +14,9 @@ use crate::tools::handlers::spine_spec::create_spine_namespace_tool;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
 use codex_tools::JsonSchemaPrimitiveType;
 use codex_tools::JsonSchemaType;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -67,8 +70,7 @@ fn transition_args() -> serde_json::Value {
 
 fn close_args() -> serde_json::Value {
     json!({
-        "child_summary": "current leaf",
-        "summary": "parent scope",
+        "summary": "current scope",
     })
 }
 
@@ -80,18 +82,39 @@ fn handler(tool: SpineTool) -> SpineHandler {
     SpineHandler { tool }
 }
 
+fn spine_call(tool: SpineTool, call_id: &str, arguments: serde_json::Value) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: tool.name().to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: arguments.to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
+fn function_call_output(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("Spine updated.".to_string()),
+            success: Some(true),
+        },
+    }
+}
+
 #[test]
-fn transition_schema_exposes_instruction_only_for_next_and_close() {
+fn transition_schema_exposes_open_close_only() {
     let ToolSpec::Namespace(namespace) = create_spine_namespace_tool() else {
         panic!("expected namespace tool");
     };
     let expected_tools = [
-        (crate::spine::SPINE_TOOL_OPEN, false, false, false),
-        (crate::spine::SPINE_TOOL_NEXT, true, false, true),
-        (crate::spine::SPINE_TOOL_CLOSE, true, true, true),
+        (crate::spine::SPINE_TOOL_TREE, false, false),
+        (crate::spine::SPINE_TOOL_OPEN, false, false),
+        (crate::spine::SPINE_TOOL_CLOSE, true, true),
     ];
+    assert_eq!(namespace.tools.len(), expected_tools.len());
 
-    for (name, expect_summary, expect_child_summary, expect_instruction) in expected_tools {
+    for (name, expect_summary, expect_instruction) in expected_tools {
         let tool = namespace
             .tools
             .iter()
@@ -107,15 +130,9 @@ fn transition_schema_exposes_instruction_only_for_next_and_close() {
             .expect("transition tool should have properties");
 
         assert_eq!(properties.contains_key("summary"), expect_summary);
-        assert_eq!(
-            properties.contains_key("child_summary"),
-            expect_child_summary
-        );
+        assert!(!properties.contains_key("child_summary"));
         assert_eq!(properties.contains_key("instruction"), expect_instruction);
         let mut expected_required = Vec::new();
-        if expect_child_summary {
-            expected_required.push("child_summary".to_string());
-        }
         if expect_summary {
             expected_required.push("summary".to_string());
         }
@@ -152,7 +169,7 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
     assert_eq!(
         output.log_preview(),
         format!(
-            "Current:  1.1.1\nBase: {}\n\n1: live\n    1.1: live\n        1.1.1: Current",
+            "Current:  1.1.1\nBase: {}\n\n1: suspended\n    1.1: suspended\n        1.1.1: Current",
             spine_base(&temp)
         )
     );
@@ -180,52 +197,77 @@ async fn valid_open_stages_transition_without_advancing_cursor() {
 }
 
 #[tokio::test]
-async fn valid_next_returns_compact_tree_view() {
+async fn valid_close_returns_to_parent_tree_view() {
     let (temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-
-    let output = handler(SpineTool::Next)
+    handler(SpineTool::Open)
         .handle(invocation(
             Arc::clone(&session),
             Arc::clone(&turn),
-            "call-next",
-            SpineTool::Next,
+            "call-open",
+            SpineTool::Open,
+            open_args(),
+        ))
+        .await
+        .expect("spine open should stage");
+    {
+        let mut runtime = session.spine.as_ref().expect("spine runtime").lock().await;
+        runtime
+            .after_response_items_recorded(
+                "turn-open",
+                &[
+                    spine_call(SpineTool::Open, "call-open", open_args()),
+                    function_call_output("call-open"),
+                ],
+                0,
+                2,
+            )
+            .expect("commit open");
+        runtime.take_last_committed_transition();
+    }
+
+    let output = handler(SpineTool::Close)
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "call-close",
+            SpineTool::Close,
             json!({
                 "summary": "Completed reproduction and patch verification",
             }),
         ))
         .await
-        .expect("spine next should stage");
+        .expect("spine close should stage");
 
     assert_eq!(
         output.log_preview(),
         format!(
-            "Current:  1.2\nBase: {}\n\n1: live\n    1.1: finished Completed reproduction and patch verification [memory already in context]\n    1.2: Current",
+            "Current:  1.1\nBase: {}\n\n1: suspended\n    1.1: Current\n        1.1.1: closed Completed reproduction and patch verification [memory already in context]",
             spine_base(&temp)
         )
     );
 }
 
 #[tokio::test]
-async fn next_accepts_instruction_and_stages_it() {
+async fn close_accepts_instruction_and_stages_it() {
     let (_temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    handler(SpineTool::Next)
+    handler(SpineTool::Close)
         .handle(invocation(
             Arc::clone(&session),
             Arc::clone(&turn),
-            "call-next",
-            SpineTool::Next,
+            "call-close",
+            SpineTool::Close,
             json!({
                 "summary": "Completed reproduction and patch verification",
                 "instruction": " preserve failing command and verification result ",
             }),
         ))
         .await
-        .expect("spine next should stage");
+        .expect("spine close should stage");
 
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     let staged = runtime
@@ -311,7 +353,7 @@ async fn missing_runtime_rejects() {
 
     assert_eq!(
         err,
-        FunctionCallError::RespondToModel("spine task tree is not enabled".to_string())
+        FunctionCallError::RespondToModel("spine is not enabled".to_string())
     );
 }
 
@@ -372,12 +414,12 @@ async fn open_rejects_instruction_without_staging() {
 async fn empty_instruction_rejects_without_staging() {
     let (_temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
-    let err = handler(SpineTool::Next)
+    let err = handler(SpineTool::Close)
         .handle(invocation(
             Arc::clone(&session),
             Arc::new(turn),
             "call-spine",
-            SpineTool::Next,
+            SpineTool::Close,
             json!({
                 "summary": "root done",
                 "instruction": "   ",
@@ -400,12 +442,12 @@ async fn empty_instruction_rejects_without_staging() {
 async fn empty_summary_rejects_without_staging() {
     let (_temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
-    let err = handler(SpineTool::Next)
+    let err = handler(SpineTool::Close)
         .handle(invocation(
             Arc::clone(&session),
             Arc::new(turn),
             "call-spine",
-            SpineTool::Next,
+            SpineTool::Close,
             json!({
                 "summary": "",
             }),
@@ -422,55 +464,31 @@ async fn empty_summary_rejects_without_staging() {
 }
 
 #[tokio::test]
-async fn close_on_root_rejects_without_staging() {
+async fn close_root_child_stages_parent_cursor() {
     let (_temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
-    let err = handler(SpineTool::Close)
+    let turn = Arc::new(turn);
+    handler(SpineTool::Close)
         .handle(invocation(
             Arc::clone(&session),
-            Arc::new(turn),
+            turn,
             "call-spine",
             SpineTool::Close,
             close_args(),
         ))
         .await
-        .expect_err("root close should reject");
+        .expect("root child close should stage");
 
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel("cannot close the root spine node".to_string())
-    );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
-    assert!(runtime.staged_transition().is_none());
+    let staged = runtime
+        .staged_transition()
+        .expect("transition should be staged");
+    assert_eq!(staged.from_node.bracketed(), "[1.1]");
+    assert_eq!(staged.to_node.bracketed(), "[1]");
 }
 
 #[tokio::test]
-async fn close_requires_child_summary_without_staging() {
-    let (_temp, session, turn) = session_and_turn_with_spine().await;
-    let session = Arc::new(session);
-    let err = handler(SpineTool::Close)
-        .handle(invocation(
-            Arc::clone(&session),
-            Arc::new(turn),
-            "call-spine",
-            SpineTool::Close,
-            transition_args(),
-        ))
-        .await
-        .expect_err("missing child_summary should reject");
-
-    let FunctionCallError::RespondToModel(message) = err else {
-        panic!("expected model-visible parse error");
-    };
-    assert!(message.contains("failed to parse function arguments"));
-    assert!(message.contains("missing field"));
-    assert!(message.contains("child_summary"));
-    let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
-    assert!(runtime.staged_transition().is_none());
-}
-
-#[tokio::test]
-async fn close_rejects_empty_child_summary_without_staging() {
+async fn close_rejects_child_summary_without_staging() {
     let (_temp, session, turn) = session_and_turn_with_spine().await;
     let session = Arc::new(session);
     let err = handler(SpineTool::Close)
@@ -480,17 +498,19 @@ async fn close_rejects_empty_child_summary_without_staging() {
             "call-spine",
             SpineTool::Close,
             json!({
-                "child_summary": "   ",
-                "summary": "parent scope",
+                "child_summary": "legacy child",
+                "summary": "current scope",
             }),
         ))
         .await
-        .expect_err("empty child_summary should reject");
+        .expect_err("child_summary should reject");
 
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel("spine close requires child_summary".to_string())
-    );
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected model-visible parse error");
+    };
+    assert!(message.contains("failed to parse function arguments"));
+    assert!(message.contains("unknown field"));
+    assert!(message.contains("child_summary"));
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;
     assert!(runtime.staged_transition().is_none());
 }
@@ -515,7 +535,7 @@ async fn tree_prints_current_tree_without_staging() {
     assert_eq!(
         output.log_preview(),
         format!(
-            "Current:  1.1\nBase: {}\n\n1: live\n    1.1: Current",
+            "Current:  1.1\nBase: {}\n\n1: suspended\n    1.1: Current",
             spine_base(&temp)
         )
     );
@@ -526,7 +546,7 @@ async fn tree_prints_current_tree_without_staging() {
         json!({
             "op": null,
             "cursor": "[1.1]",
-            "tree": "1: live\n    1.1: Current",
+            "tree": "1: suspended\n    1.1: Current",
         })
     );
     let runtime = session.spine.as_ref().expect("spine runtime").lock().await;

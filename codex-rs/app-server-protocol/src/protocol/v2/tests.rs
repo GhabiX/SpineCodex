@@ -96,59 +96,6 @@ fn turn_defaults_legacy_missing_items_view_to_full() {
 }
 
 #[test]
-fn spine_tree_plan_serializes_plan_tree_with_external_field_name() {
-    let plan = SpineTreePlan {
-        revision: 1,
-        explanation: None,
-        spine_plantree: Some(SpineTreePlanTree {
-            anchor_node_id: "1".to_string(),
-            root: SpineTreePlanTreeScope {
-                existing_node_id: Some("1.1".to_string()),
-                summary: "focused scope".to_string(),
-                status: Some(SpineTreePlanItemStatus::InProgress),
-                checkpoints: vec![SpineTreePlanCheckpoint {
-                    task: "verify schema".to_string(),
-                    status: SpineTreePlanItemStatus::Completed,
-                }],
-                children: Vec::new(),
-            },
-        }),
-        items: Vec::new(),
-    };
-
-    let value = serde_json::to_value(&plan).expect("serialize SpineTreePlan");
-    assert!(value.get("spinePlanTree").is_some());
-    assert!(value.get("spinePlantree").is_none());
-
-    let decoded: SpineTreePlan = serde_json::from_value(json!({
-        "revision": 1,
-        "explanation": null,
-        "spinePlanTree": {
-            "anchorNodeId": "1",
-            "root": {
-                "existingNodeId": "1.1",
-                "summary": "focused scope",
-                "status": "inProgress",
-                "checkpoints": [
-                    {
-                        "task": "verify schema",
-                        "status": "completed",
-                    },
-                ],
-                "children": [],
-            },
-        },
-        "items": [],
-    }))
-    .expect("deserialize SpineTreePlan");
-
-    assert_eq!(
-        decoded.spine_plantree.expect("plan tree").root.checkpoints[0].status,
-        SpineTreePlanItemStatus::Completed
-    );
-}
-
-#[test]
 fn thread_turns_list_params_accepts_items_view() {
     let params = serde_json::from_value::<ThreadTurnsListParams>(json!({
         "threadId": "thr_123",

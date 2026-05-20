@@ -17,7 +17,6 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) plugins_command_enabled: bool,
     pub(crate) fast_command_enabled: bool,
     pub(crate) goal_command_enabled: bool,
-    pub(crate) spine_task_tree_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
@@ -38,7 +37,6 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
         .filter(|(_, cmd)| flags.fast_command_enabled || *cmd != SlashCommand::Fast)
         .filter(|(_, cmd)| flags.goal_command_enabled || *cmd != SlashCommand::Goal)
-        .filter(|(_, cmd)| flags.spine_task_tree_enabled || *cmd != SlashCommand::Spinetree)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
@@ -80,7 +78,6 @@ mod tests {
             plugins_command_enabled: true,
             fast_command_enabled: true,
             goal_command_enabled: true,
-            spine_task_tree_enabled: true,
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: true,
@@ -131,21 +128,6 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.goal_command_enabled = false;
         assert_eq!(find_builtin_command("goal", flags), None);
-    }
-
-    #[test]
-    fn spinetree_command_is_hidden_when_spine_task_tree_is_disabled() {
-        let mut flags = all_enabled_flags();
-        flags.spine_task_tree_enabled = false;
-        assert_eq!(find_builtin_command("spinetree", flags), None);
-    }
-
-    #[test]
-    fn spinetree_command_resolves_when_spine_task_tree_is_enabled() {
-        assert_eq!(
-            find_builtin_command("spinetree", all_enabled_flags()),
-            Some(SlashCommand::Spinetree)
-        );
     }
 
     #[test]

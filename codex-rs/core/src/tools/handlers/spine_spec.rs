@@ -1,6 +1,5 @@
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
-use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use codex_tools::JsonSchema;
@@ -13,15 +12,10 @@ use std::collections::BTreeMap;
 pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
     ToolSpec::Namespace(ResponsesApiNamespace {
         name: SPINE_NAMESPACE.to_string(),
-        description: "Inspect and move the feature-gated Spine task tree cursor.".to_string(),
+        description: "Inspect the feature-gated Spine tree and cursor.".to_string(),
         tools: vec![
             ResponsesApiNamespaceTool::Function(spine_tree_tool()),
             ResponsesApiNamespaceTool::Function(spine_open_tool()),
-            ResponsesApiNamespaceTool::Function(spine_transition_tool(
-                SPINE_TOOL_NEXT,
-                "Finish the current Spine leaf and move to its next sibling.",
-                CompactInstructionParam::Included,
-            )),
             ResponsesApiNamespaceTool::Function(spine_close_tool()),
         ],
     })
@@ -30,7 +24,7 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
 fn spine_open_tool() -> ResponsesApiTool {
     ResponsesApiTool {
         name: SPINE_TOOL_OPEN.to_string(),
-        description: "Enter a child scope for a focused Spine subproblem.".to_string(),
+        description: "Open a child scope for the current Spine cursor.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(false.into())),
@@ -38,34 +32,24 @@ fn spine_open_tool() -> ResponsesApiTool {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CompactInstructionParam {
-    Included,
-}
-
-fn spine_transition_tool(
-    name: &str,
-    description: &str,
-    compact_instruction: CompactInstructionParam,
-) -> ResponsesApiTool {
+fn spine_close_tool() -> ResponsesApiTool {
     let mut properties = BTreeMap::from([(
         "summary".to_string(),
         JsonSchema::string(Some(
-            "Short Spine Tree display label for the transition".to_string(),
+            "Short Spine Tree display label for the current scope being closed.".to_string(),
         )),
     )]);
-    if compact_instruction == CompactInstructionParam::Included {
-        properties.insert(
-            "instruction".to_string(),
-            JsonSchema::string(Some(
-                "Optional guidance for the automatic compact pass after this transition; use it to name what must be preserved or emphasized from the completed node or scope.".to_string(),
-            )),
-        );
-    }
+    properties.insert(
+        "instruction".to_string(),
+        JsonSchema::string(Some(
+            "Optional guidance for the automatic compact pass after this transition; use it to name what must be preserved or emphasized from the completed scope."
+                .to_string(),
+        )),
+    );
 
     ResponsesApiTool {
-        name: name.to_string(),
-        description: description.to_string(),
+        name: SPINE_TOOL_CLOSE.to_string(),
+        description: "Close the current Spine scope and resume the parent cursor.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(
@@ -77,47 +61,10 @@ fn spine_transition_tool(
     }
 }
 
-fn spine_close_tool() -> ResponsesApiTool {
-    let mut properties = BTreeMap::from([
-        (
-            "child_summary".to_string(),
-            JsonSchema::string(Some(
-                "Short Spine Tree display label for the current leaf being finished.".to_string(),
-            )),
-        ),
-        (
-            "summary".to_string(),
-            JsonSchema::string(Some(
-                "Short Spine Tree display label for the parent scope being closed.".to_string(),
-            )),
-        ),
-    ]);
-    properties.insert(
-        "instruction".to_string(),
-        JsonSchema::string(Some(
-            "Optional guidance for the automatic compact pass after this transition; use it to name what must be preserved or emphasized from the completed leaf or parent scope."
-                .to_string(),
-        )),
-    );
-
-    ResponsesApiTool {
-        name: SPINE_TOOL_CLOSE.to_string(),
-        description: "Finish the current Spine leaf, close its non-root parent scope, and continue at the parent's next sibling.".to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::object(
-            properties,
-            Some(vec!["child_summary".to_string(), "summary".to_string()]),
-            Some(false.into()),
-        ),
-        output_schema: None,
-    }
-}
-
 fn spine_tree_tool() -> ResponsesApiTool {
     ResponsesApiTool {
         name: SPINE_TOOL_TREE.to_string(),
-        description: "Print the current Spine node and task tree without changing the cursor."
+        description: "Inspect the current Spine node and tree without changing the cursor."
             .to_string(),
         strict: false,
         defer_loading: None,

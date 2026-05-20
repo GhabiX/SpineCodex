@@ -2782,6 +2782,21 @@ pub struct CompactedItem {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_history: Option<Vec<ResponseItem>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spine: Option<SpineCompactedCheckpoint>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct SpineCompactedCheckpoint {
+    pub compact_id: String,
+    pub kind: SpineCompactedCheckpointKind,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SpineCompactedCheckpointKind {
+    Suffix,
+    RootEpoch,
 }
 
 impl From<CompactedItem> for ResponseItem {

@@ -2125,12 +2125,6 @@ mod tests {
     use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
     use codex_protocol::spine_tree::SpineTreeNodeStatus;
-    use codex_protocol::spine_tree::SpineTreePlanCheckpointSnapshot;
-    use codex_protocol::spine_tree::SpineTreePlanItemSnapshot;
-    use codex_protocol::spine_tree::SpineTreePlanItemStatus;
-    use codex_protocol::spine_tree::SpineTreePlanSnapshot;
-    use codex_protocol::spine_tree::SpineTreePlanTreeScopeSnapshot;
-    use codex_protocol::spine_tree::SpineTreePlanTreeSnapshot;
     use codex_protocol::spine_tree::SpineTreeUpdateEvent;
     use codex_thread_store::StoredThread;
     use codex_thread_store::StoredThreadHistory;
@@ -3529,43 +3523,13 @@ mod tests {
                     node_id: "1".to_string(),
                     parent_id: None,
                     summary: Some("root scope".to_string()),
-                    status: SpineTreeNodeStatus::Opened,
-                    plan: None,
+                    status: SpineTreeNodeStatus::Suspended,
                 },
                 SpineTreeNodeSnapshot {
                     node_id: "1.1".to_string(),
                     parent_id: Some("1".to_string()),
                     summary: Some("focused leaf".to_string()),
                     status: SpineTreeNodeStatus::Live,
-                    plan: Some(SpineTreePlanSnapshot {
-                        revision: 3,
-                        explanation: Some("track focused work".to_string()),
-                        spine_plantree: Some(SpineTreePlanTreeSnapshot {
-                            anchor_node_id: "1".to_string(),
-                            root: SpineTreePlanTreeScopeSnapshot {
-                                existing_node_id: None,
-                                summary: "Verify scope".to_string(),
-                                status: Some(SpineTreePlanItemStatus::InProgress),
-                                checkpoints: vec![SpineTreePlanCheckpointSnapshot {
-                                    task: "run focused validation".to_string(),
-                                    status: SpineTreePlanItemStatus::InProgress,
-                                }],
-                                children: Vec::new(),
-                            },
-                        }),
-                        items: vec![
-                            SpineTreePlanItemSnapshot {
-                                stable_task_id: "1.1:0".to_string(),
-                                step: "inspect inputs".to_string(),
-                                status: SpineTreePlanItemStatus::Completed,
-                            },
-                            SpineTreePlanItemSnapshot {
-                                stable_task_id: "1.1:1".to_string(),
-                                step: "run validation".to_string(),
-                                status: SpineTreePlanItemStatus::InProgress,
-                            },
-                        ],
-                    }),
                 },
             ],
         };
@@ -3585,28 +3549,12 @@ mod tests {
                 assert_eq!(n.nodes[0].node_id, "1");
                 assert_eq!(
                     n.nodes[0].status,
-                    codex_app_server_protocol::SpineTreeNodeStatus::Opened
+                    codex_app_server_protocol::SpineTreeNodeStatus::Suspended
                 );
                 assert_eq!(n.nodes[1].parent_id.as_deref(), Some("1"));
-                let plan = n.nodes[1].plan.as_ref().expect("leaf plan");
-                assert_eq!(plan.revision, 3);
-                assert_eq!(plan.explanation.as_deref(), Some("track focused work"));
-                let spine_plantree = plan.spine_plantree.as_ref().expect("leaf plan tree");
-                assert_eq!(spine_plantree.anchor_node_id, "1");
-                assert_eq!(spine_plantree.root.summary, "Verify scope");
                 assert_eq!(
-                    spine_plantree.root.checkpoints[0].task,
-                    "run focused validation"
-                );
-                assert_eq!(plan.items[0].stable_task_id, "1.1:0");
-                assert_eq!(
-                    plan.items[0].status,
-                    codex_app_server_protocol::SpineTreePlanItemStatus::Completed
-                );
-                assert_eq!(plan.items[1].step, "run validation");
-                assert_eq!(
-                    plan.items[1].status,
-                    codex_app_server_protocol::SpineTreePlanItemStatus::InProgress
+                    n.nodes[1].status,
+                    codex_app_server_protocol::SpineTreeNodeStatus::Live
                 );
             }
             other => bail!("unexpected message: {other:?}"),

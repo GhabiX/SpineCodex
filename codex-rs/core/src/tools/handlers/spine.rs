@@ -1,7 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
-use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::spine::store::SpineOperation;
@@ -30,7 +29,6 @@ pub struct SpineHandler {
 pub enum SpineTool {
     Tree,
     Open,
-    Next,
     Close,
 }
 
@@ -44,9 +42,6 @@ impl SpineHandler {
                 tool: SpineTool::Open,
             },
             Self {
-                tool: SpineTool::Next,
-            },
-            Self {
                 tool: SpineTool::Close,
             },
         ]
@@ -58,7 +53,6 @@ impl SpineTool {
         match self {
             SpineTool::Tree => SPINE_TOOL_TREE,
             SpineTool::Open => SPINE_TOOL_OPEN,
-            SpineTool::Next => SPINE_TOOL_NEXT,
             SpineTool::Close => SPINE_TOOL_CLOSE,
         }
     }
@@ -67,7 +61,6 @@ impl SpineTool {
         match self {
             SpineTool::Tree => None,
             SpineTool::Open => Some(SpineOperation::Open),
-            SpineTool::Next => Some(SpineOperation::Next),
             SpineTool::Close => Some(SpineOperation::Close),
         }
     }
@@ -75,16 +68,7 @@ impl SpineTool {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SpineNextArgs {
-    summary: String,
-    #[serde(default, rename = "instruction")]
-    compact_instruction: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SpineCloseArgs {
-    child_summary: String,
     summary: String,
     #[serde(default, rename = "instruction")]
     compact_instruction: Option<String>,
@@ -185,9 +169,10 @@ impl ToolHandler for SpineHandler {
             ));
         }
 
-        let spine = session.spine.as_ref().ok_or_else(|| {
-            FunctionCallError::RespondToModel("spine task tree is not enabled".to_string())
-        })?;
+        let spine = session
+            .spine
+            .as_ref()
+            .ok_or_else(|| FunctionCallError::RespondToModel("spine is not enabled".to_string()))?;
 
         if self.tool == SpineTool::Tree {
             let _args: SpineTreeArgs = parse_arguments(&arguments)?;
@@ -213,34 +198,13 @@ impl ToolHandler for SpineHandler {
             .tool
             .op()
             .expect("tree returned before transition handling");
-        let (summary, child_summary, compact_instruction) = match self.tool {
+        let (summary, compact_instruction) = match self.tool {
             SpineTool::Open => {
                 let _args: SpineOpenArgs = parse_arguments(&arguments)?;
-                (None, None, None)
-            }
-            SpineTool::Next => {
-                let args: SpineNextArgs = parse_arguments(&arguments)?;
-                let compact_instruction = match args.compact_instruction {
-                    Some(instruction) => {
-                        let instruction = instruction.trim().to_string();
-                        if instruction.is_empty() {
-                            return Err(FunctionCallError::RespondToModel(
-                                "spine instruction must not be empty when provided".to_string(),
-                            ));
-                        }
-                        Some(instruction)
-                    }
-                    None => None,
-                };
-                (Some(args.summary), None, compact_instruction)
+                (None, None)
             }
             SpineTool::Close => {
                 let args: SpineCloseArgs = parse_arguments(&arguments)?;
-                if args.child_summary.trim().is_empty() {
-                    return Err(FunctionCallError::RespondToModel(
-                        "spine close requires child_summary".to_string(),
-                    ));
-                }
                 let compact_instruction = match args.compact_instruction {
                     Some(instruction) => {
                         let instruction = instruction.trim().to_string();
@@ -253,11 +217,7 @@ impl ToolHandler for SpineHandler {
                     }
                     None => None,
                 };
-                (
-                    Some(args.summary),
-                    Some(args.child_summary),
-                    compact_instruction,
-                )
+                (Some(args.summary), compact_instruction)
             }
             SpineTool::Tree => unreachable!("tree returned before transition handling"),
         };
@@ -265,30 +225,17 @@ impl ToolHandler for SpineHandler {
             let mut runtime = spine.lock().await;
             let mut preview_state = runtime.state().clone();
             let base = runtime.store().root().to_path_buf();
-            op.apply_with_child_summary(&mut preview_state, summary.clone(), child_summary.clone())
+            op.apply(&mut preview_state, summary.clone())
                 .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
-            let staged = if child_summary.is_some() {
-                runtime
-                    .stage_transition_with_child_summary(
-                        call_id,
-                        turn.sub_id.clone(),
-                        op,
-                        summary,
-                        child_summary,
-                        compact_instruction,
-                    )
-                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?
-            } else {
-                runtime
-                    .stage_transition(
-                        call_id,
-                        turn.sub_id.clone(),
-                        op,
-                        summary,
-                        compact_instruction,
-                    )
-                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?
-            };
+            let staged = runtime
+                .stage_transition(
+                    call_id,
+                    turn.sub_id.clone(),
+                    op,
+                    summary,
+                    compact_instruction,
+                )
+                .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
             if preview_state.node(&staged.to_node).is_none() {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "spine transition produced unknown node {}",

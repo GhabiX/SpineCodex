@@ -45,7 +45,6 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
-    Spinetree,
     DebugConfig,
     Title,
     Statusline,
@@ -96,7 +95,6 @@ impl SlashCommand {
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
-            SlashCommand::Spinetree => "show the current Spine plan tree",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -209,7 +207,6 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Status
-            | SlashCommand::Spinetree
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
@@ -268,16 +265,6 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
-    }
-
-    #[test]
-    fn spinetree_command_parses_and_is_available_during_task() {
-        assert_eq!(
-            SlashCommand::from_str("spinetree"),
-            Ok(SlashCommand::Spinetree)
-        );
-        assert!(SlashCommand::Spinetree.available_during_task());
-        assert!(!SlashCommand::Spinetree.available_in_side_conversation());
     }
 
     #[test]

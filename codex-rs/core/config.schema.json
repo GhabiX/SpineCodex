@@ -553,6 +553,9 @@
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
+            "spine_task_tree": {
+              "type": "boolean"
+            },
             "sqlite": {
               "type": "boolean"
             },
@@ -749,9 +752,6 @@
       "properties": {
         "config_lockfile": {
           "$ref": "#/definitions/DebugConfigLockToml"
-        },
-        "runtime_checks": {
-          "type": "boolean"
         }
       },
       "type": "object"
@@ -4121,6 +4121,9 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "spine_task_tree": {
           "type": "boolean"
         },
         "sqlite": {

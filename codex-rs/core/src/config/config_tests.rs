@@ -7023,7 +7023,6 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             zsh_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
-            runtime_debug_checks: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
             plan_mode_reasoning_effort: None,
             model_reasoning_summary: Some(ReasoningSummary::Detailed),
@@ -7396,7 +7395,6 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         zsh_path: None,
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
-        runtime_debug_checks: false,
         model_reasoning_effort: None,
         plan_mode_reasoning_effort: None,
         model_reasoning_summary: None,
@@ -7555,7 +7553,6 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         zsh_path: None,
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
-        runtime_debug_checks: false,
         model_reasoning_effort: None,
         plan_mode_reasoning_effort: None,
         model_reasoning_summary: None,
@@ -7699,7 +7696,6 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         zsh_path: None,
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
-        runtime_debug_checks: false,
         model_reasoning_effort: Some(ReasoningEffort::High),
         plan_mode_reasoning_effort: None,
         model_reasoning_summary: Some(ReasoningSummary::Detailed),
@@ -8888,42 +8884,6 @@ save_fields_resolved_from_model_catalog = false
     assert!(config.config_lock_toml.is_some());
     assert!(config.config_lock_allow_codex_version_mismatch);
     assert!(!config.config_lock_save_fields_resolved_from_model_catalog);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn debug_runtime_checks_load_from_nested_table() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[debug]
-runtime_checks = true
-"#,
-    )?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert!(config.runtime_debug_checks);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn debug_runtime_checks_default_to_disabled() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert!(!config.runtime_debug_checks);
 
     Ok(())
 }

@@ -2861,16 +2861,6 @@
             "null"
           ]
         },
-        "plan": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SpineTreePlan"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "status": {
           "$ref": "#/definitions/SpineTreeNodeStatus"
         },
@@ -2890,145 +2880,10 @@
     "SpineTreeNodeStatus": {
       "enum": [
         "live",
-        "opened",
-        "finished",
+        "suspended",
         "closed"
       ],
       "type": "string"
-    },
-    "SpineTreePlan": {
-      "properties": {
-        "explanation": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "items": {
-          "items": {
-            "$ref": "#/definitions/SpineTreePlanItem"
-          },
-          "type": "array"
-        },
-        "revision": {
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "spinePlanTree": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SpineTreePlanTree"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "revision"
-      ],
-      "type": "object"
-    },
-    "SpineTreePlanCheckpoint": {
-      "properties": {
-        "status": {
-          "$ref": "#/definitions/SpineTreePlanItemStatus"
-        },
-        "task": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "status",
-        "task"
-      ],
-      "type": "object"
-    },
-    "SpineTreePlanItem": {
-      "properties": {
-        "stableTaskId": {
-          "type": "string"
-        },
-        "status": {
-          "$ref": "#/definitions/SpineTreePlanItemStatus"
-        },
-        "step": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "stableTaskId",
-        "status",
-        "step"
-      ],
-      "type": "object"
-    },
-    "SpineTreePlanItemStatus": {
-      "enum": [
-        "pending",
-        "inProgress",
-        "completed"
-      ],
-      "type": "string"
-    },
-    "SpineTreePlanTree": {
-      "properties": {
-        "anchorNodeId": {
-          "type": "string"
-        },
-        "root": {
-          "$ref": "#/definitions/SpineTreePlanTreeScope"
-        }
-      },
-      "required": [
-        "anchorNodeId",
-        "root"
-      ],
-      "type": "object"
-    },
-    "SpineTreePlanTreeScope": {
-      "properties": {
-        "checkpoints": {
-          "items": {
-            "$ref": "#/definitions/SpineTreePlanCheckpoint"
-          },
-          "type": "array"
-        },
-        "children": {
-          "items": {
-            "$ref": "#/definitions/SpineTreePlanTreeScope"
-          },
-          "type": "array"
-        },
-        "existingNodeId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SpineTreePlanItemStatus"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "checkpoints",
-        "children",
-        "summary"
-      ],
-      "type": "object"
     },
     "SpineTreeUpdatedNotification": {
       "properties": {

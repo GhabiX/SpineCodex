@@ -24,10 +24,6 @@ pub struct SharedCliOptions {
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
 
-    /// Enable runtime invariant checks with fatal diagnostics.
-    #[arg(long = "debug", default_value_t = false)]
-    pub runtime_debug_checks: bool,
-
     /// Specify which local provider to use (lmstudio or ollama).
     /// If not specified with --oss, will use config default or show selection.
     #[arg(long = "local-provider")]
@@ -68,7 +64,6 @@ impl SharedCliOptions {
             images,
             model,
             oss,
-            runtime_debug_checks,
             oss_provider,
             config_profile,
             sandbox_mode,
@@ -80,7 +75,6 @@ impl SharedCliOptions {
             images: root_images,
             model: root_model,
             oss: root_oss,
-            runtime_debug_checks: root_runtime_debug_checks,
             oss_provider: root_oss_provider,
             config_profile: root_config_profile,
             sandbox_mode: root_sandbox_mode,
@@ -94,9 +88,6 @@ impl SharedCliOptions {
         }
         if *root_oss {
             *oss = true;
-        }
-        if *root_runtime_debug_checks {
-            *runtime_debug_checks = true;
         }
         if oss_provider.is_none() {
             oss_provider.clone_from(root_oss_provider);
@@ -133,7 +124,6 @@ impl SharedCliOptions {
             images,
             model,
             oss,
-            runtime_debug_checks,
             oss_provider,
             config_profile,
             sandbox_mode,
@@ -147,9 +137,6 @@ impl SharedCliOptions {
         }
         if oss {
             self.oss = true;
-        }
-        if runtime_debug_checks {
-            self.runtime_debug_checks = true;
         }
         if let Some(oss_provider) = oss_provider {
             self.oss_provider = Some(oss_provider);

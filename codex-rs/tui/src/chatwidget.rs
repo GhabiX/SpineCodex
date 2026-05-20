@@ -112,7 +112,6 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_app_server_protocol::SkillsListResponse;
-use codex_app_server_protocol::SpineTreePlanItemStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::TextElement as AppServerTextElement;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
@@ -968,10 +967,8 @@ pub(crate) struct ChatWidget {
     had_work_activity: bool,
     // Whether the current turn emitted a plan update.
     saw_plan_update_this_turn: bool,
-    // Whether the current turn emits Spine Tree snapshots, which replace flat plan cells.
+    // Whether the current turn emits Spine Tree snapshots.
     saw_spine_tree_update_this_turn: bool,
-    // Latest Spine Tree snapshot, cached so `/spinetree` can display the active PlanTree locally.
-    last_spine_tree_snapshot: Option<SpineTreeUpdatedNotification>,
     // Whether the current turn emitted a proposed plan item that has not been superseded by a
     // later steer. This is cleared when the user submits a steer so the plan popup only appears
     // if a newer proposed plan arrives afterward.
@@ -2065,7 +2062,6 @@ impl ChatWidget {
         self.thread_id = Some(session.thread_id);
         if previous_thread_id != self.thread_id {
             self.recent_auto_review_denials = RecentAutoReviewDenials::default();
-            self.last_spine_tree_snapshot = None;
         }
         self.refresh_plan_mode_nudge();
         self.last_turn_id = None;
@@ -2127,7 +2123,6 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
-        self.sync_spine_task_tree_command_enabled();
         self.refresh_plugin_mentions();
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
@@ -3433,9 +3428,6 @@ impl ChatWidget {
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
-        if self.saw_spine_tree_update_this_turn {
-            return;
-        }
         self.saw_plan_update_this_turn = true;
         let total = update.plan.len();
         let completed = update
@@ -3453,52 +3445,10 @@ impl ChatWidget {
 
     fn on_spine_tree_update(&mut self, notification: SpineTreeUpdatedNotification) {
         self.saw_spine_tree_update_this_turn = true;
-        self.saw_plan_update_this_turn = true;
-        self.last_spine_tree_snapshot = Some(notification.clone());
-        let mut total = 0;
-        let mut completed = 0;
-        for node in &notification.nodes {
-            let Some(plan) = &node.plan else {
-                continue;
-            };
-            total += plan.items.len();
-            completed += plan
-                .items
-                .iter()
-                .filter(|item| item.status == SpineTreePlanItemStatus::Completed)
-                .count();
-        }
-        self.last_plan_progress = (total > 0).then_some((completed, total));
-        self.refresh_status_surfaces();
         self.app_event_tx.send(AppEvent::UpsertSpineTreeCell {
             turn_id: notification.turn_id.clone(),
             snapshot: notification,
         });
-    }
-
-    fn add_spine_plantree_output(&mut self) {
-        let Some(snapshot) = self.last_spine_tree_snapshot.clone() else {
-            self.add_info_message(
-                "Spine PlanTree is not available yet.".to_string(),
-                /*hint*/ None,
-            );
-            return;
-        };
-        let active_plantree_available = snapshot
-            .nodes
-            .iter()
-            .find(|node| node.node_id == snapshot.active_node_id)
-            .and_then(|node| node.plan.as_ref())
-            .and_then(|plan| plan.spine_plantree.as_ref())
-            .is_some();
-        if !active_plantree_available {
-            self.add_info_message(
-                "Active Spine PlanTree is not available yet.".to_string(),
-                /*hint*/ None,
-            );
-            return;
-        }
-        self.add_to_history(history_cell::new_spine_plantree_update(snapshot));
     }
 
     fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
@@ -5096,7 +5046,6 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_spine_tree_update_this_turn: false,
-            last_spine_tree_snapshot: None,
             saw_plan_item_this_turn: false,
             last_plan_progress: None,
             plan_delta_buffer: String::new(),
@@ -5156,7 +5105,6 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
-        widget.sync_spine_task_tree_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
@@ -9276,9 +9224,6 @@ impl ChatWidget {
                 self.update_collaboration_mode_indicator();
             }
         }
-        if feature == Feature::SpineTaskTree {
-            self.sync_spine_task_tree_command_enabled();
-        }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
@@ -9558,11 +9503,6 @@ impl ChatWidget {
     fn sync_goal_command_enabled(&mut self) {
         self.bottom_pane
             .set_goal_command_enabled(self.config.features.enabled(Feature::Goals));
-    }
-
-    fn sync_spine_task_tree_command_enabled(&mut self) {
-        self.bottom_pane
-            .set_spine_task_tree_enabled(self.config.features.enabled(Feature::SpineTaskTree));
     }
 
     fn current_model_supports_personality(&self) -> bool {

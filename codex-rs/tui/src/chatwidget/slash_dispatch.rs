@@ -375,9 +375,6 @@ impl ChatWidget {
                     );
                 }
             }
-            SlashCommand::Spinetree => {
-                self.add_spine_plantree_output();
-            }
             SlashCommand::Ide => {
                 self.handle_ide_command();
             }
@@ -884,7 +881,6 @@ impl ChatWidget {
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
-            spine_task_tree_enabled: self.config.features.enabled(Feature::SpineTaskTree),
             fast_command_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
@@ -912,7 +908,6 @@ impl ChatWidget {
             | SlashCommand::Plugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
-            | SlashCommand::Spinetree
             | SlashCommand::Raw
             | SlashCommand::Vim
             | SlashCommand::Diff
