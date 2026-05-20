@@ -1,6 +1,5 @@
 use super::fast_fail::RuntimeFastFailError;
 use super::fast_fail::mem_install_body_error;
-use super::fast_fail::validate_mem_install_metadata;
 use super::fast_fail::validate_mem_install_pre_commit;
 use super::ids::NodeId;
 use super::ids::NodeIdParseError;
@@ -12,7 +11,6 @@ use super::mem_install::MemorySectionId;
 use super::mem_install::parse_generated_memory_sections;
 use super::mem_install::verify_memory_body_ref as verify_memory_body_ref_in_memory;
 use super::projection_epoch::ProjectionEpochMetadata;
-use super::state::SpineOperationName;
 use super::state::SpineState;
 use super::state::SpineStateError;
 use super::state::StateCheckpoint;
@@ -23,8 +21,6 @@ use codex_protocol::protocol::RolloutItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use sha2::Digest;
-use sha2::Sha256;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -41,17 +37,44 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 use thiserror::Error;
 
+mod compact_ledger;
+mod operation;
+mod trajs_ledger;
+mod tree_ledger;
+
+pub(crate) use compact_ledger::CommittedMemInstall;
+pub(crate) use compact_ledger::CommittedNoteEvidence;
+pub(crate) use compact_ledger::CompactAttemptRecord;
+use compact_ledger::CompactAttemptState;
+use compact_ledger::CompactIndexEvent;
+pub(crate) use compact_ledger::CompactStartedRecord;
+pub(crate) use compact_ledger::CompactTerminalRecord;
+pub(crate) use compact_ledger::InstalledCompactSpan;
+pub(crate) use compact_ledger::MemInstallCommittedRecord;
+pub(crate) use compact_ledger::NoteEvidenceCommittedRecord;
+pub(crate) use compact_ledger::NotePlacement;
+use compact_ledger::note_evidence_items_hash;
+use compact_ledger::record_compact_terminal;
+use compact_ledger::record_mem_install_committed;
+use compact_ledger::record_note_evidence_committed;
+pub(crate) use operation::SpineOperation;
+pub(crate) use operation::TransitionSummaryArg;
+use trajs_ledger::TrajsIndexEvent;
+use tree_ledger::TreeEvent;
+use tree_ledger::next_tree_seq_after;
+use tree_ledger::next_tree_seq_for_event_count;
+
 const TREE_FILE: &str = "tree.jsonl";
 const NODES_DIR: &str = "nodes";
 const MEMORY_FILE: &str = "memory.md";
 const NODE_TRAJS_FILE: &str = "trajs.jsonl";
 const TRAJS_INDEX_FILE: &str = "trajs.index.jsonl";
-const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
+pub(super) const COMPACT_INDEX_FILE: &str = "compact.index.jsonl";
 const RAW_DIR: &str = "raw";
 const RAW_ROLLOUT_FILE: &str = "rollout.raw.jsonl";
 const SPINE_BASE_LOCATOR_VERSION: u32 = 1;
-const MEM_INSTALL_COMMITTED_SCHEMA_VERSION: u32 = 3;
-const NOTE_EVIDENCE_COMMITTED_SCHEMA_VERSION: u32 = 1;
+pub(super) const MEM_INSTALL_COMMITTED_SCHEMA_VERSION: u32 = 3;
+pub(super) const NOTE_EVIDENCE_COMMITTED_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineSidecarStore {
@@ -1803,507 +1826,6 @@ impl SpineSidecarStore {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SpineOperation {
-    Open,
-    Close,
-    Archive,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CompactAttemptRecord {
-    pub(crate) compact_id: String,
-    pub(crate) node_id: NodeId,
-    pub(crate) op: SpineOperation,
-    pub(crate) cut_ordinal: u64,
-    pub(crate) fold_end_ordinal: u64,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CompactStartedRecord {
-    pub(crate) attempt: CompactAttemptRecord,
-    pub(crate) strategy: String,
-    pub(crate) rollout: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct MemInstallCommittedRecord {
-    pub(crate) attempt: CompactAttemptRecord,
-    pub(crate) body_ref: MemoryBodyRef,
-    pub(crate) projection_ref: String,
-    pub(crate) source_rollout_ref: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum NotePlacement {
-    BeforeMem,
-    AfterMem,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct NoteEvidenceCommittedRecord {
-    pub(crate) compact_id: String,
-    pub(crate) placement: NotePlacement,
-    pub(crate) kind: String,
-    pub(crate) items: Vec<ResponseItem>,
-    pub(crate) projection_ref: String,
-    pub(crate) source_rollout_ref: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CommittedMemInstall {
-    pub(crate) compact_id: String,
-    pub(crate) node_id: NodeId,
-    pub(crate) op: SpineOperation,
-    pub(crate) cut_ordinal: u64,
-    pub(crate) fold_end_ordinal: u64,
-    pub(crate) body_ref: MemoryBodyRef,
-    pub(crate) projection_ref: String,
-    pub(crate) source_rollout_ref: String,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct CommittedNoteEvidence {
-    pub(crate) compact_id: String,
-    pub(crate) placement: NotePlacement,
-    pub(crate) kind: String,
-    pub(crate) items_hash: String,
-    pub(crate) items: Vec<ResponseItem>,
-    pub(crate) projection_ref: String,
-    pub(crate) source_rollout_ref: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CompactTerminalRecord {
-    pub(crate) attempt: CompactAttemptRecord,
-    pub(crate) strategy: String,
-    pub(crate) error: String,
-}
-
-pub(crate) trait TransitionSummaryArg {
-    fn into_transition_summary(self) -> Option<String>;
-}
-
-impl TransitionSummaryArg for Option<String> {
-    fn into_transition_summary(self) -> Option<String> {
-        self
-    }
-}
-
-impl TransitionSummaryArg for String {
-    fn into_transition_summary(self) -> Option<String> {
-        Some(self)
-    }
-}
-
-impl TransitionSummaryArg for &str {
-    fn into_transition_summary(self) -> Option<String> {
-        Some(self.to_string())
-    }
-}
-
-impl SpineOperation {
-    pub(crate) fn apply(
-        self,
-        state: &mut SpineState,
-        summary: Option<String>,
-    ) -> Result<Transition, SpineStateError> {
-        match self {
-            SpineOperation::Open => {
-                if summary.is_some() {
-                    return Err(SpineStateError::UnexpectedSummary(SpineOperationName::Open));
-                }
-                state.open()
-            }
-            SpineOperation::Close => state
-                .close(summary.ok_or(SpineStateError::MissingSummary(SpineOperationName::Close))?),
-            SpineOperation::Archive => Err(SpineStateError::ArchiveIsInternal),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-enum TreeEvent {
-    SpineInitialized {
-        seq: u64,
-        initial_raw_start_ordinal: u64,
-    },
-    TransitionApplied {
-        seq: u64,
-        op: SpineOperation,
-        from_node: String,
-        to_node: String,
-        summary: Option<String>,
-        raw_start_ordinal: u64,
-        source_turn_id: String,
-    },
-    RootEpochReset {
-        seq: u64,
-        root_id: String,
-        next_leaf_id: String,
-        summary: String,
-        raw_start_ordinal: u64,
-        compact_id: String,
-        source_turn_id: String,
-    },
-    RawStartOrdinalUpdated {
-        seq: u64,
-        node_id: String,
-        raw_start_ordinal: u64,
-        source_turn_id: String,
-    },
-    ProjectionReset {
-        seq: u64,
-        reason: String,
-        source_turn_id: Option<String>,
-        source_rollout_ref: String,
-        processed_rollout_len: u64,
-        processed_rollout_hash: String,
-        effective_raw_len: u64,
-        surviving_turn_ids_hash: String,
-        surviving_compact_ids: Vec<String>,
-        checkpoint_hash: String,
-        checkpoint: StateCheckpoint,
-    },
-    SpineHintEmitted {
-        seq: u64,
-        node_id: String,
-        threshold_tokens: u64,
-        estimated_tokens: u64,
-        source: String,
-    },
-}
-
-impl TreeEvent {
-    fn seq(&self) -> u64 {
-        match self {
-            TreeEvent::SpineInitialized { seq, .. }
-            | TreeEvent::TransitionApplied { seq, .. }
-            | TreeEvent::RootEpochReset { seq, .. }
-            | TreeEvent::RawStartOrdinalUpdated { seq, .. }
-            | TreeEvent::ProjectionReset { seq, .. }
-            | TreeEvent::SpineHintEmitted { seq, .. } => *seq,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-enum TrajsIndexEvent {
-    RawItemsRecorded {
-        seq: u64,
-        node_id: String,
-        turn_id: String,
-        start: u64,
-        end: u64,
-    },
-    TransitionCommitted {
-        seq: u64,
-        call_id: String,
-        op: SpineOperation,
-        from_node: String,
-        to_node: String,
-        call_start_ordinal: u64,
-        boundary_end: u64,
-    },
-}
-
-#[derive(Debug)]
-struct CompactAttemptState {
-    node_id: String,
-    op: SpineOperation,
-    cut_ordinal: u64,
-    fold_end_ordinal: u64,
-    rollout: String,
-    terminal: Option<&'static str>,
-    mem_install_committed: bool,
-    root_note_evidence_committed: bool,
-    note_evidence_kinds: HashSet<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct InstalledCompactSpan {
-    pub(crate) compact_id: String,
-    pub(crate) node_id: NodeId,
-    pub(crate) op: SpineOperation,
-    pub(crate) cut_ordinal: u64,
-    pub(crate) fold_end_ordinal: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-enum CompactIndexEvent {
-    CompactStarted {
-        seq: u64,
-        compact_id: String,
-        node_id: String,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        strategy: String,
-        rollout: String,
-    },
-    MemInstallCommitted {
-        seq: u64,
-        schema_version: u32,
-        compact_id: String,
-        node_id: String,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        memory_section_id: String,
-        body_hash: String,
-        storage_ref: String,
-        projection_ref: String,
-        source_rollout_ref: String,
-    },
-    NoteEvidenceCommitted {
-        seq: u64,
-        schema_version: u32,
-        compact_id: String,
-        placement: NotePlacement,
-        kind: String,
-        items_hash: String,
-        items: Vec<ResponseItem>,
-        projection_ref: String,
-        source_rollout_ref: String,
-    },
-    CompactFailed {
-        seq: u64,
-        compact_id: String,
-        node_id: String,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        strategy: String,
-        error: String,
-    },
-    CompactInterrupted {
-        seq: u64,
-        compact_id: String,
-        node_id: String,
-        op: SpineOperation,
-        cut_ordinal: u64,
-        fold_end_ordinal: u64,
-        strategy: String,
-        error: String,
-    },
-}
-
-impl CompactIndexEvent {
-    fn seq(&self) -> u64 {
-        match self {
-            CompactIndexEvent::CompactStarted { seq, .. }
-            | CompactIndexEvent::MemInstallCommitted { seq, .. }
-            | CompactIndexEvent::NoteEvidenceCommitted { seq, .. }
-            | CompactIndexEvent::CompactFailed { seq, .. }
-            | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq,
-        }
-    }
-
-    fn set_seq(&mut self, next_seq: u64) {
-        match self {
-            CompactIndexEvent::CompactStarted { seq, .. }
-            | CompactIndexEvent::MemInstallCommitted { seq, .. }
-            | CompactIndexEvent::NoteEvidenceCommitted { seq, .. }
-            | CompactIndexEvent::CompactFailed { seq, .. }
-            | CompactIndexEvent::CompactInterrupted { seq, .. } => *seq = next_seq,
-        }
-    }
-}
-
-fn next_tree_seq_for_event_count(count: usize) -> Result<u64, SpineStoreError> {
-    u64::try_from(count + 1)
-        .map_err(|_| SpineStoreError::InvalidLedger("tree.jsonl has too many events".into()))
-}
-
-fn next_tree_seq_after(current_seq: u64) -> Result<u64, SpineStoreError> {
-    current_seq
-        .checked_add(1)
-        .ok_or_else(|| SpineStoreError::InvalidLedger("tree.jsonl has too many events".into()))
-}
-
-fn record_compact_terminal(
-    attempts: &mut HashMap<String, CompactAttemptState>,
-    compact_id: String,
-    node_id: String,
-    op: SpineOperation,
-    cut_ordinal: u64,
-    fold_end_ordinal: u64,
-    terminal: &'static str,
-) -> Result<(), SpineStoreError> {
-    let Some(attempt) = attempts.get_mut(&compact_id) else {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl has {terminal} without matching compact_started for {compact_id}"
-        )));
-    };
-    if attempt.mem_install_committed {
-        return Err(RuntimeFastFailError::MemInstallInvalidTerminalAfterCommit {
-            compact_id,
-            terminal,
-        }
-        .into());
-    }
-    if attempt.terminal.is_some() {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl has duplicate terminal event for {compact_id}"
-        )));
-    }
-    if attempt.node_id != node_id
-        || attempt.op != op
-        || attempt.cut_ordinal != cut_ordinal
-        || attempt.fold_end_ordinal != fold_end_ordinal
-    {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl {terminal} does not match compact_started for {compact_id}"
-        )));
-    }
-    attempt.terminal = Some(terminal);
-    Ok(())
-}
-
-fn record_mem_install_committed(
-    store: &SpineSidecarStore,
-    attempts: &mut HashMap<String, CompactAttemptState>,
-    _seq: u64,
-    schema_version: u32,
-    compact_id: String,
-    node_id: String,
-    op: SpineOperation,
-    cut_ordinal: u64,
-    fold_end_ordinal: u64,
-    memory_section_id: String,
-    body_hash: String,
-    storage_ref: String,
-    projection_ref: String,
-    source_rollout_ref: String,
-) -> Result<(), SpineStoreError> {
-    if schema_version != MEM_INSTALL_COMMITTED_SCHEMA_VERSION {
-        return Err(RuntimeFastFailError::MemInstallUnsupportedSchema {
-            compact_id,
-            schema_version,
-        }
-        .into());
-    }
-
-    let Some(attempt) = attempts.get_mut(&compact_id) else {
-        return Err(RuntimeFastFailError::MemInstallMissingStarted { compact_id }.into());
-    };
-    if attempt.mem_install_committed {
-        return Err(RuntimeFastFailError::MemInstallDuplicateCompactId { compact_id }.into());
-    }
-    if let Some(terminal) = attempt.terminal {
-        return Err(RuntimeFastFailError::MemInstallCheckpointBeforeCommit {
-            compact_id,
-            terminal,
-        }
-        .into());
-    }
-    if attempt.node_id != node_id
-        || attempt.op != op
-        || attempt.cut_ordinal != cut_ordinal
-        || attempt.fold_end_ordinal != fold_end_ordinal
-    {
-        return Err(RuntimeFastFailError::MemInstallSpanMismatch { compact_id }.into());
-    }
-    validate_mem_install_metadata(
-        &compact_id,
-        &projection_ref,
-        &source_rollout_ref,
-        attempt.rollout == source_rollout_ref,
-    )?;
-    if op == SpineOperation::Archive && !attempt.root_note_evidence_committed {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl root archive MemInstall {compact_id} is missing NoteEvidenceCommitted"
-        )));
-    }
-    let node_id = NodeId::parse(&node_id)?;
-    let body_ref = MemoryBodyRef {
-        section_id: MemorySectionId::parse(memory_section_id, storage_ref)
-            .map_err(|err| mem_install_body_error(&compact_id, err))?,
-        body_hash,
-    };
-    match store.verify_memory_body_ref(&node_id, &body_ref) {
-        Ok(_) => {}
-        Err(SpineStoreError::MemoryBody(err)) => {
-            return Err(mem_install_body_error(&compact_id, err).into());
-        }
-        Err(err) => return Err(err),
-    }
-    attempt.mem_install_committed = true;
-    Ok(())
-}
-
-fn record_note_evidence_committed(
-    attempts: &mut HashMap<String, CompactAttemptState>,
-    _seq: u64,
-    schema_version: u32,
-    compact_id: String,
-    placement: NotePlacement,
-    kind: String,
-    items_hash: String,
-    items: Vec<ResponseItem>,
-    projection_ref: String,
-    source_rollout_ref: String,
-) -> Result<(), SpineStoreError> {
-    if schema_version != NOTE_EVIDENCE_COMMITTED_SCHEMA_VERSION {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} has unsupported schema_version {schema_version}"
-        )));
-    }
-    let Some(attempt) = attempts.get_mut(&compact_id) else {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} has no matching CompactStarted"
-        )));
-    };
-    if let Some(terminal) = attempt.terminal {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} follows {terminal}"
-        )));
-    }
-    if attempt.mem_install_committed {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} follows MemInstallCommitted"
-        )));
-    }
-    validate_note_evidence_metadata(
-        &compact_id,
-        &kind,
-        &projection_ref,
-        &source_rollout_ref,
-        attempt.rollout == source_rollout_ref,
-    )?;
-    if items.is_empty() {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl NoteEvidenceCommitted for {compact_id}/{kind} has empty items"
-        )));
-    }
-    if !attempt.note_evidence_kinds.insert(kind.clone()) {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl has duplicate NoteEvidenceCommitted for {compact_id}/{kind}"
-        )));
-    }
-    if placement == NotePlacement::BeforeMem && attempt.op != SpineOperation::Archive {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} uses before_mem placement for non-root {:?} compact",
-            attempt.op
-        )));
-    }
-    if placement == NotePlacement::BeforeMem {
-        attempt.root_note_evidence_committed = true;
-    }
-    let actual_hash = note_evidence_items_hash(&items)?;
-    if items_hash != actual_hash {
-        return Err(SpineStoreError::InvalidLedger(format!(
-            "compact.index.jsonl NoteEvidenceCommitted {compact_id}/{kind} items hash mismatch: expected {items_hash}, actual {actual_hash}"
-        )));
-    }
-    Ok(())
-}
-
 fn validate_note_evidence_metadata(
     compact_id: &str,
     kind: &str,
@@ -2327,14 +1849,6 @@ fn validate_note_evidence_metadata(
         )));
     }
     Ok(())
-}
-
-fn note_evidence_items_hash(items: &[ResponseItem]) -> Result<String, SpineStoreError> {
-    let encoded = serde_json::to_string(items).map_err(|source| SpineStoreError::Json {
-        path: PathBuf::from(COMPACT_INDEX_FILE),
-        source,
-    })?;
-    Ok(format!("sha256:{:x}", Sha256::digest(encoded.as_bytes())))
 }
 
 #[cfg(test)]
