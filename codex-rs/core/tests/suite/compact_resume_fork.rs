@@ -16,6 +16,7 @@ use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -30,6 +31,7 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -643,6 +645,133 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Scenario: a Spine-enabled session opens and closes a child scope, resumes,
+/// forks, resumes the fork, rolls back a turn, compacts, resumes again, and can
+/// continue from the compacted Spine sidecar without restoring rolled-back text.
+async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<()> {
+    if network_disabled() {
+        println!("Skipping test because network is disabled in this sandbox");
+        return Ok(());
+    }
+
+    const ROOT_BEFORE_OPEN: &str = "SPINE_ROOT_BEFORE_OPEN";
+    const OPEN_TURN: &str = "SPINE_OPEN_TURN";
+    const CHILD_WORK: &str = "SPINE_CHILD_WORK";
+    const CLOSE_TURN: &str = "SPINE_CLOSE_TURN";
+    const PARENT_AFTER_CLOSE: &str = "SPINE_PARENT_AFTER_CLOSE";
+    const AFTER_RESUME_KEEP: &str = "SPINE_AFTER_RESUME_KEEP";
+    const ROLLED_BACK_FORK_TURN: &str = "SPINE_ROLLED_BACK_FORK_TURN";
+    const FINAL_AFTER_COMPACT_RESUME: &str = "SPINE_FINAL_AFTER_COMPACT_RESUME";
+
+    let server = MockServer::start().await;
+    let request_log = mount_spine_chain_sequence(&server).await;
+    let (_home, config, manager, base) = start_spine_test_conversation(&server).await;
+
+    user_turn(&base, ROOT_BEFORE_OPEN).await;
+    user_turn(&base, OPEN_TURN).await;
+    user_turn(&base, CHILD_WORK).await;
+    user_turn(&base, CLOSE_TURN).await;
+    user_turn(&base, PARENT_AFTER_CLOSE).await;
+
+    let base_path = fetch_conversation_path(&base);
+    assert!(spine_locator_path(&base_path).exists());
+    shutdown_conversation(&base).await;
+
+    let resumed = resume_conversation(&manager, &config, base_path).await;
+    user_turn(&resumed, AFTER_RESUME_KEEP).await;
+    let resumed_path = fetch_conversation_path(&resumed);
+    shutdown_conversation(&resumed).await;
+
+    let forked = fork_thread(&manager, &config, resumed_path, /*nth_user_message*/ 6).await;
+    let forked_path = fetch_conversation_path(&forked);
+    assert!(spine_locator_path(&forked_path).exists());
+    user_turn(&forked, ROLLED_BACK_FORK_TURN).await;
+    let forked_path = fetch_conversation_path(&forked);
+    shutdown_conversation(&forked).await;
+
+    let resumed_fork = resume_conversation(&manager, &config, forked_path).await;
+    resumed_fork
+        .submit(Op::ThreadRollback { num_turns: 1 })
+        .await?;
+    let rollback_event = wait_for_event(&resumed_fork, |ev| {
+        matches!(ev, EventMsg::ThreadRolledBack(_))
+    })
+    .await;
+    let EventMsg::ThreadRolledBack(rollback_event) = rollback_event else {
+        panic!("expected thread rolled back event");
+    };
+    assert_eq!(rollback_event.num_turns, 1);
+
+    compact_conversation(&resumed_fork).await;
+    let compacted_path = fetch_conversation_path(&resumed_fork);
+    shutdown_conversation(&resumed_fork).await;
+
+    let resumed_after_compact = resume_conversation(&manager, &config, compacted_path).await;
+    user_turn(&resumed_after_compact, FINAL_AFTER_COMPACT_RESUME).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 11);
+    assert!(request_log.saw_function_call("call-spine-open"));
+    assert!(request_log.saw_function_call("call-spine-close"));
+    assert_eq!(
+        request_log
+            .function_call_output_text("call-spine-open")
+            .as_deref(),
+        Some("Spine opened after this tool output is recorded.")
+    );
+    assert_eq!(
+        request_log
+            .function_call_output_text("call-spine-close")
+            .as_deref(),
+        Some("Spine closed after this tool output is recorded.")
+    );
+
+    let rolled_back_turn_request = &requests[8];
+    assert!(
+        rolled_back_turn_request.body_contains_text(AFTER_RESUME_KEEP),
+        "forked request should preserve the resumed branch before rollback"
+    );
+    assert!(
+        rolled_back_turn_request.body_contains_text(ROLLED_BACK_FORK_TURN),
+        "forked request should include the turn that will be rolled back"
+    );
+
+    let compact_request_after_rollback = &requests[9];
+    assert!(
+        compact_request_after_rollback.body_contains_text(AFTER_RESUME_KEEP),
+        "compact after rollback should still see the preserved resumed branch"
+    );
+    assert!(
+        !compact_request_after_rollback.body_contains_text(ROLLED_BACK_FORK_TURN),
+        "compact after rollback must not summarize the rolled-back fork turn"
+    );
+
+    let final_request = requests
+        .last()
+        .unwrap_or_else(|| panic!("missing final request after compact resume"));
+    let final_user_texts = final_request.message_input_texts("user");
+    assert_eq!(
+        final_user_texts.last().map(String::as_str),
+        Some(FINAL_AFTER_COMPACT_RESUME)
+    );
+    assert!(
+        final_request.body_contains_text("<spine_memory runtime_generated=\"true\">"),
+        "final request should hydrate Spine root memory after compact resume"
+    );
+    assert!(
+        final_request.body_contains_text(SUMMARY_TEXT),
+        "final request should include the compacted summary in Spine memory"
+    );
+    assert!(
+        !final_request.body_contains_text(ROLLED_BACK_FORK_TURN),
+        "rolled-back fork turn must not be restored after compact resume"
+    );
+
+    shutdown_conversation(&resumed_after_compact).await;
+    Ok(())
+}
+
 fn normalize_line_endings(value: &mut Value) {
     match value {
         Value::String(text) => {
@@ -760,6 +889,78 @@ async fn mount_second_compact_sequence(server: &MockServer) -> ResponseMock {
     mount_sse_sequence(server, vec![sse1, sse2, sse3, sse4, sse5, sse6, sse7, sse8]).await
 }
 
+async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
+    let root = sse(vec![
+        ev_assistant_message("spine-root-reply", "spine root reply"),
+        ev_completed("spine-root"),
+    ]);
+    let open_call = sse(vec![
+        ev_response_created("spine-open-call"),
+        ev_function_call_with_namespace("call-spine-open", "spine", "open", "{}"),
+        ev_completed("spine-open-call"),
+    ]);
+    let open_follow_up = sse(vec![
+        ev_assistant_message("spine-open-reply", "spine opened reply"),
+        ev_completed("spine-open-follow-up"),
+    ]);
+    let child_work = sse(vec![
+        ev_assistant_message("spine-child-reply", "spine child reply"),
+        ev_completed("spine-child"),
+    ]);
+    let close_call = sse(vec![
+        ev_response_created("spine-close-call"),
+        ev_function_call_with_namespace(
+            "call-spine-close",
+            "spine",
+            "close",
+            r#"{"summary":"child scope done","instruction":"keep child scope evidence"}"#,
+        ),
+        ev_completed("spine-close-call"),
+    ]);
+    let close_follow_up = sse(vec![
+        ev_assistant_message("spine-close-reply", "spine closed reply"),
+        ev_completed("spine-close-follow-up"),
+    ]);
+    let parent_after_close = sse(vec![
+        ev_assistant_message("spine-parent-reply", "spine parent reply"),
+        ev_completed("spine-parent"),
+    ]);
+    let after_resume = sse(vec![
+        ev_assistant_message("spine-after-resume-reply", "spine after resume reply"),
+        ev_completed("spine-after-resume"),
+    ]);
+    let rolled_back_fork = sse(vec![
+        ev_assistant_message("spine-rolled-back-reply", "spine rolled back reply"),
+        ev_completed("spine-rolled-back"),
+    ]);
+    let compact = sse(vec![
+        ev_assistant_message("spine-compact-summary", SUMMARY_TEXT),
+        ev_completed("spine-compact"),
+    ]);
+    let final_after_compact_resume = sse(vec![
+        ev_assistant_message("spine-final-reply", "spine final reply"),
+        ev_completed("spine-final"),
+    ]);
+
+    mount_sse_sequence(
+        server,
+        vec![
+            root,
+            open_call,
+            open_follow_up,
+            child_work,
+            close_call,
+            close_follow_up,
+            parent_after_close,
+            after_resume,
+            rolled_back_fork,
+            compact,
+            final_after_compact_resume,
+        ],
+    )
+    .await
+}
+
 async fn start_test_conversation(
     server: &MockServer,
     model: Option<&str>,
@@ -777,6 +978,28 @@ async fn start_test_conversation(
     let test = Box::pin(builder.build(server))
         .await
         .expect("create conversation");
+    (test.home, test.config, test.thread_manager, test.codex)
+}
+
+async fn start_spine_test_conversation(
+    server: &MockServer,
+) -> (Arc<TempDir>, Config, Arc<ThreadManager>, Arc<CodexThread>) {
+    let base_url = format!("{}/v1", server.uri());
+    let test = Box::pin(
+        test_codex()
+            .with_config(move |config| {
+                config.model_provider.name = "Non-OpenAI Model provider".to_string();
+                config.model_provider.base_url = Some(base_url);
+                config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            })
+            .build(server),
+    )
+    .await
+    .expect("create spine conversation");
     (test.home, test.config, test.thread_manager, test.codex)
 }
 
@@ -817,6 +1040,17 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
 
 fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
     conversation.rollout_path().expect("rollout path")
+}
+
+fn spine_locator_path(rollout_path: &std::path::Path) -> std::path::PathBuf {
+    let parent = rollout_path
+        .parent()
+        .unwrap_or_else(|| panic!("rollout path {rollout_path:?} should have parent"));
+    let stem = rollout_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_else(|| panic!("rollout path {rollout_path:?} should have UTF-8 stem"));
+    parent.join(format!("{stem}.spine.json"))
 }
 
 async fn shutdown_conversation(conversation: &Arc<CodexThread>) {

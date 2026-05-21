@@ -116,11 +116,14 @@ impl SpineState {
                 mem: None,
             },
         );
-        Self {
+        let state = Self {
             nodes,
             stack: vec![epoch, leaf],
             root_mem: None,
-        }
+        };
+        #[cfg(debug_assertions)]
+        state.debug_assert_invariants();
+        state
     }
 
     fn cursor(&self) -> &NodeId {
@@ -169,6 +172,8 @@ impl SpineState {
             },
         );
         self.stack.push(child);
+        #[cfg(debug_assertions)]
+        self.debug_assert_invariants();
         Ok(())
     }
 
@@ -205,6 +210,8 @@ impl SpineState {
             .get_mut(&parent)
             .ok_or_else(|| SpineError::InvalidEvent(format!("close parent {parent} is missing")))?;
         parent_node.status = NodeStatus::Live;
+        #[cfg(debug_assertions)]
+        self.debug_assert_invariants();
         Ok(())
     }
 
@@ -271,6 +278,8 @@ impl SpineState {
         );
         self.stack = vec![epoch, leaf];
         self.root_mem = Some(mem);
+        #[cfg(debug_assertions)]
+        self.debug_assert_invariants();
         Ok(())
     }
 
@@ -325,6 +334,171 @@ impl SpineState {
             ));
         }
         lines.join("\n")
+    }
+
+    #[cfg(debug_assertions)]
+    fn debug_assert_invariants(&self) {
+        assert!(!self.stack.is_empty(), "spine stack must not be empty");
+        assert!(
+            self.stack.first().is_some_and(NodeId::is_root_epoch),
+            "spine stack must start at a root epoch"
+        );
+
+        let stack_set = self.stack.iter().collect::<BTreeSet<_>>();
+        assert_eq!(
+            stack_set.len(),
+            self.stack.len(),
+            "spine stack must not contain duplicate nodes"
+        );
+
+        for (key, node) in &self.nodes {
+            assert_eq!(key, &node.id, "spine node map key must match node id");
+            assert!(
+                !node.id.0.is_empty(),
+                "spine node id path must not be empty"
+            );
+            for component in &node.id.0 {
+                assert!(*component > 0, "spine node id components must be positive");
+            }
+        }
+
+        for window in self.stack.windows(2) {
+            let parent = &window[0];
+            let child = &window[1];
+            assert_eq!(
+                child.parent().as_ref(),
+                Some(parent),
+                "spine stack must be a contiguous parent chain"
+            );
+        }
+
+        for id in &self.stack {
+            assert!(
+                self.nodes.contains_key(id),
+                "spine stack node {id} must exist"
+            );
+        }
+
+        let cursor = self.cursor();
+        let live_nodes = self
+            .nodes
+            .values()
+            .filter(|node| node.status == NodeStatus::Live)
+            .collect::<Vec<_>>();
+        assert_eq!(live_nodes.len(), 1, "spine must have exactly one live node");
+        assert_eq!(
+            &live_nodes[0].id, cursor,
+            "spine live node must be the cursor"
+        );
+
+        for id in self.stack.iter().take(self.stack.len().saturating_sub(1)) {
+            let node = self.nodes.get(id).expect("stack node exists");
+            assert_eq!(
+                node.status,
+                NodeStatus::Suspended,
+                "spine non-cursor stack nodes must be suspended"
+            );
+            assert!(
+                node.raw_end.is_none(),
+                "spine suspended nodes must not have raw_end"
+            );
+        }
+
+        let cursor_node = self.nodes.get(cursor).expect("cursor node exists");
+        assert_eq!(
+            cursor_node.status,
+            NodeStatus::Live,
+            "spine cursor must be live"
+        );
+        assert!(
+            cursor_node.raw_end.is_none(),
+            "spine live cursor must not have raw_end"
+        );
+
+        for node in self.nodes.values() {
+            match node.status {
+                NodeStatus::Live => {}
+                NodeStatus::Suspended => {
+                    assert!(
+                        stack_set.contains(&node.id),
+                        "spine suspended node {} must be on the active stack",
+                        node.id
+                    );
+                    assert_ne!(&node.id, cursor, "spine cursor must not be suspended");
+                }
+                NodeStatus::Closed => {
+                    let end = node.raw_end.unwrap_or_else(|| {
+                        panic!("spine closed node {} must have raw_end", node.id)
+                    });
+                    assert!(
+                        node.raw_start <= end,
+                        "spine closed node {} must have a valid raw range",
+                        node.id
+                    );
+                    for descendant in self.nodes.values() {
+                        if descendant.id.0.len() <= node.id.0.len()
+                            || !descendant.id.0.starts_with(&node.id.0)
+                        {
+                            continue;
+                        }
+                        assert_eq!(
+                            descendant.status,
+                            NodeStatus::Closed,
+                            "spine closed node {} must not contain live/suspended descendant {}",
+                            node.id,
+                            descendant.id
+                        );
+                    }
+                }
+            }
+        }
+
+        for id in self.nodes.keys() {
+            if id.is_root_epoch() {
+                continue;
+            }
+            let parent = id
+                .parent()
+                .unwrap_or_else(|| panic!("spine non-root node {id} must have parent"));
+            let parent_node = self
+                .nodes
+                .get(&parent)
+                .unwrap_or_else(|| panic!("spine node {id} parent {parent} must exist"));
+            assert!(
+                parent_node.children.contains(id),
+                "spine parent {parent} must list child {id}"
+            );
+        }
+
+        for node in self.nodes.values() {
+            let mut children = BTreeSet::new();
+            for (index, child) in node.children.iter().enumerate() {
+                assert!(
+                    children.insert(child),
+                    "spine node {} must not list child {child} more than once",
+                    node.id
+                );
+                assert!(
+                    self.nodes.contains_key(child),
+                    "spine node {} child {child} must exist",
+                    node.id
+                );
+                assert_eq!(
+                    child.parent().as_ref(),
+                    Some(&node.id),
+                    "spine child {child} must point back to parent {}",
+                    node.id
+                );
+                let expected = node
+                    .id
+                    .child(u32::try_from(index + 1).expect("spine child index fits in u32"));
+                assert_eq!(
+                    child, &expected,
+                    "spine node {} children must be dense and ordered",
+                    node.id
+                );
+            }
+        }
     }
 }
 
@@ -650,7 +824,6 @@ impl SpineSessionState {
         }
         Ok(())
     }
-
 }
 
 impl SpineRuntime {
@@ -945,7 +1118,10 @@ fn replay(events: &[KEvent], raw_mask: RawMask<'_>) -> Result<SpineState, SpineE
                 .root_compact(node, *boundary, mem.clone())?,
         }
     }
-    state.ok_or_else(|| SpineError::InvalidEvent("missing init".to_string()))
+    let state = state.ok_or_else(|| SpineError::InvalidEvent("missing init".to_string()))?;
+    #[cfg(debug_assertions)]
+    state.debug_assert_invariants();
+    Ok(state)
 }
 
 #[derive(Clone)]
@@ -1248,7 +1424,10 @@ mod tests {
         let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw)
             .expect("load spine")
             .expect("sidecar exists");
-        assert_eq!(replayed.state().render_tree(), "[1] Open \n  [1.1] Current ");
+        assert_eq!(
+            replayed.state().render_tree(),
+            "[1] Open \n  [1.1] Current "
+        );
         assert_eq!(
             replayed.materialize_history(&raw).expect("materialize"),
             vec![text_item("before")]
@@ -1270,7 +1449,9 @@ mod tests {
         runtime.stage_open("open".to_string()).expect("stage open");
         runtime.observe_raw_items(1).expect("record open output");
         runtime.maybe_commit_output("open").expect("commit open");
-        runtime.observe_raw_items(1).expect("record rolled-back child raw");
+        runtime
+            .observe_raw_items(1)
+            .expect("record rolled-back child raw");
         runtime
             .stage_close("close".to_string(), "child done".to_string(), None)
             .expect("stage close");
