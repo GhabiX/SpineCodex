@@ -66,6 +66,60 @@ fn content_items_to_text_ignores_image_only_content() {
 }
 
 #[test]
+fn remote_root_compact_body_preserves_remote_summary_without_context_prefixes() {
+    let replacement_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "stale developer instructions".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "surviving user prompt".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "surviving assistant note".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::Compaction {
+            encrypted_content: "REMOTE_ENCRYPTED_SUMMARY".to_string(),
+        },
+        ResponseItem::ContextCompaction {
+            encrypted_content: Some("REMOTE_CONTEXT_SUMMARY".to_string()),
+        },
+    ];
+
+    let body = crate::compact_remote::remote_root_compact_body(&replacement_history);
+
+    assert!(body.contains("# Spine Remote Compact Memory"));
+    assert!(body.contains("surviving user prompt"));
+    assert!(body.contains("surviving assistant note"));
+    assert!(body.contains("REMOTE_ENCRYPTED_SUMMARY"));
+    assert!(body.contains("REMOTE_CONTEXT_SUMMARY"));
+    assert!(!body.contains("stale developer instructions"));
+    assert!(!body.contains("<ENVIRONMENT_CONTEXT>"));
+}
+
+#[test]
 fn collect_user_messages_extracts_user_text_only() {
     let items = vec![
         ResponseItem::Message {

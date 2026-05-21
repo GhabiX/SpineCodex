@@ -435,6 +435,126 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let home = harness.test().home.clone();
+    let rollout_path = harness
+        .test()
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_function_call_with_namespace(
+                    "call-spine-tree",
+                    "spine",
+                    "tree",
+                    "{}",
+                ),
+                responses::ev_completed("resp-spine-tree"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "SPINE_READY"),
+                responses::ev_completed("resp-spine-ready"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_REMOTE_ROOT_COMPACT"),
+                responses::ev_completed("resp-after-remote-root-compact"),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![ResponseItem::Compaction {
+        encrypted_content: "REMOTE_SPINE_ROOT_COMPACT_SUMMARY".to_string(),
+    }];
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_history }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "initialize spine runtime".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.shutdown_and_wait().await?;
+
+    let mut resume_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        });
+    let resumed = resume_builder
+        .resume(harness.server(), home, rollout_path)
+        .await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&resumed.codex).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let response_requests = responses_mock.requests();
+    let follow_up_request = response_requests.last().expect("follow-up request missing");
+    assert!(
+        follow_up_request.body_contains_text("<spine_memory runtime_generated=\"true\">"),
+        "expected remote compact to hydrate Spine root memory for follow-up turns"
+    );
+    assert!(
+        follow_up_request.body_contains_text("REMOTE_SPINE_ROOT_COMPACT_SUMMARY"),
+        "expected Spine root memory to include remote compact payload"
+    );
+    assert!(
+        !follow_up_request.body_contains_text("SPINE_READY"),
+        "expected remote compact memory to replace pre-compaction raw assistant history"
+    );
+
+    Ok(())
+}
+
 async fn assert_remote_manual_compact_request_parity(
     auth: CodexAuth,
     configured_service_tier: Option<ServiceTier>,
@@ -799,6 +919,143 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
     assert!(
         follow_up_body.contains("hello remote compact"),
         "expected v2 follow-up request to preserve retained original user messages"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_installs_spine_root_compact_for_followups() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+                config
+                    .features
+                    .enable(Feature::RemoteCompactionV2)
+                    .expect("enable remote compaction v2");
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let home = harness.test().home.clone();
+    let rollout_path = harness
+        .test()
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_function_call_with_namespace(
+                    "call-spine-tree-v2",
+                    "spine",
+                    "tree",
+                    "{}",
+                ),
+                responses::ev_completed("resp-spine-tree-v2"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "SPINE_READY_V2"),
+                responses::ev_completed("resp-spine-ready-v2"),
+            ]),
+            responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "REMOTE_SPINE_ROOT_COMPACT_V2_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("resp-compact-v2"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_REMOTE_ROOT_COMPACT_V2"),
+                responses::ev_completed("resp-after-remote-root-compact-v2"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "initialize spine runtime v2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.shutdown_and_wait().await?;
+
+    let mut resume_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config
+                .features
+                .enable(Feature::RemoteCompactionV2)
+                .expect("enable remote compaction v2");
+        });
+    let resumed = resume_builder
+        .resume(harness.server(), home, rollout_path)
+        .await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after remote compact v2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&resumed.codex).await;
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        4,
+        "expected spine init, spine follow-up, compact v2, and post-compact follow-up requests"
+    );
+    let compact_request = &response_requests[2];
+    assert!(
+        compact_request
+            .body_json()
+            .to_string()
+            .contains("\"type\":\"compaction_trigger\""),
+        "expected v2 compact request to include the compaction trigger"
+    );
+    let follow_up_request = response_requests.last().expect("follow-up request missing");
+    assert!(
+        follow_up_request.body_contains_text("<spine_memory runtime_generated=\"true\">"),
+        "expected remote compact v2 to hydrate Spine root memory for follow-up turns"
+    );
+    assert!(
+        follow_up_request.body_contains_text("REMOTE_SPINE_ROOT_COMPACT_V2_SUMMARY"),
+        "expected Spine root memory to include remote compact v2 payload"
     );
 
     Ok(())
