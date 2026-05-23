@@ -5,7 +5,9 @@ use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ops::Range;
 
+use crate::context_manager::ContextAppend;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
@@ -57,12 +59,16 @@ impl SessionState {
     }
 
     // History helpers
-    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
+    pub(crate) fn record_items<I>(
+        &mut self,
+        items: I,
+        policy: TruncationPolicy,
+    ) -> Vec<ContextAppend>
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
-        self.history.record_items(items, policy);
+        self.history.record_items(items, policy)
     }
 
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
@@ -97,6 +103,18 @@ impl SessionState {
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
+    }
+
+    pub(crate) fn replace_history_suffix(
+        &mut self,
+        range: Range<usize>,
+        replacement: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+    ) -> Result<(), String> {
+        self.history.replace_suffix(range, replacement)?;
+        self.history
+            .set_reference_context_item(reference_context_item);
+        Ok(())
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {

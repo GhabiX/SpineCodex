@@ -276,13 +276,17 @@ async fn run_compact_task_inner_impl(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
+    let spine_history = sess
+        .install_spine_root_compact(summary_text.clone(), new_history.len())
+        .await
+        .map_err(|err| CodexErr::Fatal(format!("failed to install Spine root compact: {err}")))?;
+    if let Some(spine_history) = spine_history {
+        new_history = spine_history;
+    }
     let compacted_item = CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
     };
-    sess.install_spine_root_compact(summary_text.clone())
-        .await
-        .map_err(|err| CodexErr::Fatal(format!("failed to install Spine root compact: {err}")))?;
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
     client_session.reset_websocket_session();

@@ -329,6 +329,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
+            spine_fork_source_rollout_path: None,
             parent_trace: None,
             environments: vec![TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
@@ -463,6 +464,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
+            spine_fork_source_rollout_path: None,
             parent_trace: None,
             environments: Vec::new(),
         })
@@ -519,6 +521,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
+            spine_fork_source_rollout_path: None,
             parent_trace: None,
             environments: environments.clone(),
         })
@@ -791,6 +794,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
+            spine_fork_source_rollout_path: None,
             parent_trace: None,
             environments: Vec::new(),
         })

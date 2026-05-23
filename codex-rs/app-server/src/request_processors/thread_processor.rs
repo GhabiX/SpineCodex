@@ -1099,6 +1099,7 @@ impl ThreadRequestProcessor {
                 dynamic_tools: core_dynamic_tools,
                 persist_extended_history: false,
                 metrics_service_name: service_name,
+                spine_fork_source_rollout_path: None,
                 parent_trace: request_trace,
                 environments,
             })

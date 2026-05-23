@@ -197,12 +197,32 @@ fn filters_non_api_messages() {
         phase: None,
     };
     let reasoning = reasoning_msg("thinking...");
-    h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
+    let appends = h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
+    assert_eq!(
+        appends,
+        vec![ContextAppend {
+            input_index: 1,
+            context_index: 0,
+        }]
+    );
 
     // User and assistant should be retained.
     let u = user_msg("hi");
     let a = assistant_msg("hello");
-    h.record_items([&u, &a], policy);
+    let appends = h.record_items([&u, &a], policy);
+    assert_eq!(
+        appends,
+        vec![
+            ContextAppend {
+                input_index: 0,
+                context_index: 1,
+            },
+            ContextAppend {
+                input_index: 1,
+                context_index: 2,
+            }
+        ]
+    );
 
     let items = h.raw_items();
     assert_eq!(
@@ -713,6 +733,47 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                     success: Some(true),
                 },
             },
+        ]
+    );
+}
+
+#[test]
+fn replace_suffix_rewrites_only_tail() {
+    let mut history = create_history_with_items(vec![
+        user_input_text_msg("prefix"),
+        user_input_text_msg("old one"),
+        user_input_text_msg("old two"),
+    ]);
+
+    history
+        .replace_suffix(1..3, vec![user_input_text_msg("memory")])
+        .expect("suffix replace");
+
+    assert_eq!(
+        history.raw_items(),
+        vec![user_input_text_msg("prefix"), user_input_text_msg("memory")]
+    );
+}
+
+#[test]
+fn replace_suffix_rejects_non_suffix_range() {
+    let mut history = create_history_with_items(vec![
+        user_input_text_msg("prefix"),
+        user_input_text_msg("middle"),
+        user_input_text_msg("tail"),
+    ]);
+
+    let err = history
+        .replace_suffix(1..2, vec![user_input_text_msg("memory")])
+        .expect_err("non-suffix replace should fail");
+
+    assert!(err.contains("does not match history length"));
+    assert_eq!(
+        history.raw_items(),
+        vec![
+            user_input_text_msg("prefix"),
+            user_input_text_msg("middle"),
+            user_input_text_msg("tail"),
         ]
     );
 }

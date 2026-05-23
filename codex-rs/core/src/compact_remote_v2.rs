@@ -231,7 +231,7 @@ async fn run_remote_compact_task_inner_impl(
     );
     let (compaction_output, response_id) = compaction_output_result?;
     let compacted_history = build_v2_compacted_history(&prompt_input, compaction_output);
-    let new_history = process_compacted_history(
+    let mut new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
         compacted_history,
@@ -243,15 +243,19 @@ async fn run_remote_compact_task_inner_impl(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
-    let compacted_item = CompactedItem {
-        message: String::new(),
-        replacement_history: Some(new_history.clone()),
-    };
     compaction_trace.record_installed(&CompactionCheckpointTracePayload {
         input_history: &trace_input_history,
         replacement_history: &new_history,
     });
-    install_remote_spine_root_compact(sess.as_ref(), &new_history).await?;
+    if let Some(spine_history) =
+        install_remote_spine_root_compact(sess.as_ref(), &new_history).await?
+    {
+        new_history = spine_history;
+    }
+    let compacted_item = CompactedItem {
+        message: String::new(),
+        replacement_history: Some(new_history.clone()),
+    };
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
     sess.recompute_token_usage(turn_context).await;

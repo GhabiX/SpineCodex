@@ -13,7 +13,6 @@ use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::spine::SpineStore;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
@@ -182,6 +181,7 @@ pub struct StartThreadOptions {
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub persist_extended_history: bool,
     pub metrics_service_name: Option<String>,
+    pub spine_fork_source_rollout_path: Option<PathBuf>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
 }
@@ -574,6 +574,7 @@ impl ThreadManager {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name: None,
+            spine_fork_source_rollout_path: None,
             parent_trace: None,
             environments,
         }))
@@ -600,6 +601,7 @@ impl ThreadManager {
             options.dynamic_tools,
             options.persist_extended_history,
             options.metrics_service_name,
+            options.spine_fork_source_rollout_path,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
             options.parent_trace,
@@ -630,12 +632,16 @@ impl ThreadManager {
                     "failed to read subagent fork source {forked_from_thread_id}: {err}"
                 ))
             })?;
-        let history = stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?;
+        let source_rollout_path = fork_source.rollout_path();
+        let history = stored_thread_to_initial_history(stored_thread, source_rollout_path.clone())?;
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
             InterruptedTurnHistoryMarker::from_config(&options.config),
         );
+        if options.config.features.enabled(Feature::SpineTaskTree) {
+            options.spine_fork_source_rollout_path = source_rollout_path;
+        }
         self.start_thread_with_options(options).await
     }
 
@@ -679,6 +685,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
+            /*spine_fork_source_rollout_path*/ None,
             parent_trace,
             environments,
             /*user_shell_override*/ None,
@@ -704,6 +711,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            /*spine_fork_source_rollout_path*/ None,
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
@@ -733,6 +741,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            /*spine_fork_source_rollout_path*/ None,
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
@@ -886,9 +895,6 @@ impl ThreadManager {
             _ => None,
         };
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
-        let spine_fork_rollout_items = history.get_rollout_items();
-        let spine_raw_items =
-            crate::session::spine_raw_items_after_rollback(&spine_fork_rollout_items);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -902,34 +908,12 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
+            spine_source_rollout_path,
             parent_trace,
             environments,
             /*user_shell_override*/ None,
         ))
         .await?;
-        if let Some(source_rollout_path) = spine_source_rollout_path
-            && let Some(target_rollout_path) = new_thread.session_configured.rollout_path.as_deref()
-        {
-            let raw_live = spine_raw_items
-                .iter()
-                .map(Option::is_some)
-                .collect::<Vec<_>>();
-            SpineStore::clone_for_rollout_with_raw_live(
-                &source_rollout_path,
-                target_rollout_path,
-                &raw_live,
-            )
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to clone Spine sidecar for fork: {err}"))
-            })?;
-            let turn_context = new_thread.thread.codex.session.new_default_turn().await;
-            new_thread
-                .thread
-                .codex
-                .session
-                .apply_rollout_reconstruction(turn_context.as_ref(), &spine_fork_rollout_items)
-                .await;
-        }
         Ok(new_thread)
     }
 
@@ -1070,6 +1054,7 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             metrics_service_name,
+            /*spine_fork_source_rollout_path*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1104,6 +1089,7 @@ impl ThreadManagerState {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            /*spine_fork_source_rollout_path*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1139,6 +1125,7 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
+            /*spine_fork_source_rollout_path*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1160,6 +1147,7 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        spine_fork_source_rollout_path: Option<PathBuf>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
@@ -1174,6 +1162,7 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            spine_fork_source_rollout_path,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
@@ -1195,6 +1184,7 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        spine_fork_source_rollout_path: Option<PathBuf>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
@@ -1248,6 +1238,7 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            spine_fork_source_rollout_path,
             inherited_shell_snapshot,
             inherited_exec_policy,
             parent_rollout_thread_trace,

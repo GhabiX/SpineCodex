@@ -682,13 +682,40 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
     user_turn(&resumed, AFTER_RESUME_KEEP).await;
     let resumed_path = fetch_conversation_path(&resumed);
     shutdown_conversation(&resumed).await;
+    let parent_sidecar_root = spine_sidecar_root(&resumed_path);
+    let parent_counts_before_fork_turn = spine_sidecar_counts(&resumed_path);
 
-    let forked = fork_thread(&manager, &config, resumed_path, /*nth_user_message*/ 6).await;
+    let forked = fork_thread(
+        &manager,
+        &config,
+        resumed_path.clone(),
+        /*nth_user_message*/ 6,
+    )
+    .await;
     let forked_path = fetch_conversation_path(&forked);
     assert!(spine_locator_path(&forked_path).exists());
+    let child_sidecar_root = spine_sidecar_root(&forked_path);
+    assert_ne!(
+        child_sidecar_root, parent_sidecar_root,
+        "fork child must use an independent Spine sidecar root"
+    );
+    assert_eq!(
+        spine_sidecar_counts(&forked_path),
+        parent_counts_before_fork_turn,
+        "fork child should start from the parent's visible Spine checkpoint"
+    );
     user_turn(&forked, ROLLED_BACK_FORK_TURN).await;
     let forked_path = fetch_conversation_path(&forked);
     shutdown_conversation(&forked).await;
+    assert_eq!(
+        spine_sidecar_counts(&resumed_path),
+        parent_counts_before_fork_turn,
+        "fork child appends must not mutate the parent Spine sidecar"
+    );
+    assert!(
+        spine_sidecar_counts(&forked_path).tree_events > parent_counts_before_fork_turn.tree_events,
+        "fork child sidecar should advance after child-only turns"
+    );
 
     let resumed_fork = resume_conversation(&manager, &config, forked_path).await;
     resumed_fork
@@ -711,7 +738,7 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
     user_turn(&resumed_after_compact, FINAL_AFTER_COMPACT_RESUME).await;
 
     let requests = request_log.requests();
-    assert_eq!(requests.len(), 11);
+    assert_eq!(requests.len(), 10);
     assert!(request_log.saw_function_call("call-spine-open"));
     assert!(request_log.saw_function_call("call-spine-close"));
     assert_eq!(
@@ -727,7 +754,10 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
         Some("Spine closed after this tool output is recorded.")
     );
 
-    let rolled_back_turn_request = &requests[8];
+    let rolled_back_turn_request = requests
+        .iter()
+        .find(|request| request.body_contains_text(ROLLED_BACK_FORK_TURN))
+        .unwrap_or_else(|| panic!("missing fork request with rolled-back turn"));
     assert!(
         rolled_back_turn_request.body_contains_text(AFTER_RESUME_KEEP),
         "forked request should preserve the resumed branch before rollback"
@@ -737,7 +767,10 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
         "forked request should include the turn that will be rolled back"
     );
 
-    let compact_request_after_rollback = &requests[9];
+    let compact_request_after_rollback = requests
+        .iter()
+        .find(|request| request.body_contains_text(SUMMARIZATION_PROMPT))
+        .unwrap_or_else(|| panic!("missing compact request after rollback"));
     assert!(
         compact_request_after_rollback.body_contains_text(AFTER_RESUME_KEEP),
         "compact after rollback should still see the preserved resumed branch"
@@ -896,7 +929,12 @@ async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
     ]);
     let open_call = sse(vec![
         ev_response_created("spine-open-call"),
-        ev_function_call_with_namespace("call-spine-open", "spine", "open", "{}"),
+        ev_function_call_with_namespace(
+            "call-spine-open",
+            "spine",
+            "open",
+            r#"{"summary":"child scope"}"#,
+        ),
         ev_completed("spine-open-call"),
     ]);
     let open_follow_up = sse(vec![
@@ -913,13 +951,9 @@ async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
             "call-spine-close",
             "spine",
             "close",
-            r#"{"summary":"child scope done","instruction":"keep child scope evidence"}"#,
+            r#"{"instruction":"keep child scope evidence"}"#,
         ),
         ev_completed("spine-close-call"),
-    ]);
-    let close_follow_up = sse(vec![
-        ev_assistant_message("spine-close-reply", "spine closed reply"),
-        ev_completed("spine-close-follow-up"),
     ]);
     let parent_after_close = sse(vec![
         ev_assistant_message("spine-parent-reply", "spine parent reply"),
@@ -950,7 +984,6 @@ async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
             open_follow_up,
             child_work,
             close_call,
-            close_follow_up,
             parent_after_close,
             after_resume,
             rolled_back_fork,
@@ -1051,6 +1084,44 @@ fn spine_locator_path(rollout_path: &std::path::Path) -> std::path::PathBuf {
         .and_then(|stem| stem.to_str())
         .unwrap_or_else(|| panic!("rollout path {rollout_path:?} should have UTF-8 stem"));
     parent.join(format!("{stem}.spine.json"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SpineSidecarCounts {
+    tree_events: usize,
+    mem_records: usize,
+}
+
+fn spine_sidecar_root(rollout_path: &std::path::Path) -> std::path::PathBuf {
+    let locator_path = spine_locator_path(rollout_path);
+    let locator_text = std::fs::read_to_string(&locator_path)
+        .unwrap_or_else(|err| panic!("read Spine locator {locator_path:?}: {err}"));
+    let locator_json: Value = serde_json::from_str(&locator_text)
+        .unwrap_or_else(|err| panic!("parse Spine locator {locator_path:?}: {err}"));
+    let base = locator_json
+        .get("base")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("Spine locator {locator_path:?} missing base"));
+    locator_path
+        .parent()
+        .unwrap_or_else(|| panic!("Spine locator {locator_path:?} should have parent"))
+        .join(base)
+}
+
+fn jsonl_line_count(path: &std::path::Path) -> usize {
+    match std::fs::read_to_string(path) {
+        Ok(text) => text.lines().filter(|line| !line.trim().is_empty()).count(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(err) => panic!("read jsonl {path:?}: {err}"),
+    }
+}
+
+fn spine_sidecar_counts(rollout_path: &std::path::Path) -> SpineSidecarCounts {
+    let root = spine_sidecar_root(rollout_path);
+    SpineSidecarCounts {
+        tree_events: jsonl_line_count(&root.join("tree.jsonl")),
+        mem_records: jsonl_line_count(&root.join("mem.jsonl")),
+    }
 }
 
 async fn shutdown_conversation(conversation: &Arc<CodexThread>) {
