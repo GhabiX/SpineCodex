@@ -7,8 +7,15 @@ use crate::context_manager::is_user_turn_boundary;
 pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
     pub(super) raw_response_items: Vec<Option<ResponseItem>>,
+    pub(super) spine_rollback_cuts: Vec<usize>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
+    pub(super) used_replacement_history: bool,
+}
+
+pub(crate) struct SpineRawItemsAfterRollback {
+    pub(crate) raw_items: Vec<Option<ResponseItem>>,
+    pub(crate) rollback_cuts: Vec<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -234,6 +241,7 @@ impl Session {
 
         let mut history = ContextManager::new();
         let mut saw_legacy_compaction_without_replacement_history = false;
+        let used_replacement_history = base_replacement_history.is_some();
         if let Some(base_replacement_history) = base_replacement_history {
             history.replace(base_replacement_history.to_vec());
         }
@@ -293,13 +301,15 @@ impl Session {
             reference_context_item
         };
 
-        let raw_response_items = spine_raw_items_after_rollback(rollout_items);
+        let spine_raw_items = spine_raw_items_after_rollback_with_cuts(rollout_items);
 
         RolloutReconstruction {
             history: history.raw_items().to_vec(),
-            raw_response_items,
+            raw_response_items: spine_raw_items.raw_items,
+            spine_rollback_cuts: spine_raw_items.rollback_cuts,
             previous_turn_settings,
             reference_context_item,
+            used_replacement_history,
         }
     }
 }
@@ -307,8 +317,15 @@ impl Session {
 pub(crate) fn spine_raw_items_after_rollback(
     rollout_items: &[RolloutItem],
 ) -> Vec<Option<ResponseItem>> {
+    spine_raw_items_after_rollback_with_cuts(rollout_items).raw_items
+}
+
+pub(crate) fn spine_raw_items_after_rollback_with_cuts(
+    rollout_items: &[RolloutItem],
+) -> SpineRawItemsAfterRollback {
     let mut raw_items = Vec::<Option<ResponseItem>>::new();
     let mut user_boundaries = Vec::<usize>::new();
+    let mut rollback_cuts = Vec::<usize>::new();
     for item in rollout_items {
         match item {
             RolloutItem::ResponseItem(response_item) => {
@@ -322,6 +339,7 @@ pub(crate) fn spine_raw_items_after_rollback(
                     let Some(cut) = user_boundaries.pop() else {
                         break;
                     };
+                    rollback_cuts.push(cut);
                     for item in raw_items.iter_mut().skip(cut) {
                         *item = None;
                     }
@@ -330,5 +348,8 @@ pub(crate) fn spine_raw_items_after_rollback(
             _ => {}
         }
     }
-    raw_items
+    SpineRawItemsAfterRollback {
+        raw_items,
+        rollback_cuts,
+    }
 }

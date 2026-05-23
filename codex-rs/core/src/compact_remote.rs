@@ -234,10 +234,6 @@ async fn run_remote_compact_task_inner_impl(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
-    let compacted_item = CompactedItem {
-        message: String::new(),
-        replacement_history: Some(new_history.clone()),
-    };
     // Install is the semantic boundary where the compact endpoint's output becomes live
     // thread history. Keep it distinct from the later inference request so the reducer can
     // still represent repeated developer/context prefix items exactly as the model saw them.
@@ -245,7 +241,15 @@ async fn run_remote_compact_task_inner_impl(
         input_history: &trace_input_history,
         replacement_history: &new_history,
     });
-    install_remote_spine_root_compact(sess.as_ref(), &new_history).await?;
+    if let Some(spine_history) =
+        install_remote_spine_root_compact(sess.as_ref(), &new_history).await?
+    {
+        new_history = spine_history;
+    }
+    let compacted_item = CompactedItem {
+        message: String::new(),
+        replacement_history: Some(new_history.clone()),
+    };
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
     sess.recompute_token_usage(turn_context).await;
@@ -280,9 +284,9 @@ pub(crate) async fn process_compacted_history(
 pub(crate) async fn install_remote_spine_root_compact(
     sess: &Session,
     replacement_history: &[ResponseItem],
-) -> CodexResult<()> {
+) -> CodexResult<Option<Vec<ResponseItem>>> {
     let body = remote_root_compact_body(replacement_history);
-    sess.install_spine_root_compact(body)
+    sess.install_spine_root_compact(body, replacement_history.len())
         .await
         .map_err(|err| CodexErr::Fatal(format!("failed to install Spine root compact: {err}")))
 }

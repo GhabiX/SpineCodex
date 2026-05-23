@@ -27,6 +27,7 @@ use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 use codex_utils_output_truncation::truncate_text;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
+use std::ops::Range;
 use std::sync::LazyLock;
 
 /// Transcript of thread history
@@ -56,6 +57,12 @@ pub(crate) struct TotalTokenUsageBreakdown {
     pub all_history_items_model_visible_bytes: i64,
     pub estimated_tokens_of_items_added_since_last_successful_api_response: i64,
     pub estimated_bytes_of_items_added_since_last_successful_api_response: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ContextAppend {
+    pub(crate) input_index: usize,
+    pub(crate) context_index: usize,
 }
 
 impl ContextManager {
@@ -96,20 +103,31 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
+    pub(crate) fn record_items<I>(
+        &mut self,
+        items: I,
+        policy: TruncationPolicy,
+    ) -> Vec<ContextAppend>
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
-        for item in items {
+        let mut appends = Vec::new();
+        for (input_index, item) in items.into_iter().enumerate() {
             let item_ref = item.deref();
             if !is_api_message(item_ref) {
                 continue;
             }
 
             let processed = self.process_item(item_ref, policy);
+            let context_index = self.items.len();
             self.items.push(processed);
+            appends.push(ContextAppend {
+                input_index,
+                context_index,
+            });
         }
+        appends
     }
 
     /// Returns the history prepared for sending to the model. This applies a proper
@@ -182,6 +200,26 @@ impl ContextManager {
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
         self.history_version = self.history_version.saturating_add(1);
+    }
+
+    pub(crate) fn replace_suffix(
+        &mut self,
+        range: Range<usize>,
+        replacement: Vec<ResponseItem>,
+    ) -> Result<(), String> {
+        if range.start > range.end {
+            return Err("suffix range start must not exceed end".to_string());
+        }
+        if range.end != self.items.len() {
+            return Err(format!(
+                "suffix range end {} does not match history length {}",
+                range.end,
+                self.items.len()
+            ));
+        }
+        self.items.splice(range, replacement);
+        self.history_version = self.history_version.saturating_add(1);
+        Ok(())
     }
 
     /// Replace image content in the last turn if it originated from a tool output.

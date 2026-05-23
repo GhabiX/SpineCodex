@@ -311,6 +311,7 @@ impl ExternalAgentConfigRequestProcessor {
                 dynamic_tools: Vec::new(),
                 persist_extended_history: false,
                 metrics_service_name: None,
+                spine_fork_source_rollout_path: None,
                 parent_trace: None,
                 environments,
             })

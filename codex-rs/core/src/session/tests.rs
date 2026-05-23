@@ -8,6 +8,9 @@ use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
+use crate::spine::SPINE_NAMESPACE;
+use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_OPEN;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
@@ -60,6 +63,9 @@ use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::spine::SpineRuntime;
+use crate::spine::SpineSessionState;
+use crate::spine::SpineStore;
 use crate::state::ActiveTurn;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
@@ -157,10 +163,12 @@ use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use wiremock::ResponseTemplate;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
@@ -197,6 +205,131 @@ fn assistant_message(text: &str) -> ResponseItem {
         }],
         phase: None,
     }
+}
+
+fn spine_call(name: &str, call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: name.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
+fn function_output(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload::from_text("ok".to_string()),
+    }
+}
+
+async fn assert_session_history_matches_spine_materialization(
+    session: &Session,
+    rollout_path: &Path,
+) {
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(rollout_path, &raw_items, &[])
+        .expect("load spine runtime from rollout")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        materialized.as_slice()
+    );
+}
+
+async fn make_spine_session_with_closed_child(
+    summary_text: &str,
+) -> (Arc<Session>, Arc<TurnContext>, PathBuf, Vec<RolloutItem>) {
+    let server = start_mock_server().await;
+    let compact_mock = core_test_support::responses::mount_compact_user_history_with_summary_once(
+        &server,
+        summary_text,
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before spine");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "resume-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await;
+    session
+        .stage_spine_open("resume-open".to_string(), "resumed child".to_string())
+        .await
+        .expect("stage open");
+    let open_output = function_output("resume-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let child_body = user_message("child body before close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await;
+
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "resume-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await;
+    session
+        .stage_spine_close("resume-close".to_string(), None)
+        .await
+        .expect("stage close");
+    let close_output = function_output("resume-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .await
+        .expect("commit close");
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    (session, turn_context, rollout_path, resumed.history)
 }
 
 fn test_session_telemetry_without_metadata() -> SessionTelemetry {
@@ -4177,6 +4310,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         tx_event,
         agent_status_tx,
         InitialHistory::New,
+        /*spine_fork_source_rollout_path*/ None,
         SessionSource::Exec,
         skills_manager,
         plugins_manager,
@@ -4417,7 +4551,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         goal_runtime: crate::goals::GoalRuntimeState::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
-        spine: None,
+        spine: config
+            .features
+            .enabled(Feature::SpineTaskTree)
+            .then(|| TokioMutex::new(SpineSessionState::new())),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -4522,6 +4659,7 @@ async fn make_session_with_config_and_rx(
         tx_event,
         agent_status_tx,
         InitialHistory::New,
+        /*spine_fork_source_rollout_path*/ None,
         SessionSource::Exec,
         skills_manager,
         plugins_manager,
@@ -4625,6 +4763,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         tx_event,
         agent_status_tx,
         initial_history,
+        /*spine_fork_source_rollout_path*/ None,
         session_source,
         skills_manager,
         plugins_manager,
@@ -6274,7 +6413,10 @@ where
         goal_runtime: crate::goals::GoalRuntimeState::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
-        spine: None,
+        spine: config
+            .features
+            .enabled(Feature::SpineTaskTree)
+            .then(|| TokioMutex::new(SpineSessionState::new())),
         next_internal_sub_id: AtomicU64::new(0),
     });
 
@@ -7443,6 +7585,1414 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         serde_json::to_value(Some(turn_context.to_turn_context_item()))
             .expect("serialize expected turn context item")
     );
+}
+
+#[tokio::test]
+async fn spine_close_bridge_replaces_only_suffix_history() {
+    let server = start_mock_server().await;
+    let compact_mock = core_test_support::responses::mount_compact_user_history_with_summary_once(
+        &server,
+        "real compact summary",
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await;
+    session
+        .stage_spine_open("open".to_string(), "child".to_string())
+        .await
+        .expect("stage open");
+    let open_output = function_output("open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open output");
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+
+    let inner = user_message("inside");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
+        .await;
+
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await;
+    session
+        .stage_spine_close("close".to_string(), None)
+        .await
+        .expect("stage close");
+    let close_output = function_output("close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .await
+        .expect("commit close output");
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let compact_request = compact_mock.single_request();
+    assert_eq!(compact_request.path(), "/v1/responses/compact");
+    assert!(compact_request.body_contains_text("Compact only the suffix for the Spine node 1.1.1"));
+    assert!(!compact_request.has_function_call("open"));
+    assert!(compact_request.function_call_output_text("open").is_none());
+    assert!(compact_request.body_contains_text("inside"));
+    assert!(compact_request.body_contains_text(
+        "Preserve decisions, file paths, tests, failures, and remaining TODOs."
+    ));
+
+    let history = session.clone_history().await;
+    let items = history.raw_items();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0], prefix);
+    assert!(matches!(
+        &items[1],
+        ResponseItem::Message { role, content, .. }
+            if role == "user"
+                && matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                            && text.contains("real compact summary")
+                )
+    ));
+    assert!(!items.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "close")
+    ));
+    assert!(!items
+        .iter()
+        .any(|item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "close")));
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
+async fn spine_close_aborts_if_history_changes_during_compact() {
+    let server = start_mock_server().await;
+    let delayed_compact = core_test_support::responses::mount_compact_response_once(
+        &server,
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(serde_json::json!({
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{ "type": "input_text", "text": "delayed compact input" }]
+                    },
+                    {
+                        "type": "compaction",
+                        "encrypted_content": "delayed compact summary"
+                    }
+                ]
+            }))
+            .set_delay(Duration::from_millis(300)),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await;
+    let open_request = spine_call(SPINE_TOOL_OPEN, "open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await;
+    session
+        .stage_spine_open("open".to_string(), "child".to_string())
+        .await
+        .expect("stage open");
+    let open_output = function_output("open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open output");
+    let inner = user_message("inside");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
+        .await;
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await;
+    session
+        .stage_spine_close("close".to_string(), None)
+        .await
+        .expect("stage close");
+    let close_output = function_output("close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_output))
+        .await;
+
+    let commit_session = Arc::clone(&session);
+    let commit_turn_context = Arc::clone(&turn_context);
+    let commit_close_output = close_output.clone();
+    let commit_task = tokio::spawn(async move {
+        commit_session
+            .maybe_commit_spine_tool_output(&commit_turn_context, &commit_close_output)
+            .await
+    });
+    timeout(Duration::from_secs(2), async {
+        while delayed_compact.requests().is_empty() {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("compact request should start before delayed response");
+
+    let concurrent = user_message("concurrent history mutation");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&concurrent))
+        .await;
+
+    let err = commit_task
+        .await
+        .expect("commit task should join")
+        .expect_err("close commit must reject changed history");
+    assert!(
+        err.to_string()
+            .contains("spine.close history changed while compacting suffix"),
+        "unexpected close error: {err}"
+    );
+    assert_eq!(delayed_compact.requests().len(), 1);
+
+    let history = session.clone_history().await;
+    let items = history.raw_items();
+    assert_eq!(
+        items,
+        &[
+            prefix.clone(),
+            inner.clone(),
+            close_request,
+            close_output,
+            concurrent.clone()
+        ]
+    );
+    assert!(
+        !items.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                            || text.contains("delayed compact summary")
+                )
+        )),
+        "aborted close must not install compact memory into host history"
+    );
+    assert!(!items.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "open")
+    ));
+    assert!(!items.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "open")
+    ));
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    {
+        InitialHistory::Resumed(resumed) => spine_raw_items_after_rollback(&resumed.history),
+        _ => panic!("expected resumed rollout history"),
+    };
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(runtime.parse_stack_msg_leaf_count_for_test(), 3);
+    let expected_materialized = vec![prefix.clone(), inner.clone(), concurrent.clone()];
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)"),
+        expected_materialized
+    );
+}
+
+#[tokio::test]
+async fn spine_close_native_compact_partial_success_does_not_shift_close() {
+    let server = start_mock_server().await;
+    let delayed_close_compact = core_test_support::responses::mount_compact_response_once(
+        &server,
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(serde_json::json!({
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{ "type": "input_text", "text": "late close compact input" }]
+                    },
+                    {
+                        "type": "compaction",
+                        "encrypted_content": "late close compact summary"
+                    }
+                ]
+            }))
+            .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+    let native_compact_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("native-partial-summary", "native compact wins"),
+            ev_completed("native-partial-response"),
+        ]),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before partial close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await;
+    let open_request = spine_call(SPINE_TOOL_OPEN, "partial-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await;
+    session
+        .stage_spine_open("partial-open".to_string(), "partial child".to_string())
+        .await
+        .expect("stage open");
+    let open_output = function_output("partial-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+    let child_body = user_message("partial child work");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await;
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "partial-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await;
+    session
+        .stage_spine_close("partial-close".to_string(), None)
+        .await
+        .expect("stage close");
+    let close_output = function_output("partial-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_output))
+        .await;
+
+    let commit_session = Arc::clone(&session);
+    let commit_turn_context = Arc::clone(&turn_context);
+    let commit_close_output = close_output.clone();
+    let commit_task = tokio::spawn(async move {
+        commit_session
+            .maybe_commit_spine_tool_output(&commit_turn_context, &commit_close_output)
+            .await
+    });
+    timeout(Duration::from_secs(2), async {
+        while delayed_close_compact.requests().is_empty() {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("close compact request should start before native compact");
+
+    crate::compact::run_compact_task(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        vec![UserInput::Text {
+            text: "native compact during close".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await
+    .expect("native compact succeeds");
+
+    let err = commit_task
+        .await
+        .expect("close commit task should join")
+        .expect_err("late close commit must be rejected after native compact");
+    assert!(
+        err.to_string()
+            .contains("spine.close history changed while compacting suffix"),
+        "unexpected partial-success close error: {err}"
+    );
+    assert_eq!(delayed_close_compact.requests().len(), 1);
+    assert_eq!(native_compact_mock.requests().len(), 1);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    assert_eq!(session.clone_history().await.raw_items(), materialized);
+    let tree = runtime.render_tree().expect("render spine tree");
+    assert!(tree.contains("[1] Done root"), "{tree}");
+    assert!(tree.contains("[2.1] Current root"), "{tree}");
+    assert!(!runtime.parse_stack_debug_for_test().contains("Close("));
+    assert!(
+        materialized.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("native compact wins")
+                )
+        )),
+        "native compact memory should be the visible h(PS)"
+    );
+}
+
+#[tokio::test]
+async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
+    let server = start_mock_server().await;
+    let compact_mock =
+        core_test_support::responses::mount_compact_user_history_with_summary_sequence(
+            &server,
+            vec![
+                "inner compact summary".to_string(),
+                "outer compact summary".to_string(),
+            ],
+        )
+        .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before outer");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await;
+
+    let outer_open_request = spine_call(SPINE_TOOL_OPEN, "outer-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_open_request))
+        .await;
+    session
+        .stage_spine_open("outer-open".to_string(), "outer".to_string())
+        .await
+        .expect("stage outer open");
+    let outer_open_output = function_output("outer-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &outer_open_output)
+        .await
+        .expect("commit outer open");
+
+    let outer_setup = user_message("outer setup");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_setup))
+        .await;
+
+    let inner_open_request = spine_call(SPINE_TOOL_OPEN, "inner-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_open_request))
+        .await;
+    session
+        .stage_spine_open("inner-open".to_string(), "inner".to_string())
+        .await
+        .expect("stage inner open");
+    let inner_open_output = function_output("inner-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &inner_open_output)
+        .await
+        .expect("commit inner open");
+
+    let inner_raw = assistant_message("inner assistant traj should be folded away");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_raw))
+        .await;
+
+    let inner_close_request = spine_call(SPINE_TOOL_CLOSE, "inner-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_close_request))
+        .await;
+    session
+        .stage_spine_close("inner-close".to_string(), None)
+        .await
+        .expect("stage inner close");
+    let inner_close_output = function_output("inner-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_close_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &inner_close_output)
+        .await
+        .expect("commit inner close");
+
+    let after_inner = user_message("after inner in outer suffix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&after_inner))
+        .await;
+
+    let outer_close_request = spine_call(SPINE_TOOL_CLOSE, "outer-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_close_request))
+        .await;
+    session
+        .stage_spine_close("outer-close".to_string(), None)
+        .await
+        .expect("stage outer close");
+    let outer_close_output = function_output("outer-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_close_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &outer_close_output)
+        .await
+        .expect("commit outer close");
+
+    let requests = compact_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let inner_compact_request = &requests[0];
+    assert!(inner_compact_request.body_contains_text("inner assistant traj should be folded away"));
+    let outer_compact_request = &requests[1];
+    assert!(
+        outer_compact_request
+            .body_contains_text("Compact only the suffix for the Spine node 1.1.1")
+    );
+    assert!(outer_compact_request.body_contains_text("<spine_memory runtime_generated=\"true\">"));
+    assert!(outer_compact_request.body_contains_text("Spine Memory 1.1.1.1"));
+    assert!(outer_compact_request.body_contains_text("inner compact summary"));
+    assert!(outer_compact_request.body_contains_text("after inner in outer suffix"));
+    assert!(
+        !outer_compact_request.body_contains_text("inner assistant traj should be folded away")
+    );
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
+async fn spine_native_compact_replacement_history_matches_parse_stack_materialization() {
+    let server = start_mock_server().await;
+    let close_compact_mock =
+        core_test_support::responses::mount_compact_user_history_with_summary_sequence(
+            &server,
+            vec!["closed child summary before native compact".to_string()],
+        )
+        .await;
+    let native_compact_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("native-compact-summary", "native root compact summary"),
+            ev_completed("native-compact-response"),
+        ]),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before native compact");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "native-compact-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await;
+    session
+        .stage_spine_open(
+            "native-compact-open".to_string(),
+            "child before native compact".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("native-compact-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let child_body = user_message("child body before native compact");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await;
+
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "native-compact-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await;
+    session
+        .stage_spine_close("native-compact-close".to_string(), None)
+        .await
+        .expect("stage close");
+    let close_output = function_output("native-compact-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .await
+        .expect("commit close");
+
+    crate::compact::run_compact_task(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        vec![UserInput::Text {
+            text: "compact now".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await
+    .expect("native compact succeeds");
+
+    assert_eq!(close_compact_mock.requests().len(), 1);
+    assert_eq!(native_compact_mock.requests().len(), 1);
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    let replacement_history = resumed
+        .history
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::Compacted(compacted) => compacted.replacement_history.as_ref(),
+            _ => None,
+        })
+        .expect("native compact should persist replacement_history");
+
+    assert_eq!(replacement_history, &materialized);
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        materialized.as_slice()
+    );
+    assert!(matches!(
+        materialized.as_slice(),
+        [ResponseItem::Message { content, .. }]
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }]
+                    if text.contains("native root compact summary")
+                        && text.contains("<spine_memory runtime_generated=\"true\">")
+            )
+    ));
+}
+
+#[tokio::test]
+async fn spine_context_matches_h_ps_across_operation_sequence() {
+    let server = start_mock_server().await;
+    let close_compact_mock =
+        core_test_support::responses::mount_compact_user_history_with_summary_once(
+            &server,
+            "sequence child compact summary",
+        )
+        .await;
+    let native_compact_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("sequence-native-summary", "sequence native compact summary"),
+            ev_completed("sequence-native-response"),
+        ]),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("sequence prefix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await;
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "sequence-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await;
+    session
+        .stage_spine_open("sequence-open".to_string(), "sequence child".to_string())
+        .await
+        .expect("stage open");
+    let open_output = function_output("sequence-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+
+    let child_body = user_message("sequence child body");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await;
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "sequence-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await;
+    session
+        .stage_spine_close("sequence-close".to_string(), None)
+        .await
+        .expect("stage close");
+    let close_output = function_output("sequence-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .await
+        .expect("commit close");
+    assert_eq!(close_compact_mock.requests().len(), 1);
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+
+    crate::compact::run_compact_task(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        vec![UserInput::Text {
+            text: "sequence native compact".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await
+    .expect("native compact succeeds");
+    assert_eq!(native_compact_mock.requests().len(), 1);
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let source_raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let source_runtime =
+        SpineRuntime::load_for_rollout_items(&rollout_path, &source_raw_items, &[])
+            .expect("load source spine runtime")
+            .expect("source sidecar should exist");
+    let source_materialized = source_runtime
+        .materialize_history(&source_raw_items)
+        .expect("materialize source h(PS)");
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = source_raw_items
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    SpineStore::clone_for_rollout_with_raw_live(&rollout_path, &resumed_rollout_path, &raw_live)
+        .expect("clone spine sidecar");
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: resumed.history,
+            rollout_path: Some(rollout_path),
+        }))
+        .await;
+    assert_eq!(
+        resumed_session.clone_history().await.raw_items(),
+        source_materialized.as_slice()
+    );
+}
+
+#[tokio::test]
+async fn spine_feature_off_records_spine_shaped_items_as_plain_history_without_sidecar() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .disable(Feature::SpineTaskTree)
+                .expect("disable spine feature");
+        },
+    )
+    .await;
+    assert!(session.spine.is_none());
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("feature off prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "feature-off-open");
+    let open_output = function_output("feature-off-open");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "feature-off-close");
+    let close_output = function_output("feature-off-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await;
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await;
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await;
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await;
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_output))
+        .await;
+
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        &[
+            prefix.clone(),
+            open_request.clone(),
+            open_output.clone(),
+            close_request.clone(),
+            close_output.clone(),
+        ]
+    );
+    assert!(!SpineStore::has_for_rollout(&rollout_path).expect("check sidecar"));
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &resumed.history)
+        .await;
+    assert_eq!(
+        reconstructed.history,
+        vec![
+            prefix,
+            open_request,
+            open_output,
+            close_request,
+            close_output
+        ]
+    );
+    assert!(!reconstructed.used_replacement_history);
+    assert!(reconstructed.spine_rollback_cuts.is_empty());
+}
+
+#[tokio::test]
+async fn spine_feature_off_prompt_history_is_byte_identical_to_base_codex() {
+    let (mut base_session, base_turn_context, _base_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |_config| {},
+        )
+        .await;
+    let base_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut base_session).expect("base session should be unique"),
+    )
+    .await;
+    assert!(base_session.spine.is_none());
+
+    let (mut feature_off_session, feature_off_turn_context, _feature_off_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .disable(Feature::SpineTaskTree)
+                    .expect("disable spine feature");
+            },
+        )
+        .await;
+    let feature_off_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut feature_off_session).expect("feature-off session should be unique"),
+    )
+    .await;
+    assert!(feature_off_session.spine.is_none());
+
+    let items = vec![
+        user_message("feature off byte prefix"),
+        spine_call(SPINE_TOOL_OPEN, "byte-open"),
+        function_output("byte-open"),
+        user_message("<spine_memory runtime_generated=\"true\">plain text</spine_memory>"),
+        spine_call(SPINE_TOOL_CLOSE, "byte-close"),
+        function_output("byte-close"),
+        assistant_message("feature off assistant"),
+    ];
+    for item in &items {
+        base_session
+            .record_conversation_items(&base_turn_context, std::slice::from_ref(item))
+            .await;
+        feature_off_session
+            .record_conversation_items(&feature_off_turn_context, std::slice::from_ref(item))
+            .await;
+    }
+
+    let base_history = base_session.clone_history().await;
+    let feature_off_history = feature_off_session.clone_history().await;
+    assert_eq!(
+        serde_json::to_vec(base_history.raw_items()).expect("base raw history json"),
+        serde_json::to_vec(feature_off_history.raw_items()).expect("feature-off raw history json")
+    );
+    assert_eq!(
+        serde_json::to_vec(
+            &base_history
+                .clone()
+                .for_prompt(&base_turn_context.model_info.input_modalities)
+        )
+        .expect("base prompt history json"),
+        serde_json::to_vec(
+            &feature_off_history
+                .clone()
+                .for_prompt(&feature_off_turn_context.model_info.input_modalities)
+        )
+        .expect("feature-off prompt history json")
+    );
+
+    base_session.ensure_rollout_materialized().await;
+    base_session
+        .flush_rollout()
+        .await
+        .expect("base rollout should flush");
+    feature_off_session.ensure_rollout_materialized().await;
+    feature_off_session
+        .flush_rollout()
+        .await
+        .expect("feature-off rollout should flush");
+
+    let InitialHistory::Resumed(base_resumed) =
+        RolloutRecorder::get_rollout_history(&base_rollout_path)
+            .await
+            .expect("read base rollout")
+    else {
+        panic!("expected base resumed rollout history");
+    };
+    let InitialHistory::Resumed(feature_off_resumed) =
+        RolloutRecorder::get_rollout_history(&feature_off_rollout_path)
+            .await
+            .expect("read feature-off rollout")
+    else {
+        panic!("expected feature-off resumed rollout history");
+    };
+    let base_reconstructed = base_session
+        .reconstruct_history_from_rollout(&base_turn_context, &base_resumed.history)
+        .await;
+    let feature_off_reconstructed = feature_off_session
+        .reconstruct_history_from_rollout(&feature_off_turn_context, &feature_off_resumed.history)
+        .await;
+    assert_eq!(
+        serde_json::to_vec(&base_reconstructed.history).expect("base reconstructed json"),
+        serde_json::to_vec(&feature_off_reconstructed.history)
+            .expect("feature-off reconstructed json")
+    );
+    assert_eq!(
+        base_reconstructed.used_replacement_history,
+        feature_off_reconstructed.used_replacement_history
+    );
+    assert_eq!(
+        base_reconstructed.spine_rollback_cuts,
+        feature_off_reconstructed.spine_rollback_cuts
+    );
+    assert!(!SpineStore::has_for_rollout(&base_rollout_path).expect("check base sidecar"));
+    assert!(
+        !SpineStore::has_for_rollout(&feature_off_rollout_path).expect("check feature-off sidecar")
+    );
+}
+
+#[tokio::test]
+async fn spine_feature_off_replacement_history_resume_is_host_verbatim() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .disable(Feature::SpineTaskTree)
+                .expect("disable spine feature");
+        },
+    )
+    .await;
+    assert!(session.spine.is_none());
+
+    let replacement_history = vec![
+        user_message("feature off replacement history"),
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<spine_memory runtime_generated=\"true\">not parsed</spine_memory>"
+                    .to_string(),
+            }],
+            phase: None,
+        },
+    ];
+    let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
+        message: "host compact checkpoint".to_string(),
+        replacement_history: Some(replacement_history.clone()),
+    })];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: Some(PathBuf::from("/tmp/feature-off-spine-looking.jsonl")),
+        }))
+        .await;
+
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        replacement_history
+    );
+    assert!(session.spine.is_none());
+}
+
+#[tokio::test]
+async fn spine_fixed_query_is_not_shifted_as_msg() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.developer_instructions = Some("fixed developer instruction".to_string());
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    assert!(
+        developer_input_texts(&initial_context)
+            .iter()
+            .any(|text| text.contains("fixed developer instruction")),
+        "fixed developer instruction should be rendered into prompt prefix"
+    );
+    assert!(
+        session.clone_history().await.raw_items().is_empty(),
+        "building fixed query prompt prefix must not append working history"
+    );
+
+    assert!(
+        !SpineStore::has_for_rollout(&rollout_path).expect("check sidecar"),
+        "fixed query must not create Spine sidecar or shift Msg tokens"
+    );
+
+    let user = user_message("actual task message");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&user))
+        .await;
+    let msg_count = session
+        .spine
+        .as_ref()
+        .expect("spine enabled")
+        .lock()
+        .await
+        .runtime()
+        .expect("runtime exists")
+        .parse_stack_msg_leaf_count_for_test();
+    assert_eq!(
+        msg_count, 1,
+        "only the actual working-history message should shift as Msg"
+    );
+}
+
+#[tokio::test]
+async fn spine_raw_ordinals_follow_persisted_rollout_items_not_input_width() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let first = user_message("first persisted message");
+    let second = user_message("second persisted message");
+    session
+        .record_conversation_items(
+            &turn_context,
+            &[
+                first.clone(),
+                ResponseItem::CompactionTrigger,
+                second.clone(),
+            ],
+        )
+        .await;
+
+    let runtime = session
+        .spine
+        .as_ref()
+        .expect("spine enabled")
+        .lock()
+        .await
+        .runtime()
+        .expect("runtime exists")
+        .parse_stack_debug_for_test();
+    assert!(
+        runtime.contains("raw_ordinal: 0")
+            && runtime.contains("context_index: 0")
+            && runtime.contains("raw_ordinal: 1")
+            && runtime.contains("context_index: 1"),
+        "expected persisted raw ordinals to skip CompactionTrigger without widening raw trace: {runtime}"
+    );
+    assert!(
+        !runtime.contains("raw_ordinal: 2"),
+        "non-persisted input item must not advance Spine raw ordinal: {runtime}"
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)"),
+        vec![first, second]
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "spine_task_tree replacement_history does not match sidecar h(PS)")]
+async fn spine_resume_rejects_replacement_history_mismatch() {
+    let (_source_session, _source_turn_context, source_rollout_path, mut rollout_items) =
+        make_spine_session_with_closed_child("sidecar resume summary").await;
+    let stale_replacement = vec![user_message("stale replacement_history should not win")];
+    rollout_items.push(RolloutItem::Compacted(CompactedItem {
+        message: "stale compact checkpoint".to_string(),
+        replacement_history: Some(stale_replacement.clone()),
+    }));
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = spine_raw_items_after_rollback(&rollout_items)
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    SpineStore::clone_for_rollout_with_raw_live(
+        &source_rollout_path,
+        &resumed_rollout_path,
+        &raw_live,
+    )
+    .expect("clone spine sidecar");
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: Some(source_rollout_path),
+        }))
+        .await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "spine_task_tree resume requires Spine sidecar")]
+async fn replacement_history_not_used_as_spine_replay_source() {
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    assert!(!SpineStore::has_for_rollout(&rollout_path).expect("check sidecar"));
+    let replacement_history = vec![user_message(
+        "<spine_memory runtime_generated=\"true\">rendered snapshot only</spine_memory>",
+    )];
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: vec![RolloutItem::Compacted(CompactedItem {
+                message: "host compact checkpoint".to_string(),
+                replacement_history: Some(replacement_history),
+            })],
+            rollout_path: Some(rollout_path),
+        }))
+        .await;
+}
+
+#[tokio::test]
+async fn spine_resume_accepts_matching_replacement_history_checkpoint() {
+    let (_source_session, _source_turn_context, source_rollout_path, mut rollout_items) =
+        make_spine_session_with_closed_child("sidecar resume summary").await;
+    let expected_raw_items = spine_raw_items_after_rollback(&rollout_items);
+    let expected_runtime =
+        SpineRuntime::load_for_rollout_items(&source_rollout_path, &expected_raw_items, &[])
+            .expect("load source spine runtime")
+            .expect("source sidecar should exist");
+    let expected_materialized = expected_runtime
+        .materialize_history(&expected_raw_items)
+        .expect("materialize source h(PS)");
+
+    rollout_items.push(RolloutItem::Compacted(CompactedItem {
+        message: "matching compact checkpoint".to_string(),
+        replacement_history: Some(expected_materialized.clone()),
+    }));
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = spine_raw_items_after_rollback(&rollout_items)
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    SpineStore::clone_for_rollout_with_raw_live(
+        &source_rollout_path,
+        &resumed_rollout_path,
+        &raw_live,
+    )
+    .expect("clone spine sidecar");
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: Some(source_rollout_path),
+        }))
+        .await;
+
+    let resumed_history = resumed_session.clone_history().await;
+    assert_eq!(
+        resumed_history.raw_items(),
+        expected_materialized.as_slice()
+    );
+    assert!(matches!(
+        resumed_history.raw_items(),
+        [
+            ResponseItem::Message { content: prefix, .. },
+            ResponseItem::Message { content: memory, .. },
+        ] if matches!(
+            prefix.as_slice(),
+            [ContentItem::InputText { text }] if text == "prefix before spine"
+        ) && matches!(
+            memory.as_slice(),
+            [ContentItem::InputText { text }]
+                if text.contains("Spine Memory 1.1.1")
+                    && text.contains("sidecar resume summary")
+        )
+    ));
+}
+
+#[tokio::test]
+#[should_panic(expected = "spine_task_tree resume requires Spine sidecar")]
+async fn spine_resume_non_spine_session_fails_closed() {
+    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    let rollout_items = vec![RolloutItem::ResponseItem(user_message(
+        "ordinary non-spine history",
+    ))];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: Some(rollout_path),
+        }))
+        .await;
 }
 
 #[tokio::test]

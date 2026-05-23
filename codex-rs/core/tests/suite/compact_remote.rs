@@ -154,6 +154,59 @@ fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
     }]
 }
 
+fn assert_spine_root_replacement_history_in_rollout(
+    rollout_path: &std::path::Path,
+    expected_summary: &str,
+) -> Result<()> {
+    let rollout_text = fs::read_to_string(rollout_path)?;
+    let mut saw_spine_checkpoint = false;
+    for line in rollout_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(entry) = serde_json::from_str::<RolloutLine>(line) else {
+            continue;
+        };
+        let RolloutItem::Compacted(compacted) = entry.item else {
+            continue;
+        };
+        let Some(replacement_history) = compacted.replacement_history.as_ref() else {
+            continue;
+        };
+        assert_eq!(
+            replacement_history.len(),
+            1,
+            "Spine root compact replacement_history should be one root memory item"
+        );
+        let ResponseItem::Message { role, content, .. } = &replacement_history[0] else {
+            panic!("Spine root compact replacement_history must render as a memory message");
+        };
+        assert_eq!(role, "user");
+        let text = content
+            .iter()
+            .find_map(|item| match item {
+                ContentItem::InputText { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .expect("Spine root memory should contain input text");
+        assert!(
+            text.contains("<spine_memory runtime_generated=\"true\">"),
+            "replacement_history must contain runtime-generated Spine memory: {text}"
+        );
+        assert!(
+            text.contains(expected_summary),
+            "replacement_history memory should include remote compact summary {expected_summary}: {text}"
+        );
+        saw_spine_checkpoint = true;
+    }
+    assert!(
+        saw_spine_checkpoint,
+        "expected rollout to persist Spine root replacement_history checkpoint"
+    );
+    Ok(())
+}
+
 fn remote_realtime_test_codex_builder(
     realtime_server: &responses::WebSocketTestServer,
 ) -> TestCodexBuilder {
@@ -519,7 +572,7 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
                 .expect("enable spine feature");
         });
     let resumed = resume_builder
-        .resume(harness.server(), home, rollout_path)
+        .resume(harness.server(), home, rollout_path.clone())
         .await?;
 
     resumed
@@ -551,6 +604,10 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
         !follow_up_request.body_contains_text("SPINE_READY"),
         "expected remote compact memory to replace pre-compaction raw assistant history"
     );
+    assert_spine_root_replacement_history_in_rollout(
+        &rollout_path,
+        "REMOTE_SPINE_ROOT_COMPACT_SUMMARY",
+    )?;
 
     Ok(())
 }
@@ -1017,7 +1074,7 @@ async fn remote_compact_v2_installs_spine_root_compact_for_followups() -> Result
                 .expect("enable remote compaction v2");
         });
     let resumed = resume_builder
-        .resume(harness.server(), home, rollout_path)
+        .resume(harness.server(), home, rollout_path.clone())
         .await?;
 
     resumed
@@ -1057,6 +1114,10 @@ async fn remote_compact_v2_installs_spine_root_compact_for_followups() -> Result
         follow_up_request.body_contains_text("REMOTE_SPINE_ROOT_COMPACT_V2_SUMMARY"),
         "expected Spine root memory to include remote compact v2 payload"
     );
+    assert_spine_root_replacement_history_in_rollout(
+        &rollout_path,
+        "REMOTE_SPINE_ROOT_COMPACT_V2_SUMMARY",
+    )?;
 
     Ok(())
 }

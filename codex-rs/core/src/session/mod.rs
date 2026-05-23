@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::Prompt;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
@@ -17,6 +18,7 @@ use crate::agent::status::is_final;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
+use crate::compact::content_items_to_text;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::connectors;
@@ -29,6 +31,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context_manager::ContextAppend;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
@@ -38,9 +41,14 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
+use crate::spine::SPINE_NAMESPACE;
+use crate::spine::SpineCloseCompact;
+use crate::spine::SpineCommitKind;
 use crate::spine::SpineError;
+use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineSessionState;
+use crate::spine::SpineStore;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -124,6 +132,7 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rollout::should_persist_response_item;
 use codex_rollout::state_db;
 use codex_rollout_trace::AgentResultTracePayload;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
@@ -401,6 +410,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
+    pub(crate) spine_fork_source_rollout_path: Option<PathBuf>,
     pub(crate) session_source: SessionSource,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
@@ -465,6 +475,7 @@ impl Codex {
             mcp_manager,
             extensions,
             conversation_history,
+            spine_fork_source_rollout_path,
             session_source,
             thread_source,
             agent_control,
@@ -655,6 +666,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
+            spine_fork_source_rollout_path,
             session_source_clone,
             skills_manager,
             plugins_manager,
@@ -1269,7 +1281,11 @@ impl Session {
         )
         .await;
         if let Err(err) = self
-            .rebuild_spine_from_rollout_items(&reconstructed_rollout.raw_response_items)
+            .rebuild_spine_from_rollout_items(
+                &reconstructed_rollout.raw_response_items,
+                &reconstructed_rollout.spine_rollback_cuts,
+                reconstructed_rollout.used_replacement_history,
+            )
             .await
         {
             panic!("failed to rebuild Spine runtime from rollout: {err}");
@@ -1282,6 +1298,8 @@ impl Session {
     async fn rebuild_spine_from_rollout_items(
         &self,
         raw_items: &[Option<ResponseItem>],
+        rollback_cuts: &[usize],
+        used_replacement_history: bool,
     ) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
@@ -1295,13 +1313,29 @@ impl Session {
         };
         let raw_len = u64::try_from(raw_items.len())
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
-        let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, raw_items)?;
+        let runtime =
+            SpineRuntime::load_for_rollout_items(&rollout_path, raw_items, rollback_cuts)?;
+        if runtime.is_none() && (used_replacement_history || raw_items.iter().any(Option::is_some))
+        {
+            return Err(SpineError::InvalidStore(
+                "spine_task_tree resume requires Spine sidecar".to_string(),
+            ));
+        }
         let materialized = runtime
             .as_ref()
             .map(|runtime| runtime.materialize_history(raw_items))
             .transpose()?;
         spine_slot.lock().await.set_replayed(raw_len, runtime)?;
         if let Some(materialized) = materialized {
+            if used_replacement_history {
+                let host_history = self.clone_history().await;
+                if host_history.raw_items() != materialized.as_slice() {
+                    return Err(SpineError::InvalidStore(
+                        "spine_task_tree replacement_history does not match sidecar h(PS)"
+                            .to_string(),
+                    ));
+                }
+            }
             self.replace_history(materialized, self.reference_context_item().await)
                 .await;
         }
@@ -1313,6 +1347,73 @@ impl Session {
             return Ok(());
         };
         spine_slot.lock().await.observe_raw_items(count)
+    }
+
+    async fn ensure_spine_runtime_if_available(&self) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let Some(rollout_path) = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+        else {
+            return Ok(());
+        };
+        spine_slot.lock().await.ensure_runtime(&rollout_path)
+    }
+
+    async fn observe_spine_context_items(
+        &self,
+        raw_ordinals: &[Option<u64>],
+        items: &[ResponseItem],
+        appends: &[ContextAppend],
+    ) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+            .ok_or_else(|| {
+                SpineError::InvalidStore(
+                    "spine_task_tree checkpoint requires rollout path".to_string(),
+                )
+            })?;
+        let history = self.clone_history().await;
+        let raw_history = history.raw_items().to_vec();
+        let mut guard = spine_slot.lock().await;
+        let Some(runtime) = guard.runtime_mut() else {
+            return Ok(());
+        };
+        for append in appends {
+            let raw_ordinal = raw_ordinals
+                .get(append.input_index)
+                .copied()
+                .flatten()
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent(
+                        "context append has no persisted raw ordinal".to_string(),
+                    )
+                })?;
+            let item = items.get(append.input_index).ok_or_else(|| {
+                SpineError::InvalidEvent("context append input index outside items".to_string())
+            })?;
+            if crate::spine::is_user_message(item) {
+                let context = raw_history
+                    .get(..append.context_index)
+                    .ok_or_else(|| {
+                        SpineError::InvalidEvent(
+                            "checkpoint context index outside history".to_string(),
+                        )
+                    })?
+                    .to_vec();
+                runtime.checkpoint_before_user_msg(&rollout_path, raw_ordinal, &context)?;
+            }
+            runtime.observe_context_item(raw_ordinal, append.context_index, item)?;
+        }
+        Ok(())
     }
 
     async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineSessionState>, SpineError> {
@@ -1339,27 +1440,29 @@ impl Session {
     pub(crate) async fn spine_tree(&self) -> Result<String, SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let guard = spine.lock().await;
-        Ok(guard
+        guard
             .runtime()
             .expect("spine runtime initialized")
-            .state()
-            .render_tree())
+            .render_tree()
     }
 
-    pub(crate) async fn stage_spine_open(&self, call_id: String) -> Result<(), SpineError> {
+    pub(crate) async fn stage_spine_open(
+        &self,
+        call_id: String,
+        summary: String,
+    ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         spine
             .lock()
             .await
             .runtime_mut()
             .expect("spine runtime initialized")
-            .stage_open(call_id)
+            .stage_open(call_id, summary)
     }
 
     pub(crate) async fn stage_spine_close(
         &self,
         call_id: String,
-        summary: String,
         instruction: Option<String>,
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
@@ -1368,11 +1471,12 @@ impl Session {
             .await
             .runtime_mut()
             .expect("spine runtime initialized")
-            .stage_close(call_id, summary, instruction)
+            .stage_close(call_id, instruction)
     }
 
     pub(crate) async fn maybe_commit_spine_tool_output(
         &self,
+        turn_context: &TurnContext,
         item: &ResponseItem,
     ) -> Result<(), SpineError> {
         let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
@@ -1381,20 +1485,210 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        if let Some(spine) = spine_slot.lock().await.runtime_mut() {
-            spine.maybe_commit_output(call_id)?;
+        let pending_commit = {
+            let guard = spine_slot.lock().await;
+            let Some(spine) = guard.runtime() else {
+                return Ok(());
+            };
+            spine.pending_commit(call_id)?
+        };
+        let close_compact = match pending_commit {
+            Some(SpinePendingCommit::Close {
+                node,
+                suffix_start,
+                instruction,
+            }) => {
+                let history = self.clone_history().await;
+                let expected_history = history.raw_items().to_vec();
+                Some((
+                    self.spine_compact_close(
+                        turn_context,
+                        &history,
+                        node.to_string(),
+                        suffix_start,
+                        instruction,
+                    )
+                    .await?,
+                    expected_history,
+                ))
+            }
+            Some(SpinePendingCommit::Open) | None => None,
+        };
+        if let Some((_, expected_history)) = close_compact.as_ref() {
+            let history = self.clone_history().await;
+            if history.raw_items() != expected_history.as_slice() {
+                return Err(SpineError::InvalidEvent(
+                    "spine.close history changed while compacting suffix".to_string(),
+                ));
+            }
         }
+        {
+            let mut guard = spine_slot.lock().await;
+            let Some(spine) = guard.runtime_mut() else {
+                return Ok(());
+            };
+            let mut state = self.state.lock().await;
+            if let Some((_, expected_history)) = close_compact.as_ref()
+                && state.clone_history().raw_items() != expected_history.as_slice()
+            {
+                return Err(SpineError::InvalidEvent(
+                    "spine.close history changed before suffix replacement".to_string(),
+                ));
+            }
+            let close_compact = close_compact.map(|(compact, _)| compact);
+            let commit_kind = spine.maybe_commit_output(call_id, close_compact)?;
+            if let Some(commit_kind) = commit_kind.as_ref() {
+                match commit_kind {
+                    SpineCommitKind::Open { suffix_start } => {
+                        let history = state.clone_history();
+                        let history_items = history.raw_items();
+                        if *suffix_start > history_items.len() {
+                            return Err(SpineError::InvalidEvent(format!(
+                                "spine.open suffix start {suffix_start} exceeds history length {}",
+                                history_items.len()
+                            )));
+                        }
+                        let filtered = history_items
+                            .iter()
+                            .cloned()
+                            .enumerate()
+                            .filter_map(|(index, history_item)| {
+                                let remove = index >= *suffix_start
+                                    && match &history_item {
+                                        ResponseItem::FunctionCall {
+                                            call_id: existing,
+                                            namespace,
+                                            ..
+                                        } => {
+                                            existing == call_id
+                                                && namespace.as_deref() == Some(SPINE_NAMESPACE)
+                                        }
+                                        ResponseItem::FunctionCallOutput {
+                                            call_id: existing,
+                                            ..
+                                        } => existing == call_id,
+                                        _ => false,
+                                    };
+                                (!remove).then_some(history_item)
+                            })
+                            .collect();
+                        let reference_context_item = state.reference_context_item();
+                        state.replace_history(filtered, reference_context_item);
+                    }
+                    SpineCommitKind::Close {
+                        suffix_start,
+                        replacement,
+                    } => {
+                        let suffix_end = state.clone_history().raw_items().len();
+                        if *suffix_start > suffix_end {
+                            return Err(SpineError::InvalidEvent(format!(
+                                "spine.close suffix start {suffix_start} exceeds history length {suffix_end}"
+                            )));
+                        }
+                        let reference_context_item = state.reference_context_item();
+                        state
+                            .replace_history_suffix(
+                                *suffix_start..suffix_end,
+                                replacement.clone(),
+                                reference_context_item,
+                            )
+                            .map_err(SpineError::InvalidEvent)?;
+                    }
+                }
+            }
+        };
         Ok(())
     }
 
-    pub(crate) async fn install_spine_root_compact(&self, body: String) -> Result<(), SpineError> {
+    async fn spine_compact_close(
+        &self,
+        turn_context: &TurnContext,
+        history: &ContextManager,
+        node_id: String,
+        suffix_start: usize,
+        instruction: Option<String>,
+    ) -> Result<SpineCloseCompact, SpineError> {
+        let raw_items = history.raw_items();
+        if suffix_start >= raw_items.len() {
+            return Err(SpineError::InvalidEvent(format!(
+                "spine.close suffix start {suffix_start} is outside history length {}",
+                raw_items.len()
+            )));
+        }
+        let mut prompt_input = history
+            .clone()
+            .for_prompt(&turn_context.model_info.input_modalities);
+        prompt_input.push(spine_close_compact_prompt_item(
+            &node_id,
+            instruction.as_deref(),
+        ));
+        let prompt = Prompt {
+            input: prompt_input,
+            base_instructions: self.get_base_instructions().await,
+            personality: turn_context.personality,
+            ..Default::default()
+        };
+        let compaction_trace = self.services.rollout_thread_trace.compaction_trace_context(
+            turn_context.sub_id.as_str(),
+            format!("spine-close-{node_id}"),
+            turn_context.model_info.slug.as_str(),
+            turn_context.provider.info().name.as_str(),
+        );
+        let output = self
+            .services
+            .model_client
+            .compact_conversation_history(
+                &prompt,
+                &turn_context.model_info,
+                crate::client::CompactConversationRequestSettings {
+                    effort: turn_context.reasoning_effort,
+                    summary: turn_context.reasoning_summary,
+                    service_tier: turn_context.config.service_tier.clone(),
+                },
+                &turn_context.session_telemetry,
+                &compaction_trace,
+            )
+            .await
+            .map_err(|err| {
+                SpineError::InvalidEvent(format!("spine.close compact failed: {err}"))
+            })?;
+        let body = spine_close_compact_body(&node_id, &output)?;
+        Ok(SpineCloseCompact {
+            body,
+            source_context_range: suffix_start..raw_items.len(),
+        })
+    }
+
+    pub(crate) async fn install_spine_root_compact(
+        &self,
+        body: String,
+        next_open_index: usize,
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(());
+            return Ok(None);
         };
         if let Some(spine) = spine_slot.lock().await.runtime_mut() {
-            spine.root_compact(body)?;
+            spine.root_compact(body, next_open_index)?;
+            self.ensure_rollout_materialized().await;
+            self.flush_rollout()
+                .await
+                .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+            let rollout_path = self
+                .current_rollout_path()
+                .await
+                .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+                .ok_or_else(|| {
+                    SpineError::InvalidStore(
+                        "spine_task_tree root compact requires rollout path".to_string(),
+                    )
+                })?;
+            let history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
+                .await
+                .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+            let raw_items = spine_raw_items_after_rollback(&history.get_rollout_items());
+            return spine.materialize_history(&raw_items).map(Some);
         }
-        Ok(())
+        Ok(None)
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -2629,10 +2923,29 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items, turn_context).await;
+        let (raw_ordinals, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
+            let raw_start = spine_slot.lock().await.raw_len();
+            match assign_spine_raw_ordinals(raw_start, items) {
+                Ok(mapped) => mapped,
+                Err(err) => panic!("failed to assign Spine raw ordinals: {err}"),
+            }
+        } else {
+            (Vec::new(), 0)
+        };
+        let appends = self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
-        if let Err(err) = self.observe_spine_raw_items(items.len()).await {
+        if let Err(err) = self.ensure_spine_runtime_if_available().await {
+            panic!("failed to initialize Spine runtime: {err}");
+        }
+        if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
             panic!("failed to observe Spine raw items: {err}");
+        }
+        if !raw_ordinals.is_empty()
+            && let Err(err) = self
+                .observe_spine_context_items(&raw_ordinals, items, &appends)
+                .await
+        {
+            panic!("failed to observe Spine context items: {err}");
         }
         self.send_raw_response_items(turn_context, items).await;
     }
@@ -2642,9 +2955,9 @@ impl Session {
         &self,
         items: &[ResponseItem],
         turn_context: &TurnContext,
-    ) {
+    ) -> Vec<ContextAppend> {
         let mut state = self.state.lock().await;
-        state.record_items(items.iter(), turn_context.truncation_policy);
+        state.record_items(items.iter(), turn_context.truncation_policy)
     }
 
     async fn maybe_warn_on_server_model_mismatch(
@@ -3526,6 +3839,94 @@ impl Session {
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
+}
+
+fn spine_close_compact_prompt_item(node_id: &str, instruction: Option<&str>) -> ResponseItem {
+    let mut text = format!(
+        "---------- End of Context (where compact to) ----------\n\n\
+Compact only the suffix for the Spine node {node_id}, by the most recent `spine.open` tool-use, into a Markdown memory.\n\
+Preserve decisions, file paths, tests, failures, and remaining TODOs."
+    );
+    if let Some(instruction) = instruction
+        .map(str::trim)
+        .filter(|instruction| !instruction.is_empty())
+    {
+        text.push_str("\n\n");
+        text.push_str(instruction);
+    }
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText { text }],
+        phase: None,
+    }
+}
+
+fn spine_close_compact_body(node_id: &str, output: &[ResponseItem]) -> Result<String, SpineError> {
+    let mut entries = Vec::new();
+    for item in output {
+        match item {
+            ResponseItem::Message { role, content, .. }
+                if role == "assistant" || role == "user" =>
+            {
+                if let Some(text) = content_items_to_text(content)
+                    && !text.trim().is_empty()
+                {
+                    entries.push(text);
+                }
+            }
+            ResponseItem::Compaction { encrypted_content } => {
+                if !encrypted_content.trim().is_empty() {
+                    entries.push(encrypted_content.clone());
+                }
+            }
+            ResponseItem::ContextCompaction {
+                encrypted_content: Some(encrypted_content),
+            } => {
+                if !encrypted_content.trim().is_empty() {
+                    entries.push(encrypted_content.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    if entries.is_empty() {
+        return Err(SpineError::InvalidEvent(
+            "spine.close compact produced no memory body".to_string(),
+        ));
+    }
+    let mut body = format!("# Spine Memory {node_id}\n\n");
+    body.push_str(&entries.join("\n\n"));
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    Ok(body)
+}
+
+fn assign_spine_raw_ordinals(
+    raw_start: u64,
+    items: &[ResponseItem],
+) -> Result<(Vec<Option<u64>>, usize), SpineError> {
+    let mut next = raw_start;
+    let mut ordinals = Vec::with_capacity(items.len());
+    for item in items {
+        if should_persist_response_item(item) {
+            ordinals.push(Some(next));
+            next = next
+                .checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+        } else {
+            ordinals.push(None);
+        }
+    }
+    let count = next
+        .checked_sub(raw_start)
+        .ok_or_else(|| SpineError::InvalidEvent("raw ordinal underflow".to_string()))?;
+    Ok((
+        ordinals,
+        usize::try_from(count)
+            .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
+    ))
 }
 
 pub(crate) fn emit_subagent_session_started(

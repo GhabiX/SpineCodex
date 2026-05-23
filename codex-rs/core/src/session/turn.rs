@@ -43,6 +43,10 @@ use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::spine::SPINE_NAMESPACE;
+use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_OPEN;
+use crate::spine::SPINE_TOOL_TREE;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -383,6 +387,7 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
+    let mut spine_control_follow_up_items: Vec<ResponseItem> = Vec::new();
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -439,11 +444,12 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = {
+        let mut sampling_request_input: Vec<ResponseItem> = {
             sess.clone_history()
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
+        sampling_request_input.append(&mut spine_control_follow_up_items);
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -472,7 +478,9 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
+                    spine_control_items,
                 } = sampling_request_output;
+                spine_control_follow_up_items = spine_control_items;
                 can_drain_pending_input = true;
                 let has_pending_input = sess.has_pending_input().await;
                 let needs_follow_up = model_needs_follow_up || has_pending_input;
@@ -1271,6 +1279,19 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+    spine_control_items: Vec<ResponseItem>,
+}
+
+fn is_spine_control_function_call(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::FunctionCall {
+            namespace: Some(namespace),
+            name,
+            ..
+        } if namespace == SPINE_NAMESPACE
+            && matches!(name.as_str(), SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE)
+    )
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -1807,14 +1828,28 @@ async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    spine_control_items: &mut Vec<ResponseItem>,
 ) -> CodexResult<()> {
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
                 let response_item = response_input.into();
+                if let ResponseItem::FunctionCallOutput { call_id, .. } = &response_item
+                    && spine_control_items.iter().any(|item| {
+                        matches!(
+                            item,
+                            ResponseItem::FunctionCall {
+                                call_id: existing,
+                                ..
+                            } if existing == call_id
+                        )
+                    })
+                {
+                    spine_control_items.push(response_item.clone());
+                }
                 sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
                     .await;
-                sess.maybe_commit_spine_tool_output(&response_item)
+                sess.maybe_commit_spine_tool_output(&turn_context, &response_item)
                     .await
                     .map_err(|err| {
                         CodexErr::Fatal(format!("failed to commit Spine tool output: {err}"))
@@ -1884,6 +1919,7 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
+    let mut spine_control_items: Vec<ResponseItem> = Vec::new();
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
         String,
@@ -2012,6 +2048,8 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
+                let spine_control_item =
+                    is_spine_control_function_call(&item).then(|| item.clone());
                 let output_result =
                     match handle_output_item_done(&mut ctx, item, previously_streamed_item)
                         .instrument(handle_responses)
@@ -2027,11 +2065,15 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                if let Some(item) = spine_control_item {
+                    spine_control_items.push(item);
+                }
                 // todo: remove before stabilizing multi-agent v2
                 if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
+                        spine_control_items: Vec::new(),
                     });
                 }
             }
@@ -2165,6 +2207,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
+                    spine_control_items: Vec::new(),
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -2294,7 +2337,13 @@ async fn try_run_sampling_request(
         client_session.send_response_processed(response_id).await;
     }
 
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    drain_in_flight(
+        &mut in_flight,
+        sess.clone(),
+        turn_context.clone(),
+        &mut spine_control_items,
+    )
+    .await?;
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token
@@ -2319,7 +2368,10 @@ async fn try_run_sampling_request(
         }
     }
 
-    outcome
+    outcome.map(|mut output| {
+        output.spine_control_items = spine_control_items;
+        output
+    })
 }
 
 pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {

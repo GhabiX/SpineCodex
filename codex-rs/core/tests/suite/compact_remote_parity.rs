@@ -983,9 +983,14 @@ fn normalize_tmp_prefix_before_marker(text: &mut String, marker: &str) {
                     .and_then(|temp_index| prefix[..temp_index].rfind(":\\Users\\"))
                     .and_then(|colon_index| colon_index.checked_sub(1))
             });
+        let run_user_temp_start = prefix
+            .rfind("/run/user/")
+            .filter(|start_index| prefix[*start_index..].contains("/.tmp"));
         let start = prefix
             .rfind("/private/var/folders/")
             .or_else(|| prefix.rfind("/var/folders/"))
+            .or_else(|| prefix.rfind("/var/tmp/"))
+            .or(run_user_temp_start)
             .or_else(|| prefix.rfind("/private/tmp/.tmp"))
             .or_else(|| prefix.rfind("/tmp/.tmp"))
             .or(windows_appdata_temp_start);
@@ -1002,13 +1007,15 @@ fn normalize_tmp_prefix_before_marker(text: &mut String, marker: &str) {
 fn normalize_string_rewrites_linux_temp_skill_paths() {
     let text = normalize_string(
         "file: /tmp/.tmp5YYdK3/skills/.system/imagegen/SKILL.md and \
-         /private/tmp/.tmpw3wqF9/skills/custom/SKILL.md",
+         /private/tmp/.tmpw3wqF9/skills/custom/SKILL.md and \
+         /run/user/1001/codex-ckq-test-tmp-20260523_0542_serial/.tmpSvMy0J/skills/.system/openai-docs/SKILL.md",
     );
 
     assert_eq!(
         text,
         "file: <CODEX_HOME>/skills/.system/imagegen/SKILL.md and \
-         <CODEX_HOME>/skills/custom/SKILL.md"
+         <CODEX_HOME>/skills/custom/SKILL.md and \
+         <CODEX_HOME>/skills/.system/openai-docs/SKILL.md"
     );
 }
 
