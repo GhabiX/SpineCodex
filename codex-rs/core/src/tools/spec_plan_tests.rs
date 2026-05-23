@@ -1475,6 +1475,17 @@ fn spine_namespace_is_registered_only_when_feature_enabled() {
             .tool_exposure(&ToolName::namespaced("spine", "open"))
             .is_some()
     );
+
+    let open_tool = find_namespace_function_tool(&specs, "spine", "open");
+    let (open_properties, open_required) = expect_object_schema(&open_tool.parameters);
+    assert_eq!(open_required, Some(&vec!["summary".to_string()]));
+    assert!(open_properties.contains_key("summary"));
+
+    let close_tool = find_namespace_function_tool(&specs, "spine", "close");
+    let (close_properties, close_required) = expect_object_schema(&close_tool.parameters);
+    assert_eq!(close_required, Some(&Vec::new()));
+    assert!(!close_properties.contains_key("summary"));
+    assert!(close_properties.contains_key("instruction"));
 }
 
 #[test]
