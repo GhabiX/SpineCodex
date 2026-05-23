@@ -24,6 +24,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::empty_extension_registry;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -553,6 +554,10 @@ impl TestCodexBuilder {
         } else {
             load_default_config_for_test(home).await
         };
+        config
+            .features
+            .disable(Feature::Apps)
+            .expect("test config should allow feature update");
         config.cwd = cwd_override;
         config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
