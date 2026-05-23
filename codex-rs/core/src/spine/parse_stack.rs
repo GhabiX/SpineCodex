@@ -1,0 +1,522 @@
+use crate::spine::SpineError;
+use crate::spine::archive::SpineArchive;
+use crate::spine::archive::archive_task_tree;
+use crate::spine::archive::memory_ref;
+use crate::spine::archive::next_root_open_symbol;
+use crate::spine::archive::tree_meta;
+use crate::spine::model::ControlSymbol;
+use crate::spine::model::KEvent;
+use crate::spine::model::LoggedKEvent;
+use crate::spine::model::MemRecord;
+use crate::spine::model::NodeId;
+use crate::spine::model::NodeStatus;
+use crate::spine::model::RawMask;
+use crate::spine::model::RootEpoch;
+use crate::spine::model::SegRef;
+use crate::spine::model::SpineToken;
+use crate::spine::model::SpineTreeNode;
+use crate::spine::model::Symbol;
+use crate::spine::model::TreeMeta;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct ParseStack {
+    pub(super) symbols: Vec<Symbol>,
+}
+
+impl ParseStack {
+    pub(super) fn new() -> Self {
+        Self {
+            symbols: Vec::new(),
+        }
+    }
+
+    pub(super) fn shift(
+        &mut self,
+        token: SpineToken,
+        archive: &SpineArchive,
+    ) -> Result<(), SpineError> {
+        self.reduce_fixpoint(archive)?;
+        let symbol = match token {
+            SpineToken::Init { meta } => Symbol::Control(ControlSymbol::Init(meta)),
+            SpineToken::Open { meta } => Symbol::Control(ControlSymbol::Open(meta)),
+            SpineToken::Close { memory } => Symbol::Control(ControlSymbol::Close(memory)),
+            SpineToken::Compact {
+                memory,
+                next_open_index,
+            } => Symbol::Control(ControlSymbol::Compact(memory, next_open_index)),
+            SpineToken::Msg { seg, from_user } => {
+                Symbol::SpineTreeNode(SpineTreeNode::MsgAsLeafNode {
+                    msg: seg,
+                    from_user,
+                })
+            }
+        };
+        self.symbols.push(symbol);
+        self.reduce_fixpoint(archive)
+    }
+
+    fn reduce_fixpoint(&mut self, archive: &SpineArchive) -> Result<(), SpineError> {
+        loop {
+            if self.reduce_task_tree(archive)? {
+                continue;
+            }
+            if self.reduce_root_epoch(archive)? {
+                continue;
+            }
+            if self.reduce_nodes_append() {
+                continue;
+            }
+            if self.reduce_node_to_nodes() {
+                continue;
+            }
+            break;
+        }
+        Ok(())
+    }
+
+    fn reduce_task_tree(&mut self, archive: &SpineArchive) -> Result<bool, SpineError> {
+        let has_nodes = match self.symbols.get(..) {
+            Some(
+                [
+                    ..,
+                    Symbol::Control(ControlSymbol::Open(_)),
+                    Symbol::SpineTreeNodes(_),
+                    Symbol::Control(ControlSymbol::Close(_)),
+                ],
+            ) => true,
+            Some(
+                [
+                    ..,
+                    Symbol::Control(ControlSymbol::Open(_)),
+                    Symbol::Control(ControlSymbol::Close(_)),
+                ],
+            ) => false,
+            _ => return Ok(false),
+        };
+        let Some(Symbol::Control(ControlSymbol::Close(memory))) = self.symbols.pop() else {
+            unreachable!("close symbol matched by reduce pattern")
+        };
+        let children = if has_nodes {
+            let Some(Symbol::SpineTreeNodes(children)) = self.symbols.pop() else {
+                unreachable!("nodes symbol matched by reduce pattern")
+            };
+            children
+        } else {
+            Vec::new()
+        };
+        let Some(Symbol::Control(ControlSymbol::Open(meta))) = self.symbols.pop() else {
+            unreachable!("open symbol matched by reduce pattern")
+        };
+        let (memory_path, trajs_path) = archive_task_tree(archive, &meta, &children, &memory)?;
+        self.symbols
+            .push(Symbol::SpineTreeNode(SpineTreeNode::SpineTree {
+                memory,
+                meta,
+                children,
+                memory_path,
+                trajs_path,
+            }));
+        Ok(true)
+    }
+
+    fn reduce_nodes_append(&mut self) -> bool {
+        let Some([.., Symbol::SpineTreeNodes(_), Symbol::SpineTreeNode(_)]) = self.symbols.get(..)
+        else {
+            return false;
+        };
+        let node = self
+            .symbols
+            .pop()
+            .expect("node symbol matched by reduce pattern");
+        let Some(Symbol::SpineTreeNodes(nodes)) = self.symbols.last_mut() else {
+            unreachable!("nodes symbol was checked before pop")
+        };
+        let Symbol::SpineTreeNode(node) = node else {
+            unreachable!("node symbol was checked before pop")
+        };
+        nodes.push(node);
+        true
+    }
+
+    fn reduce_node_to_nodes(&mut self) -> bool {
+        let Some(Symbol::SpineTreeNode(_)) = self.symbols.last() else {
+            return false;
+        };
+        let Some(Symbol::SpineTreeNode(node)) = self.symbols.pop() else {
+            unreachable!("node symbol was checked before pop")
+        };
+        self.symbols.push(Symbol::SpineTreeNodes(vec![node]));
+        true
+    }
+
+    fn reduce_root_epoch(&mut self, archive: &SpineArchive) -> Result<bool, SpineError> {
+        let Some(compact_idx) = self
+            .symbols
+            .iter()
+            .rposition(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Compact(..))))
+        else {
+            return Ok(false);
+        };
+        let Symbol::Control(ControlSymbol::Compact(memory, next_open_index)) =
+            self.symbols[compact_idx].clone()
+        else {
+            unreachable!("compact symbol was checked before clone")
+        };
+        let next_open = next_root_open_symbol(archive, &memory, next_open_index)?;
+        let Some(boundary_idx) = self.symbols[..compact_idx].iter().rposition(|symbol| {
+            matches!(
+                symbol,
+                Symbol::Control(ControlSymbol::Init(_)) | Symbol::RootEpoches(_)
+            )
+        }) else {
+            return Ok(false);
+        };
+
+        let root_epoch = RootEpoch { memory };
+        let boundary = self.symbols[boundary_idx].clone();
+        match boundary {
+            Symbol::Control(ControlSymbol::Init(_)) => {
+                self.symbols.truncate(boundary_idx + 1);
+                self.symbols.push(Symbol::RootEpoches(vec![root_epoch]));
+            }
+            Symbol::RootEpoches(mut root_epochs) => {
+                self.symbols.truncate(boundary_idx);
+                root_epochs.push(root_epoch);
+                self.symbols.push(Symbol::RootEpoches(root_epochs));
+            }
+            _ => unreachable!("root epoch boundary was checked before mutate"),
+        }
+        self.symbols.push(next_open);
+        Ok(true)
+    }
+
+    pub(super) fn render_tree(&self) -> Result<String, SpineError> {
+        let mut rows = Vec::<TreeRenderRow>::new();
+        collect_tree_render_rows(&self.symbols, &mut rows)?;
+        Ok(format_tree_rows(rows))
+    }
+
+    pub(super) fn current_open_meta(&self) -> Result<&TreeMeta, SpineError> {
+        self.symbols
+            .iter()
+            .rev()
+            .find_map(|symbol| match symbol {
+                Symbol::Control(ControlSymbol::Open(meta)) => Some(meta),
+                _ => None,
+            })
+            .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))
+    }
+
+    pub(super) fn current_root_epoch_id(&self) -> Result<NodeId, SpineError> {
+        let current = self.current_open_meta()?.id.clone();
+        let root = *current
+            .0
+            .first()
+            .ok_or_else(|| SpineError::InvalidEvent("current node id is empty".to_string()))?;
+        Ok(NodeId::root_epoch(root))
+    }
+
+    pub(super) fn next_child_id(&self) -> Result<NodeId, SpineError> {
+        let parent = self.current_open_meta()?.id.clone();
+        let rows = self.tree_rows()?;
+        let child_count = rows
+            .iter()
+            .filter(|row| row.id.parent().as_ref() == Some(&parent))
+            .count();
+        let index = u32::try_from(child_count + 1)
+            .map_err(|_| SpineError::InvalidEvent("too many child nodes".to_string()))?;
+        Ok(parent.child(index))
+    }
+
+    fn tree_rows(&self) -> Result<Vec<TreeRenderRow>, SpineError> {
+        let mut rows = Vec::<TreeRenderRow>::new();
+        collect_tree_render_rows(&self.symbols, &mut rows)?;
+        Ok(rows)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TreeRenderRow {
+    id: NodeId,
+    status: NodeStatus,
+    summary: String,
+}
+
+fn collect_tree_render_rows(
+    symbols: &[Symbol],
+    rows: &mut Vec<TreeRenderRow>,
+) -> Result<(), SpineError> {
+    for symbol in symbols {
+        match symbol {
+            Symbol::Control(ControlSymbol::Init(_))
+            | Symbol::Control(ControlSymbol::Close(_))
+            | Symbol::Control(ControlSymbol::Compact(_, _)) => {}
+            Symbol::Control(ControlSymbol::Open(meta)) => {
+                rows.push(TreeRenderRow {
+                    id: meta.id.clone(),
+                    status: NodeStatus::Live,
+                    summary: meta.summary.clone(),
+                });
+            }
+            Symbol::SpineTreeNode(node) => {
+                collect_tree_render_node(node, rows)?;
+            }
+            Symbol::SpineTreeNodes(nodes) => {
+                for node in nodes {
+                    collect_tree_render_node(node, rows)?;
+                }
+            }
+            Symbol::RootEpoches(root_epochs) => {
+                for root_epoch in root_epochs {
+                    rows.push(TreeRenderRow {
+                        id: root_epoch.memory.node_id.clone(),
+                        status: NodeStatus::Closed,
+                        summary: "root".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    let open_positions = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, row)| (row.status == NodeStatus::Live).then_some(idx))
+        .collect::<Vec<_>>();
+    let Some((&live_idx, ancestors)) = open_positions.split_last() else {
+        return Err(SpineError::InvalidEvent(
+            "ParseStack tree render has no live cursor".to_string(),
+        ));
+    };
+    for ancestor_idx in ancestors {
+        rows[*ancestor_idx].status = NodeStatus::Suspended;
+    }
+    for row in rows.iter_mut().skip(live_idx + 1) {
+        if row.status == NodeStatus::Live {
+            row.status = NodeStatus::Closed;
+        }
+    }
+    Ok(())
+}
+
+fn collect_tree_render_node(
+    node: &SpineTreeNode,
+    rows: &mut Vec<TreeRenderRow>,
+) -> Result<(), SpineError> {
+    match node {
+        SpineTreeNode::MsgAsLeafNode { .. } => {}
+        SpineTreeNode::SpineTree { meta, children, .. } => {
+            rows.push(TreeRenderRow {
+                id: meta.id.clone(),
+                status: NodeStatus::Closed,
+                summary: meta.summary.clone(),
+            });
+            for child in children {
+                collect_tree_render_node(child, rows)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn parse_stack_msg_leaf_count(symbols: &[Symbol]) -> usize {
+    symbols
+        .iter()
+        .map(|symbol| match symbol {
+            Symbol::SpineTreeNode(node) => spine_tree_node_msg_leaf_count(node),
+            Symbol::SpineTreeNodes(nodes) => nodes.iter().map(spine_tree_node_msg_leaf_count).sum(),
+            Symbol::Control(_) | Symbol::RootEpoches(_) => 0,
+        })
+        .sum()
+}
+
+#[cfg(test)]
+fn spine_tree_node_msg_leaf_count(node: &SpineTreeNode) -> usize {
+    match node {
+        SpineTreeNode::MsgAsLeafNode { .. } => 1,
+        SpineTreeNode::SpineTree { children, .. } => {
+            children.iter().map(spine_tree_node_msg_leaf_count).sum()
+        }
+    }
+}
+
+fn format_tree_rows(rows: Vec<TreeRenderRow>) -> String {
+    let rows = rows
+        .into_iter()
+        .map(|row| (row.id.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+    let mut visible = BTreeSet::<NodeId>::new();
+    let Some(cursor) = rows
+        .values()
+        .find(|row| row.status == NodeStatus::Live)
+        .map(|row| row.id.clone())
+    else {
+        return String::new();
+    };
+
+    let mut path = Vec::<NodeId>::new();
+    let mut current = Some(cursor.clone());
+    while let Some(id) = current {
+        path.push(id.clone());
+        current = id.parent();
+    }
+    path.reverse();
+
+    for node_id in &path {
+        visible.insert(node_id.clone());
+        if node_id.is_root_epoch() {
+            for sibling in rows.keys() {
+                if sibling.is_root_epoch() && sibling < node_id {
+                    visible.insert(sibling.clone());
+                }
+            }
+        }
+        if let Some(parent) = node_id.parent() {
+            for sibling in rows.keys() {
+                if sibling.parent() == Some(parent.clone()) && sibling < node_id {
+                    visible.insert(sibling.clone());
+                }
+            }
+        }
+    }
+    for (id, row) in &rows {
+        if id.parent().as_ref() == Some(&cursor) && row.status == NodeStatus::Closed {
+            visible.insert(id.clone());
+        }
+    }
+
+    let mut lines = Vec::new();
+    for (id, row) in rows {
+        if !visible.contains(&id) {
+            continue;
+        }
+        let marker = match row.status {
+            NodeStatus::Live => "Current",
+            NodeStatus::Suspended => "Open",
+            NodeStatus::Closed => "Done",
+        };
+        lines.push(format!(
+            "{}[{}] {} {}",
+            "  ".repeat(id.0.len().saturating_sub(1)),
+            id,
+            marker,
+            row.summary
+        ));
+    }
+    lines.join("\n")
+}
+
+pub(super) fn event_to_token(
+    event: &LoggedKEvent,
+    archive: &SpineArchive,
+    mems: &BTreeMap<String, MemRecord>,
+    raw_mask: RawMask<'_>,
+) -> Result<SpineToken, SpineError> {
+    match &event.event {
+        KEvent::Init { raw_start } => Ok(SpineToken::Init {
+            meta: tree_meta(
+                archive,
+                NodeId::root_epoch(1),
+                *raw_start,
+                "root".to_string(),
+            )?,
+        }),
+        KEvent::Msg {
+            raw_ordinal,
+            context_index,
+            from_user,
+        } => Ok(SpineToken::Msg {
+            seg: SegRef::ResponseItem {
+                raw_ordinal: *raw_ordinal,
+                context_index: usize::try_from(*context_index)
+                    .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?,
+            },
+            from_user: *from_user,
+        }),
+        KEvent::Open {
+            child,
+            index,
+            summary,
+            ..
+        } => Ok(SpineToken::Open {
+            meta: tree_meta(archive, child.clone(), *index, summary.clone())?,
+        }),
+        KEvent::Close { node, .. } => {
+            let mem = mems.values().find(|mem| &mem.node == node).ok_or_else(|| {
+                SpineError::InvalidEvent(format!("missing memory for close node {node}"))
+            })?;
+            if !mem.allowed_by(raw_mask)? {
+                return Err(SpineError::InvalidEvent(format!(
+                    "memory {} does not cover live raw evidence",
+                    mem.compact_id
+                )));
+            }
+            Ok(SpineToken::Close {
+                memory: memory_ref(
+                    archive,
+                    mem.compact_id.clone(),
+                    mem.node.clone(),
+                    mem.body_hash.clone(),
+                    mem.raw_start..mem.raw_end,
+                    mem.context_start..mem.context_end,
+                    event.seq..event.seq + 1,
+                ),
+            })
+        }
+        KEvent::RootCompact {
+            mem,
+            next_open_index,
+            ..
+        } => {
+            let mem = mems.get(mem).ok_or_else(|| {
+                SpineError::InvalidEvent("missing memory for root compact".to_string())
+            })?;
+            if !mem.allowed_by(raw_mask)? {
+                return Err(SpineError::InvalidEvent(format!(
+                    "memory {} does not cover live raw evidence",
+                    mem.compact_id
+                )));
+            }
+            Ok(SpineToken::Compact {
+                memory: memory_ref(
+                    archive,
+                    mem.compact_id.clone(),
+                    mem.node.clone(),
+                    mem.body_hash.clone(),
+                    mem.raw_start..mem.raw_end,
+                    mem.context_start..mem.context_end,
+                    event.seq..event.seq + 1,
+                ),
+                next_open_index: usize::try_from(*next_open_index).map_err(|_| {
+                    SpineError::InvalidEvent("root open index overflow".to_string())
+                })?,
+            })
+        }
+    }
+}
+
+pub(super) fn parse_stack_from_events(
+    events: &[LoggedKEvent],
+    archive: &SpineArchive,
+    mems: &[MemRecord],
+    raw_mask: RawMask<'_>,
+) -> Result<ParseStack, SpineError> {
+    let mems = mems
+        .iter()
+        .cloned()
+        .map(|mem| (mem.compact_id.clone(), mem))
+        .collect::<BTreeMap<_, _>>();
+    let mut ps = ParseStack::new();
+    for event in events {
+        if !event.allowed_by(raw_mask)? {
+            continue;
+        }
+        ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;
+    }
+    Ok(ps)
+}
