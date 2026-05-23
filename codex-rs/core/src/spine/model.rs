@@ -1,0 +1,311 @@
+use crate::spine::SpineError;
+use crate::spine::io::hash_raw_live;
+use crate::spine::io::hash_raw_live_prefix_all_true;
+use serde::Deserialize;
+use serde::Serialize;
+use std::fmt;
+use std::ops::Range;
+use std::path::PathBuf;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct NodeId(pub(super) Vec<u32>);
+
+impl NodeId {
+    pub(super) fn root_epoch(index: u32) -> Self {
+        Self(vec![index])
+    }
+
+    pub(super) fn child(&self, index: u32) -> Self {
+        let mut path = self.0.clone();
+        path.push(index);
+        Self(path)
+    }
+
+    pub(super) fn parent(&self) -> Option<Self> {
+        (self.0.len() > 1).then(|| Self(self.0[..self.0.len() - 1].to_vec()))
+    }
+
+    pub(super) fn is_root_epoch(&self) -> bool {
+        self.0.len() == 1
+    }
+
+    pub(super) fn as_path(&self) -> String {
+        self.0
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+}
+
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.as_path())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum NodeStatus {
+    Live,
+    Suspended,
+    Closed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum KEvent {
+    Init {
+        raw_start: u64,
+    },
+    Msg {
+        raw_ordinal: u64,
+        context_index: u64,
+        from_user: bool,
+    },
+    Open {
+        child: NodeId,
+        boundary: u64,
+        index: u64,
+        summary: String,
+    },
+    Close {
+        node: NodeId,
+        boundary: u64,
+        summary: String,
+        instruction: Option<String>,
+    },
+    RootCompact {
+        node: NodeId,
+        boundary: u64,
+        mem: String,
+        next_open_index: u64,
+        raw_live_hash: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct LoggedKEvent {
+    pub(super) seq: u64,
+    #[serde(flatten)]
+    pub(super) event: KEvent,
+}
+
+impl std::ops::Deref for LoggedKEvent {
+    type Target = KEvent;
+
+    fn deref(&self) -> &Self::Target {
+        &self.event
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum MemKind {
+    Suffix,
+    RootEpoch,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct MemRecord {
+    pub(super) compact_id: String,
+    pub(super) kind: MemKind,
+    pub(super) node: NodeId,
+    pub(super) raw_start: u64,
+    pub(super) raw_end: u64,
+    pub(super) context_start: usize,
+    pub(super) context_end: usize,
+    #[serde(default)]
+    pub(super) raw_live_hash: Option<String>,
+    pub(super) body_path: String,
+    pub(super) body_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct TreeMeta {
+    pub(super) id: NodeId,
+    pub(super) index: usize,
+    pub(super) summary: String,
+    pub(super) node_dir: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum SegRef {
+    ResponseItem {
+        raw_ordinal: u64,
+        context_index: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct MemoryRef {
+    pub(super) compact_id: String,
+    pub(super) node_id: NodeId,
+    pub(super) body_path: PathBuf,
+    pub(super) body_hash: String,
+    pub(super) source_raw_range: Range<u64>,
+    pub(super) source_context_range: Range<usize>,
+    pub(super) source_token_seq: Range<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum SpineToken {
+    Init {
+        meta: TreeMeta,
+    },
+    Open {
+        meta: TreeMeta,
+    },
+    Close {
+        memory: MemoryRef,
+    },
+    Compact {
+        memory: MemoryRef,
+        next_open_index: usize,
+    },
+    Msg {
+        seg: SegRef,
+        from_user: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum ControlSymbol {
+    Init(TreeMeta),
+    Open(TreeMeta),
+    Close(MemoryRef),
+    Compact(MemoryRef, usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum Symbol {
+    Control(ControlSymbol),
+    SpineTreeNode(SpineTreeNode),
+    SpineTreeNodes(Vec<SpineTreeNode>),
+    RootEpoches(Vec<RootEpoch>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum SpineTreeNode {
+    MsgAsLeafNode {
+        msg: SegRef,
+        from_user: bool,
+    },
+    SpineTree {
+        memory: MemoryRef,
+        meta: TreeMeta,
+        children: Vec<SpineTreeNode>,
+        memory_path: PathBuf,
+        trajs_path: PathBuf,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct RootEpoch {
+    pub(super) memory: MemoryRef,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RawMask<'a> {
+    live: Option<&'a [bool]>,
+}
+
+impl<'a> RawMask<'a> {
+    pub(super) fn new(live: &'a [bool]) -> Self {
+        Self { live: Some(live) }
+    }
+
+    fn boundary_live(self, boundary: u64) -> Result<bool, SpineError> {
+        let Some(live) = self.live else {
+            return Ok(true);
+        };
+        if boundary == 0 {
+            return Ok(true);
+        }
+        let index = usize::try_from(boundary - 1)
+            .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
+        Ok(live.get(index).copied().unwrap_or(false))
+    }
+
+    fn raw_index_live(self, index: u64) -> Result<bool, SpineError> {
+        let Some(live) = self.live else {
+            return Ok(true);
+        };
+        let index = usize::try_from(index)
+            .map_err(|_| SpineError::InvalidEvent("raw index overflow".to_string()))?;
+        Ok(live.get(index).copied().unwrap_or(false))
+    }
+
+    fn span_live(self, start: u64, end: u64) -> Result<bool, SpineError> {
+        let Some(live) = self.live else {
+            return Ok(true);
+        };
+        let start = usize::try_from(start)
+            .map_err(|_| SpineError::InvalidEvent("raw start overflow".to_string()))?;
+        let end = usize::try_from(end)
+            .map_err(|_| SpineError::InvalidEvent("raw end overflow".to_string()))?;
+        if end > live.len() || start > end {
+            return Ok(false);
+        }
+        Ok(live[start..end].iter().all(|item| *item))
+    }
+
+    fn prefix_hash_matches(self, end: u64, expected: &str) -> Result<bool, SpineError> {
+        let end = usize::try_from(end)
+            .map_err(|_| SpineError::InvalidEvent("raw end overflow".to_string()))?;
+        let Some(live) = self.live else {
+            return Ok(hash_raw_live_prefix_all_true(end) == expected);
+        };
+        if end > live.len() {
+            return Ok(false);
+        }
+        Ok(hash_raw_live(&live[..end]) == expected)
+    }
+}
+
+impl LoggedKEvent {
+    pub(super) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
+        self.event.allowed_by(raw_mask)
+    }
+}
+
+impl KEvent {
+    pub(super) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
+        match self {
+            KEvent::Init { .. } => Ok(true),
+            KEvent::Msg { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
+            KEvent::Open {
+                child,
+                summary,
+                boundary,
+                ..
+            } => {
+                if summary == "root" && child.parent().is_some_and(|parent| parent.is_root_epoch())
+                {
+                    return Ok(true);
+                }
+                raw_mask.raw_index_live(*boundary)
+            }
+            KEvent::Close { boundary, .. } => raw_mask.boundary_live(*boundary),
+            KEvent::RootCompact {
+                boundary,
+                raw_live_hash,
+                ..
+            } => raw_mask.prefix_hash_matches(*boundary, raw_live_hash),
+        }
+    }
+}
+
+impl MemRecord {
+    pub(super) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
+        match self.kind {
+            MemKind::Suffix => raw_mask.span_live(self.raw_start, self.raw_end),
+            MemKind::RootEpoch => self
+                .raw_live_hash
+                .as_deref()
+                .map(|hash| raw_mask.prefix_hash_matches(self.raw_end, hash))
+                .unwrap_or(Ok(false)),
+        }
+    }
+}
