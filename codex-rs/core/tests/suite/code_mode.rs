@@ -432,6 +432,12 @@ if (!tool) {
         tool_names(&first_body),
         vec!["exec".to_string(), "wait".to_string()]
     );
+    assert!(
+        !tool_names(&first_body)
+            .iter()
+            .any(|name| name.contains("calendar_timezone_option_99")),
+        "deferred app tool should not be exposed as a top-level tool"
+    );
 
     let exec_description = first_body
         .get("tools")
@@ -452,7 +458,6 @@ if (!tool) {
         })
         .expect("exec description should be present");
     assert!(exec_description.contains("filter `ALL_TOOLS` by `name` and `description`"));
-    assert!(!exec_description.contains("calendar_timezone_option_99"));
 
     let request = follow_up_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
