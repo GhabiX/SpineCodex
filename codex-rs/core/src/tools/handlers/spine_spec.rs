@@ -34,8 +34,13 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
                 strict: false,
                 defer_loading: None,
                 parameters: JsonSchema::object(
-                    BTreeMap::new(),
-                    Some(Vec::new()),
+                    BTreeMap::from([(
+                        "summary".to_string(),
+                        JsonSchema::string(Some(
+                            "Short label for the new Spine scope.".to_string(),
+                        )),
+                    )]),
+                    Some(vec!["summary".to_string()]),
                     Some(false.into()),
                 ),
                 output_schema: None,
@@ -46,28 +51,18 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
 }
 
 fn spine_close_tool() -> ResponsesApiTool {
-    let properties = BTreeMap::from([
-        (
-            "summary".to_string(),
-            JsonSchema::string(Some("Short label for the completed scope.".to_string())),
-        ),
-        (
-            "instruction".to_string(),
-            JsonSchema::string(Some(
-                "Optional guidance for the runtime compact memory.".to_string(),
-            )),
-        ),
-    ]);
+    let properties = BTreeMap::from([(
+        "instruction".to_string(),
+        JsonSchema::string(Some(
+            "Optional guidance for the runtime compact memory.".to_string(),
+        )),
+    )]);
     ResponsesApiTool {
         name: SPINE_TOOL_CLOSE.to_string(),
         description: "Close the current Spine scope and resume its parent.".to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(
-            properties,
-            Some(vec!["summary".to_string()]),
-            Some(false.into()),
-        ),
+        parameters: JsonSchema::object(properties, Some(Vec::new()), Some(false.into())),
         output_schema: None,
     }
 }

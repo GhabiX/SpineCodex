@@ -59,8 +59,13 @@ struct EmptyArgs {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CloseArgs {
+struct OpenArgs {
     summary: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CloseArgs {
     #[serde(default)]
     instruction: Option<String>,
 }
@@ -118,9 +123,9 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                 )))
             }
             SpineTool::Open => {
-                let _args: EmptyArgs = parse_arguments(&arguments)?;
+                let args: OpenArgs = parse_arguments(&arguments)?;
                 session
-                    .stage_spine_open(call_id)
+                    .stage_spine_open(call_id, args.summary)
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
@@ -131,7 +136,7 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
             SpineTool::Close => {
                 let args: CloseArgs = parse_arguments(&arguments)?;
                 session
-                    .stage_spine_close(call_id, args.summary, args.instruction)
+                    .stage_spine_close(call_id, args.instruction)
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
