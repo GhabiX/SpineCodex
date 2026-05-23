@@ -72,445 +72,6 @@ enum NodeStatus {
     Closed,
 }
 
-#[derive(Clone, Debug)]
-struct Node {
-    id: NodeId,
-    children: Vec<NodeId>,
-    status: NodeStatus,
-    raw_start: u64,
-    raw_end: Option<u64>,
-    context_start: usize,
-    summary: Option<String>,
-    mem: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct SpineState {
-    nodes: BTreeMap<NodeId, Node>,
-    stack: Vec<NodeId>,
-    root_mem: Option<String>,
-}
-
-impl SpineState {
-    fn new(raw_start: u64) -> Self {
-        let epoch = NodeId::root_epoch(1);
-        let mut nodes = BTreeMap::new();
-        nodes.insert(
-            epoch.clone(),
-            Node {
-                id: epoch.clone(),
-                children: Vec::new(),
-                status: NodeStatus::Live,
-                raw_start,
-                raw_end: None,
-                context_start: usize::try_from(raw_start).expect("spine raw_start must fit usize"),
-                summary: None,
-                mem: None,
-            },
-        );
-        let state = Self {
-            nodes,
-            stack: vec![epoch],
-            root_mem: None,
-        };
-        #[cfg(debug_assertions)]
-        state.debug_assert_invariants();
-        state
-    }
-
-    fn cursor(&self) -> &NodeId {
-        self.stack.last().expect("spine stack is never empty")
-    }
-
-    fn next_child_id(&self, parent: &NodeId) -> Result<NodeId, SpineError> {
-        let parent_node = self
-            .nodes
-            .get(parent)
-            .ok_or_else(|| SpineError::InvalidEvent(format!("unknown parent {parent}")))?;
-        let index = u32::try_from(parent_node.children.len() + 1)
-            .map_err(|_| SpineError::InvalidEvent("too many child nodes".to_string()))?;
-        Ok(parent.child(index))
-    }
-
-    fn open(
-        &mut self,
-        child: NodeId,
-        boundary: u64,
-        index: u64,
-        summary: String,
-    ) -> Result<(), SpineError> {
-        let parent = self.cursor().clone();
-        let expected = self.next_child_id(&parent)?;
-        if child != expected {
-            return Err(SpineError::InvalidEvent(format!(
-                "open child {child} does not match expected {expected}"
-            )));
-        }
-        let parent_node = self
-            .nodes
-            .get_mut(&parent)
-            .ok_or_else(|| SpineError::InvalidEvent(format!("open parent {parent} is missing")))?;
-        if parent_node.status != NodeStatus::Live {
-            return Err(SpineError::InvalidEvent(format!(
-                "open parent {parent} is not live"
-            )));
-        }
-        parent_node.status = NodeStatus::Suspended;
-        parent_node.children.push(child.clone());
-        self.nodes.insert(
-            child.clone(),
-            Node {
-                id: child.clone(),
-                children: Vec::new(),
-                status: NodeStatus::Live,
-                raw_start: boundary,
-                raw_end: None,
-                context_start: usize::try_from(index).map_err(|_| {
-                    SpineError::InvalidEvent("open context index overflow".to_string())
-                })?,
-                summary: Some(summary),
-                mem: None,
-            },
-        );
-        self.stack.push(child);
-        #[cfg(debug_assertions)]
-        self.debug_assert_invariants();
-        Ok(())
-    }
-
-    fn close(&mut self, node: &NodeId, boundary: u64, summary: String) -> Result<(), SpineError> {
-        if self.cursor() != node {
-            return Err(SpineError::InvalidEvent(format!(
-                "close node {node} is not current cursor {}",
-                self.cursor()
-            )));
-        }
-        if node.is_root_epoch() {
-            return Err(SpineError::InvalidEvent(
-                "cannot close root epoch".to_string(),
-            ));
-        }
-        let parent = node
-            .parent()
-            .ok_or_else(|| SpineError::InvalidEvent("closed node has no parent".to_string()))?;
-        let closing = self
-            .nodes
-            .get_mut(node)
-            .ok_or_else(|| SpineError::InvalidEvent(format!("close node {node} is missing")))?;
-        if closing.status != NodeStatus::Live {
-            return Err(SpineError::InvalidEvent(format!(
-                "close node {node} is not live"
-            )));
-        }
-        closing.status = NodeStatus::Closed;
-        closing.raw_end = Some(boundary);
-        closing.summary = Some(summary);
-        self.stack.pop();
-        let parent_node = self
-            .nodes
-            .get_mut(&parent)
-            .ok_or_else(|| SpineError::InvalidEvent(format!("close parent {parent} is missing")))?;
-        parent_node.status = NodeStatus::Live;
-        #[cfg(debug_assertions)]
-        self.debug_assert_invariants();
-        Ok(())
-    }
-
-    fn root_compact(
-        &mut self,
-        node: &NodeId,
-        boundary: u64,
-        mem: String,
-    ) -> Result<(), SpineError> {
-        let current_epoch = self
-            .stack
-            .first()
-            .cloned()
-            .ok_or_else(|| SpineError::InvalidEvent("missing root epoch".to_string()))?;
-        if node != &current_epoch {
-            return Err(SpineError::InvalidEvent(format!(
-                "root compact node {node} is not current root epoch {current_epoch}"
-            )));
-        }
-        if let Some(epoch) = self.nodes.get_mut(node) {
-            epoch.status = NodeStatus::Closed;
-            epoch.raw_end = Some(boundary);
-            epoch.mem = Some(mem.clone());
-        }
-        for item in self.stack.iter().skip(1) {
-            if let Some(node) = self.nodes.get_mut(item) {
-                node.status = NodeStatus::Closed;
-                node.raw_end.get_or_insert(boundary);
-            }
-        }
-        let next_index = self
-            .nodes
-            .keys()
-            .filter(|id| id.is_root_epoch())
-            .map(|id| id.0[0])
-            .max()
-            .unwrap_or(0)
-            + 1;
-        let epoch = NodeId::root_epoch(next_index);
-        let leaf = epoch.child(1);
-        self.nodes.insert(
-            epoch.clone(),
-            Node {
-                id: epoch.clone(),
-                children: vec![leaf.clone()],
-                status: NodeStatus::Suspended,
-                raw_start: boundary,
-                raw_end: None,
-                context_start: usize::try_from(boundary).map_err(|_| {
-                    SpineError::InvalidEvent("root epoch context index overflow".to_string())
-                })?,
-                summary: None,
-                mem: None,
-            },
-        );
-        self.nodes.insert(
-            leaf.clone(),
-            Node {
-                id: leaf.clone(),
-                children: Vec::new(),
-                status: NodeStatus::Live,
-                raw_start: boundary,
-                raw_end: None,
-                context_start: usize::try_from(boundary).map_err(|_| {
-                    SpineError::InvalidEvent("root leaf context index overflow".to_string())
-                })?,
-                summary: Some("root".to_string()),
-                mem: None,
-            },
-        );
-        self.stack = vec![epoch, leaf];
-        self.root_mem = Some(mem);
-        #[cfg(debug_assertions)]
-        self.debug_assert_invariants();
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn visible_nodes(&self) -> Vec<NodeId> {
-        let mut visible = BTreeSet::new();
-        for node_id in &self.stack {
-            visible.insert(node_id.clone());
-            if let Some(parent) = node_id.parent()
-                && let Some(parent_node) = self.nodes.get(&parent)
-            {
-                for sibling in &parent_node.children {
-                    if sibling < node_id {
-                        visible.insert(sibling.clone());
-                    }
-                }
-            }
-        }
-        if let Some(cursor) = self.nodes.get(self.cursor()) {
-            for child in &cursor.children {
-                if self
-                    .nodes
-                    .get(child)
-                    .is_some_and(|node| node.status == NodeStatus::Closed)
-                {
-                    visible.insert(child.clone());
-                }
-            }
-        }
-        visible.into_iter().collect()
-    }
-
-    #[cfg(test)]
-    fn render_tree(&self) -> String {
-        let visible = self.visible_nodes().into_iter().collect::<BTreeSet<_>>();
-        let mut lines = Vec::new();
-        for node in self.nodes.values() {
-            if !visible.contains(&node.id) {
-                continue;
-            }
-            let depth = node.id.0.len().saturating_sub(1);
-            let marker = match node.status {
-                NodeStatus::Live => "Current",
-                NodeStatus::Suspended => "Open",
-                NodeStatus::Closed => "Done",
-            };
-            let label = node.summary.as_deref().unwrap_or("");
-            lines.push(format!(
-                "{}[{}] {} {}",
-                "  ".repeat(depth),
-                node.id,
-                marker,
-                label
-            ));
-        }
-        lines.join("\n")
-    }
-
-    #[cfg(debug_assertions)]
-    fn debug_assert_invariants(&self) {
-        assert!(!self.stack.is_empty(), "spine stack must not be empty");
-        assert!(
-            self.stack.first().is_some_and(NodeId::is_root_epoch),
-            "spine stack must start at a root epoch"
-        );
-
-        let stack_set = self.stack.iter().collect::<BTreeSet<_>>();
-        assert_eq!(
-            stack_set.len(),
-            self.stack.len(),
-            "spine stack must not contain duplicate nodes"
-        );
-
-        for (key, node) in &self.nodes {
-            assert_eq!(key, &node.id, "spine node map key must match node id");
-            assert!(
-                !node.id.0.is_empty(),
-                "spine node id path must not be empty"
-            );
-            for component in &node.id.0 {
-                assert!(*component > 0, "spine node id components must be positive");
-            }
-        }
-
-        for window in self.stack.windows(2) {
-            let parent = &window[0];
-            let child = &window[1];
-            assert_eq!(
-                child.parent().as_ref(),
-                Some(parent),
-                "spine stack must be a contiguous parent chain"
-            );
-        }
-
-        for id in &self.stack {
-            assert!(
-                self.nodes.contains_key(id),
-                "spine stack node {id} must exist"
-            );
-        }
-
-        let cursor = self.cursor();
-        let live_nodes = self
-            .nodes
-            .values()
-            .filter(|node| node.status == NodeStatus::Live)
-            .collect::<Vec<_>>();
-        assert_eq!(live_nodes.len(), 1, "spine must have exactly one live node");
-        assert_eq!(
-            &live_nodes[0].id, cursor,
-            "spine live node must be the cursor"
-        );
-
-        for id in self.stack.iter().take(self.stack.len().saturating_sub(1)) {
-            let node = self.nodes.get(id).expect("stack node exists");
-            assert_eq!(
-                node.status,
-                NodeStatus::Suspended,
-                "spine non-cursor stack nodes must be suspended"
-            );
-            assert!(
-                node.raw_end.is_none(),
-                "spine suspended nodes must not have raw_end"
-            );
-        }
-
-        let cursor_node = self.nodes.get(cursor).expect("cursor node exists");
-        assert_eq!(
-            cursor_node.status,
-            NodeStatus::Live,
-            "spine cursor must be live"
-        );
-        assert!(
-            cursor_node.raw_end.is_none(),
-            "spine live cursor must not have raw_end"
-        );
-
-        for node in self.nodes.values() {
-            match node.status {
-                NodeStatus::Live => {}
-                NodeStatus::Suspended => {
-                    assert!(
-                        stack_set.contains(&node.id),
-                        "spine suspended node {} must be on the active stack",
-                        node.id
-                    );
-                    assert_ne!(&node.id, cursor, "spine cursor must not be suspended");
-                }
-                NodeStatus::Closed => {
-                    let end = node.raw_end.unwrap_or_else(|| {
-                        panic!("spine closed node {} must have raw_end", node.id)
-                    });
-                    assert!(
-                        node.raw_start <= end,
-                        "spine closed node {} must have a valid raw range",
-                        node.id
-                    );
-                    for descendant in self.nodes.values() {
-                        if descendant.id.0.len() <= node.id.0.len()
-                            || !descendant.id.0.starts_with(&node.id.0)
-                        {
-                            continue;
-                        }
-                        assert_eq!(
-                            descendant.status,
-                            NodeStatus::Closed,
-                            "spine closed node {} must not contain live/suspended descendant {}",
-                            node.id,
-                            descendant.id
-                        );
-                    }
-                }
-            }
-        }
-
-        for id in self.nodes.keys() {
-            if id.is_root_epoch() {
-                continue;
-            }
-            let parent = id
-                .parent()
-                .unwrap_or_else(|| panic!("spine non-root node {id} must have parent"));
-            let parent_node = self
-                .nodes
-                .get(&parent)
-                .unwrap_or_else(|| panic!("spine node {id} parent {parent} must exist"));
-            assert!(
-                parent_node.children.contains(id),
-                "spine parent {parent} must list child {id}"
-            );
-        }
-
-        for node in self.nodes.values() {
-            let mut children = BTreeSet::new();
-            for (index, child) in node.children.iter().enumerate() {
-                assert!(
-                    children.insert(child),
-                    "spine node {} must not list child {child} more than once",
-                    node.id
-                );
-                assert!(
-                    self.nodes.contains_key(child),
-                    "spine node {} child {child} must exist",
-                    node.id
-                );
-                assert_eq!(
-                    child.parent().as_ref(),
-                    Some(&node.id),
-                    "spine child {child} must point back to parent {}",
-                    node.id
-                );
-                let expected = node
-                    .id
-                    .child(u32::try_from(index + 1).expect("spine child index fits in u32"));
-                assert_eq!(
-                    child, &expected,
-                    "spine node {} children must be dense and ordered",
-                    node.id
-                );
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum KEvent {
@@ -581,16 +142,11 @@ struct TreeMeta {
     node_dir: PathBuf,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum SegRef {
     ResponseItem {
         raw_ordinal: u64,
         context_index: usize,
-    },
-    Memory {
-        memory_id: String,
-        body_path: PathBuf,
     },
 }
 
@@ -605,24 +161,19 @@ struct MemoryRef {
     source_token_seq: Range<u64>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum SpineToken {
     Init {
         meta: TreeMeta,
     },
-    End,
     Open {
         meta: TreeMeta,
-        call_id: String,
     },
     Close {
         memory: MemoryRef,
-        call_id: String,
     },
     Compact {
         memory: MemoryRef,
-        compact_id: String,
         next_open_index: usize,
     },
     Msg {
@@ -634,13 +185,11 @@ enum SpineToken {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum ControlSymbol {
     Init(TreeMeta),
-    End,
     Open(TreeMeta),
     Close(MemoryRef),
     Compact(MemoryRef, usize),
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum Symbol {
     Control(ControlSymbol),
@@ -649,7 +198,6 @@ enum Symbol {
     RootEpoches(Vec<RootEpoch>),
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum SpineTreeNode {
     MsgAsLeafNode {
@@ -733,13 +281,11 @@ impl ParseStack {
         self.reduce_fixpoint(archive)?;
         let symbol = match token {
             SpineToken::Init { meta } => Symbol::Control(ControlSymbol::Init(meta)),
-            SpineToken::End => Symbol::Control(ControlSymbol::End),
-            SpineToken::Open { meta, .. } => Symbol::Control(ControlSymbol::Open(meta)),
-            SpineToken::Close { memory, .. } => Symbol::Control(ControlSymbol::Close(memory)),
+            SpineToken::Open { meta } => Symbol::Control(ControlSymbol::Open(meta)),
+            SpineToken::Close { memory } => Symbol::Control(ControlSymbol::Close(memory)),
             SpineToken::Compact {
                 memory,
                 next_open_index,
-                ..
             } => Symbol::Control(ControlSymbol::Compact(memory, next_open_index)),
             SpineToken::Msg { seg, from_user } => {
                 Symbol::SpineTreeNode(SpineTreeNode::MsgAsLeafNode {
@@ -892,6 +438,44 @@ impl ParseStack {
         collect_tree_render_rows(&self.symbols, &mut rows)?;
         Ok(format_tree_rows(rows))
     }
+
+    fn current_open_meta(&self) -> Result<&TreeMeta, SpineError> {
+        self.symbols
+            .iter()
+            .rev()
+            .find_map(|symbol| match symbol {
+                Symbol::Control(ControlSymbol::Open(meta)) => Some(meta),
+                _ => None,
+            })
+            .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))
+    }
+
+    fn current_root_epoch_id(&self) -> Result<NodeId, SpineError> {
+        let current = self.current_open_meta()?.id.clone();
+        let root = *current
+            .0
+            .first()
+            .ok_or_else(|| SpineError::InvalidEvent("current node id is empty".to_string()))?;
+        Ok(NodeId::root_epoch(root))
+    }
+
+    fn next_child_id(&self) -> Result<NodeId, SpineError> {
+        let parent = self.current_open_meta()?.id.clone();
+        let rows = self.tree_rows()?;
+        let child_count = rows
+            .iter()
+            .filter(|row| row.id.parent().as_ref() == Some(&parent))
+            .count();
+        let index = u32::try_from(child_count + 1)
+            .map_err(|_| SpineError::InvalidEvent("too many child nodes".to_string()))?;
+        Ok(parent.child(index))
+    }
+
+    fn tree_rows(&self) -> Result<Vec<TreeRenderRow>, SpineError> {
+        let mut rows = Vec::<TreeRenderRow>::new();
+        collect_tree_render_rows(&self.symbols, &mut rows)?;
+        Ok(rows)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -908,7 +492,6 @@ fn collect_tree_render_rows(
     for symbol in symbols {
         match symbol {
             Symbol::Control(ControlSymbol::Init(_))
-            | Symbol::Control(ControlSymbol::End)
             | Symbol::Control(ControlSymbol::Close(_))
             | Symbol::Control(ControlSymbol::Compact(_, _)) => {}
             Symbol::Control(ControlSymbol::Open(meta)) => {
@@ -1191,15 +774,6 @@ fn render_trajs_node(out: &mut String, node: &SpineTreeNode, depth: usize) {
                     "{indent}- msg raw_ordinal={raw_ordinal} context_index={context_index} from_user={from_user}\n"
                 ));
             }
-            SegRef::Memory {
-                memory_id,
-                body_path,
-            } => {
-                out.push_str(&format!(
-                    "{indent}- memory id={memory_id} body_path={}\n",
-                    body_path.display()
-                ));
-            }
         },
         SpineTreeNode::SpineTree {
             meta,
@@ -1239,7 +813,6 @@ fn collect_checkpoint_refs(
             | Symbol::Control(ControlSymbol::Compact(memory, _)) => {
                 memory_refs.push(checkpoint_memory_ref(memory));
             }
-            Symbol::Control(ControlSymbol::End) => {}
             Symbol::SpineTreeNode(node) => {
                 collect_checkpoint_node_refs(node, tree_meta, memory_refs, trajs_refs);
             }
@@ -1379,7 +952,6 @@ fn event_to_token(
             ..
         } => Ok(SpineToken::Open {
             meta: tree_meta(archive, child.clone(), *index, summary.clone())?,
-            call_id: String::new(),
         }),
         KEvent::Close { node, .. } => {
             let mem = mems.values().find(|mem| &mem.node == node).ok_or_else(|| {
@@ -1401,7 +973,6 @@ fn event_to_token(
                     mem.context_start..mem.context_end,
                     event.seq..event.seq + 1,
                 ),
-                call_id: String::new(),
             })
         }
         KEvent::RootCompact {
@@ -1428,7 +999,6 @@ fn event_to_token(
                     mem.context_start..mem.context_end,
                     event.seq..event.seq + 1,
                 ),
-                compact_id: mem.compact_id.clone(),
                 next_open_index: usize::try_from(*next_open_index).map_err(|_| {
                     SpineError::InvalidEvent("root open index overflow".to_string())
                 })?,
@@ -1726,22 +1296,6 @@ impl SpineStore {
     }
 }
 
-trait SpineEventView {
-    fn event(&self) -> &KEvent;
-}
-
-impl SpineEventView for KEvent {
-    fn event(&self) -> &KEvent {
-        self
-    }
-}
-
-impl SpineEventView for LoggedKEvent {
-    fn event(&self) -> &KEvent {
-        &self.event
-    }
-}
-
 impl LoggedKEvent {
     fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         self.event.allowed_by(raw_mask)
@@ -1791,7 +1345,6 @@ impl MemRecord {
 #[derive(Clone, Debug)]
 pub(crate) struct SpineRuntime {
     store: SpineStore,
-    state: SpineState,
     parse_stack: ParseStack,
     raw_len: u64,
     raw_live: Vec<bool>,
@@ -2005,11 +1558,9 @@ impl SpineRuntime {
         };
         let raw_mask = RawMask::new(&raw_live);
         let archive = SpineArchive::new(store.root.clone());
-        let state = replay(&events, raw_mask)?;
         let parse_stack = parse_stack_from_events(&events, &archive, &mems, raw_mask)?;
         Ok(Self {
             store,
-            state,
             parse_stack,
             raw_len: u64::try_from(raw_live.len())
                 .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
@@ -2042,7 +1593,6 @@ impl SpineRuntime {
             .filter(|event| event.seq < checkpoint.token_seq)
             .cloned()
             .collect::<Vec<_>>();
-        let state = replay(&prefix_events, prefix_mask)?;
         let prefix_ps = parse_stack_from_events(&prefix_events, &archive, &mems, prefix_mask)?;
         if prefix_ps != checkpoint.parse_stack {
             return Err(SpineError::InvalidStore(format!(
@@ -2051,7 +1601,6 @@ impl SpineRuntime {
             )));
         }
 
-        let mut state = state;
         let mut parse_stack = checkpoint.parse_stack.clone();
         let raw_mask = RawMask::new(&raw_live);
         for event in events
@@ -2061,7 +1610,6 @@ impl SpineRuntime {
             if !event.allowed_by(raw_mask)? {
                 continue;
             }
-            apply_event_to_state(&mut state, &event.event)?;
             parse_stack.shift(
                 event_to_token(event, &archive, &mem_map, raw_mask)?,
                 &archive,
@@ -2069,7 +1617,6 @@ impl SpineRuntime {
         }
         Ok(Self {
             store,
-            state,
             parse_stack,
             raw_len: u64::try_from(raw_live.len())
                 .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
@@ -2078,11 +1625,6 @@ impl SpineRuntime {
             control_call_ids: BTreeSet::new(),
             pending: None,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn state(&self) -> &SpineState {
-        &self.state
     }
 
     pub(crate) fn render_tree(&self) -> Result<String, SpineError> {
@@ -2252,7 +1794,7 @@ impl SpineRuntime {
             token_seq: self.store.next_event_seq()?,
             raw_live_hash: hash_raw_live(&self.raw_live[..raw_ordinal_usize]),
             context_len: context.len(),
-            cursor: self.state.cursor().to_string(),
+            cursor: self.parse_stack.current_open_meta()?.id.to_string(),
             parse_stack: self.parse_stack.clone(),
             parse_stack_symbols: self
                 .parse_stack
@@ -2330,7 +1872,7 @@ impl SpineRuntime {
         }
         match pending.op {
             SpineOp::Open => {
-                let child = self.state.next_child_id(self.state.cursor())?;
+                let child = self.parse_stack.next_child_id()?;
                 let boundary = pending.boundary.ok_or_else(|| {
                     SpineError::InvalidEvent("missing spine.open boundary".to_string())
                 })?;
@@ -2349,27 +1891,21 @@ impl SpineRuntime {
                 self.parse_stack.shift(
                     SpineToken::Open {
                         meta: self.tree_meta_for_child(child.clone(), index, summary.clone())?,
-                        call_id: pending.call_id,
                     },
                     &self.archive(),
                 )?;
-                self.state.open(child, boundary, index, summary)?;
                 self.store.append_event(&event)?;
             }
             SpineOp::Close => {
-                let node = self.state.cursor().clone();
-                let suffix_start = self
-                    .state
-                    .nodes
-                    .get(&node)
-                    .map(|node| node.context_start)
-                    .ok_or_else(|| SpineError::InvalidEvent(format!("missing node {node}")))?;
-                let summary = self
-                    .state
-                    .nodes
-                    .get(&node)
-                    .and_then(|node| node.summary.clone())
-                    .ok_or_else(|| SpineError::InvalidEvent("missing open summary".to_string()))?;
+                let open_meta = self.parse_stack.current_open_meta()?.clone();
+                let node = open_meta.id.clone();
+                if node.is_root_epoch() {
+                    return Err(SpineError::InvalidEvent(
+                        "cannot close root epoch".to_string(),
+                    ));
+                }
+                let suffix_start = open_meta.index;
+                let summary = open_meta.summary.clone();
                 let event = KEvent::Close {
                     node: node.clone(),
                     boundary: self.raw_len,
@@ -2381,8 +1917,6 @@ impl SpineRuntime {
                         "spine.close requires a completed suffix compact".to_string(),
                     )
                 })?;
-                let mut staged_state = self.state.clone();
-                staged_state.close(&node, self.raw_len, summary)?;
                 let seq = self.store.next_event_seq()?;
                 if close_compact.source_context_range.start != suffix_start {
                     return Err(SpineError::InvalidEvent(format!(
@@ -2390,10 +1924,7 @@ impl SpineRuntime {
                         close_compact.source_context_range.start
                     )));
                 }
-                let mem = self.stage_close_mem(&staged_state, node.clone(), close_compact)?;
-                if let Some(node) = staged_state.nodes.get_mut(&node) {
-                    node.mem = Some(mem.compact_id.clone());
-                }
+                let mem = self.stage_close_mem(&open_meta, close_compact)?;
                 let body = self.store.read_memory_body(&mem)?;
                 let memory = memory_ref(
                     &self.archive(),
@@ -2405,16 +1936,9 @@ impl SpineRuntime {
                     seq..seq + 1,
                 );
                 let mut staged_parse_stack = self.parse_stack.clone();
-                staged_parse_stack.shift(
-                    SpineToken::Close {
-                        memory,
-                        call_id: pending.call_id,
-                    },
-                    &self.archive(),
-                )?;
+                staged_parse_stack.shift(SpineToken::Close { memory }, &self.archive())?;
                 self.store.append_mem(&mem)?;
                 self.store.append_event(&event)?;
-                self.state = staged_state;
                 self.parse_stack = staged_parse_stack;
                 self.pending = None;
                 return Ok(Some(SpineCommitKind::Close {
@@ -2452,16 +1976,10 @@ impl SpineRuntime {
         Ok(Some(match pending.op {
             SpineOp::Open => SpinePendingCommit::Open,
             SpineOp::Close => {
-                let node = self.state.cursor().clone();
-                let suffix_start = self
-                    .state
-                    .nodes
-                    .get(&node)
-                    .map(|node| node.context_start)
-                    .ok_or_else(|| SpineError::InvalidEvent(format!("missing node {node}")))?;
+                let open_meta = self.parse_stack.current_open_meta()?;
                 SpinePendingCommit::Close {
-                    node,
-                    suffix_start,
+                    node: open_meta.id.clone(),
+                    suffix_start: open_meta.index,
                     instruction: pending.instruction.clone(),
                 }
             }
@@ -2478,12 +1996,7 @@ impl SpineRuntime {
                 "spine root compact memory body must not be empty".to_string(),
             ));
         }
-        let node = self
-            .state
-            .stack
-            .first()
-            .cloned()
-            .ok_or_else(|| SpineError::InvalidEvent("missing root epoch".to_string()))?;
+        let node = self.parse_stack.current_root_epoch_id()?;
         let compact_id = format!("root-{}-{}", node.as_path().replace('.', "-"), self.raw_len);
         let body_path = self.store.write_memory_body(&compact_id, &body)?;
         let raw_live_hash = hash_raw_live(&self.raw_live);
@@ -2499,8 +2012,6 @@ impl SpineRuntime {
             body_path,
             body_hash: sha1_hex(body.as_bytes()),
         };
-        let mut staged_state = self.state.clone();
-        staged_state.root_compact(&node, self.raw_len, compact_id.clone())?;
         let seq = self.store.next_event_seq()?;
         let mut staged_parse_stack = self.parse_stack.clone();
         staged_parse_stack.shift(
@@ -2514,7 +2025,6 @@ impl SpineRuntime {
                     mem.context_start..mem.context_end,
                     seq..seq + 1,
                 ),
-                compact_id: mem.compact_id.clone(),
                 next_open_index,
             },
             &self.archive(),
@@ -2528,7 +2038,6 @@ impl SpineRuntime {
                 .map_err(|_| SpineError::InvalidEvent("root open index overflow".to_string()))?,
             raw_live_hash,
         })?;
-        self.state = staged_state;
         self.parse_stack = staged_parse_stack;
         self.pending = None;
         Ok(())
@@ -2536,21 +2045,16 @@ impl SpineRuntime {
 
     fn stage_close_mem(
         &self,
-        state: &SpineState,
-        node_id: NodeId,
+        open_meta: &TreeMeta,
         close_compact: SpineCloseCompact,
     ) -> Result<MemRecord, SpineError> {
-        let node = state
-            .nodes
-            .get(&node_id)
-            .ok_or_else(|| SpineError::InvalidEvent(format!("missing node {node_id}")))?;
-        let end = node
-            .raw_end
-            .ok_or_else(|| SpineError::InvalidEvent(format!("node {node_id} is not closed")))?;
+        let node_id = open_meta.id.clone();
+        let raw_start = self.open_raw_start(&node_id)?;
+        let end = self.raw_len;
         let compact_id = format!(
             "mem-{}-{}-{}",
             node_id.as_path().replace('.', "-"),
-            node.raw_start,
+            raw_start,
             end
         );
         let body_path = self
@@ -2560,7 +2064,7 @@ impl SpineRuntime {
             compact_id: compact_id.clone(),
             kind: MemKind::Suffix,
             node: node_id.clone(),
-            raw_start: node.raw_start,
+            raw_start,
             raw_end: end,
             context_start: close_compact.source_context_range.start,
             context_end: close_compact.source_context_range.end,
@@ -2571,68 +2075,26 @@ impl SpineRuntime {
         Ok(mem)
     }
 
+    fn open_raw_start(&self, node_id: &NodeId) -> Result<u64, SpineError> {
+        self.store
+            .events()?
+            .into_iter()
+            .rev()
+            .find_map(|event| match event.event {
+                KEvent::Open {
+                    child, boundary, ..
+                } if &child == node_id => Some(boundary),
+                _ => None,
+            })
+            .ok_or_else(|| SpineError::InvalidEvent(format!("missing open event for {node_id}")))
+    }
+
     pub(crate) fn materialize_history(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
         render_parse_stack_to_context(&self.parse_stack, raw_items)
     }
-}
-
-fn replay<E: SpineEventView>(
-    events: &[E],
-    raw_mask: RawMask<'_>,
-) -> Result<SpineState, SpineError> {
-    let mut state = None;
-    for event in events {
-        let event = event.event();
-        if !event.allowed_by(raw_mask)? {
-            continue;
-        }
-        match event {
-            KEvent::Init { raw_start } => {
-                if state.is_some() {
-                    return Err(SpineError::InvalidEvent("duplicate init".to_string()));
-                }
-                state = Some(SpineState::new(*raw_start));
-            }
-            _ => apply_event_to_state(
-                state
-                    .as_mut()
-                    .ok_or_else(|| SpineError::InvalidEvent("event before init".to_string()))?,
-                event,
-            )?,
-        }
-    }
-    let state = state.ok_or_else(|| SpineError::InvalidEvent("missing init".to_string()))?;
-    #[cfg(debug_assertions)]
-    state.debug_assert_invariants();
-    Ok(state)
-}
-
-fn apply_event_to_state(state: &mut SpineState, event: &KEvent) -> Result<(), SpineError> {
-    match event {
-        KEvent::Init { .. } | KEvent::Msg { .. } => {}
-        KEvent::Open {
-            child,
-            boundary,
-            index,
-            summary,
-        } => state.open(child.clone(), *boundary, *index, summary.clone())?,
-        KEvent::Close {
-            node,
-            boundary,
-            summary,
-            ..
-        } => state.close(node, *boundary, summary.clone())?,
-        KEvent::RootCompact {
-            node,
-            boundary,
-            mem,
-            ..
-        } => state.root_compact(node, *boundary, mem.clone())?,
-    }
-    Ok(())
 }
 
 fn render_parse_stack_to_context(
@@ -2652,7 +2114,6 @@ fn render_symbols_to_context(
     for symbol in symbols {
         match symbol {
             Symbol::Control(ControlSymbol::Init(_))
-            | Symbol::Control(ControlSymbol::End)
             | Symbol::Control(ControlSymbol::Open(_))
             | Symbol::Control(ControlSymbol::Close(_))
             | Symbol::Control(ControlSymbol::Compact(_, _)) => {}
@@ -2699,14 +2160,6 @@ fn render_node_to_context(
                     ))
                 })?;
             out.push(item.clone());
-            Ok(())
-        }
-        SpineTreeNode::MsgAsLeafNode {
-            msg: SegRef::Memory { body_path, .. },
-            ..
-        } => {
-            let body = std::fs::read_to_string(body_path)?;
-            out.push(memory_response_item(&body));
             Ok(())
         }
         SpineTreeNode::SpineTree { memory, .. } => {
@@ -3287,8 +2740,8 @@ mod tests {
         );
         assert_eq!(event_log_debug(&runtime), event_debug_after_first_commit);
         assert_eq!(
-            runtime.state().render_tree(),
-            "[1] Open \n  [1.1] Open root\n    [1.1.1] Current only child"
+            runtime.render_tree().expect("render tree"),
+            "  [1.1] Open root\n    [1.1.1] Current only child"
         );
     }
 
@@ -3444,7 +2897,7 @@ mod tests {
             .expect("observe close output");
 
         let parse_stack_before = runtime.parse_stack().clone();
-        let state_before = runtime.state().clone();
+        let tree_before = runtime.render_tree().expect("render tree before failure");
         let events_before = event_log_debug(&runtime);
         let mem_count_before = runtime
             .store
@@ -3461,7 +2914,10 @@ mod tests {
         );
 
         assert_eq!(runtime.parse_stack(), &parse_stack_before);
-        assert_eq!(runtime.state().render_tree(), state_before.render_tree());
+        assert_eq!(
+            runtime.render_tree().expect("render tree after failure"),
+            tree_before
+        );
         assert_eq!(event_log_debug(&runtime), events_before);
         assert_eq!(
             runtime.store.mems().expect("read mems after failure").len(),
@@ -3516,7 +2972,7 @@ mod tests {
             .expect("observe close output");
 
         let parse_stack_before = runtime.parse_stack().clone();
-        let state_before = runtime.state().clone();
+        let tree_before = runtime.render_tree().expect("render tree before failure");
         let events_before = event_log_debug(&runtime);
         std::fs::create_dir(runtime.store.mem_path()).expect("poison mem ledger path");
 
@@ -3534,7 +2990,10 @@ mod tests {
         );
 
         assert_eq!(runtime.parse_stack(), &parse_stack_before);
-        assert_eq!(runtime.state().render_tree(), state_before.render_tree());
+        assert_eq!(
+            runtime.render_tree().expect("render tree after failure"),
+            tree_before
+        );
         assert_eq!(event_log_debug(&runtime), events_before);
         assert!(
             runtime
@@ -3692,6 +3151,8 @@ mod tests {
         let mut raw = Vec::new();
         let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
 
+        append_msg(&mut runtime, &mut raw, "root work");
+        open_scope(&mut runtime, &mut raw, "open-1-1", "scope 1.1");
         append_msg(&mut runtime, &mut raw, "1.1 work");
         close_scope(&mut runtime, &mut raw, "close-1-1", "1.1");
         open_scope(&mut runtime, &mut raw, "open-1-2", "scope 1.2");
@@ -3703,7 +3164,6 @@ mod tests {
         append_msg(&mut runtime, &mut raw, "1.2.2 work");
         close_scope(&mut runtime, &mut raw, "close-1-2-2", "1.2.2");
         close_scope(&mut runtime, &mut raw, "close-1-2", "1.2");
-        open_scope(&mut runtime, &mut raw, "open-1-3", "scope 1.3");
         append_msg(&mut runtime, &mut raw, "1.3 work");
         runtime
             .root_compact("root epoch 1 memory".to_string(), raw.len())
@@ -3911,7 +3371,7 @@ mod tests {
         let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
             .expect("load spine")
             .expect("sidecar exists");
-        let tree = replayed.state().render_tree();
+        let tree = replayed.render_tree().expect("render tree");
         assert!(tree.contains("[1.1] Current"));
         assert!(tree.contains("[1.1.1] Done child scope"));
 
@@ -4134,8 +3594,8 @@ mod tests {
             .expect("load spine")
             .expect("sidecar exists");
         assert_eq!(
-            replayed.state().render_tree(),
-            "[1] Open \n  [1.1] Open root\n    [1.1.1] Current child scope"
+            replayed.render_tree().expect("render tree"),
+            "  [1.1] Open root\n    [1.1.1] Current child scope"
         );
         assert_eq!(
             replayed.materialize_history(&raw).expect("materialize"),
@@ -4176,8 +3636,8 @@ mod tests {
             .expect("load spine")
             .expect("sidecar exists");
         assert_eq!(
-            replayed.state().render_tree(),
-            "[1] Open \n  [1.1] Current root"
+            replayed.render_tree().expect("render tree"),
+            "  [1.1] Current root"
         );
         assert_eq!(
             replayed.materialize_history(&raw).expect("materialize"),
@@ -4315,7 +3775,7 @@ mod tests {
             .observe_context_item(0, 0, &text_item("before failed compact"))
             .expect("observe context item");
         let parse_stack_before = runtime.parse_stack().clone();
-        let state_before = runtime.state().clone();
+        let tree_before = runtime.render_tree().expect("render tree before failure");
         let events_before = event_log_debug(&runtime);
         let mem_count_before = runtime
             .store
@@ -4333,7 +3793,10 @@ mod tests {
         );
 
         assert_eq!(runtime.parse_stack(), &parse_stack_before);
-        assert_eq!(runtime.state().render_tree(), state_before.render_tree());
+        assert_eq!(
+            runtime.render_tree().expect("render tree after failure"),
+            tree_before
+        );
         assert_eq!(event_log_debug(&runtime), events_before);
         assert_eq!(
             runtime.store.mems().expect("read mems after failure").len(),
@@ -4606,8 +4069,8 @@ mod tests {
             .expect("load spine")
             .expect("sidecar exists");
         assert_eq!(
-            replayed.state().render_tree(),
-            "[1] Open \n  [1.1] Open root\n    [1.1.1] Current restored sibling"
+            replayed.render_tree().expect("render tree"),
+            "  [1.1] Open root\n    [1.1.1] Current restored sibling"
         );
         assert!(matches!(
             replayed.parse_stack().symbols.as_slice(),
