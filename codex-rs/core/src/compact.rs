@@ -277,7 +277,10 @@ async fn run_compact_task_inner_impl(
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
     let spine_history = sess
-        .install_spine_root_compact(summary_text.clone(), new_history.len())
+        .install_spine_root_compact(
+            root_epoch_compact_body_from_history(&new_history),
+            new_history.len(),
+        )
         .await
         .map_err(|err| CodexErr::Fatal(format!("failed to install Spine root compact: {err}")))?;
     if let Some(spine_history) = spine_history {
@@ -391,6 +394,74 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     } else {
         Some(pieces.join("\n"))
     }
+}
+
+pub(crate) fn root_epoch_compact_body_from_history(history: &[ResponseItem]) -> String {
+    let mut spine_memories = Vec::new();
+    let mut survivor_messages = Vec::new();
+    let mut summary_messages = Vec::new();
+    for item in history {
+        let ResponseItem::Message { role, content, .. } = item else {
+            continue;
+        };
+        let Some(text) = content_items_to_text(content) else {
+            continue;
+        };
+        if role == "user" && text.contains("<spine_memory runtime_generated=\"true\">") {
+            spine_memories.push(text);
+        } else if role == "user" && is_summary_message(&text) {
+            summary_messages.push(format!("Native compact summary:\n{text}"));
+        } else if role == "user"
+            && matches!(
+                crate::event_mapping::parse_turn_item(item),
+                Some(TurnItem::UserMessage(_) | TurnItem::HookPrompt(_))
+            )
+        {
+            survivor_messages.push(format!("User message:\n{text}"));
+        } else if role == "assistant" {
+            survivor_messages.push(format!("Assistant message:\n{text}"));
+        }
+    }
+
+    let mut body = "# Spine Root-Epoch Memory\n\n".to_string();
+    body.push_str(
+        "Native compact completed for this root epoch; Spine installed this memory after the native compact replacement was built.\n\n",
+    );
+    if !spine_memories.is_empty() {
+        body.push_str("Visible runtime-generated Spine memories after native compact:\n\n");
+        body.push_str(&spine_memories.join("\n\n"));
+        body.push_str("\n\n");
+        survivor_messages.retain(|entry| !contains_forbidden_spine_availability_claim(entry));
+        if !survivor_messages.is_empty() {
+            body.push_str("Other readable survivor messages after native compact:\n\n");
+            body.push_str(&survivor_messages.join("\n\n"));
+            body.push('\n');
+        }
+    } else {
+        let entries = if survivor_messages.is_empty() {
+            summary_messages
+        } else {
+            survivor_messages
+        };
+        if entries.is_empty() {
+            body.push_str(
+                "No readable model-visible messages were present in the compacted history.\n",
+            );
+        } else {
+            body.push_str("Readable survivor messages after native compact:\n\n");
+            body.push_str(&entries.join("\n\n"));
+        }
+        body.push('\n');
+    }
+    body
+}
+
+fn contains_forbidden_spine_availability_claim(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("spine namespace was not available")
+        || text.contains("spine namespace is unavailable")
+        || text.contains("spine` namespace is unavailable")
+        || text.contains("no actual spine tool calls could be made")
 }
 
 pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {

@@ -6,8 +6,8 @@ use crate::client::CompactConversationRequestSettings;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
-use crate::compact::content_items_to_text;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
+use crate::compact::root_epoch_compact_body_from_history;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -29,7 +29,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
@@ -292,69 +291,7 @@ pub(crate) async fn install_remote_spine_root_compact(
 }
 
 pub(crate) fn remote_root_compact_body(replacement_history: &[ResponseItem]) -> String {
-    let mut entries = Vec::new();
-    for item in replacement_history {
-        match item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                if matches!(
-                    crate::event_mapping::parse_turn_item(item),
-                    Some(TurnItem::UserMessage(_) | TurnItem::HookPrompt(_))
-                ) {
-                    push_remote_root_compact_text(&mut entries, "User message", content);
-                }
-            }
-            ResponseItem::Message { role, content, .. } if role == "assistant" => {
-                push_remote_root_compact_text(&mut entries, "Assistant message", content);
-            }
-            ResponseItem::Compaction { encrypted_content } => {
-                push_remote_root_compact_entry(
-                    &mut entries,
-                    "Remote compaction item",
-                    encrypted_content,
-                );
-            }
-            ResponseItem::ContextCompaction {
-                encrypted_content: Some(encrypted_content),
-            } => {
-                push_remote_root_compact_entry(
-                    &mut entries,
-                    "Remote context compaction item",
-                    encrypted_content,
-                );
-            }
-            _ => {}
-        }
-    }
-
-    let mut body = "# Spine Remote Compact Memory\n\n".to_string();
-    if entries.is_empty() {
-        body.push_str(
-            "Remote compact replacement history contained no model-visible memory items.\n",
-        );
-    } else {
-        body.push_str("Remote compact replacement history:\n\n");
-        for (index, entry) in entries.iter().enumerate() {
-            body.push_str("## Item ");
-            body.push_str(&(index + 1).to_string());
-            body.push('\n');
-            body.push_str(entry);
-            body.push_str("\n\n");
-        }
-    }
-    body
-}
-
-fn push_remote_root_compact_text(entries: &mut Vec<String>, label: &str, content: &[ContentItem]) {
-    if let Some(text) = content_items_to_text(content) {
-        push_remote_root_compact_entry(entries, label, &text);
-    }
-}
-
-fn push_remote_root_compact_entry(entries: &mut Vec<String>, label: &str, text: &str) {
-    if text.trim().is_empty() {
-        return;
-    }
-    entries.push(format!("{label}:\n{text}"));
+    root_epoch_compact_body_from_history(replacement_history)
 }
 
 /// Returns whether an item from remote compaction output should be preserved.
