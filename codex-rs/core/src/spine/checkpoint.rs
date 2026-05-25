@@ -31,7 +31,52 @@ pub(super) struct SpineCheckpoint {
     pub(super) memory_refs: Vec<CheckpointMemoryRef>,
     pub(super) trajs_refs: Vec<CheckpointTrajsRef>,
     pub(super) h_ps_hash: String,
-    pub(super) context_hash: String,
+}
+
+pub(super) fn build_checkpoint(
+    rollout_path: &Path,
+    raw_ordinal: u64,
+    token_seq: u64,
+    raw_live: &[bool],
+    parse_stack: &ParseStack,
+    context: &[ResponseItem],
+) -> Result<SpineCheckpoint, SpineError> {
+    let raw_ordinal_usize = usize::try_from(raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
+    if raw_ordinal_usize > raw_live.len() {
+        return Err(SpineError::InvalidEvent(
+            "checkpoint raw ordinal exceeds raw boundary".to_string(),
+        ));
+    }
+    let mut tree_meta = Vec::new();
+    let mut memory_refs = Vec::new();
+    let mut trajs_refs = Vec::new();
+    collect_checkpoint_refs(
+        &parse_stack.symbols,
+        &mut tree_meta,
+        &mut memory_refs,
+        &mut trajs_refs,
+    );
+    Ok(SpineCheckpoint {
+        version: CHECKPOINT_VERSION,
+        checkpoint_id: format!("pre-user-{raw_ordinal:020}"),
+        rollout_path: rollout_path.display().to_string(),
+        raw_ordinal,
+        token_seq,
+        raw_live_hash: hash_raw_live(&raw_live[..raw_ordinal_usize]),
+        context_len: context.len(),
+        cursor: parse_stack.current_open_meta()?.id.to_string(),
+        parse_stack: parse_stack.clone(),
+        parse_stack_symbols: parse_stack
+            .symbols
+            .iter()
+            .map(|symbol| format!("{symbol:?}"))
+            .collect(),
+        tree_meta,
+        memory_refs,
+        trajs_refs,
+        h_ps_hash: hash_response_items(context)?,
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,6 +119,7 @@ pub(super) fn collect_checkpoint_refs(
             | Symbol::Control(ControlSymbol::Open(meta)) => {
                 tree_meta.push(checkpoint_tree_meta(meta));
             }
+            Symbol::Control(ControlSymbol::End) => {}
             Symbol::Control(ControlSymbol::Close(memory))
             | Symbol::Control(ControlSymbol::Compact(memory, _)) => {
                 memory_refs.push(checkpoint_memory_ref(memory));
@@ -187,7 +233,7 @@ pub(super) fn validate_checkpoint(
         )));
     }
     let hash = hash_response_items(&materialized)?;
-    if hash != checkpoint.h_ps_hash || hash != checkpoint.context_hash {
+    if hash != checkpoint.h_ps_hash {
         return Err(SpineError::InvalidStore(format!(
             "spine checkpoint h(PS) hash mismatch for {}",
             checkpoint.checkpoint_id

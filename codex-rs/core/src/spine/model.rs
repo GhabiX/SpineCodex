@@ -49,7 +49,7 @@ impl fmt::Display for NodeId {
 #[serde(rename_all = "snake_case")]
 pub(super) enum NodeStatus {
     Live,
-    Suspended,
+    Opened,
     Closed,
 }
 
@@ -136,6 +136,19 @@ pub(super) enum SegRef {
         raw_ordinal: u64,
         context_index: usize,
     },
+    Memory {
+        memory_id: String,
+        body_path: PathBuf,
+    },
+}
+
+impl SegRef {
+    pub(super) fn from_memory_ref(memory: &MemoryRef) -> Self {
+        Self::Memory {
+            memory_id: memory.compact_id.clone(),
+            body_path: memory.body_path.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +167,7 @@ pub(super) enum SpineToken {
     Init {
         meta: TreeMeta,
     },
+    End,
     Open {
         meta: TreeMeta,
     },
@@ -173,6 +187,7 @@ pub(super) enum SpineToken {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) enum ControlSymbol {
     Init(TreeMeta),
+    End,
     Open(TreeMeta),
     Close(MemoryRef),
     Compact(MemoryRef, usize),

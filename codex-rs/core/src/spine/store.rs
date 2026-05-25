@@ -22,6 +22,7 @@ const LOCATOR_VERSION: u32 = 1;
 const TREE_FILE: &str = "tree.jsonl";
 const MEM_FILE: &str = "mem.jsonl";
 const CHECKPOINT_DIR: &str = "checkpoints";
+const INITIAL_CHECKPOINT_FILE: &str = "initial.json";
 
 pub(super) const BODY_DIR: &str = "memory";
 
@@ -119,6 +120,10 @@ impl SpineStore {
             .join(format!("pre-user-{raw_ordinal:020}.json"))
     }
 
+    pub(super) fn initial_checkpoint_path(&self) -> PathBuf {
+        self.checkpoint_dir().join(INITIAL_CHECKPOINT_FILE)
+    }
+
     pub(super) fn append_event(&self, event: &KEvent) -> Result<u64, SpineError> {
         let seq = self.next_event_seq()?;
         append_json_line(
@@ -145,11 +150,48 @@ impl SpineStore {
     }
 
     #[cfg(test)]
+    pub(crate) fn event_count_for_test(&self) -> Result<usize, SpineError> {
+        Ok(self.events()?.len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn suffix_mem_cover_for_test(
+        &self,
+        node_path: &str,
+    ) -> Result<Option<(u64, u64, usize, usize)>, SpineError> {
+        Ok(self
+            .mems()?
+            .into_iter()
+            .find(|mem| mem.node.as_path() == node_path)
+            .map(|mem| {
+                (
+                    mem.raw_start,
+                    mem.raw_end,
+                    mem.context_start,
+                    mem.context_end,
+                )
+            }))
+    }
+
+    #[cfg(test)]
     pub(super) fn checkpoint_for_test(
         &self,
         raw_ordinal: u64,
     ) -> Result<SpineCheckpoint, SpineError> {
         read_json_file(&self.checkpoint_path(raw_ordinal))
+    }
+
+    #[cfg(test)]
+    pub(super) fn initial_checkpoint_for_test(&self) -> Result<SpineCheckpoint, SpineError> {
+        read_json_file(&self.initial_checkpoint_path())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initial_checkpoint_identity_for_test(
+        &self,
+    ) -> Result<(String, String), SpineError> {
+        let checkpoint: SpineCheckpoint = read_json_file(&self.initial_checkpoint_path())?;
+        Ok((checkpoint.checkpoint_id, checkpoint.cursor))
     }
 
     pub(super) fn next_event_seq(&self) -> Result<u64, SpineError> {
@@ -189,6 +231,13 @@ impl SpineStore {
     pub(super) fn write_checkpoint(&self, checkpoint: &SpineCheckpoint) -> Result<(), SpineError> {
         let path = self.checkpoint_path(checkpoint.raw_ordinal);
         write_json_file_if_unchanged(&path, checkpoint)
+    }
+
+    pub(super) fn write_initial_checkpoint(
+        &self,
+        checkpoint: &SpineCheckpoint,
+    ) -> Result<(), SpineError> {
+        write_json_file_if_unchanged(&self.initial_checkpoint_path(), checkpoint)
     }
 
     pub(super) fn rollback_checkpoint(

@@ -140,7 +140,7 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                    "Spine closed after this tool output is recorded.".to_string(),
+                    "Spine closed.".to_string(),
                     Some(true),
                 )))
             }

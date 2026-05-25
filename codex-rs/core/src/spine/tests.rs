@@ -1,4 +1,6 @@
 use super::*;
+use crate::spine::CHECKPOINT_VERSION;
+use crate::spine::io::hash_response_items;
 use codex_protocol::models::ContentItem;
 use std::path::PathBuf;
 
@@ -62,7 +64,7 @@ fn compact_body_with_context_range(
     }
 }
 
-fn open_scope(
+fn open_task(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     call_id: &str,
@@ -113,7 +115,7 @@ fn append_msg(runtime: &mut SpineRuntime, raw: &mut Vec<Option<ResponseItem>>, t
         .expect("observe msg");
 }
 
-fn close_scope(
+fn close_task(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     call_id: &str,
@@ -218,6 +220,37 @@ fn ordinary_response_item_shifts_msg() {
             }]),
         ]
     );
+}
+
+#[test]
+fn end_token_is_retained_as_control_epsilon() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let item = text_item("ordinary");
+    let raw = vec![Some(item.clone())];
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(1).expect("observe raw");
+    runtime
+        .observe_context_item(0, 0, &item)
+        .expect("observe context item");
+
+    let mut parse_stack = runtime.parse_stack().clone();
+    parse_stack
+        .shift(SpineToken::End, &runtime.archive())
+        .expect("shift End");
+
+    assert!(matches!(
+        parse_stack.symbols.last(),
+        Some(Symbol::Control(ControlSymbol::End))
+    ));
+    assert_eq!(
+        render_parse_stack_to_context(&parse_stack, &raw).expect("render context"),
+        vec![item]
+    );
+    let tree = parse_stack.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1.1"), "{tree}");
+    assert!(tree.contains("- [1.1] Current root"), "{tree}");
 }
 
 #[test]
@@ -357,10 +390,11 @@ fn duplicate_open_call_id_does_not_create_second_child() {
         None
     );
     assert_eq!(event_log_debug(&runtime), event_debug_after_first_commit);
-    assert_eq!(
-        runtime.render_tree().expect("render tree"),
-        "  [1.1] Open root\n    [1.1.1] Current only child"
-    );
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1.1.1"), "{tree}");
+    assert!(tree.contains("Spine Task Tree:"), "{tree}");
+    assert!(tree.contains("- [1.1] Open root"), "{tree}");
+    assert!(tree.contains("- [1.1.1] Current only child"), "{tree}");
 }
 
 #[test]
@@ -416,9 +450,13 @@ fn spine_close_output_does_not_shift_msg() {
         .maybe_commit_output("open", None)
         .expect("commit open");
 
+    runtime.observe_raw_items(1).expect("record child raw");
+    runtime
+        .observe_context_item(2, 2, &text_item("inside"))
+        .expect("observe child raw");
     runtime.observe_raw_items(1).expect("record close request");
     runtime
-        .observe_context_item(2, 2, &spine_call(SPINE_TOOL_CLOSE, "close"))
+        .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
         .stage_close("close".to_string(), None)
@@ -429,12 +467,12 @@ fn spine_close_output_does_not_shift_msg() {
     };
     runtime.observe_raw_items(1).expect("record close output");
     runtime
-        .observe_context_item(3, 3, &function_output("close"))
+        .observe_context_item(4, 4, &function_output("close"))
         .expect("observe close output");
     runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_context_range("1.1.1", suffix_start..4)),
+            Some(compact_body_with_context_range("1.1.1", suffix_start..5)),
         )
         .expect("commit close");
 
@@ -442,9 +480,30 @@ fn spine_close_output_does_not_shift_msg() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, KEvent::Msg { .. }))
+            .filter_map(|event| match event {
+                KEvent::Msg { raw_ordinal, .. } => Some(*raw_ordinal),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![2],
+        "only the real child suffix item should shift as Msg"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            KEvent::Msg {
+                raw_ordinal: 3 | 4,
+                ..
+            }
+        )),
+        "close request/output carriers must not shift as Msg"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, KEvent::Close { .. }))
             .count(),
-        0
+        1
     );
     assert!(matches!(events.last(), Some(KEvent::Close { .. })));
     let Some(Symbol::SpineTreeNodes(nodes)) = runtime.parse_stack().symbols.last() else {
@@ -464,18 +523,189 @@ fn spine_close_output_does_not_shift_msg() {
     assert_eq!(meta.id, NodeId::root_epoch(1).child(1).child(1));
     assert_eq!(meta.index, 0);
     assert_eq!(meta.summary, "child");
-    assert!(children.is_empty());
+    assert!(matches!(
+        children.as_slice(),
+        [SpineTreeNode::MsgAsLeafNode {
+            msg: SegRef::ResponseItem {
+                raw_ordinal: 2,
+                context_index: 2,
+            },
+            ..
+        }]
+    ));
     assert_eq!(memory_path, &PathBuf::from("nodes/1/1/1/Memory.md"));
     assert_eq!(trajs_path, &PathBuf::from("nodes/1/1/1/Trajs.md"));
 
     let memory_archive =
         std::fs::read_to_string(runtime.store.root.join(memory_path)).expect("memory archive");
-    assert!(memory_archive.contains("compact_id: mem-1-1-1-0-4"));
-    assert!(memory_archive.contains("source_context_range: [0..4)"));
+    assert!(memory_archive.contains("compact_id: mem-1-1-1-0-5"));
+    assert!(memory_archive.contains("source_context_range: [0..5)"));
     assert!(memory_archive.contains("# Spine Memory 1.1.1"));
     let trajs_archive =
         std::fs::read_to_string(runtime.store.root.join(trajs_path)).expect("trajs archive");
-    assert!(!trajs_archive.contains("msg raw_ordinal="));
+    assert!(trajs_archive.contains("raw raw_ordinal=2 context_index=2"));
+}
+
+#[test]
+fn empty_task_tree_reduce_fails_without_archive_side_effects() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let archive = runtime.archive();
+    let node_id = NodeId::root_epoch(1).child(1);
+    let open = Symbol::Control(ControlSymbol::Open(
+        tree_meta(&archive, node_id.clone(), 0, "empty".to_string()).expect("meta"),
+    ));
+    let memory = memory_ref(
+        &archive,
+        "empty-memory".to_string(),
+        node_id,
+        sha1_hex(b"empty"),
+        0..0,
+        0..0,
+        0..0,
+    );
+    let mut parse_stack = ParseStack {
+        symbols: vec![open, Symbol::Control(ControlSymbol::Close(memory))],
+    };
+
+    let err = parse_stack
+        .shift(SpineToken::End, &archive)
+        .expect_err("open close without Nodes must fail");
+    assert!(
+        err.to_string()
+            .contains("spine.close requires non-empty live suffix"),
+        "unexpected empty task close error: {err}"
+    );
+    assert!(
+        !runtime.store.root.join("nodes/1/1").exists(),
+        "empty close must not archive a TaskTree"
+    );
+}
+
+#[test]
+fn empty_spine_close_does_not_commit_memory_or_event() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(1).expect("record open request");
+    runtime
+        .observe_context_item(0, 0, &spine_call(SPINE_TOOL_OPEN, "open"))
+        .expect("observe open request");
+    runtime
+        .stage_open("open".to_string(), "empty child".to_string())
+        .expect("stage open");
+    runtime.observe_raw_items(1).expect("record open output");
+    runtime
+        .observe_context_item(1, 1, &function_output("open"))
+        .expect("observe open output");
+    runtime
+        .maybe_commit_output("open", None)
+        .expect("commit open");
+    runtime.observe_raw_items(1).expect("record close request");
+    runtime
+        .observe_context_item(2, 2, &spine_call(SPINE_TOOL_CLOSE, "close"))
+        .expect("observe close request");
+    runtime
+        .stage_close("close".to_string(), None)
+        .expect("stage close");
+    runtime.observe_raw_items(1).expect("record close output");
+    runtime
+        .observe_context_item(3, 3, &function_output("close"))
+        .expect("observe close output");
+
+    let parse_stack_before = runtime.parse_stack().clone();
+    let events_before = event_log_debug(&runtime);
+    let err = runtime
+        .maybe_commit_output(
+            "close",
+            Some(compact_body_with_context_range("1.1.1", 0..4)),
+        )
+        .expect_err("empty live suffix must not close");
+    assert!(
+        err.to_string()
+            .contains("spine.close requires non-empty live suffix"),
+        "unexpected empty close error: {err}"
+    );
+    assert_eq!(runtime.parse_stack(), &parse_stack_before);
+    assert_eq!(event_log_debug(&runtime), events_before);
+    assert!(
+        runtime.store.mems().expect("read mems").is_empty(),
+        "empty close must not append a memory record"
+    );
+}
+
+#[test]
+fn duplicate_close_call_id_does_not_create_second_memory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(1).expect("record open request");
+    runtime
+        .observe_context_item(0, 0, &spine_call(SPINE_TOOL_OPEN, "open"))
+        .expect("observe open request");
+    runtime
+        .stage_open("open".to_string(), "child".to_string())
+        .expect("stage open");
+    runtime.observe_raw_items(1).expect("record open output");
+    runtime
+        .observe_context_item(1, 1, &function_output("open"))
+        .expect("observe open output");
+    runtime
+        .maybe_commit_output("open", None)
+        .expect("commit open");
+    runtime.observe_raw_items(1).expect("record child raw");
+    runtime
+        .observe_context_item(2, 2, &text_item("inside"))
+        .expect("observe child raw");
+    runtime.observe_raw_items(1).expect("record close request");
+    runtime
+        .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "dup-close"))
+        .expect("observe close request");
+    runtime
+        .stage_close("dup-close".to_string(), None)
+        .expect("stage close");
+    let suffix_start = match runtime
+        .pending_commit("dup-close")
+        .expect("pending close should be readable")
+    {
+        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
+        other => panic!("expected pending close, got {other:?}"),
+    };
+    runtime.observe_raw_items(1).expect("record close output");
+    runtime
+        .observe_context_item(4, 4, &function_output("dup-close"))
+        .expect("observe close output");
+    runtime
+        .maybe_commit_output(
+            "dup-close",
+            Some(compact_body_with_context_range("1.1.1", suffix_start..5)),
+        )
+        .expect("commit close");
+
+    let events_after_first_commit = event_log_debug(&runtime);
+    let mems_after_first_commit = runtime.store.mems().expect("read mems");
+    assert_eq!(mems_after_first_commit.len(), 1);
+    assert_eq!(
+        runtime
+            .maybe_commit_output(
+                "dup-close",
+                Some(compact_body_with_context_range("1.1.1", suffix_start..5)),
+            )
+            .expect("duplicate close output commit should be no-op"),
+        None
+    );
+    assert_eq!(event_log_debug(&runtime), events_after_first_commit);
+    assert_eq!(
+        runtime
+            .store
+            .mems()
+            .expect("read mems after duplicate")
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -661,6 +891,10 @@ fn nested_close_reduces_inner_tree_into_parent_nodes() {
         .maybe_commit_output("inner", None)
         .expect("commit inner");
 
+    runtime.observe_raw_items(1).expect("record inner raw");
+    runtime
+        .observe_context_item(4, 4, &text_item("inner body"))
+        .expect("observe inner raw");
     runtime
         .observe_raw_items(1)
         .expect("record inner close request");
@@ -678,14 +912,14 @@ fn nested_close_reduces_inner_tree_into_parent_nodes() {
         .observe_raw_items(1)
         .expect("record inner close output");
     runtime
-        .observe_context_item(5, 5, &function_output("close-inner"))
+        .observe_context_item(6, 6, &function_output("close-inner"))
         .expect("observe inner close output");
     runtime
         .maybe_commit_output(
             "close-inner",
             Some(compact_body_with_context_range(
                 "1.1.1.1",
-                inner_suffix_start..6,
+                inner_suffix_start..7,
             )),
         )
         .expect("commit inner close");
@@ -724,14 +958,14 @@ fn nested_close_reduces_inner_tree_into_parent_nodes() {
         .observe_raw_items(1)
         .expect("record outer close output");
     runtime
-        .observe_context_item(7, 7, &function_output("close-outer"))
+        .observe_context_item(8, 8, &function_output("close-outer"))
         .expect("observe outer close output");
     runtime
         .maybe_commit_output(
             "close-outer",
             Some(compact_body_with_context_range(
                 "1.1.1",
-                outer_suffix_start..8,
+                outer_suffix_start..9,
             )),
         )
         .expect("commit outer close");
@@ -759,7 +993,15 @@ fn nested_close_reduces_inner_tree_into_parent_nodes() {
     ));
     let outer_trajs = std::fs::read_to_string(runtime.store.root.join("nodes/1/1/1/Trajs.md"))
         .expect("outer trajs");
-    assert!(outer_trajs.contains("summary=inner"));
+    assert!(outer_trajs.contains("compact_id=mem-1-1-1-1-2-7"));
+    assert!(outer_trajs.contains("node_id=1.1.1.1"));
+    assert!(outer_trajs.contains("body_path="));
+    assert!(outer_trajs.contains("memory_path=nodes/1/1/1/1/Memory.md"));
+    assert!(outer_trajs.contains("trajs_path=nodes/1/1/1/1/Trajs.md"));
+    assert!(!outer_trajs.contains("body_hash:"));
+    assert!(!outer_trajs.contains("body:"));
+    assert!(!outer_trajs.contains("Spine Memory 1.1.1.1"));
+    assert!(!outer_trajs.contains("inner assistant traj"));
 }
 
 #[test]
@@ -770,18 +1012,18 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
 
     append_msg(&mut runtime, &mut raw, "root work");
-    open_scope(&mut runtime, &mut raw, "open-1-1", "scope 1.1");
+    open_task(&mut runtime, &mut raw, "open-1-1", "task 1.1");
     append_msg(&mut runtime, &mut raw, "1.1 work");
-    close_scope(&mut runtime, &mut raw, "close-1-1", "1.1");
-    open_scope(&mut runtime, &mut raw, "open-1-2", "scope 1.2");
+    close_task(&mut runtime, &mut raw, "close-1-1", "1.1");
+    open_task(&mut runtime, &mut raw, "open-1-2", "task 1.2");
     append_msg(&mut runtime, &mut raw, "1.2 work");
-    open_scope(&mut runtime, &mut raw, "open-1-2-1", "scope 1.2.1");
+    open_task(&mut runtime, &mut raw, "open-1-2-1", "task 1.2.1");
     append_msg(&mut runtime, &mut raw, "1.2.1 work");
-    close_scope(&mut runtime, &mut raw, "close-1-2-1", "1.2.1");
-    open_scope(&mut runtime, &mut raw, "open-1-2-2", "scope 1.2.2");
+    close_task(&mut runtime, &mut raw, "close-1-2-1", "1.2.1");
+    open_task(&mut runtime, &mut raw, "open-1-2-2", "task 1.2.2");
     append_msg(&mut runtime, &mut raw, "1.2.2 work");
-    close_scope(&mut runtime, &mut raw, "close-1-2-2", "1.2.2");
-    close_scope(&mut runtime, &mut raw, "close-1-2", "1.2");
+    close_task(&mut runtime, &mut raw, "close-1-2-2", "1.2.2");
+    close_task(&mut runtime, &mut raw, "close-1-2", "1.2");
     append_msg(&mut runtime, &mut raw, "1.3 work");
     runtime
         .root_compact("root epoch 1 memory".to_string(), raw.len())
@@ -853,9 +1095,9 @@ fn fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
     let mut parent = SpineRuntime::load_or_create(&parent_rollout, 0).expect("create parent");
 
     append_msg(&mut parent, &mut raw, "parent root before child");
-    open_scope(&mut parent, &mut raw, "open-child", "child scope");
+    open_task(&mut parent, &mut raw, "open-child", "child task");
     append_msg(&mut parent, &mut raw, "child work");
-    close_scope(&mut parent, &mut raw, "close-child", "1.1.1");
+    close_task(&mut parent, &mut raw, "close-child", "1.1.1");
     append_msg(&mut parent, &mut raw, "parent after child");
 
     let parent_materialized = parent.materialize_history(&raw).expect("parent h(PS)");
@@ -906,15 +1148,15 @@ fn fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
     let child_trajs_archive =
         std::fs::read_to_string(child_meta_dir.join("Trajs.md")).expect("child Trajs.md");
     assert!(child_memory_archive.contains("Spine Memory 1.1.1"));
-    assert!(child_trajs_archive.contains("raw_ordinal=3"));
+    assert!(child_trajs_archive.contains("raw raw_ordinal=3"));
     assert!(child_trajs_archive.contains("context_index=3"));
     assert!(child_meta_dir.join("Memory.md").exists());
     assert!(child_meta_dir.join("Trajs.md").exists());
 
     let mut child = child;
-    open_scope(&mut child, &mut raw, "child-open-only", "child-only scope");
+    open_task(&mut child, &mut raw, "child-open-only", "child-only task");
     append_msg(&mut child, &mut raw, "child-only work");
-    close_scope(&mut child, &mut raw, "child-close-only", "1.1.2");
+    close_task(&mut child, &mut raw, "child-close-only", "1.1.2");
 
     let reloaded_parent = SpineRuntime::load_for_rollout(&parent_rollout, parent.raw_len)
         .expect("reload parent")
@@ -951,7 +1193,7 @@ fn open_close_replay_materializes_closed_child_memory() {
         .observe_context_item(1, 1, &spine_call(SPINE_TOOL_OPEN, "open"))
         .expect("observe open request");
     runtime
-        .stage_open("open".to_string(), "child scope".to_string())
+        .stage_open("open".to_string(), "child task".to_string())
         .expect("stage open");
     runtime.observe_raw_items(1).expect("record open output");
     runtime
@@ -991,7 +1233,7 @@ fn open_close_replay_materializes_closed_child_memory() {
         .expect("sidecar exists");
     let tree = replayed.render_tree().expect("render tree");
     assert!(tree.contains("[1.1] Current"));
-    assert!(tree.contains("[1.1.1] Done child scope"));
+    assert!(tree.contains("[1.1.1] Done child task"));
 
     let materialized = replayed
         .materialize_history(&raw)
@@ -1021,7 +1263,7 @@ fn tree_renders_from_parse_stack_without_mutating_it() {
         .observe_context_item(1, 1, &spine_call(SPINE_TOOL_OPEN, "open"))
         .expect("observe open request");
     runtime
-        .stage_open("open".to_string(), "child scope".to_string())
+        .stage_open("open".to_string(), "child task".to_string())
         .expect("stage open");
     runtime.observe_raw_items(1).expect("record open output");
     runtime
@@ -1066,8 +1308,15 @@ fn tree_renders_from_parse_stack_without_mutating_it() {
         tree,
         replayed.parse_stack().render_tree().expect("render ps")
     );
-    assert!(tree.contains("[1.1] Current root"));
-    assert!(tree.contains("[1.1.1] Done child scope"));
+    assert!(tree.contains("Cursor: 1.1"), "{tree}");
+    assert!(tree.contains("Spine Task Tree:"), "{tree}");
+    assert!(tree.contains("[1.1] Current root"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done child task"), "{tree}");
+    assert!(
+        tree.contains("memory=nodes/1/1/1/Memory.md")
+            && tree.contains("trajs=nodes/1/1/1/Trajs.md"),
+        "{tree}"
+    );
 }
 
 #[test]
@@ -1092,7 +1341,7 @@ fn materialize_history_renders_from_parse_stack_memory_segments() {
         .observe_context_item(1, 1, &spine_call(SPINE_TOOL_OPEN, "open"))
         .expect("observe open request");
     runtime
-        .stage_open("open".to_string(), "child scope".to_string())
+        .stage_open("open".to_string(), "child task".to_string())
         .expect("stage open");
     runtime.observe_raw_items(1).expect("record open output");
     runtime
@@ -1130,13 +1379,43 @@ fn materialize_history_renders_from_parse_stack_memory_segments() {
     let Some(Symbol::SpineTreeNodes(nodes)) = runtime.parse_stack().symbols.last() else {
         panic!("closed child should reduce into ParseStack nodes")
     };
-    assert!(nodes.iter().any(|node| matches!(
-        node,
-        SpineTreeNode::SpineTree { memory, .. }
-            if memory.compact_id == "mem-1-1-1-1-6"
-                && memory.source_context_range == (1..6)
-                && memory.source_raw_range == (1..6)
-    )));
+    let memory = nodes
+        .iter()
+        .find_map(|node| match node {
+            SpineTreeNode::SpineTree { memory, .. } => Some(memory),
+            _ => None,
+        })
+        .expect("closed child memory ref");
+    assert_eq!(memory.compact_id, "mem-1-1-1-1-6");
+    assert_eq!(memory.source_context_range, 1..6);
+    assert_eq!(memory.source_raw_range, 1..6);
+    let memory_seg = SegRef::from_memory_ref(memory);
+    assert!(matches!(
+        &memory_seg,
+        SegRef::Memory {
+            memory_id,
+            body_path,
+        } if memory_id == "mem-1-1-1-1-6"
+            && body_path.ends_with("memory/mem-1-1-1-1-6.md")
+    ));
+    let memory_only = ParseStack {
+        symbols: vec![Symbol::SpineTreeNodes(vec![SpineTreeNode::MsgAsLeafNode {
+            msg: memory_seg,
+            from_user: true,
+        }])],
+    };
+    let rendered_memory =
+        render_parse_stack_to_context(&memory_only, &[]).expect("render SegRef::Memory");
+    assert!(matches!(
+        rendered_memory.as_slice(),
+        [ResponseItem::Message { content, .. }]
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }]
+                    if text.contains("Spine Memory 1.1.1")
+                        && text.contains("real compact body for 1.1.1")
+            )
+    ));
 
     let materialized = runtime.materialize_history(&raw).expect("materialize");
     assert_eq!(materialized.len(), 2);
@@ -1198,7 +1477,7 @@ fn rollback_keeps_open_when_request_item_survives() {
         .observe_context_item(1, 1, &spine_call(SPINE_TOOL_OPEN, "open"))
         .expect("observe open request");
     runtime
-        .stage_open("open".to_string(), "child scope".to_string())
+        .stage_open("open".to_string(), "child task".to_string())
         .expect("stage open");
     runtime.observe_raw_items(1).expect("record open output");
     runtime
@@ -1211,10 +1490,10 @@ fn rollback_keeps_open_when_request_item_survives() {
     let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
         .expect("load spine")
         .expect("sidecar exists");
-    assert_eq!(
-        replayed.render_tree().expect("render tree"),
-        "  [1.1] Open root\n    [1.1.1] Current child scope"
-    );
+    let tree = replayed.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1.1.1"), "{tree}");
+    assert!(tree.contains("- [1.1] Open root"), "{tree}");
+    assert!(tree.contains("- [1.1.1] Current child task"), "{tree}");
     assert_eq!(
         replayed.materialize_history(&raw).expect("materialize"),
         vec![text_item("before")]
@@ -1240,7 +1519,7 @@ fn rollback_skips_open_when_request_item_is_stale() {
         .observe_context_item(1, 1, &spine_call(SPINE_TOOL_OPEN, "open"))
         .expect("observe open request");
     runtime
-        .stage_open("open".to_string(), "child scope".to_string())
+        .stage_open("open".to_string(), "child task".to_string())
         .expect("stage open");
     runtime.observe_raw_items(1).expect("record open output");
     runtime
@@ -1253,10 +1532,9 @@ fn rollback_skips_open_when_request_item_is_stale() {
     let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
         .expect("load spine")
         .expect("sidecar exists");
-    assert_eq!(
-        replayed.render_tree().expect("render tree"),
-        "  [1.1] Current root"
-    );
+    let tree = replayed.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1.1"), "{tree}");
+    assert!(tree.contains("- [1.1] Current root"), "{tree}");
     assert_eq!(
         replayed.materialize_history(&raw).expect("materialize"),
         vec![text_item("before")]
@@ -1284,7 +1562,7 @@ fn rollback_hole_rejects_suffix_memory_span() {
         .observe_context_item(1, 1, &spine_call(SPINE_TOOL_OPEN, "open"))
         .expect("observe open request");
     runtime
-        .stage_open("open".to_string(), "child scope".to_string())
+        .stage_open("open".to_string(), "child task".to_string())
         .expect("stage open");
     runtime.observe_raw_items(1).expect("record open output");
     runtime
@@ -1510,7 +1788,36 @@ fn checkpoint_before_user_msg_records_recoverable_fields() {
         checkpoint.h_ps_hash,
         hash_response_items(&context).expect("hash")
     );
-    assert_eq!(checkpoint.context_hash, checkpoint.h_ps_hash);
+}
+
+#[test]
+fn initial_checkpoint_records_root_open_without_msg() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime
+        .checkpoint_initial(&rollout, &[])
+        .expect("write initial checkpoint");
+    let checkpoint = runtime
+        .store
+        .initial_checkpoint_for_test()
+        .expect("read initial checkpoint");
+
+    assert_eq!(checkpoint.checkpoint_id, "initial");
+    assert_eq!(checkpoint.raw_ordinal, 0);
+    assert_eq!(checkpoint.context_len, 0);
+    assert_eq!(checkpoint.cursor, "1.1");
+    assert!(checkpoint.memory_refs.is_empty());
+    assert!(checkpoint.trajs_refs.is_empty());
+    assert!(matches!(
+        checkpoint.parse_stack.symbols.as_slice(),
+        [
+            Symbol::Control(ControlSymbol::Init(_)),
+            Symbol::Control(ControlSymbol::Open(root))
+        ] if root.id == NodeId::root_epoch(1).child(1)
+            && root.summary == "root"
+    ));
 }
 
 #[test]
@@ -1686,9 +1993,12 @@ fn rollback_checkpoint_new_open_reuses_restored_sibling_id() {
     let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw_after_rollback, &[1])
         .expect("load spine")
         .expect("sidecar exists");
-    assert_eq!(
-        replayed.render_tree().expect("render tree"),
-        "  [1.1] Open root\n    [1.1.1] Current restored sibling"
+    let tree = replayed.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1.1.1"), "{tree}");
+    assert!(tree.contains("- [1.1] Open root"), "{tree}");
+    assert!(
+        tree.contains("- [1.1.1] Current restored sibling"),
+        "{tree}"
     );
     assert!(matches!(
         replayed.parse_stack().symbols.as_slice(),

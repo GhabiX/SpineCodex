@@ -5,20 +5,17 @@ use std::ops::Range;
 use std::path::Path;
 use thiserror::Error;
 
-use crate::spine::CHECKPOINT_VERSION;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::memory_ref;
 use crate::spine::archive::tree_meta;
 use crate::spine::checkpoint::SpineCheckpoint;
-use crate::spine::checkpoint::collect_checkpoint_refs;
+use crate::spine::checkpoint::build_checkpoint;
 use crate::spine::checkpoint::validate_checkpoint;
 use crate::spine::io::hash_raw_live;
-use crate::spine::io::hash_response_items;
 use crate::spine::io::sha1_hex;
 #[cfg(test)]
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::KEvent;
-#[cfg(test)]
 use crate::spine::model::LoggedKEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
@@ -88,7 +85,7 @@ enum SpineOp {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
     Open {
-        suffix_start: usize,
+        open_request_index: usize,
     },
     Close {
         suffix_start: usize,
@@ -259,9 +256,8 @@ impl SpineRuntime {
         } else {
             events
         };
-        let raw_mask = RawMask::new(&raw_live);
         let archive = SpineArchive::new(store.root.clone());
-        let parse_stack = parse_stack_from_events(&events, &archive, &mems, raw_mask)?;
+        let parse_stack = replay_from_events(&archive, &events, &mems, &raw_live, None, None)?;
         Ok(Self {
             store,
             parse_stack,
@@ -281,11 +277,6 @@ impl SpineRuntime {
     ) -> Result<Self, SpineError> {
         let events = store.events()?;
         let mems = store.mems()?;
-        let mem_map = mems
-            .iter()
-            .cloned()
-            .map(|mem| (mem.compact_id.clone(), mem))
-            .collect::<BTreeMap<_, _>>();
         let archive = SpineArchive::new(store.root.clone());
         let raw_ordinal = usize::try_from(checkpoint.raw_ordinal)
             .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
@@ -304,20 +295,14 @@ impl SpineRuntime {
             )));
         }
 
-        let mut parse_stack = checkpoint.parse_stack.clone();
-        let raw_mask = RawMask::new(&raw_live);
-        for event in events
-            .iter()
-            .filter(|event| event.seq >= checkpoint.token_seq)
-        {
-            if !event.allowed_by(raw_mask)? {
-                continue;
-            }
-            parse_stack.shift(
-                event_to_token(event, &archive, &mem_map, raw_mask)?,
-                &archive,
-            )?;
-        }
+        let parse_stack = replay_from_events(
+            &archive,
+            &events,
+            &mems,
+            &raw_live,
+            Some(&checkpoint.parse_stack),
+            Some(checkpoint.token_seq),
+        )?;
         Ok(Self {
             store,
             parse_stack,
@@ -435,8 +420,32 @@ impl SpineRuntime {
         raw_ordinal: u64,
         context: &[ResponseItem],
     ) -> Result<(), SpineError> {
-        let checkpoint = self.build_checkpoint(rollout_path, raw_ordinal, context)?;
+        let checkpoint = build_checkpoint(
+            rollout_path,
+            raw_ordinal,
+            self.store.next_event_seq()?,
+            &self.raw_live,
+            &self.parse_stack,
+            context,
+        )?;
         self.store.write_checkpoint(&checkpoint)
+    }
+
+    pub(crate) fn checkpoint_initial(
+        &self,
+        rollout_path: &Path,
+        context: &[ResponseItem],
+    ) -> Result<(), SpineError> {
+        let mut checkpoint = build_checkpoint(
+            rollout_path,
+            0,
+            self.store.next_event_seq()?,
+            &self.raw_live,
+            &self.parse_stack,
+            context,
+        )?;
+        checkpoint.checkpoint_id = "initial".to_string();
+        self.store.write_initial_checkpoint(&checkpoint)
     }
 
     fn append_msg_event(&self, msg: &PendingMsg) -> Result<u64, SpineError> {
@@ -465,52 +474,6 @@ impl SpineRuntime {
     fn append_and_shift_msg(&mut self, msg: &PendingMsg) -> Result<(), SpineError> {
         self.append_msg_event(msg)?;
         self.push_msg_token(msg)
-    }
-
-    fn build_checkpoint(
-        &self,
-        rollout_path: &Path,
-        raw_ordinal: u64,
-        context: &[ResponseItem],
-    ) -> Result<SpineCheckpoint, SpineError> {
-        let raw_ordinal_usize = usize::try_from(raw_ordinal)
-            .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
-        if raw_ordinal_usize > self.raw_live.len() {
-            return Err(SpineError::InvalidEvent(
-                "checkpoint raw ordinal exceeds raw boundary".to_string(),
-            ));
-        }
-        let mut tree_meta = Vec::new();
-        let mut memory_refs = Vec::new();
-        let mut trajs_refs = Vec::new();
-        collect_checkpoint_refs(
-            &self.parse_stack.symbols,
-            &mut tree_meta,
-            &mut memory_refs,
-            &mut trajs_refs,
-        );
-        Ok(SpineCheckpoint {
-            version: CHECKPOINT_VERSION,
-            checkpoint_id: format!("pre-user-{raw_ordinal:020}"),
-            rollout_path: rollout_path.display().to_string(),
-            raw_ordinal,
-            token_seq: self.store.next_event_seq()?,
-            raw_live_hash: hash_raw_live(&self.raw_live[..raw_ordinal_usize]),
-            context_len: context.len(),
-            cursor: self.parse_stack.current_open_meta()?.id.to_string(),
-            parse_stack: self.parse_stack.clone(),
-            parse_stack_symbols: self
-                .parse_stack
-                .symbols
-                .iter()
-                .map(|symbol| format!("{symbol:?}"))
-                .collect(),
-            tree_meta,
-            memory_refs,
-            trajs_refs,
-            h_ps_hash: hash_response_items(context)?,
-            context_hash: hash_response_items(context)?,
-        })
     }
 
     pub(crate) fn stage_open(
@@ -607,6 +570,11 @@ impl SpineRuntime {
                         "cannot close root epoch".to_string(),
                     ));
                 }
+                if !self.parse_stack.current_open_has_nodes()? {
+                    return Err(SpineError::InvalidEvent(
+                        "spine.close requires non-empty live suffix".to_string(),
+                    ));
+                }
                 let suffix_start = open_meta.index;
                 let summary = open_meta.summary.clone();
                 let event = KEvent::Close {
@@ -653,11 +621,11 @@ impl SpineRuntime {
         self.pending = None;
         Ok(Some(match pending.op {
             SpineOp::Open => {
-                let suffix_start = pending.index.ok_or_else(|| {
+                let open_request_index = pending.index.ok_or_else(|| {
                     SpineError::InvalidEvent("missing spine.open context index".to_string())
                 })?;
                 SpineCommitKind::Open {
-                    suffix_start: usize::try_from(suffix_start).map_err(|_| {
+                    open_request_index: usize::try_from(open_request_index).map_err(|_| {
                         SpineError::InvalidEvent("spine.open context index overflow".to_string())
                     })?,
                 }
@@ -798,6 +766,41 @@ impl SpineRuntime {
     ) -> Result<Vec<ResponseItem>, SpineError> {
         render_parse_stack_to_context(&self.parse_stack, raw_items)
     }
+}
+
+fn replay_from_events(
+    archive: &SpineArchive,
+    events: &[LoggedKEvent],
+    mems: &[MemRecord],
+    raw_live: &[bool],
+    initial: Option<&ParseStack>,
+    min_seq: Option<u64>,
+) -> Result<ParseStack, SpineError> {
+    let raw_mask = RawMask::new(raw_live);
+    let Some(initial) = initial else {
+        let events = events
+            .iter()
+            .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
+            .cloned()
+            .collect::<Vec<_>>();
+        return parse_stack_from_events(&events, archive, mems, raw_mask);
+    };
+    let mem_map = mems
+        .iter()
+        .cloned()
+        .map(|mem| (mem.compact_id.clone(), mem))
+        .collect::<BTreeMap<_, _>>();
+    let mut parse_stack = initial.clone();
+    for event in events
+        .iter()
+        .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
+    {
+        if !event.allowed_by(raw_mask)? {
+            continue;
+        }
+        parse_stack.shift(event_to_token(event, archive, &mem_map, raw_mask)?, archive)?;
+    }
+    Ok(parse_stack)
 }
 
 pub(crate) fn is_user_message(item: &ResponseItem) -> bool {

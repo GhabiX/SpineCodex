@@ -21,6 +21,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ParseStack {
@@ -42,6 +43,7 @@ impl ParseStack {
         self.reduce_fixpoint(archive)?;
         let symbol = match token {
             SpineToken::Init { meta } => Symbol::Control(ControlSymbol::Init(meta)),
+            SpineToken::End => Symbol::Control(ControlSymbol::End),
             SpineToken::Open { meta } => Symbol::Control(ControlSymbol::Open(meta)),
             SpineToken::Close { memory } => Symbol::Control(ControlSymbol::Close(memory)),
             SpineToken::Compact {
@@ -79,7 +81,18 @@ impl ParseStack {
     }
 
     fn reduce_task_tree(&mut self, archive: &SpineArchive) -> Result<bool, SpineError> {
-        let has_nodes = match self.symbols.get(..) {
+        match self.symbols.get(..) {
+            Some(
+                [
+                    ..,
+                    Symbol::Control(ControlSymbol::Open(_)),
+                    Symbol::Control(ControlSymbol::Close(_)),
+                ],
+            ) => {
+                return Err(SpineError::InvalidEvent(
+                    "spine.close requires non-empty live suffix".to_string(),
+                ));
+            }
             Some(
                 [
                     ..,
@@ -87,26 +100,14 @@ impl ParseStack {
                     Symbol::SpineTreeNodes(_),
                     Symbol::Control(ControlSymbol::Close(_)),
                 ],
-            ) => true,
-            Some(
-                [
-                    ..,
-                    Symbol::Control(ControlSymbol::Open(_)),
-                    Symbol::Control(ControlSymbol::Close(_)),
-                ],
-            ) => false,
+            ) => {}
             _ => return Ok(false),
-        };
+        }
         let Some(Symbol::Control(ControlSymbol::Close(memory))) = self.symbols.pop() else {
             unreachable!("close symbol matched by reduce pattern")
         };
-        let children = if has_nodes {
-            let Some(Symbol::SpineTreeNodes(children)) = self.symbols.pop() else {
-                unreachable!("nodes symbol matched by reduce pattern")
-            };
-            children
-        } else {
-            Vec::new()
+        let Some(Symbol::SpineTreeNodes(children)) = self.symbols.pop() else {
+            unreachable!("nodes symbol matched by reduce pattern")
         };
         let Some(Symbol::Control(ControlSymbol::Open(meta))) = self.symbols.pop() else {
             unreachable!("open symbol matched by reduce pattern")
@@ -114,7 +115,7 @@ impl ParseStack {
         let (memory_path, trajs_path) = archive_task_tree(archive, &meta, &children, &memory)?;
         self.symbols
             .push(Symbol::SpineTreeNode(SpineTreeNode::SpineTree {
-                memory,
+                memory: memory.clone(),
                 meta,
                 children,
                 memory_path,
@@ -211,6 +212,17 @@ impl ParseStack {
             .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))
     }
 
+    pub(super) fn current_open_has_nodes(&self) -> Result<bool, SpineError> {
+        let open_idx = self
+            .symbols
+            .iter()
+            .rposition(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Open(_))))
+            .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))?;
+        Ok(self.symbols[open_idx + 1..]
+            .iter()
+            .any(|symbol| matches!(symbol, Symbol::SpineTreeNodes(nodes) if !nodes.is_empty())))
+    }
+
     pub(super) fn current_root_epoch_id(&self) -> Result<NodeId, SpineError> {
         let current = self.current_open_meta()?.id.clone();
         let root = *current
@@ -244,6 +256,8 @@ struct TreeRenderRow {
     id: NodeId,
     status: NodeStatus,
     summary: String,
+    memory_path: Option<PathBuf>,
+    trajs_path: Option<PathBuf>,
 }
 
 fn collect_tree_render_rows(
@@ -253,6 +267,7 @@ fn collect_tree_render_rows(
     for symbol in symbols {
         match symbol {
             Symbol::Control(ControlSymbol::Init(_))
+            | Symbol::Control(ControlSymbol::End)
             | Symbol::Control(ControlSymbol::Close(_))
             | Symbol::Control(ControlSymbol::Compact(_, _)) => {}
             Symbol::Control(ControlSymbol::Open(meta)) => {
@@ -260,6 +275,8 @@ fn collect_tree_render_rows(
                     id: meta.id.clone(),
                     status: NodeStatus::Live,
                     summary: meta.summary.clone(),
+                    memory_path: None,
+                    trajs_path: None,
                 });
             }
             Symbol::SpineTreeNode(node) => {
@@ -276,6 +293,8 @@ fn collect_tree_render_rows(
                         id: root_epoch.memory.node_id.clone(),
                         status: NodeStatus::Closed,
                         summary: "root".to_string(),
+                        memory_path: Some(root_epoch.memory.body_path.clone()),
+                        trajs_path: None,
                     });
                 }
             }
@@ -293,7 +312,7 @@ fn collect_tree_render_rows(
         ));
     };
     for ancestor_idx in ancestors {
-        rows[*ancestor_idx].status = NodeStatus::Suspended;
+        rows[*ancestor_idx].status = NodeStatus::Opened;
     }
     for row in rows.iter_mut().skip(live_idx + 1) {
         if row.status == NodeStatus::Live {
@@ -309,11 +328,19 @@ fn collect_tree_render_node(
 ) -> Result<(), SpineError> {
     match node {
         SpineTreeNode::MsgAsLeafNode { .. } => {}
-        SpineTreeNode::SpineTree { meta, children, .. } => {
+        SpineTreeNode::SpineTree {
+            meta,
+            children,
+            memory_path,
+            trajs_path,
+            ..
+        } => {
             rows.push(TreeRenderRow {
                 id: meta.id.clone(),
                 status: NodeStatus::Closed,
                 summary: meta.summary.clone(),
+                memory_path: Some(memory_path.clone()),
+                trajs_path: Some(trajs_path.clone()),
             });
             for child in children {
                 collect_tree_render_node(child, rows)?;
@@ -390,22 +417,34 @@ fn format_tree_rows(rows: Vec<TreeRenderRow>) -> String {
         }
     }
 
-    let mut lines = Vec::new();
+    let mut lines = vec![
+        format!("Cursor: {cursor}"),
+        String::new(),
+        "Spine Task Tree:".to_string(),
+    ];
     for (id, row) in rows {
         if !visible.contains(&id) {
             continue;
         }
         let marker = match row.status {
             NodeStatus::Live => "Current",
-            NodeStatus::Suspended => "Open",
+            NodeStatus::Opened => "Open",
             NodeStatus::Closed => "Done",
         };
+        let mut detail = String::new();
+        if let Some(memory_path) = row.memory_path.as_ref() {
+            detail.push_str(&format!(" memory={}", memory_path.display()));
+        }
+        if let Some(trajs_path) = row.trajs_path.as_ref() {
+            detail.push_str(&format!(" trajs={}", trajs_path.display()));
+        }
         lines.push(format!(
-            "{}[{}] {} {}",
+            "{}- [{}] {} {}{}",
             "  ".repeat(id.0.len().saturating_sub(1)),
             id,
             marker,
-            row.summary
+            row.summary,
+            detail
         ));
     }
     lines.join("\n")

@@ -8,7 +8,6 @@ use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use crate::Prompt;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
@@ -18,7 +17,6 @@ use crate::agent::status::is_final;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
-use crate::compact::content_items_to_text;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::connectors;
@@ -42,7 +40,6 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::spine::SPINE_NAMESPACE;
-use crate::spine::SpineCloseCompact;
 use crate::spine::SpineCommitKind;
 use crate::spine::SpineError;
 use crate::spine::SpinePendingCommit;
@@ -208,6 +205,7 @@ mod mcp;
 mod multi_agents;
 mod review;
 mod rollout_reconstruction;
+mod spine_compact;
 pub(crate) use rollout_reconstruction::spine_raw_items_after_rollback;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
@@ -1199,6 +1197,9 @@ impl Session {
                 // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(/*previous_turn_settings*/ None)
                     .await;
+                if let Err(err) = self.initialize_spine_for_new_session().await {
+                    panic!("failed to initialize Spine runtime: {err}");
+                }
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
@@ -1264,6 +1265,25 @@ impl Session {
                 }
             }
         }
+    }
+
+    async fn initialize_spine_for_new_session(&self) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let Some(rollout_path) = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+        else {
+            return Ok(());
+        };
+        let mut guard = spine_slot.lock().await;
+        guard.ensure_runtime(&rollout_path)?;
+        if let Some(runtime) = guard.runtime() {
+            runtime.checkpoint_initial(&rollout_path, &[])?;
+        }
+        Ok(())
     }
 
     pub(super) async fn apply_rollout_reconstruction(
@@ -1506,6 +1526,7 @@ impl Session {
                         &history,
                         node.to_string(),
                         suffix_start,
+                        item,
                         instruction,
                     )
                     .await?,
@@ -1539,12 +1560,12 @@ impl Session {
             let commit_kind = spine.maybe_commit_output(call_id, close_compact)?;
             if let Some(commit_kind) = commit_kind.as_ref() {
                 match commit_kind {
-                    SpineCommitKind::Open { suffix_start } => {
+                    SpineCommitKind::Open { open_request_index } => {
                         let history = state.clone_history();
                         let history_items = history.raw_items();
-                        if *suffix_start > history_items.len() {
+                        if *open_request_index > history_items.len() {
                             return Err(SpineError::InvalidEvent(format!(
-                                "spine.open suffix start {suffix_start} exceeds history length {}",
+                                "spine.open request index {open_request_index} exceeds history length {}",
                                 history_items.len()
                             )));
                         }
@@ -1553,7 +1574,7 @@ impl Session {
                             .cloned()
                             .enumerate()
                             .filter_map(|(index, history_item)| {
-                                let remove = index >= *suffix_start
+                                let remove = index >= *open_request_index
                                     && match &history_item {
                                         ResponseItem::FunctionCall {
                                             call_id: existing,
@@ -1600,63 +1621,24 @@ impl Session {
         Ok(())
     }
 
-    async fn spine_compact_close(
+    pub(crate) async fn is_pending_spine_close_output(
         &self,
-        turn_context: &TurnContext,
-        history: &ContextManager,
-        node_id: String,
-        suffix_start: usize,
-        instruction: Option<String>,
-    ) -> Result<SpineCloseCompact, SpineError> {
-        let raw_items = history.raw_items();
-        if suffix_start >= raw_items.len() {
-            return Err(SpineError::InvalidEvent(format!(
-                "spine.close suffix start {suffix_start} is outside history length {}",
-                raw_items.len()
-            )));
-        }
-        let mut prompt_input = history
-            .clone()
-            .for_prompt(&turn_context.model_info.input_modalities);
-        prompt_input.push(spine_close_compact_prompt_item(
-            &node_id,
-            instruction.as_deref(),
-        ));
-        let prompt = Prompt {
-            input: prompt_input,
-            base_instructions: self.get_base_instructions().await,
-            personality: turn_context.personality,
-            ..Default::default()
+        item: &ResponseItem,
+    ) -> Result<bool, SpineError> {
+        let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
+            return Ok(false);
         };
-        let compaction_trace = self.services.rollout_thread_trace.compaction_trace_context(
-            turn_context.sub_id.as_str(),
-            format!("spine-close-{node_id}"),
-            turn_context.model_info.slug.as_str(),
-            turn_context.provider.info().name.as_str(),
-        );
-        let output = self
-            .services
-            .model_client
-            .compact_conversation_history(
-                &prompt,
-                &turn_context.model_info,
-                crate::client::CompactConversationRequestSettings {
-                    effort: turn_context.reasoning_effort,
-                    summary: turn_context.reasoning_summary,
-                    service_tier: turn_context.config.service_tier.clone(),
-                },
-                &turn_context.session_telemetry,
-                &compaction_trace,
-            )
-            .await
-            .map_err(|err| {
-                SpineError::InvalidEvent(format!("spine.close compact failed: {err}"))
-            })?;
-        let body = spine_close_compact_body(&node_id, &output)?;
-        Ok(SpineCloseCompact {
-            body,
-            source_context_range: suffix_start..raw_items.len(),
-        })
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(false);
+        };
+        let guard = spine_slot.lock().await;
+        let Some(spine) = guard.runtime() else {
+            return Ok(false);
+        };
+        Ok(matches!(
+            spine.pending_commit(call_id)?,
+            Some(SpinePendingCommit::Close { .. })
+        ))
     }
 
     pub(crate) async fn install_spine_root_compact(
@@ -2950,6 +2932,30 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
+    pub(crate) async fn record_conversation_items_raw_only(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) {
+        let (_, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
+            let raw_start = spine_slot.lock().await.raw_len();
+            match assign_spine_raw_ordinals(raw_start, items) {
+                Ok(mapped) => mapped,
+                Err(err) => panic!("failed to assign Spine raw ordinals: {err}"),
+            }
+        } else {
+            (Vec::new(), 0)
+        };
+        self.persist_rollout_response_items(items).await;
+        if let Err(err) = self.ensure_spine_runtime_if_available().await {
+            panic!("failed to initialize Spine runtime: {err}");
+        }
+        if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
+            panic!("failed to observe Spine raw items: {err}");
+        }
+        self.send_raw_response_items(turn_context, items).await;
+    }
+
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
@@ -3839,68 +3845,6 @@ impl Session {
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
-}
-
-fn spine_close_compact_prompt_item(node_id: &str, instruction: Option<&str>) -> ResponseItem {
-    let mut text = format!(
-        "---------- End of Context (where compact to) ----------\n\n\
-Compact only the suffix for the Spine node {node_id}, by the most recent `spine.open` tool-use, into a Markdown memory.\n\
-Preserve decisions, file paths, tests, failures, and remaining TODOs."
-    );
-    if let Some(instruction) = instruction
-        .map(str::trim)
-        .filter(|instruction| !instruction.is_empty())
-    {
-        text.push_str("\n\n");
-        text.push_str(instruction);
-    }
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText { text }],
-        phase: None,
-    }
-}
-
-fn spine_close_compact_body(node_id: &str, output: &[ResponseItem]) -> Result<String, SpineError> {
-    let mut entries = Vec::new();
-    for item in output {
-        match item {
-            ResponseItem::Message { role, content, .. }
-                if role == "assistant" || role == "user" =>
-            {
-                if let Some(text) = content_items_to_text(content)
-                    && !text.trim().is_empty()
-                {
-                    entries.push(text);
-                }
-            }
-            ResponseItem::Compaction { encrypted_content } => {
-                if !encrypted_content.trim().is_empty() {
-                    entries.push(encrypted_content.clone());
-                }
-            }
-            ResponseItem::ContextCompaction {
-                encrypted_content: Some(encrypted_content),
-            } => {
-                if !encrypted_content.trim().is_empty() {
-                    entries.push(encrypted_content.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-    if entries.is_empty() {
-        return Err(SpineError::InvalidEvent(
-            "spine.close compact produced no memory body".to_string(),
-        ));
-    }
-    let mut body = format!("# Spine Memory {node_id}\n\n");
-    body.push_str(&entries.join("\n\n"));
-    if !body.ends_with('\n') {
-        body.push('\n');
-    }
-    Ok(body)
 }
 
 fn assign_spine_raw_ordinals(

@@ -11,8 +11,10 @@ use crate::hook_runtime::run_pre_compact_hooks;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
+use crate::session::turn::built_tools;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
+use crate::spine::root_epoch_compact_directive_message;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -39,6 +41,8 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
 use futures::prelude::*;
+use std::collections::HashSet;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use codex_model_provider_info::ModelProviderInfo;
@@ -193,12 +197,37 @@ async fn run_compact_task_inner_impl(
 
     loop {
         // Clone is required because of the loop
-        let turn_input = history
+        let mut turn_input = history
             .clone()
             .for_prompt(&turn_context.model_info.input_modalities);
+        let spine_enabled = sess.spine.is_some();
+        if spine_enabled {
+            turn_input.push(root_epoch_compact_directive_message());
+        }
         let turn_input_len = turn_input.len();
+        let tool_router = if spine_enabled {
+            Some(
+                built_tools(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &turn_input,
+                    &HashSet::new(),
+                    /*skills_outcome*/ None,
+                    &CancellationToken::new(),
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
         let prompt = Prompt {
             input: turn_input,
+            tools: tool_router
+                .as_ref()
+                .map(|router| router.model_visible_specs())
+                .unwrap_or_default(),
+            parallel_tool_calls: false,
+            tool_choice: if spine_enabled { "none" } else { "auto" }.to_string(),
             base_instructions: sess.get_base_instructions().await,
             personality: turn_context.personality,
             ..Default::default()
@@ -277,10 +306,7 @@ async fn run_compact_task_inner_impl(
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
     let spine_history = sess
-        .install_spine_root_compact(
-            root_epoch_compact_body_from_history(&new_history),
-            new_history.len(),
-        )
+        .install_spine_root_compact(summary_text.clone(), new_history.len())
         .await
         .map_err(|err| CodexErr::Fatal(format!("failed to install Spine root compact: {err}")))?;
     if let Some(spine_history) = spine_history {
@@ -394,74 +420,6 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     } else {
         Some(pieces.join("\n"))
     }
-}
-
-pub(crate) fn root_epoch_compact_body_from_history(history: &[ResponseItem]) -> String {
-    let mut spine_memories = Vec::new();
-    let mut survivor_messages = Vec::new();
-    let mut summary_messages = Vec::new();
-    for item in history {
-        let ResponseItem::Message { role, content, .. } = item else {
-            continue;
-        };
-        let Some(text) = content_items_to_text(content) else {
-            continue;
-        };
-        if role == "user" && text.contains("<spine_memory runtime_generated=\"true\">") {
-            spine_memories.push(text);
-        } else if role == "user" && is_summary_message(&text) {
-            summary_messages.push(format!("Native compact summary:\n{text}"));
-        } else if role == "user"
-            && matches!(
-                crate::event_mapping::parse_turn_item(item),
-                Some(TurnItem::UserMessage(_) | TurnItem::HookPrompt(_))
-            )
-        {
-            survivor_messages.push(format!("User message:\n{text}"));
-        } else if role == "assistant" {
-            survivor_messages.push(format!("Assistant message:\n{text}"));
-        }
-    }
-
-    let mut body = "# Spine Root-Epoch Memory\n\n".to_string();
-    body.push_str(
-        "Native compact completed for this root epoch; Spine installed this memory after the native compact replacement was built.\n\n",
-    );
-    if !spine_memories.is_empty() {
-        body.push_str("Visible runtime-generated Spine memories after native compact:\n\n");
-        body.push_str(&spine_memories.join("\n\n"));
-        body.push_str("\n\n");
-        survivor_messages.retain(|entry| !contains_forbidden_spine_availability_claim(entry));
-        if !survivor_messages.is_empty() {
-            body.push_str("Other readable survivor messages after native compact:\n\n");
-            body.push_str(&survivor_messages.join("\n\n"));
-            body.push('\n');
-        }
-    } else {
-        let entries = if survivor_messages.is_empty() {
-            summary_messages
-        } else {
-            survivor_messages
-        };
-        if entries.is_empty() {
-            body.push_str(
-                "No readable model-visible messages were present in the compacted history.\n",
-            );
-        } else {
-            body.push_str("Readable survivor messages after native compact:\n\n");
-            body.push_str(&entries.join("\n\n"));
-        }
-        body.push('\n');
-    }
-    body
-}
-
-fn contains_forbidden_spine_availability_claim(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    text.contains("spine namespace was not available")
-        || text.contains("spine namespace is unavailable")
-        || text.contains("spine` namespace is unavailable")
-        || text.contains("no actual spine tool calls could be made")
 }
 
 pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {

@@ -1,11 +1,11 @@
 use crate::spine::SpineError;
-use crate::spine::io::sha1_hex;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::SegRef;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
+use crate::spine::render::read_memory_ref_body;
 use crate::spine::store::BODY_DIR;
 use std::ops::Range;
 use std::path::Path;
@@ -36,7 +36,7 @@ pub(super) fn archive_task_tree(
     let memory_path = meta.node_dir.join("Memory.md");
     let trajs_path = meta.node_dir.join("Trajs.md");
     write_archive_file(&memory_path, &render_memory_archive(memory)?)?;
-    write_archive_file(&trajs_path, &render_trajs_archive(children))?;
+    write_archive_file(&trajs_path, &render_trajs_archive(children)?)?;
     Ok((
         archive_relative_path(archive, &memory_path),
         archive_relative_path(archive, &trajs_path),
@@ -89,13 +89,7 @@ fn write_archive_file(path: &Path, content: &str) -> Result<(), SpineError> {
 }
 
 fn render_memory_archive(memory: &MemoryRef) -> Result<String, SpineError> {
-    let body = std::fs::read_to_string(&memory.body_path)?;
-    if sha1_hex(body.as_bytes()) != memory.body_hash {
-        return Err(SpineError::InvalidStore(format!(
-            "memory body hash mismatch for {}",
-            memory.compact_id
-        )));
-    }
+    let body = read_memory_ref_body(memory)?;
 
     let mut out = String::new();
     out.push_str("# Spine Memory Archive\n\n");
@@ -123,17 +117,16 @@ fn render_memory_archive(memory: &MemoryRef) -> Result<String, SpineError> {
     Ok(out)
 }
 
-fn render_trajs_archive(children: &[SpineTreeNode]) -> String {
+fn render_trajs_archive(children: &[SpineTreeNode]) -> Result<String, SpineError> {
     let mut out = String::new();
     out.push_str("# Spine Trajs Archive\n\n");
     for child in children {
-        render_trajs_node(&mut out, child, 0);
+        render_trajs_node(&mut out, child)?;
     }
-    out
+    Ok(out)
 }
 
-fn render_trajs_node(out: &mut String, node: &SpineTreeNode, depth: usize) {
-    let indent = "  ".repeat(depth);
+fn render_trajs_node(out: &mut String, node: &SpineTreeNode) -> Result<(), SpineError> {
     match node {
         SpineTreeNode::MsgAsLeafNode { msg, from_user } => match msg {
             SegRef::ResponseItem {
@@ -141,30 +134,39 @@ fn render_trajs_node(out: &mut String, node: &SpineTreeNode, depth: usize) {
                 context_index,
             } => {
                 out.push_str(&format!(
-                    "{indent}- msg raw_ordinal={raw_ordinal} context_index={context_index} from_user={from_user}\n"
+                    "- raw raw_ordinal={raw_ordinal} context_index={context_index} from_user={from_user}\n"
+                ));
+            }
+            SegRef::Memory {
+                memory_id,
+                body_path,
+            } => {
+                out.push_str(&format!(
+                    "- memory compact_id={memory_id} body_path={}\n",
+                    body_path.display()
                 ));
             }
         },
         SpineTreeNode::SpineTree {
             meta,
-            children,
+            memory,
             memory_path,
             trajs_path,
             ..
         } => {
             out.push_str(&format!(
-                "{indent}- tree id={} index={} summary={} memory_path={} trajs_path={}\n",
+                "- memory compact_id={} node_id={} index={} summary={} body_path={} memory_path={} trajs_path={}\n",
+                memory.compact_id,
                 meta.id,
                 meta.index,
                 meta.summary,
+                memory.body_path.display(),
                 memory_path.display(),
                 trajs_path.display()
             ));
-            for child in children {
-                render_trajs_node(out, child, depth + 1);
-            }
         }
     }
+    Ok(())
 }
 
 pub(super) fn tree_meta(

@@ -6,8 +6,8 @@ use crate::client::CompactConversationRequestSettings;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
+use crate::compact::content_items_to_text;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
-use crate::compact::root_epoch_compact_body_from_history;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -19,6 +19,7 @@ use crate::hook_runtime::run_pre_compact_hooks;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
+use crate::spine::root_epoch_compact_directive_message;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -171,7 +172,11 @@ async fn run_remote_compact_task_inner_impl(
     // compact endpoint. The checkpoint below records it separately from the next sampling request,
     // whose prompt will repeat current developer/context prefix items.
     let trace_input_history = history.raw_items().to_vec();
-    let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
+    let mut prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
+    let spine_enabled = sess.spine.is_some();
+    if spine_enabled {
+        prompt_input.push(root_epoch_compact_directive_message());
+    }
     let tool_router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -185,6 +190,7 @@ async fn run_remote_compact_task_inner_impl(
         input: prompt_input,
         tools: tool_router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        tool_choice: if spine_enabled { "none" } else { "auto" }.to_string(),
         base_instructions,
         personality: turn_context.personality,
         output_schema: None,
@@ -291,7 +297,59 @@ pub(crate) async fn install_remote_spine_root_compact(
 }
 
 pub(crate) fn remote_root_compact_body(replacement_history: &[ResponseItem]) -> String {
-    root_epoch_compact_body_from_history(replacement_history)
+    let mut entries = Vec::new();
+    for item in replacement_history {
+        match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                if matches!(
+                    crate::event_mapping::parse_turn_item(item),
+                    Some(TurnItem::UserMessage(_) | TurnItem::HookPrompt(_))
+                ) && let Some(text) = content_items_to_text(content)
+                    && !text.trim().is_empty()
+                {
+                    entries.push(text);
+                }
+            }
+            ResponseItem::Message { role, content, .. } if role == "assistant" => {
+                if let Some(text) = content_items_to_text(content)
+                    && !text.trim().is_empty()
+                {
+                    entries.push(text);
+                }
+            }
+            ResponseItem::Compaction { encrypted_content } => {
+                if !encrypted_content.trim().is_empty() {
+                    entries.push(encrypted_content.clone());
+                }
+            }
+            ResponseItem::ContextCompaction {
+                encrypted_content: Some(encrypted_content),
+            } => {
+                if !encrypted_content.trim().is_empty() {
+                    entries.push(encrypted_content.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut body = "# Spine Remote Compact Memory\n\n".to_string();
+    if entries.is_empty() {
+        body.push_str(
+            "Remote compact replacement history contained no model-visible memory items.\n",
+        );
+    } else {
+        for (index, entry) in entries.iter().enumerate() {
+            if index > 0 {
+                body.push_str("\n\n");
+            }
+            body.push_str(entry);
+        }
+    }
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body
 }
 
 /// Returns whether an item from remote compaction output should be preserved.
