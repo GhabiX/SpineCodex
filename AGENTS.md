@@ -1,5 +1,31 @@
 # Rust/codex-rs
 
+## Local CacheTree Spine Boundary
+
+This checkout is the inner Codex git repository mounted from the outer
+CacheTree repo at:
+
+```text
+/data/swe/FramePilot/cachetree/scaffold/codex-home/codex
+```
+
+The outer CacheTree repo and this inner Codex repo are separate git projects in
+a submodule relationship. Commit branch changes in this repo separately from
+outer documentation/submodule-pointer changes.
+
+For current Spine work, the only active semantic authority lives in the outer
+repo:
+
+```text
+/data/swe/FramePilot/cachetree/doc/refactor/ckq-design/FormularDef.md
+```
+
+Do not use older Open/Close, mini-spine, SpineJIT, or `taskctx` designs as
+compatibility contracts. If current Codex code or tests conflict with
+`FormularDef.md`, the active CKQ definition wins; record unresolved semantic
+gaps in the outer
+`/data/swe/FramePilot/cachetree/doc/refactor/ckq-design/refactor-conflict.md`.
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
