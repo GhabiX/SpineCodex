@@ -748,7 +748,7 @@ impl ModelClient {
             instructions: instructions.clone(),
             input,
             tools,
-            tool_choice: "auto".to_string(),
+            tool_choice: prompt.tool_choice.clone(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             store: provider.is_azure_responses_endpoint(),
@@ -1207,7 +1207,7 @@ impl ModelClientSession {
             turn.has_metadata_header = turn_metadata_header.is_some()
         )
     )]
-    async fn stream_responses_api(
+    pub(crate) async fn stream_responses_api(
         &self,
         prompt: &Prompt,
         model_info: &ModelInfo,

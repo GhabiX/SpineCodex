@@ -738,7 +738,7 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
     user_turn(&resumed_after_compact, FINAL_AFTER_COMPACT_RESUME).await;
 
     let requests = request_log.requests();
-    assert_eq!(requests.len(), 10);
+    assert_eq!(requests.len(), 12);
     assert!(request_log.saw_function_call("call-spine-open"));
     assert!(request_log.saw_function_call("call-spine-close"));
     assert_eq!(
@@ -751,7 +751,7 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
         request_log
             .function_call_output_text("call-spine-close")
             .as_deref(),
-        Some("Spine closed after this tool output is recorded.")
+        Some("Spine closed.")
     );
 
     let rolled_back_turn_request = requests
@@ -955,6 +955,14 @@ async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
         ),
         ev_completed("spine-close-call"),
     ]);
+    let close_compact = sse(vec![
+        ev_assistant_message("spine-close-compact-summary", "spine close compact summary"),
+        ev_completed("spine-close-compact"),
+    ]);
+    let close_follow_up = sse(vec![
+        ev_assistant_message("spine-close-follow-up", "spine close follow-up reply"),
+        ev_completed("spine-close-follow-up"),
+    ]);
     let parent_after_close = sse(vec![
         ev_assistant_message("spine-parent-reply", "spine parent reply"),
         ev_completed("spine-parent"),
@@ -984,6 +992,8 @@ async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
             open_follow_up,
             child_work,
             close_call,
+            close_compact,
+            close_follow_up,
             parent_after_close,
             after_resume,
             rolled_back_fork,

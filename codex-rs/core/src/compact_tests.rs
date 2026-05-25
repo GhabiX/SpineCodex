@@ -66,7 +66,7 @@ fn content_items_to_text_ignores_image_only_content() {
 }
 
 #[test]
-fn root_epoch_compact_body_preserves_spine_memories_without_native_summary_claims() {
+fn remote_root_compact_body_preserves_remote_summary_without_context_prefixes() {
     let replacement_history = vec![
         ResponseItem::Message {
             id: None,
@@ -94,31 +94,46 @@ fn root_epoch_compact_body_preserves_spine_memories_without_native_summary_claim
         },
         ResponseItem::Message {
             id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "<spine_memory runtime_generated=\"true\">\n# Spine Memory 1.1\n\nActual tool facts: spine.open and spine.tree succeeded.\n</spine_memory>".to_string(),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "surviving assistant note".to_string(),
             }],
             phase: None,
         },
-        ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "spine namespace was not available, so no actual spine tool calls could be made".to_string(),
-            }],
-            phase: None,
+        ResponseItem::Compaction {
+            encrypted_content: "REMOTE_ENCRYPTED_SUMMARY".to_string(),
+        },
+        ResponseItem::ContextCompaction {
+            encrypted_content: Some("REMOTE_CONTEXT_SUMMARY".to_string()),
         },
     ];
 
-    let body = root_epoch_compact_body_from_history(&replacement_history);
+    let body = crate::compact_remote::remote_root_compact_body(&replacement_history);
 
-    assert!(body.contains("# Spine Root-Epoch Memory"));
-    assert!(body.contains("Actual tool facts: spine.open and spine.tree succeeded."));
+    assert!(body.contains("# Spine Remote Compact Memory"));
     assert!(body.contains("surviving user prompt"));
-    assert!(!body.contains("spine namespace was not available"));
-    assert!(!body.contains("no actual spine tool calls could be made"));
+    assert!(body.contains("surviving assistant note"));
+    assert!(body.contains("REMOTE_ENCRYPTED_SUMMARY"));
+    assert!(body.contains("REMOTE_CONTEXT_SUMMARY"));
     assert!(!body.contains("stale developer instructions"));
     assert!(!body.contains("<ENVIRONMENT_CONTEXT>"));
+}
+
+#[test]
+fn remote_root_compact_body_rejects_encrypted_only_output() {
+    let replacement_history = vec![
+        ResponseItem::Compaction {
+            encrypted_content: "REMOTE_ENCRYPTED_SUMMARY".to_string(),
+        },
+        ResponseItem::ContextCompaction {
+            encrypted_content: Some("REMOTE_CONTEXT_SUMMARY".to_string()),
+        },
+    ];
+
+    let body = crate::compact_remote::remote_root_compact_body(&replacement_history);
+
+    assert!(body.contains("REMOTE_ENCRYPTED_SUMMARY"));
+    assert!(body.contains("REMOTE_CONTEXT_SUMMARY"));
 }
 
 #[test]

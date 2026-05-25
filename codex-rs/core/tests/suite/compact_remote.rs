@@ -536,8 +536,13 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
     )
     .await;
 
-    let compacted_history = vec![ResponseItem::Compaction {
-        encrypted_content: "REMOTE_SPINE_ROOT_COMPACT_SUMMARY".to_string(),
+    let compacted_history = vec![ResponseItem::Message {
+        id: Some("remote-compact-summary".to_string()),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "REMOTE_SPINE_ROOT_COMPACT_SUMMARY".to_string(),
+        }],
+        phase: None,
     }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
@@ -598,7 +603,7 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
     );
     assert!(
         follow_up_request.body_contains_text("REMOTE_SPINE_ROOT_COMPACT_SUMMARY"),
-        "expected Spine root memory to include remote compact payload"
+        "expected Spine root memory to include readable remote compact summary"
     );
     assert!(
         !follow_up_request.body_contains_text("SPINE_READY"),

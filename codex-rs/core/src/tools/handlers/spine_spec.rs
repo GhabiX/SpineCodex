@@ -29,7 +29,7 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
             }),
             ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                 name: SPINE_TOOL_OPEN.to_string(),
-                description: "Open a focused child scope under the current Spine cursor."
+                description: "Open a focused child task under the current Spine cursor."
                     .to_string(),
                 strict: false,
                 defer_loading: None,
@@ -37,7 +37,7 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
                     BTreeMap::from([(
                         "summary".to_string(),
                         JsonSchema::string(Some(
-                            "Short label for the new Spine scope.".to_string(),
+                            "Short label for the new Spine task node.".to_string(),
                         )),
                     )]),
                     Some(vec!["summary".to_string()]),
@@ -59,7 +59,7 @@ fn spine_close_tool() -> ResponsesApiTool {
     )]);
     ResponsesApiTool {
         name: SPINE_TOOL_CLOSE.to_string(),
-        description: "Close the current Spine scope and resume its parent.".to_string(),
+        description: "Close the current Spine task node and resume its parent.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(Vec::new()), Some(false.into())),

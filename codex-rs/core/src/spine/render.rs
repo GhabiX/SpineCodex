@@ -25,6 +25,7 @@ fn render_symbols_to_context(
     for symbol in symbols {
         match symbol {
             Symbol::Control(ControlSymbol::Init(_))
+            | Symbol::Control(ControlSymbol::End)
             | Symbol::Control(ControlSymbol::Open(_))
             | Symbol::Control(ControlSymbol::Close(_))
             | Symbol::Control(ControlSymbol::Compact(_, _)) => {}
@@ -52,48 +53,75 @@ fn render_node_to_context(
     out: &mut Vec<ResponseItem>,
 ) -> Result<(), SpineError> {
     match node {
-        SpineTreeNode::MsgAsLeafNode {
-            msg:
-                SegRef::ResponseItem {
-                    raw_ordinal,
-                    context_index: _,
-                },
-            ..
-        } => {
-            let raw_index = usize::try_from(*raw_ordinal)
-                .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-            let item = raw_items
-                .get(raw_index)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| {
-                    SpineError::InvalidEvent(format!(
-                        "missing raw item for visible Msg raw ordinal {raw_ordinal}"
-                    ))
-                })?;
-            out.push(item.clone());
-            Ok(())
-        }
+        SpineTreeNode::MsgAsLeafNode { msg, .. } => match msg {
+            SegRef::ResponseItem {
+                raw_ordinal,
+                context_index: _,
+            } => {
+                let raw_index = usize::try_from(*raw_ordinal)
+                    .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+                let item = raw_items
+                    .get(raw_index)
+                    .and_then(Option::as_ref)
+                    .ok_or_else(|| {
+                        SpineError::InvalidEvent(format!(
+                            "missing raw item for visible Msg raw ordinal {raw_ordinal}"
+                        ))
+                    })?;
+                out.push(item.clone());
+                Ok(())
+            }
+            SegRef::Memory {
+                memory_id,
+                body_path,
+            } => {
+                let body = read_memory_body(memory_id, body_path, None)?;
+                out.push(memory_response_item(&body));
+                Ok(())
+            }
+        },
         SpineTreeNode::SpineTree { memory, .. } => {
+            let memory_seg = SegRef::from_memory_ref(memory);
             if memory_ref_is_live(memory, raw_items)? {
-                out.push(memory_response_item(&read_memory_ref_body(memory)?));
+                render_node_to_context(
+                    &SpineTreeNode::MsgAsLeafNode {
+                        msg: memory_seg,
+                        from_user: true,
+                    },
+                    raw_items,
+                    out,
+                )
             } else {
-                return Err(SpineError::InvalidEvent(format!(
+                Err(SpineError::InvalidEvent(format!(
                     "memory {} does not cover live raw evidence",
                     memory.compact_id
-                )));
+                )))
             }
-            Ok(())
         }
     }
 }
 
 pub(super) fn read_memory_ref_body(memory: &MemoryRef) -> Result<String, SpineError> {
-    let body = std::fs::read_to_string(&memory.body_path)?;
-    if sha1_hex(body.as_bytes()) != memory.body_hash {
-        return Err(SpineError::InvalidStore(format!(
-            "memory body hash mismatch for {}",
-            memory.compact_id
-        )));
+    read_memory_body(
+        &memory.compact_id,
+        &memory.body_path,
+        Some(memory.body_hash.as_str()),
+    )
+}
+
+pub(super) fn read_memory_body(
+    memory_id: &str,
+    body_path: &std::path::Path,
+    expected_hash: Option<&str>,
+) -> Result<String, SpineError> {
+    let body = std::fs::read_to_string(body_path)?;
+    if let Some(expected_hash) = expected_hash {
+        let actual_hash = sha1_hex(body.as_bytes());
+        if actual_hash != expected_hash {
+            return Err(SpineError::InvalidStore(format!(
+                "memory body hash mismatch for {memory_id}"
+            )));
+        }
     }
     Ok(body)
 }

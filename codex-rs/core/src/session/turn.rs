@@ -387,7 +387,7 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
-    let mut spine_control_follow_up_items: Vec<ResponseItem> = Vec::new();
+    let mut spine_control_overlay = SpineControlOverlay::default();
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -449,7 +449,7 @@ pub(crate) async fn run_turn(
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
-        sampling_request_input.append(&mut spine_control_follow_up_items);
+        sampling_request_input.extend(spine_control_overlay.take_for_next_prompt());
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -478,9 +478,9 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
-                    spine_control_items,
+                    spine_control_overlay: next_spine_control_overlay,
                 } = sampling_request_output;
-                spine_control_follow_up_items = spine_control_items;
+                spine_control_overlay = next_spine_control_overlay;
                 can_drain_pending_input = true;
                 let has_pending_input = sess.has_pending_input().await;
                 let needs_follow_up = model_needs_follow_up || has_pending_input;
@@ -999,6 +999,7 @@ pub(crate) fn build_prompt(
         input,
         tools: router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        tool_choice: "auto".to_string(),
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
@@ -1279,7 +1280,38 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
-    spine_control_items: Vec<ResponseItem>,
+    spine_control_overlay: SpineControlOverlay,
+}
+
+#[derive(Debug, Default)]
+struct SpineControlOverlay {
+    items: Vec<ResponseItem>,
+}
+
+impl SpineControlOverlay {
+    fn push_request(&mut self, item: ResponseItem) {
+        self.items.push(item);
+    }
+
+    fn push_output_if_matching(&mut self, item: &ResponseItem) {
+        if let ResponseItem::FunctionCallOutput { call_id, .. } = item
+            && self.items.iter().any(|item| {
+                matches!(
+                    item,
+                    ResponseItem::FunctionCall {
+                        call_id: existing,
+                        ..
+                    } if existing == call_id
+                )
+            })
+        {
+            self.items.push(item.clone());
+        }
+    }
+
+    fn take_for_next_prompt(&mut self) -> Vec<ResponseItem> {
+        std::mem::take(&mut self.items)
+    }
 }
 
 fn is_spine_control_function_call(item: &ResponseItem) -> bool {
@@ -1828,32 +1860,42 @@ async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    spine_control_items: &mut Vec<ResponseItem>,
+    spine_control_overlay: &mut SpineControlOverlay,
 ) -> CodexResult<()> {
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
                 let response_item = response_input.into();
-                if let ResponseItem::FunctionCallOutput { call_id, .. } = &response_item
-                    && spine_control_items.iter().any(|item| {
-                        matches!(
-                            item,
-                            ResponseItem::FunctionCall {
-                                call_id: existing,
-                                ..
-                            } if existing == call_id
-                        )
-                    })
-                {
-                    spine_control_items.push(response_item.clone());
-                }
-                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
-                    .await;
-                sess.maybe_commit_spine_tool_output(&turn_context, &response_item)
+                spine_control_overlay.push_output_if_matching(&response_item);
+                let is_pending_spine_close = sess
+                    .is_pending_spine_close_output(&response_item)
                     .await
                     .map_err(|err| {
-                        CodexErr::Fatal(format!("failed to commit Spine tool output: {err}"))
+                        CodexErr::Fatal(format!("failed to inspect Spine tool output: {err}"))
                     })?;
+                if is_pending_spine_close {
+                    sess.maybe_commit_spine_tool_output(&turn_context, &response_item)
+                        .await
+                        .map_err(|err| {
+                            CodexErr::Fatal(format!("failed to commit Spine tool output: {err}"))
+                        })?;
+                    sess.record_conversation_items_raw_only(
+                        &turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await;
+                } else {
+                    sess.record_conversation_items(
+                        &turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await;
+                    sess.maybe_commit_spine_tool_output(&turn_context, &response_item)
+                        .await
+                        .map_err(|err| {
+                            CodexErr::Fatal(format!("failed to commit Spine tool output: {err}"))
+                        })?;
+                }
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -1919,7 +1961,7 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut spine_control_items: Vec<ResponseItem> = Vec::new();
+    let mut spine_control_overlay = SpineControlOverlay::default();
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
         String,
@@ -2066,14 +2108,14 @@ async fn try_run_sampling_request(
                 }
                 needs_follow_up |= output_result.needs_follow_up;
                 if let Some(item) = spine_control_item {
-                    spine_control_items.push(item);
+                    spine_control_overlay.push_request(item);
                 }
                 // todo: remove before stabilizing multi-agent v2
                 if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
-                        spine_control_items: Vec::new(),
+                        spine_control_overlay: SpineControlOverlay::default(),
                     });
                 }
             }
@@ -2207,7 +2249,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
-                    spine_control_items: Vec::new(),
+                    spine_control_overlay: SpineControlOverlay::default(),
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -2341,7 +2383,7 @@ async fn try_run_sampling_request(
         &mut in_flight,
         sess.clone(),
         turn_context.clone(),
-        &mut spine_control_items,
+        &mut spine_control_overlay,
     )
     .await?;
 
@@ -2369,7 +2411,7 @@ async fn try_run_sampling_request(
     }
 
     outcome.map(|mut output| {
-        output.spine_control_items = spine_control_items;
+        output.spine_control_overlay = spine_control_overlay;
         output
     })
 }
