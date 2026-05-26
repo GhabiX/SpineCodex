@@ -27,9 +27,6 @@ impl Session {
         };
         let snapshot = {
             let mut guard = spine_slot.lock().await;
-            let Some(_runtime) = guard.runtime() else {
-                return Ok(());
-            };
             guard.take_initial_tree_snapshot()?
         };
         if let Some(snapshot) = snapshot {
@@ -42,8 +39,11 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
+        // Host UI projection only: seeding the TUI snapshot must not mutate
+        // ContextManager, ParseStack, or sidecar state.
         let snapshot = {
             let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
             let Some(runtime) = guard.runtime() else {
                 return Ok(());
             };
@@ -144,6 +144,13 @@ impl Session {
         spine_slot.lock().await.ensure_runtime(&rollout_path)
     }
 
+    pub(super) async fn invalidate_spine_runtime(&self, reason: String) {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return;
+        };
+        spine_slot.lock().await.invalidate(reason);
+    }
+
     pub(super) async fn observe_spine_context_items(
         &self,
         raw_ordinals: &[Option<u64>],
@@ -153,6 +160,7 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
+        spine_slot.lock().await.ensure_valid()?;
         let rollout_path = self
             .current_rollout_path()
             .await
@@ -165,6 +173,7 @@ impl Session {
         let history = self.clone_history().await;
         let raw_history = history.raw_items().to_vec();
         let mut guard = spine_slot.lock().await;
+        guard.ensure_valid()?;
         let Some(runtime) = guard.runtime_mut() else {
             return Ok(());
         };
@@ -213,6 +222,7 @@ impl Session {
             ));
         };
         let mut guard = spine_slot.lock().await;
+        guard.ensure_valid()?;
         guard.ensure_runtime(&rollout_path)?;
         drop(guard);
         Ok(spine_slot)
@@ -221,10 +231,13 @@ impl Session {
     pub(crate) async fn spine_tree(&self) -> Result<String, SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let guard = spine.lock().await;
-        guard
-            .runtime()
-            .expect("spine runtime initialized")
-            .render_tree()
+        guard.ensure_valid()?;
+        let Some(runtime) = guard.runtime() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing after initialization".to_string(),
+            ));
+        };
+        runtime.render_tree()
     }
 
     pub(crate) async fn emit_spine_tree_snapshot(
@@ -234,10 +247,13 @@ impl Session {
         let spine = self.ensure_spine_runtime().await?;
         let snapshot = {
             let guard = spine.lock().await;
-            guard
-                .runtime()
-                .expect("spine runtime initialized")
-                .build_tree_snapshot()?
+            guard.ensure_valid()?;
+            let Some(runtime) = guard.runtime() else {
+                return Err(SpineError::InvalidStore(
+                    "spine runtime missing after initialization".to_string(),
+                ));
+            };
+            runtime.build_tree_snapshot()?
         };
         self.send_spine_tree_update(turn_context, snapshot).await;
         Ok(())
@@ -249,12 +265,14 @@ impl Session {
         summary: String,
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
-        spine
-            .lock()
-            .await
-            .runtime_mut()
-            .expect("spine runtime initialized")
-            .stage_open(call_id, summary)
+        let mut guard = spine.lock().await;
+        guard.ensure_valid()?;
+        let Some(runtime) = guard.runtime_mut() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing after initialization".to_string(),
+            ));
+        };
+        runtime.stage_open(call_id, summary)
     }
 
     pub(crate) async fn stage_spine_close(
@@ -263,12 +281,14 @@ impl Session {
         instruction: Option<String>,
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
-        spine
-            .lock()
-            .await
-            .runtime_mut()
-            .expect("spine runtime initialized")
-            .stage_close(call_id, instruction)
+        let mut guard = spine.lock().await;
+        guard.ensure_valid()?;
+        let Some(runtime) = guard.runtime_mut() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing after initialization".to_string(),
+            ));
+        };
+        runtime.stage_close(call_id, instruction)
     }
 
     pub(crate) async fn maybe_commit_spine_tool_output(
@@ -284,6 +304,7 @@ impl Session {
         };
         let pending_commit = {
             let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
             let Some(spine) = guard.runtime() else {
                 return Ok(());
             };
@@ -322,6 +343,7 @@ impl Session {
         }
         let snapshot = {
             let mut guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
             let Some(spine) = guard.runtime_mut() else {
                 return Ok(());
             };
@@ -415,6 +437,7 @@ impl Session {
             return Ok(false);
         };
         let guard = spine_slot.lock().await;
+        guard.ensure_valid()?;
         let Some(spine) = guard.runtime() else {
             return Ok(false);
         };
@@ -431,8 +454,12 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
-        if spine_slot.lock().await.runtime().is_none() {
-            return Ok(None);
+        {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            if guard.runtime().is_none() {
+                return Ok(None);
+            }
         }
         self.ensure_rollout_materialized().await;
         self.flush_rollout()
@@ -453,6 +480,7 @@ impl Session {
         let raw_items = spine_raw_items_after_rollback(&history.get_rollout_items());
         {
             let mut guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
             let Some(spine) = guard.runtime_mut() else {
                 return Ok(None);
             };
@@ -477,8 +505,14 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
-        if spine_slot.lock().await.runtime().is_none() {
-            return Ok(None);
+        {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid().map_err(|err| {
+                CodexErr::Fatal(format!("failed to install Spine root compact: {err}"))
+            })?;
+            if guard.runtime().is_none() {
+                return Ok(None);
+            }
         }
         let body = spine_root_compact_body(items, compacted_item).ok_or_else(|| {
             CodexErr::Fatal(
@@ -502,6 +536,8 @@ fn spine_root_compact_body(
     replacement_history: &[ResponseItem],
     compacted_item: &CompactedItem,
 ) -> Option<String> {
+    // These carriers are Codex native compact success outputs. This is not a
+    // legacy Spine fallback or rendered-history parser.
     let message = compacted_item.message.trim();
     if !message.is_empty() {
         return Some(compacted_item.message.clone());

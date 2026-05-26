@@ -595,6 +595,11 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
     wait_for_turn_complete(&resumed.codex).await;
 
     assert_eq!(compact_mock.requests().len(), 1);
+    let compact_body = compact_mock.single_request().body_json();
+    assert!(
+        namespace_child_tool_names(&compact_body, "spine").is_empty(),
+        "remote native compact must not expose Spine tools before the post-success hook: {compact_body}"
+    );
     let response_requests = responses_mock.requests();
     let follow_up_request = response_requests.last().expect("follow-up request missing");
     assert!(
@@ -1109,6 +1114,11 @@ async fn remote_compact_v2_installs_spine_root_compact_for_followups() -> Result
             .to_string()
             .contains("\"type\":\"compaction_trigger\""),
         "expected v2 compact request to include the compaction trigger"
+    );
+    let compact_body = compact_request.body_json();
+    assert!(
+        namespace_child_tool_names(&compact_body, "spine").is_empty(),
+        "remote native compact v2 must not expose Spine tools before the post-success hook: {compact_body}"
     );
     let follow_up_request = response_requests.last().expect("follow-up request missing");
     assert!(

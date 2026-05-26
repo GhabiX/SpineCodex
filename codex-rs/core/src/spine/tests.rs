@@ -1699,7 +1699,7 @@ fn rollback_keeps_open_when_request_item_survives() {
     let rollout = rollout_path(&dir);
     let raw = vec![
         Some(text_item("before")),
-        Some(text_item("open request")),
+        Some(spine_call(SPINE_TOOL_OPEN, "open")),
         None,
     ];
 
@@ -1742,7 +1742,7 @@ fn rollback_skips_open_when_request_item_is_stale() {
     let raw = vec![
         Some(text_item("before")),
         None,
-        Some(text_item("open output")),
+        Some(function_output("open")),
     ];
 
     let mut runtime = SpineRuntime::load_or_create(&rollout, 1).expect("create spine");

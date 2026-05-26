@@ -144,6 +144,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -9175,6 +9176,91 @@ async fn spine_feature_off_records_spine_shaped_items_as_plain_history_without_s
     assert!(reconstructed.spine_rollback_cuts.is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_feature_off_does_not_overlay_spine_shaped_streaming_followup() -> anyhow::Result<()>
+{
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .disable(Feature::SpineTaskTree)
+            .expect("disable spine feature");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "feature-off-spine-call",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_OPEN,
+                    r#"{"summary":"should stay plain"}"#,
+                ),
+                ev_completed("feature-off-spine-call-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("feature-off-follow-up", "done"),
+                ev_completed("feature-off-follow-up-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "emit a spine-shaped call while disabled".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(_) => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "unknown function call should still trigger one base follow-up"
+    );
+    let follow_up_body = requests[1].body_json();
+    let follow_up_input = follow_up_body["input"]
+        .as_array()
+        .expect("follow-up input array");
+    let spine_shaped_call_items = follow_up_input
+        .iter()
+        .filter(|item| {
+            item.get("call_id").and_then(serde_json::Value::as_str)
+                == Some("feature-off-spine-call")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        spine_shaped_call_items.len(),
+        2,
+        "feature off should keep only the base unknown-call request/output, not add a Spine overlay: {follow_up_body}"
+    );
+    assert!(
+        spine_shaped_call_items.iter().any(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
+        }),
+        "base follow-up should include the unknown function call request: {follow_up_body}"
+    );
+    assert!(
+        spine_shaped_call_items.iter().any(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+        }),
+        "base follow-up should include the unknown function call output: {follow_up_body}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn spine_new_session_initializes_sidecar_before_tree() {
     let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
@@ -9223,6 +9309,69 @@ async fn spine_new_session_initializes_sidecar_before_tree() {
     let events_after = store.event_count_for_test().expect("events after");
     assert_eq!(tree_from_tool, tree_before);
     assert_eq!(events_after, events_before);
+}
+
+#[tokio::test]
+async fn spine_sidecar_write_failure_invalidates_runtime_and_resume_fails_closed() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize spine");
+
+    let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
+    let broken_tree_path = store.tree_path_for_test();
+    let mut tree_permissions = std::fs::metadata(&broken_tree_path)
+        .expect("tree metadata")
+        .permissions();
+    tree_permissions.set_readonly(true);
+    std::fs::set_permissions(&broken_tree_path, tree_permissions)
+        .expect("make tree ledger readonly");
+
+    session
+        .record_conversation_items(
+            &turn_context,
+            std::slice::from_ref(&user_message("message that cannot reach sidecar")),
+        )
+        .await;
+
+    let err = session
+        .spine_tree()
+        .await
+        .expect_err("invalidated Spine runtime should fail closed");
+    assert!(
+        err.to_string().contains("spine runtime is invalid"),
+        "unexpected error: {err}"
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let err = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect_err("stale sidecar must not resume after raw coverage diverges");
+    assert!(
+        err.to_string().contains("missing token coverage"),
+        "unexpected resume error: {err}"
+    );
 }
 
 #[tokio::test]

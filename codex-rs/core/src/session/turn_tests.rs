@@ -3,6 +3,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributionFuture;
 use codex_extension_api::TurnItemContributor;
 use codex_protocol::items::AgentMessageContent;
+use codex_protocol::models::FunctionCallOutputPayload;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -35,6 +36,27 @@ fn assistant_output_text(text: &str) -> ResponseItem {
         }],
         phase: None,
     }
+}
+
+#[test]
+fn spine_control_overlay_disabled_drops_carriers() {
+    let mut overlay = SpineControlOverlay::new(false);
+    let request = ResponseItem::FunctionCall {
+        id: Some("call-item".to_string()),
+        name: SPINE_TOOL_TREE.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+        call_id: "call-spine-tree".to_string(),
+    };
+    let output = ResponseItem::FunctionCallOutput {
+        call_id: "call-spine-tree".to_string(),
+        output: FunctionCallOutputPayload::from_text("tree output".to_string()),
+    };
+
+    overlay.push_request(request);
+    overlay.push_output_if_matching(&output);
+
+    assert_eq!(overlay.take_for_next_prompt(), Vec::<ResponseItem>::new());
 }
 
 #[tokio::test]

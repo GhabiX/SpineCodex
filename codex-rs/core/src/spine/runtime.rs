@@ -49,6 +49,9 @@ pub(crate) struct SpineRuntime {
     parse_stack: ParseStack,
     raw_len: u64,
     raw_live: Vec<bool>,
+    // Turn-local Spine control transaction state. Committed open/close effects
+    // are represented by KEvents and ParseStack tokens; these maps are empty on
+    // resume/rollback by design and are not part of h(PS).
     open_requests: BTreeMap<String, OpenRequestAnchor>,
     control_call_ids: BTreeSet<String>,
     pending: Option<PendingTransition>,
@@ -115,6 +118,7 @@ pub(crate) struct SpineSessionState {
     raw_len: u64,
     runtime: Option<SpineRuntime>,
     initial_tree_snapshot_emitted: bool,
+    invalid: Option<String>,
 }
 
 impl SpineSessionState {
@@ -123,14 +127,21 @@ impl SpineSessionState {
             raw_len: 0,
             runtime: None,
             initial_tree_snapshot_emitted: false,
+            invalid: None,
         }
     }
 
     pub(crate) fn runtime(&self) -> Option<&SpineRuntime> {
+        if self.invalid.is_some() {
+            return None;
+        }
         self.runtime.as_ref()
     }
 
     pub(crate) fn runtime_mut(&mut self) -> Option<&mut SpineRuntime> {
+        if self.invalid.is_some() {
+            return None;
+        }
         self.runtime.as_mut()
     }
 
@@ -146,10 +157,31 @@ impl SpineSessionState {
         self.raw_len = raw_len;
         self.runtime = runtime;
         self.initial_tree_snapshot_emitted = false;
+        self.invalid = None;
+        Ok(())
+    }
+
+    pub(crate) fn invalidate(&mut self, reason: impl Into<String>) {
+        self.invalid = Some(reason.into());
+    }
+
+    fn invalid_error(&self) -> Option<SpineError> {
+        self.invalid
+            .as_ref()
+            .map(|reason| SpineError::InvalidStore(format!("spine runtime is invalid: {reason}")))
+    }
+
+    pub(crate) fn ensure_valid(&self) -> Result<(), SpineError> {
+        if let Some(err) = self.invalid_error() {
+            return Err(err);
+        }
         Ok(())
     }
 
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
+        if let Some(err) = self.invalid_error() {
+            return Err(err);
+        }
         let count = u64::try_from(count)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
         self.raw_len = self
@@ -165,6 +197,9 @@ impl SpineSessionState {
     }
 
     pub(crate) fn ensure_runtime(&mut self, rollout_path: &Path) -> Result<(), SpineError> {
+        if let Some(err) = self.invalid_error() {
+            return Err(err);
+        }
         if self.runtime.is_none() {
             self.runtime = Some(SpineRuntime::load_or_create(rollout_path, self.raw_len)?);
         }
@@ -174,6 +209,9 @@ impl SpineSessionState {
     pub(crate) fn take_initial_tree_snapshot(
         &mut self,
     ) -> Result<Option<SpineTreeUpdateEvent>, SpineError> {
+        if let Some(err) = self.invalid_error() {
+            return Err(err);
+        }
         if self.initial_tree_snapshot_emitted {
             return Ok(None);
         }
@@ -213,14 +251,15 @@ impl SpineRuntime {
         if !SpineStore::has_for_rollout(rollout_path)? {
             return Ok(None);
         }
-        Self::load_with_raw_live_for_rollout(
+        let runtime = Self::load_with_raw_live_for_rollout(
             SpineStore::for_rollout(rollout_path)?,
             raw_items.iter().map(Option::is_some).collect(),
             rollback_cuts,
             rollout_path,
             raw_items,
-        )
-        .map(Some)
+        )?;
+        runtime.validate_raw_coverage(raw_items)?;
+        Ok(Some(runtime))
     }
 
     #[cfg(test)]
@@ -742,6 +781,8 @@ impl SpineRuntime {
             seq..seq + 1,
         );
 
+        // Probe first because source_context_range records the pre-compact source
+        // span, while next_open_index is the post-compact h(PS) materialized len.
         let mut probe_parse_stack = self.parse_stack.clone();
         probe_parse_stack.shift(
             SpineToken::Compact {
@@ -866,6 +907,79 @@ impl SpineRuntime {
     ) -> Result<Vec<ResponseItem>, SpineError> {
         render_parse_stack_to_context(&self.parse_stack, raw_items)
     }
+
+    pub(crate) fn validate_raw_coverage(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        let (spine_control_call_ids, function_call_ids) = raw_items
+            .iter()
+            .filter_map(|item| match item.as_ref()? {
+                ResponseItem::FunctionCall {
+                    call_id,
+                    namespace: Some(namespace),
+                    name,
+                    ..
+                } if namespace == SPINE_NAMESPACE
+                    && matches!(
+                        name.as_str(),
+                        SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE
+                    ) =>
+                {
+                    Some((call_id.clone(), true))
+                }
+                ResponseItem::FunctionCall { call_id, .. } => Some((call_id.clone(), false)),
+                _ => None,
+            })
+            .fold(
+                (BTreeSet::new(), BTreeSet::new()),
+                |(mut spine_call_ids, mut all_call_ids), (call_id, is_spine)| {
+                    if is_spine {
+                        spine_call_ids.insert(call_id.clone());
+                    }
+                    all_call_ids.insert(call_id);
+                    (spine_call_ids, all_call_ids)
+                },
+            );
+        let mut covered = vec![false; raw_items.len()];
+        for event in self.store.events()? {
+            if !event.allowed_by(RawMask::new(&self.raw_live))? {
+                continue;
+            }
+            match event.event {
+                KEvent::Msg { raw_ordinal, .. } => {
+                    mark_raw_covered(&mut covered, raw_ordinal)?;
+                }
+                KEvent::Open {
+                    child,
+                    boundary,
+                    summary,
+                    ..
+                } => {
+                    if !(summary == "root"
+                        && child.parent().is_some_and(|parent| parent.is_root_epoch()))
+                    {
+                        mark_raw_covered(&mut covered, boundary)?;
+                    }
+                }
+                KEvent::Close { boundary, .. } | KEvent::RootCompact { boundary, .. } => {
+                    mark_raw_prefix_covered(&mut covered, boundary)?;
+                }
+                KEvent::Init { .. } => {}
+            }
+        }
+        for (index, item) in raw_items.iter().enumerate() {
+            if item.as_ref().is_some_and(|item| {
+                raw_item_requires_spine_coverage(item, &spine_control_call_ids, &function_call_ids)
+            }) && !covered[index]
+            {
+                return Err(SpineError::InvalidStore(format!(
+                    "spine sidecar is missing token coverage for raw ordinal {index}"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn replay_from_events(
@@ -901,6 +1015,51 @@ fn replay_from_events(
         parse_stack.shift(event_to_token(event, archive, &mem_map, raw_mask)?, archive)?;
     }
     Ok(parse_stack)
+}
+
+fn mark_raw_covered(covered: &mut [bool], raw_ordinal: u64) -> Result<(), SpineError> {
+    let index = usize::try_from(raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+    if let Some(slot) = covered.get_mut(index) {
+        *slot = true;
+    }
+    Ok(())
+}
+
+fn mark_raw_prefix_covered(covered: &mut [bool], boundary: u64) -> Result<(), SpineError> {
+    let boundary = usize::try_from(boundary)
+        .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
+    for slot in covered.iter_mut().take(boundary) {
+        *slot = true;
+    }
+    Ok(())
+}
+
+fn raw_item_requires_spine_coverage(
+    item: &ResponseItem,
+    spine_control_call_ids: &BTreeSet<String>,
+    function_call_ids: &BTreeSet<String>,
+) -> bool {
+    match item {
+        ResponseItem::FunctionCall {
+            call_id,
+            namespace: Some(namespace),
+            name,
+            ..
+        } if namespace == SPINE_NAMESPACE
+            && matches!(
+                name.as_str(),
+                SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE
+            ) =>
+        {
+            !spine_control_call_ids.contains(call_id)
+        }
+        ResponseItem::FunctionCallOutput { call_id, .. } => {
+            function_call_ids.contains(call_id) && !spine_control_call_ids.contains(call_id)
+        }
+        ResponseItem::Other | ResponseItem::CompactionTrigger => false,
+        _ => true,
+    }
 }
 
 pub(crate) fn is_user_message(item: &ResponseItem) -> bool {
