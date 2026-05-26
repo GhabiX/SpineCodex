@@ -205,10 +205,10 @@ fn initial_tree_snapshot_projects_root_epoch_with_live_first_child() {
     assert_eq!(snapshot.active_node_id, "1.1");
     assert_eq!(nodes.len(), 2);
     assert_eq!(nodes["1"].parent_id, None);
-    assert_eq!(nodes["1"].summary.as_deref(), Some("root"));
+    assert_eq!(nodes["1"].summary, None);
     assert_eq!(nodes["1"].status, SpineTreeNodeStatus::Opened);
     assert_eq!(nodes["1.1"].parent_id.as_deref(), Some("1"));
-    assert_eq!(nodes["1.1"].summary.as_deref(), Some("root"));
+    assert_eq!(nodes["1.1"].summary, None);
     assert_eq!(nodes["1.1"].status, SpineTreeNodeStatus::Live);
 }
 
@@ -255,10 +255,10 @@ fn root_compact_tree_snapshot_promotes_new_root_epoch_holder() {
     assert_eq!(nodes["1"].parent_id, None);
     assert_eq!(nodes["1"].status, SpineTreeNodeStatus::Compacted);
     assert_eq!(nodes["2"].parent_id, None);
-    assert_eq!(nodes["2"].summary.as_deref(), Some("root"));
+    assert_eq!(nodes["2"].summary, None);
     assert_eq!(nodes["2"].status, SpineTreeNodeStatus::Opened);
     assert_eq!(nodes["2.1"].parent_id.as_deref(), Some("2"));
-    assert_eq!(nodes["2.1"].summary.as_deref(), Some("root"));
+    assert_eq!(nodes["2.1"].summary, None);
     assert_eq!(nodes["2.1"].status, SpineTreeNodeStatus::Live);
 }
 
@@ -299,8 +299,9 @@ fn root_depth_open_node_can_close_and_next_open_creates_sibling() {
 
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1"), "{tree}");
-    assert!(tree.contains("[1] Current root"), "{tree}");
-    assert!(tree.contains("[1.1] Done root"), "{tree}");
+    assert!(tree.contains("[1] Current"), "{tree}");
+    assert!(tree.contains("[1.1] Done"), "{tree}");
+    assert!(!tree.contains("root"), "{tree}");
 
     let materialized = runtime.materialize_history(&raw).expect("materialize");
     assert_eq!(materialized.len(), 1);
@@ -480,7 +481,7 @@ fn end_token_is_retained_as_control_epsilon() {
     );
     let tree = parse_stack.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1.1"), "{tree}");
-    assert!(tree.contains("- [1.1] Current root"), "{tree}");
+    assert!(tree.contains("- [1.1] Current"), "{tree}");
 }
 
 #[test]
@@ -623,7 +624,7 @@ fn duplicate_open_call_id_does_not_create_second_child() {
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1.1.1"), "{tree}");
     assert!(tree.contains("Spine Task Tree:"), "{tree}");
-    assert!(tree.contains("- [1.1] Open root"), "{tree}");
+    assert!(tree.contains("- [1.1] Open"), "{tree}");
     assert!(tree.contains("- [1.1.1] Current only child"), "{tree}");
 }
 
@@ -1299,8 +1300,8 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
     );
 
     let tree = replayed.parse_stack().render_tree().expect("render tree");
-    assert!(tree.contains("[1] Done root"), "{tree}");
-    assert!(tree.contains("[2.1] Current root"), "{tree}");
+    assert!(tree.contains("[1] Done"), "{tree}");
+    assert!(tree.contains("[2.1] Current"), "{tree}");
     assert!(
         !tree.contains("[1.2.1]") && !tree.contains("[1.2.2]"),
         "closed descendants of a previous root epoch must stay folded: {tree}"
@@ -1544,7 +1545,7 @@ fn tree_renders_from_parse_stack_without_mutating_it() {
     );
     assert!(tree.contains("Cursor: 1.1"), "{tree}");
     assert!(tree.contains("Spine Task Tree:"), "{tree}");
-    assert!(tree.contains("[1.1] Current root"), "{tree}");
+    assert!(tree.contains("[1.1] Current"), "{tree}");
     assert!(tree.contains("[1.1.1] Done child task"), "{tree}");
     assert!(
         tree.contains("memory=nodes/1/1/1/Memory.md")
@@ -1726,7 +1727,7 @@ fn rollback_keeps_open_when_request_item_survives() {
         .expect("sidecar exists");
     let tree = replayed.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1.1.1"), "{tree}");
-    assert!(tree.contains("- [1.1] Open root"), "{tree}");
+    assert!(tree.contains("- [1.1] Open"), "{tree}");
     assert!(tree.contains("- [1.1.1] Current child task"), "{tree}");
     assert_eq!(
         replayed.materialize_history(&raw).expect("materialize"),
@@ -1768,7 +1769,7 @@ fn rollback_skips_open_when_request_item_is_stale() {
         .expect("sidecar exists");
     let tree = replayed.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1.1"), "{tree}");
-    assert!(tree.contains("- [1.1] Current root"), "{tree}");
+    assert!(tree.contains("- [1.1] Current"), "{tree}");
     assert_eq!(
         replayed.materialize_history(&raw).expect("materialize"),
         vec![text_item("before")]
@@ -1919,9 +1920,9 @@ fn root_depth_open_after_native_compact_can_close_and_open_sibling() {
 
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 2"), "{tree}");
-    assert!(tree.contains("[1] Done root"), "{tree}");
-    assert!(tree.contains("[2] Current root"), "{tree}");
-    assert!(tree.contains("[2.1] Done root"), "{tree}");
+    assert!(tree.contains("[1] Done"), "{tree}");
+    assert!(tree.contains("[2] Current"), "{tree}");
+    assert!(tree.contains("[2.1] Done"), "{tree}");
 
     open_task(&mut runtime, &mut raw, "open-2-2", "task 2.2");
     assert!(matches!(
@@ -2396,7 +2397,7 @@ fn rollback_checkpoint_new_open_reuses_restored_sibling_id() {
         .expect("sidecar exists");
     let tree = replayed.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1.1.1"), "{tree}");
-    assert!(tree.contains("- [1.1] Open root"), "{tree}");
+    assert!(tree.contains("- [1.1] Open"), "{tree}");
     assert!(
         tree.contains("- [1.1.1] Current restored sibling"),
         "{tree}"
