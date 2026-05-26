@@ -1870,7 +1870,7 @@ async fn record_initial_history_new_seeds_initial_spine_tree_snapshot() {
         .find(|node| node.node_id == "1")
         .expect("projected root epoch node");
     assert_eq!(root.parent_id, None);
-    assert_eq!(root.summary.as_deref(), Some("root"));
+    assert_eq!(root.summary, None);
     assert_eq!(
         root.status,
         codex_protocol::spine_tree::SpineTreeNodeStatus::Opened
@@ -1881,7 +1881,7 @@ async fn record_initial_history_new_seeds_initial_spine_tree_snapshot() {
         .find(|node| node.node_id == "1.1")
         .expect("live initial root child");
     assert_eq!(child.parent_id.as_deref(), Some("1"));
-    assert_eq!(child.summary.as_deref(), Some("root"));
+    assert_eq!(child.summary, None);
     assert_eq!(
         child.status,
         codex_protocol::spine_tree::SpineTreeNodeStatus::Live
@@ -8009,8 +8009,9 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         .expect("spine sidecar should exist");
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1"), "{tree}");
-    assert!(tree.contains("[1] Current root"), "{tree}");
-    assert!(tree.contains("[1.1] Done root"), "{tree}");
+    assert!(tree.contains("[1] Current"), "{tree}");
+    assert!(tree.contains("[1.1] Done"), "{tree}");
+    assert!(!tree.contains("root"), "{tree}");
     let (_, raw_end, context_start, context_end) = SpineStore::for_rollout(&rollout_path)
         .expect("load spine store")
         .suffix_mem_cover_for_test("1.1")
@@ -8499,8 +8500,8 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
         .expect("materialize h(PS)");
     assert_eq!(session.clone_history().await.raw_items(), materialized);
     let tree = runtime.render_tree().expect("render spine tree");
-    assert!(tree.contains("[1] Done root"), "{tree}");
-    assert!(tree.contains("[2.1] Current root"), "{tree}");
+    assert!(tree.contains("[1] Done"), "{tree}");
+    assert!(tree.contains("[2.1] Current"), "{tree}");
     assert!(!runtime.parse_stack_debug_for_test().contains("Close("));
     assert!(
         materialized.iter().any(|item| matches!(

@@ -212,7 +212,7 @@ impl ParseStack {
             .into_iter()
             .map(|row| {
                 let status = row.snapshot_status();
-                let summary = Some(row.summary).filter(|summary| !summary.trim().is_empty());
+                let summary = visible_summary(&row).map(str::to_string);
                 // Snapshot parents describe this projected forest, not hidden
                 // ParseStack ancestors such as the root epoch holder.
                 let parent_id = row
@@ -360,7 +360,7 @@ fn project_current_root_epoch_row(cursor: NodeId, rows: &mut Vec<TreeRenderRow>)
     rows.push(TreeRenderRow {
         id: root,
         status: NodeStatus::Opened,
-        summary: "root".to_string(),
+        summary: String::new(),
         memory_path: None,
         trajs_path: None,
     });
@@ -425,7 +425,7 @@ fn collect_tree_render_rows(
                     rows.push(TreeRenderRow {
                         id: root_epoch.memory.node_id.clone(),
                         status: NodeStatus::Closed,
-                        summary: "root".to_string(),
+                        summary: String::new(),
                         memory_path: Some(root_epoch.memory.body_path.clone()),
                         trajs_path: None,
                     });
@@ -553,16 +553,27 @@ fn format_tree_rows(rows: Vec<TreeRenderRow>) -> String {
         if let Some(trajs_path) = row.trajs_path.as_ref() {
             detail.push_str(&format!(" trajs={}", trajs_path.display()));
         }
+        let summary = visible_summary(&row)
+            .map(|summary| format!(" {summary}"))
+            .unwrap_or_default();
         lines.push(format!(
-            "{}- [{}] {} {}{}",
+            "{}- [{}] {}{}{}",
             "  ".repeat(id.0.len().saturating_sub(1)),
             id,
             marker,
-            row.summary,
+            summary,
             detail
         ));
     }
     lines.join("\n")
+}
+
+fn visible_summary(row: &TreeRenderRow) -> Option<&str> {
+    let summary = row.summary.trim();
+    if summary.is_empty() || summary == "root" {
+        return None;
+    }
+    Some(summary)
 }
 
 pub(super) fn event_to_token(

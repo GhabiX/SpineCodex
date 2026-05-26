@@ -254,7 +254,12 @@ mod tests {
             "turn".to_string(),
             snapshot(vec![
                 node("1", None, Some("earlier work"), SpineTreeNodeStatus::Closed),
-                node("2", None, Some("current root"), SpineTreeNodeStatus::Opened),
+                node(
+                    "2",
+                    None,
+                    Some("current scope"),
+                    SpineTreeNodeStatus::Opened,
+                ),
                 node(
                     "2.1",
                     Some("2"),
@@ -267,7 +272,7 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         assert!(rendered.contains("Spine Tree"));
         assert!(rendered.contains("1 earlier work done"));
-        assert!(rendered.contains("2 current root open"));
+        assert!(rendered.contains("2 current scope open"));
         assert!(rendered.contains("2.1 focused task current"));
         assert!(!rendered.contains("LR"));
         assert!(!rendered.contains("ParseStack"));
@@ -282,15 +287,15 @@ mod tests {
         let cell = new_spine_tree_update(
             "turn".to_string(),
             snapshot(vec![
-                node("1", None, Some("old root"), SpineTreeNodeStatus::Compacted),
-                node("2", None, Some("new root"), SpineTreeNodeStatus::Opened),
+                node("1", None, Some("old scope"), SpineTreeNodeStatus::Compacted),
+                node("2", None, Some("new scope"), SpineTreeNodeStatus::Opened),
                 node("2.1", Some("2"), Some("active"), SpineTreeNodeStatus::Live),
             ]),
         );
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
-        assert!(rendered.contains("1 old root compacted"));
-        assert!(!rendered.contains("1 old root done"));
+        assert!(rendered.contains("1 old scope compacted"));
+        assert!(!rendered.contains("1 old scope done"));
     }
 
     #[test]
@@ -300,7 +305,7 @@ mod tests {
             snapshot_with_active(
                 "1.1.1",
                 vec![
-                    node("1.1", None, Some("root"), SpineTreeNodeStatus::Opened),
+                    node("1.1", None, None, SpineTreeNodeStatus::Opened),
                     node(
                         "1.1.1",
                         Some("1.1"),
@@ -313,7 +318,7 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         assert!(!rendered.contains("(empty)"));
-        assert!(rendered.contains("1.1 root open"));
+        assert!(rendered.contains("1.1 open"));
         assert!(rendered.contains("1.1.1 focused task current"));
     }
 
@@ -324,15 +329,16 @@ mod tests {
             snapshot_with_active(
                 "1",
                 vec![
-                    node("1", None, Some("root"), SpineTreeNodeStatus::Live),
-                    node("1.1", Some("1"), Some("root"), SpineTreeNodeStatus::Closed),
+                    node("1", None, None, SpineTreeNodeStatus::Live),
+                    node("1.1", Some("1"), None, SpineTreeNodeStatus::Closed),
                 ],
             ),
         );
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         assert!(!rendered.contains("(empty)"));
-        assert!(rendered.contains("1 root current"));
-        assert!(rendered.contains("1.1 root done"));
+        assert!(rendered.contains("1 current"));
+        assert!(rendered.contains("1.1 done"));
+        assert!(!rendered.contains("root"));
     }
 }
