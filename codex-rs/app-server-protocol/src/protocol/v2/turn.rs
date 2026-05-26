@@ -10,6 +10,8 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use codex_protocol::spine_tree::SpineTreeNodeSnapshot as CoreSpineTreeNodeSnapshot;
+use codex_protocol::spine_tree::SpineTreeNodeStatus as CoreSpineTreeNodeStatus;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -361,6 +363,39 @@ pub struct TurnPlanUpdatedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct SpineTreeUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub snapshot_seq: u64,
+    pub active_node_id: String,
+    pub nodes: Vec<SpineTreeNode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineTreeNode {
+    pub node_id: String,
+    #[ts(optional = nullable)]
+    pub parent_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub summary: Option<String>,
+    pub status: SpineTreeNodeStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum SpineTreeNodeStatus {
+    Live,
+    Opened,
+    Closed,
+    Compacted,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnPlanStep {
     pub step: String,
     pub status: TurnPlanStepStatus,
@@ -390,6 +425,28 @@ impl From<CorePlanStepStatus> for TurnPlanStepStatus {
             CorePlanStepStatus::Pending => Self::Pending,
             CorePlanStepStatus::InProgress => Self::InProgress,
             CorePlanStepStatus::Completed => Self::Completed,
+        }
+    }
+}
+
+impl From<CoreSpineTreeNodeSnapshot> for SpineTreeNode {
+    fn from(value: CoreSpineTreeNodeSnapshot) -> Self {
+        Self {
+            node_id: value.node_id,
+            parent_id: value.parent_id,
+            summary: value.summary,
+            status: value.status.into(),
+        }
+    }
+}
+
+impl From<CoreSpineTreeNodeStatus> for SpineTreeNodeStatus {
+    fn from(value: CoreSpineTreeNodeStatus) -> Self {
+        match value {
+            CoreSpineTreeNodeStatus::Live => Self::Live,
+            CoreSpineTreeNodeStatus::Opened => Self::Opened,
+            CoreSpineTreeNodeStatus::Closed => Self::Closed,
+            CoreSpineTreeNodeStatus::Compacted => Self::Compacted,
         }
     }
 }

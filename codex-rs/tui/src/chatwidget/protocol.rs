@@ -109,6 +109,12 @@ impl ChatWidget {
                         .collect(),
                 })
             }
+            ServerNotification::SpineTreeUpdated(notification) => {
+                self.app_event_tx.send(AppEvent::UpsertSpineTreeCell {
+                    turn_id: notification.turn_id.clone(),
+                    snapshot: notification,
+                });
+            }
             ServerNotification::HookStarted(notification) => {
                 self.on_hook_started(notification.run);
             }

@@ -49,6 +49,7 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -1211,6 +1212,18 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &outgoing,
             )
             .await;
+        }
+        EventMsg::SpineTreeUpdate(spine_tree_event) => {
+            let notification = SpineTreeUpdatedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.to_string(),
+                snapshot_seq: spine_tree_event.snapshot_seq,
+                active_node_id: spine_tree_event.active_node_id,
+                nodes: spine_tree_event.nodes.into_iter().map(Into::into).collect(),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::SpineTreeUpdated(notification))
+                .await;
         }
         EventMsg::ShutdownComplete => {
             thread_watch_manager

@@ -2858,6 +2858,74 @@
       "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
       "type": "object"
     },
+    "SpineTreeNode": {
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/SpineTreeNodeStatus"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "nodeId",
+        "status"
+      ],
+      "type": "object"
+    },
+    "SpineTreeNodeStatus": {
+      "enum": [
+        "live",
+        "opened",
+        "closed",
+        "compacted"
+      ],
+      "type": "string"
+    },
+    "SpineTreeUpdatedNotification": {
+      "properties": {
+        "activeNodeId": {
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/definitions/SpineTreeNode"
+          },
+          "type": "array"
+        },
+        "snapshotSeq": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "activeNodeId",
+        "nodes",
+        "snapshotSeq",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "SubAgentSource": {
       "oneOf": [
         {
@@ -5195,6 +5263,26 @@
         "params"
       ],
       "title": "Turn/plan/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "turn/spineTree/updated"
+          ],
+          "title": "Turn/spineTree/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SpineTreeUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Turn/spineTree/updatedNotification",
       "type": "object"
     },
     {

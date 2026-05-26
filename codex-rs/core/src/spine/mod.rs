@@ -1,5 +1,6 @@
 mod archive;
 mod checkpoint;
+mod instructions;
 mod io;
 mod model;
 mod parse_stack;
@@ -22,6 +23,8 @@ pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::is_user_message;
 pub(crate) use store::SpineStore;
+
+pub(crate) use instructions::append_spine_view_instructions;
 
 const CHECKPOINT_VERSION: u32 = 1;
 

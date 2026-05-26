@@ -305,19 +305,26 @@ async fn run_compact_task_inner_impl(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
-    let spine_history = sess
-        .install_spine_root_compact(summary_text.clone(), new_history.len())
+    let spine_compact = sess
+        .install_spine_root_compact(summary_text.clone())
         .await
         .map_err(|err| CodexErr::Fatal(format!("failed to install Spine root compact: {err}")))?;
-    if let Some(spine_history) = spine_history {
+    let spine_tree_snapshot = if let Some((spine_history, snapshot)) = spine_compact {
         new_history = spine_history;
-    }
+        Some(snapshot)
+    } else {
+        None
+    };
     let compacted_item = CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
     };
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
+    if let Some(snapshot) = spine_tree_snapshot {
+        sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
+            .await;
+    }
     client_session.reset_websocket_session();
     sess.recompute_token_usage(&turn_context).await;
 

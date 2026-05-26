@@ -379,12 +379,11 @@ impl CodexThread {
             .inject_response_items(vec![pending_item])
             .await
         {
-            let turn_context = self.codex.session.new_default_turn().await;
-            let items: Vec<ResponseItem> = items.into_iter().map(Into::into).collect();
             self.codex
                 .session
-                .record_conversation_items(turn_context.as_ref(), &items)
+                .queue_response_items_for_next_turn(items)
                 .await;
+            self.codex.session.maybe_start_turn_for_pending_work().await;
         }
 
         Ok(submission_id)

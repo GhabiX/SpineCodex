@@ -1,4 +1,5 @@
 use codex_protocol::models::ResponseItem;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -113,6 +114,7 @@ pub(crate) struct SpineCloseCompact {
 pub(crate) struct SpineSessionState {
     raw_len: u64,
     runtime: Option<SpineRuntime>,
+    initial_tree_snapshot_emitted: bool,
 }
 
 impl SpineSessionState {
@@ -120,6 +122,7 @@ impl SpineSessionState {
         Self {
             raw_len: 0,
             runtime: None,
+            initial_tree_snapshot_emitted: false,
         }
     }
 
@@ -142,6 +145,7 @@ impl SpineSessionState {
     ) -> Result<(), SpineError> {
         self.raw_len = raw_len;
         self.runtime = runtime;
+        self.initial_tree_snapshot_emitted = false;
         Ok(())
     }
 
@@ -165,6 +169,20 @@ impl SpineSessionState {
             self.runtime = Some(SpineRuntime::load_or_create(rollout_path, self.raw_len)?);
         }
         Ok(())
+    }
+
+    pub(crate) fn take_initial_tree_snapshot(
+        &mut self,
+    ) -> Result<Option<SpineTreeUpdateEvent>, SpineError> {
+        if self.initial_tree_snapshot_emitted {
+            return Ok(None);
+        }
+        let Some(runtime) = self.runtime.as_ref() else {
+            return Ok(None);
+        };
+        let snapshot = runtime.build_tree_snapshot()?;
+        self.initial_tree_snapshot_emitted = true;
+        Ok(Some(snapshot))
     }
 }
 
@@ -317,6 +335,26 @@ impl SpineRuntime {
 
     pub(crate) fn render_tree(&self) -> Result<String, SpineError> {
         self.parse_stack.render_tree()
+    }
+
+    pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineError> {
+        let nodes = self.parse_stack.tree_snapshot_nodes()?;
+        let active_node_id = nodes
+            .iter()
+            .find(|node| node.status == codex_protocol::spine_tree::SpineTreeNodeStatus::Live)
+            .map(|node| node.node_id.clone())
+            .ok_or_else(|| {
+                SpineError::InvalidEvent("Spine tree snapshot has no live node".to_string())
+            })?;
+        Ok(SpineTreeUpdateEvent {
+            snapshot_seq: self.store.next_event_seq()?,
+            active_node_id,
+            nodes,
+        })
+    }
+
+    pub(crate) fn current_open_index(&self) -> Result<usize, SpineError> {
+        Ok(self.parse_stack.current_open_meta()?.index)
     }
 
     #[cfg(test)]
@@ -570,6 +608,13 @@ impl SpineRuntime {
                         "cannot close root epoch".to_string(),
                     ));
                 }
+                if node.parent().is_some_and(|parent| parent.is_root_epoch())
+                    && node.0.last() == Some(&1)
+                {
+                    return Err(SpineError::InvalidEvent(
+                        "cannot close root epoch holder".to_string(),
+                    ));
+                }
                 if !self.parse_stack.current_open_has_nodes()? {
                     return Err(SpineError::InvalidEvent(
                         "spine.close requires non-empty live suffix".to_string(),
@@ -660,13 +705,14 @@ impl SpineRuntime {
     pub(crate) fn root_compact(
         &mut self,
         body: String,
-        next_open_index: usize,
-    ) -> Result<(), SpineError> {
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Vec<ResponseItem>, SpineError> {
         if body.trim().is_empty() {
             return Err(SpineError::InvalidEvent(
                 "spine root compact memory body must not be empty".to_string(),
             ));
         }
+        let source_context_end = self.materialize_history(raw_items)?.len();
         let node = self.parse_stack.current_root_epoch_id()?;
         let compact_id = format!("root-{}-{}", node.as_path().replace('.', "-"), self.raw_len);
         let body_path = self.store.write_memory_body(&compact_id, &body)?;
@@ -678,28 +724,48 @@ impl SpineRuntime {
             raw_start: 0,
             raw_end: self.raw_len,
             context_start: 0,
-            context_end: next_open_index,
+            context_end: source_context_end,
             raw_live_hash: Some(raw_live_hash.clone()),
             body_path,
             body_hash: sha1_hex(body.as_bytes()),
         };
         let seq = self.store.next_event_seq()?;
+        let memory = memory_ref(
+            &self.archive(),
+            mem.compact_id.clone(),
+            mem.node.clone(),
+            mem.body_hash.clone(),
+            mem.raw_start..mem.raw_end,
+            mem.context_start..mem.context_end,
+            seq..seq + 1,
+        );
+
+        let mut probe_parse_stack = self.parse_stack.clone();
+        probe_parse_stack.shift(
+            SpineToken::Compact {
+                memory: memory.clone(),
+                next_open_index: 0,
+            },
+            &self.archive(),
+        )?;
+        let next_open_index = render_parse_stack_to_context(&probe_parse_stack, raw_items)?.len();
+
         let mut staged_parse_stack = self.parse_stack.clone();
         staged_parse_stack.shift(
             SpineToken::Compact {
-                memory: memory_ref(
-                    &self.archive(),
-                    mem.compact_id.clone(),
-                    mem.node.clone(),
-                    mem.body_hash.clone(),
-                    mem.raw_start..mem.raw_end,
-                    mem.context_start..mem.context_end,
-                    seq..seq + 1,
-                ),
+                memory,
                 next_open_index,
             },
             &self.archive(),
         )?;
+        let materialized = render_parse_stack_to_context(&staged_parse_stack, raw_items)?;
+        let current_open_index = staged_parse_stack.current_open_meta()?.index;
+        if current_open_index != materialized.len() {
+            return Err(SpineError::InvalidEvent(format!(
+                "spine root compact open index {current_open_index} does not match materialized history length {}",
+                materialized.len()
+            )));
+        }
         self.store.append_mem(&mem)?;
         self.store.append_event(&KEvent::RootCompact {
             node: node.clone(),
@@ -711,7 +777,7 @@ impl SpineRuntime {
         })?;
         self.parse_stack = staged_parse_stack;
         self.pending = None;
-        Ok(())
+        Ok(materialized)
     }
 
     fn stage_close_mem(
@@ -747,17 +813,49 @@ impl SpineRuntime {
     }
 
     fn open_raw_start(&self, node_id: &NodeId) -> Result<u64, SpineError> {
-        self.store
-            .events()?
-            .into_iter()
-            .rev()
-            .find_map(|event| match event.event {
-                KEvent::Open {
-                    child, boundary, ..
-                } if &child == node_id => Some(boundary),
-                _ => None,
-            })
-            .ok_or_else(|| SpineError::InvalidEvent(format!("missing open event for {node_id}")))
+        let events = self.store.events()?;
+        if let Some(boundary) = events.iter().rev().find_map(|event| match &event.event {
+            KEvent::Open {
+                child, boundary, ..
+            } if child == node_id => Some(*boundary),
+            _ => None,
+        }) {
+            return Ok(boundary);
+        }
+        let Some(parent) = node_id.parent() else {
+            return Err(SpineError::InvalidEvent(format!(
+                "missing open event for {node_id}"
+            )));
+        };
+        if parent.is_root_epoch() && node_id.0.last() == Some(&1) {
+            let root_epoch =
+                parent.0.first().copied().ok_or_else(|| {
+                    SpineError::InvalidEvent("root epoch id is empty".to_string())
+                })?;
+            let Some(previous_root_epoch) = root_epoch.checked_sub(1) else {
+                return Err(SpineError::InvalidEvent(format!(
+                    "missing open event for {node_id}"
+                )));
+            };
+            let compacted_parent = NodeId::root_epoch(previous_root_epoch);
+            return events
+                .into_iter()
+                .rev()
+                .find_map(|event| match event.event {
+                    KEvent::RootCompact { node, boundary, .. }
+                        if node == compacted_parent && parent.child(1) == *node_id =>
+                    {
+                        Some(boundary)
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent(format!("missing open event for {node_id}"))
+                });
+        }
+        Err(SpineError::InvalidEvent(format!(
+            "missing open event for {node_id}"
+        )))
     }
 
     pub(crate) fn materialize_history(

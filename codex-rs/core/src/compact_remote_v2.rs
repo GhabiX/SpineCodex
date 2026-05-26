@@ -253,17 +253,24 @@ async fn run_remote_compact_task_inner_impl(
         input_history: &trace_input_history,
         replacement_history: &new_history,
     });
-    if let Some(spine_history) =
+    let spine_tree_snapshot = if let Some((spine_history, snapshot)) =
         install_remote_spine_root_compact(sess.as_ref(), &new_history).await?
     {
         new_history = spine_history;
-    }
+        Some(snapshot)
+    } else {
+        None
+    };
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
     };
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
+    if let Some(snapshot) = spine_tree_snapshot {
+        sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
+            .await;
+    }
     sess.recompute_token_usage(turn_context).await;
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
