@@ -2222,6 +2222,9 @@ fn spine_tree_upsert_action(
     else {
         return SpineTreeUpsertAction::Insert;
     };
+    if !last_spine_tree.is_live_update() {
+        return SpineTreeUpsertAction::Insert;
+    }
     if last_spine_tree.turn_id() != turn_id {
         return SpineTreeUpsertAction::Insert;
     }
@@ -2239,6 +2242,18 @@ mod tests {
     fn spine_cell(turn_id: &str, snapshot_seq: u64) -> Arc<dyn HistoryCell> {
         Arc::new(history_cell::new_spine_tree_update(
             turn_id.to_string(),
+            codex_app_server_protocol::SpineTreeUpdatedNotification {
+                thread_id: "thread".to_string(),
+                turn_id: turn_id.to_string(),
+                snapshot_seq,
+                active_node_id: "1.1".to_string(),
+                nodes: Vec::new(),
+            },
+        ))
+    }
+
+    fn manual_spine_cell(turn_id: &str, snapshot_seq: u64) -> Arc<dyn HistoryCell> {
+        Arc::new(history_cell::new_manual_spine_tree_snapshot(
             codex_app_server_protocol::SpineTreeUpdatedNotification {
                 thread_id: "thread".to_string(),
                 turn_id: turn_id.to_string(),
@@ -2280,6 +2295,16 @@ mod tests {
         assert_eq!(
             spine_tree_upsert_action(Some(&last), "turn-1", 3),
             SpineTreeUpsertAction::Ignore
+        );
+    }
+
+    #[test]
+    fn spine_tree_upsert_does_not_replace_manual_snapshot() {
+        let last = manual_spine_cell("turn-1", 4);
+
+        assert_eq!(
+            spine_tree_upsert_action(Some(&last), "turn-1", 5),
+            SpineTreeUpsertAction::Insert
         );
     }
 }

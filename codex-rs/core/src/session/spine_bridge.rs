@@ -38,6 +38,25 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn seed_spine_tree_snapshot_if_available(&self) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let snapshot = {
+            let guard = spine_slot.lock().await;
+            let Some(runtime) = guard.runtime() else {
+                return Ok(());
+            };
+            runtime.build_tree_snapshot()?
+        };
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_string(),
+            msg: EventMsg::SpineTreeUpdate(snapshot),
+        })
+        .await;
+        Ok(())
+    }
+
     pub(super) async fn initialize_spine_for_new_session(&self) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());

@@ -374,6 +374,7 @@ pub(crate) struct ChatComposer {
     service_tier_commands: Vec<ServiceTierCommand>,
     mentions_v2_enabled: bool,
     goal_command_enabled: bool,
+    spine_task_tree_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
@@ -439,6 +440,7 @@ impl ChatComposer {
             plugins_command_enabled: self.plugins_command_enabled,
             service_tier_commands_enabled: self.service_tier_commands_enabled,
             goal_command_enabled: self.goal_command_enabled,
+            spine_task_tree_enabled: self.spine_task_tree_enabled,
             personality_command_enabled: self.personality_command_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
@@ -538,6 +540,7 @@ impl ChatComposer {
             service_tier_commands: Vec::new(),
             mentions_v2_enabled: false,
             goal_command_enabled: false,
+            spine_task_tree_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
@@ -639,6 +642,10 @@ impl ChatComposer {
 
     pub fn set_goal_command_enabled(&mut self, enabled: bool) {
         self.goal_command_enabled = enabled;
+    }
+
+    pub fn set_spine_task_tree_enabled(&mut self, enabled: bool) {
+        self.spine_task_tree_enabled = enabled;
     }
 
     /// Replace composer, editor, and footer-hint key bindings from one runtime snapshot.
@@ -3872,6 +3879,7 @@ impl ChatComposer {
                     let plugins_command_enabled = self.plugins_command_enabled;
                     let service_tier_commands_enabled = self.service_tier_commands_enabled;
                     let goal_command_enabled = self.goal_command_enabled;
+                    let spine_task_tree_enabled = self.spine_task_tree_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
                     let audio_device_selection_enabled = self.audio_device_selection_enabled;
@@ -3882,6 +3890,7 @@ impl ChatComposer {
                             plugins_command_enabled,
                             service_tier_commands_enabled,
                             goal_command_enabled,
+                            spine_task_tree_enabled,
                             personality_command_enabled,
                             realtime_conversation_enabled,
                             audio_device_selection_enabled,

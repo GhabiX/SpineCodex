@@ -1837,6 +1837,58 @@ async fn record_initial_history_new_defers_initial_context_until_first_turn() {
 }
 
 #[tokio::test]
+async fn record_initial_history_new_seeds_initial_spine_tree_snapshot() {
+    let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    session.record_initial_history(InitialHistory::New).await;
+
+    let event = timeout(StdDuration::from_secs(1), rx.recv())
+        .await
+        .expect("timeout waiting for initial Spine tree snapshot")
+        .expect("event");
+    let snapshot = match event.msg {
+        EventMsg::SpineTreeUpdate(snapshot) => snapshot,
+        msg => panic!("expected Spine tree update, got {msg:?}"),
+    };
+    assert_eq!(event.id, INITIAL_SUBMIT_ID);
+    assert_eq!(snapshot.active_node_id, "1.1");
+    assert_eq!(snapshot.nodes.len(), 2);
+    let root = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1")
+        .expect("projected root epoch node");
+    assert_eq!(root.parent_id, None);
+    assert_eq!(root.summary.as_deref(), Some("root"));
+    assert_eq!(
+        root.status,
+        codex_protocol::spine_tree::SpineTreeNodeStatus::Opened
+    );
+    let child = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1")
+        .expect("live initial root child");
+    assert_eq!(child.parent_id.as_deref(), Some("1"));
+    assert_eq!(child.summary.as_deref(), Some("root"));
+    assert_eq!(
+        child.status,
+        codex_protocol::spine_tree::SpineTreeNodeStatus::Live
+    );
+}
+
+#[tokio::test]
 async fn resumed_history_injects_initial_context_on_first_context_update_only() {
     let (session, turn_context) = make_session_and_context().await;
     let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
@@ -7697,16 +7749,8 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         compact_request.body_json()["instructions"]
             .as_str()
             .is_some_and(|instructions| !instructions
-                .contains("Compact only the suffix for the Spine node 1.1.1")),
+                .contains("Write a compact continuation memory for Spine node 1.1.1")),
         "compact directive should be a trailing prompt input message, not duplicated into base instructions"
-    );
-    assert!(
-        compact_request.body_contains_text(
-            "replace the raw transcript for Spine node 1.1.1 in future context"
-        )
-    );
-    assert!(
-        compact_request.body_contains_text("Write a Markdown memory, not a conversation reply")
     );
     assert!(
         compact_request.body_contains_text("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
@@ -7784,44 +7828,9 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     assert!(
         system_texts.iter().any(|text| text
-            .contains("Write a Markdown memory, not a conversation reply")
-            && text.contains("runtime Spine memory for a closed task node")
-            && text.contains(
-                "replace the raw transcript for Spine node 1.1.1 in future context"
-            )
-            && text.contains("compact continuity record for its parent scope")
-            && text.contains(
-                "Scope: the user's question, intent, and what this node was trying to resolve"
-            )
-            && text.contains("Current State: what is now known, decided, changed, or verified")
-            && text.contains(
-                "Evidence: important files, functions, commands, tests, results, ids, and failures"
-            )
-            && text.contains(
-                "Carry Forward: the user's current intent, facts the parent or later sibling needs"
-            )
-            && text.contains(
-                "concrete direction for continuing the work if this task should keep moving after close"
-            )
-            && text.contains(
-                "Open Questions: unresolved decisions, blockers, or user-facing conclusions that still matter"
-            )
-            && text.contains("Use prefix context only to interpret names and constraints")
-            && text.contains(
-                "Use the optional close instruction as a hint about what to preserve"
-            )
-            && text.contains(
-                "state the user's current intent and continuation direction as carry-forward context"
-            )
-            && !text.contains("copy those strings exactly into the memory")
-            && !text.contains("TEST_WITH_LLM_*")
-            && !text.contains("Required Evidence")
-            && !text.contains("final-answer markers")
-            && !text.contains("pending post-tool response constraints")
-            && !text.contains("pending post-close response constraint")
-            && text.contains("---------- Spine Compact Directive ----------")
+            .contains("---------- Spine Compact Directive ----------")
             && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
-        "compact directive should be a trailing system message: {system_texts:?}"
+        "compact directive and close instruction should be a trailing system message: {system_texts:?}"
     );
     assert!(
         system_texts.iter().any(
@@ -7835,7 +7844,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     assert!(
         user_texts.iter().all(|text| {
             !text.contains("---------- Spine Compact Directive ----------")
-                && !text.contains("Compact only the suffix for the Spine node")
+                && !text.contains("Write a compact continuation memory for Spine node")
                 && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
         }),
         "compact directive must not be injected as user input: {user_texts:?}"
@@ -7899,6 +7908,117 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         raw_end, 5,
         "suffix memory raw evidence must include the close request but stop before the close output"
     );
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)"),
+        items
+    );
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
+async fn spine_close_bridge_can_close_initial_root_child() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_summary_sse(
+            "spine-close-root-child-summary",
+            "root child compact summary",
+        ),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let root_child_work = user_message("initial root child work");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&root_child_work))
+        .await;
+
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "close-root-child");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await;
+    session
+        .stage_spine_close("close-root-child".to_string(), None)
+        .await
+        .expect("stage close");
+    let close_output = function_output("close-root-child");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .await
+        .expect("commit close output");
+    session
+        .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
+        .await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let compact_request = compact_mock.single_request();
+    assert!(compact_request.body_contains_text("initial root child work"));
+    assert!(
+        compact_request
+            .body_contains_text("Write a compact continuation memory for Spine node 1.1")
+    );
+    assert!(
+        compact_request
+            .body_contains_text("Messages below this boundary are the suffix for Spine node 1.1")
+    );
+
+    let history = session.clone_history().await;
+    let items = history.raw_items();
+    assert_eq!(items.len(), 1);
+    assert!(matches!(
+        &items[0],
+        ResponseItem::Message { role, content, .. }
+            if role == "user"
+                && matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1")
+                            && text.contains("root child compact summary")
+                            && !text.contains("initial root child work")
+                            && !text.contains("---------- Spine Compact Directive ----------")
+                )
+    ));
+
+    let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    {
+        InitialHistory::Resumed(resumed) => spine_raw_items_after_rollback(&resumed.history),
+        _ => panic!("expected resumed rollout history"),
+    };
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1"), "{tree}");
+    assert!(tree.contains("[1] Current root"), "{tree}");
+    assert!(tree.contains("[1.1] Done root"), "{tree}");
+    let (_, raw_end, context_start, context_end) = SpineStore::for_rollout(&rollout_path)
+        .expect("load spine store")
+        .suffix_mem_cover_for_test("1.1")
+        .expect("read spine mem records")
+        .expect("closed root child suffix memory should be recorded");
+    assert_eq!(context_start, 0);
+    assert_eq!(context_end, 1);
+    assert_eq!(raw_end, 2);
     assert_eq!(
         runtime
             .materialize_history(&raw_items)
@@ -8520,11 +8640,6 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     let inner_compact_request = &requests[0];
     assert!(inner_compact_request.body_contains_text("inner assistant traj should be folded away"));
     let outer_compact_request = &requests[1];
-    assert!(
-        outer_compact_request.body_contains_text(
-            "replace the raw transcript for Spine node 1.1.1 in future context"
-        )
-    );
     assert!(
         outer_compact_request.body_contains_text("<spine_memory runtime_generated="),
         "outer close suffix evidence should include the rendered child memory item"

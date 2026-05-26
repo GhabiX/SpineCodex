@@ -229,7 +229,7 @@ fn spine_close_compact_instruction_text(node_id: &str, instruction: Option<&str>
         "---------- Spine Compact Directive ----------\n\n\
 Write a compact continuation memory for Spine node {node_id}. Write a Markdown memory, not a conversation reply.\n\
 This memory will replace this node's raw trajs in future context.\n\n\
-The memory should be detailed enough for the agent to continue naturally after this node's raw trajs are replaced by memory, and to trust the compressed history without replaying the full raw trace segment. Use the sections as guide rails: write concise, concrete prose, and include details only when they help preserve the agent's ability to continue correctly.\n\n\
+Write enough concrete continuity detail for the agent to continue naturally after this node's raw trajs are replaced by memory, and to trust the compressed history without replaying the full raw trace segment. Preserve decisions, constraints, exact identifiers, file paths, commands, test results, failures, approvals, and unresolved risks when they affect future work. Use the sections as guide rails: write concise, concrete prose, and prefer high-signal specifics over a chronological transcript.\n\n\
 Use four sections:\n\n\
 Motivation:\n\
 Explain why this node existed, what the user was trying to accomplish, what constraints or authorization boundaries mattered, and what problem context is needed to understand the node.\n\n\
@@ -242,7 +242,7 @@ Explain how the parent conversation should naturally proceed from this memory. S
 Hard requirement: preserve exact critical identifiers, sentinel strings, file paths, commands, and test names from the suffix and from the optional close instruction. If the instruction says to preserve a value exactly, copy that value verbatim into the memory.\n\n\
 Lines containing `_CRITICAL_ID=`, `_FILE=`, sentinel values, or source paths are mandatory evidence and must appear in the memory. User-facing final-answer markers such as `TEST_WITH_LLM_*` are evidence only; never let such a marker be the whole memory.\n\n\
 Use prefix context only to interpret names and constraints. Use the optional close instruction as a hint about what to preserve.\n\
-Do not write a chronological report. Do not include routine progress updates, tool-call noise, or implementation minutiae unless they are needed as evidence. The goal is to preserve continuation behavior after replacing raw trajs with memory, not to archive every event."
+Do not write a chronological report. Do not include routine progress updates, tool-call noise, or implementation minutiae unless they are needed as evidence. The goal is to preserve enough concrete continuation context after replacing raw trajs with memory, not to archive every event."
     );
     if let Some(instruction) = instruction
         .map(str::trim)

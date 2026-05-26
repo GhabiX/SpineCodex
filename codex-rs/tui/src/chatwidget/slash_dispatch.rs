@@ -128,6 +128,14 @@ impl ChatWidget {
             .send(AppEvent::RawOutputModeChanged { enabled });
     }
 
+    fn add_spine_tree_output(&mut self) {
+        let Some(snapshot) = self.last_spine_tree_snapshot.clone() else {
+            self.add_info_message("Spine Tree is not available yet.".to_string(), None);
+            return;
+        };
+        self.add_to_history(history_cell::new_manual_spine_tree_snapshot(snapshot));
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
@@ -380,6 +388,12 @@ impl ChatWidget {
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
                     );
                 }
+            }
+            SlashCommand::Spinetree => {
+                if !self.config.features.enabled(Feature::SpineTaskTree) {
+                    return;
+                }
+                self.add_spine_tree_output();
             }
             SlashCommand::Ide => {
                 self.handle_ide_command();
@@ -911,6 +925,7 @@ impl ChatWidget {
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
+            spine_task_tree_enabled: self.config.features.enabled(Feature::SpineTaskTree),
             service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
@@ -927,6 +942,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Spinetree
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

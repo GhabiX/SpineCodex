@@ -198,20 +198,30 @@ impl ParseStack {
     }
 
     pub(super) fn render_tree(&self) -> Result<String, SpineError> {
-        let mut rows = Vec::<TreeRenderRow>::new();
-        collect_tree_render_rows(&self.symbols, &mut rows)?;
+        let rows = self.tree_rows()?;
         Ok(format_tree_rows(rows))
     }
 
     pub(super) fn tree_snapshot_nodes(&self) -> Result<Vec<SpineTreeNodeSnapshot>, SpineError> {
-        Ok(self
-            .tree_rows()?
+        let rows = self.tree_rows()?;
+        let projected_ids = rows
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<BTreeSet<_>>();
+        Ok(rows
             .into_iter()
             .map(|row| {
                 let status = row.snapshot_status();
                 let summary = Some(row.summary).filter(|summary| !summary.trim().is_empty());
+                // Snapshot parents describe this projected forest, not hidden
+                // ParseStack ancestors such as the root epoch holder.
+                let parent_id = row
+                    .id
+                    .parent()
+                    .filter(|parent| projected_ids.contains(parent))
+                    .map(|id| id.as_path());
                 SpineTreeNodeSnapshot {
-                    parent_id: row.id.parent().map(|id| id.as_path()),
+                    parent_id,
                     node_id: row.id.as_path(),
                     summary,
                     status,
@@ -221,14 +231,15 @@ impl ParseStack {
     }
 
     pub(super) fn current_open_meta(&self) -> Result<&TreeMeta, SpineError> {
-        self.symbols
-            .iter()
-            .rev()
-            .find_map(|symbol| match symbol {
-                Symbol::Control(ControlSymbol::Open(meta)) => Some(meta),
-                _ => None,
-            })
+        self.current_open_meta_opt()
             .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))
+    }
+
+    pub(super) fn current_open_meta_opt(&self) -> Option<&TreeMeta> {
+        self.symbols.iter().rev().find_map(|symbol| match symbol {
+            Symbol::Control(ControlSymbol::Open(meta)) => Some(meta),
+            _ => None,
+        })
     }
 
     pub(super) fn current_open_has_nodes(&self) -> Result<bool, SpineError> {
@@ -243,7 +254,7 @@ impl ParseStack {
     }
 
     pub(super) fn current_root_epoch_id(&self) -> Result<NodeId, SpineError> {
-        let current = self.current_open_meta()?.id.clone();
+        let current = self.current_cursor_id()?;
         let root = *current
             .0
             .first()
@@ -251,8 +262,45 @@ impl ParseStack {
         Ok(NodeId::root_epoch(root))
     }
 
+    pub(super) fn current_cursor_id(&self) -> Result<NodeId, SpineError> {
+        if let Some(open) = self.current_open_meta_opt() {
+            return Ok(open.id.clone());
+        }
+        for symbol in self.symbols.iter().rev() {
+            match symbol {
+                Symbol::SpineTreeNodes(nodes) => {
+                    if let Some(root) = root_epoch_from_nodes(nodes) {
+                        return Ok(root);
+                    }
+                }
+                Symbol::SpineTreeNode(node) => {
+                    if let Some(root) = root_epoch_from_node(node) {
+                        return Ok(root);
+                    }
+                }
+                Symbol::RootEpoches(root_epochs) => {
+                    let next = root_epochs
+                        .last()
+                        .and_then(|root_epoch| root_epoch.memory.node_id.0.first().copied())
+                        .and_then(|root| root.checked_add(1))
+                        .ok_or_else(|| {
+                            SpineError::InvalidEvent(
+                                "current root epoch id is unavailable".to_string(),
+                            )
+                        })?;
+                    return Ok(NodeId::root_epoch(next));
+                }
+                Symbol::Control(ControlSymbol::Init(meta)) => return Ok(meta.id.clone()),
+                Symbol::Control(_) => {}
+            }
+        }
+        Err(SpineError::InvalidEvent(
+            "ParseStack has no cursor".to_string(),
+        ))
+    }
+
     pub(super) fn next_child_id(&self) -> Result<NodeId, SpineError> {
-        let parent = self.current_open_meta()?.id.clone();
+        let parent = self.current_cursor_id()?;
         let rows = self.tree_rows()?;
         let child_count = rows
             .iter()
@@ -266,6 +314,8 @@ impl ParseStack {
     fn tree_rows(&self) -> Result<Vec<TreeRenderRow>, SpineError> {
         let mut rows = Vec::<TreeRenderRow>::new();
         collect_tree_render_rows(&self.symbols, &mut rows)?;
+        project_current_root_epoch_row(self.current_cursor_id()?, &mut rows);
+        mark_cursor_statuses(self.current_cursor_id()?, &mut rows);
         Ok(rows)
     }
 }
@@ -287,6 +337,47 @@ struct TreeRenderRow {
     summary: String,
     memory_path: Option<PathBuf>,
     trajs_path: Option<PathBuf>,
+}
+
+fn root_epoch_from_nodes(nodes: &[SpineTreeNode]) -> Option<NodeId> {
+    nodes.iter().find_map(root_epoch_from_node)
+}
+
+fn root_epoch_from_node(node: &SpineTreeNode) -> Option<NodeId> {
+    match node {
+        SpineTreeNode::MsgAsLeafNode { .. } => None,
+        SpineTreeNode::SpineTree { meta, .. } => meta.id.0.first().copied().map(NodeId::root_epoch),
+    }
+}
+
+fn project_current_root_epoch_row(cursor: NodeId, rows: &mut Vec<TreeRenderRow>) {
+    let Some(root) = cursor.0.first().copied().map(NodeId::root_epoch) else {
+        return;
+    };
+    if rows.iter().any(|row| row.id == root) {
+        return;
+    }
+    rows.push(TreeRenderRow {
+        id: root,
+        status: NodeStatus::Opened,
+        summary: "root".to_string(),
+        memory_path: None,
+        trajs_path: None,
+    });
+}
+
+fn mark_cursor_statuses(cursor: NodeId, rows: &mut [TreeRenderRow]) {
+    for row in rows {
+        if row.id == cursor {
+            row.status = NodeStatus::Live;
+        } else if row.status == NodeStatus::Live || node_is_ancestor_of(&row.id, &cursor) {
+            row.status = NodeStatus::Opened;
+        }
+    }
+}
+
+fn node_is_ancestor_of(ancestor: &NodeId, descendant: &NodeId) -> bool {
+    ancestor.0.len() < descendant.0.len() && descendant.0.starts_with(ancestor.0.as_slice())
 }
 
 impl TreeRenderRow {
@@ -343,24 +434,6 @@ fn collect_tree_render_rows(
         }
     }
 
-    let open_positions = rows
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, row)| (row.status == NodeStatus::Live).then_some(idx))
-        .collect::<Vec<_>>();
-    let Some((&live_idx, ancestors)) = open_positions.split_last() else {
-        return Err(SpineError::InvalidEvent(
-            "ParseStack tree render has no live cursor".to_string(),
-        ));
-    };
-    for ancestor_idx in ancestors {
-        rows[*ancestor_idx].status = NodeStatus::Opened;
-    }
-    for row in rows.iter_mut().skip(live_idx + 1) {
-        if row.status == NodeStatus::Live {
-            row.status = NodeStatus::Closed;
-        }
-    }
     Ok(())
 }
 

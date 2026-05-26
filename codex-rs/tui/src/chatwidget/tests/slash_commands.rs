@@ -1,5 +1,8 @@
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use codex_app_server_protocol::SpineTreeNode;
+use codex_app_server_protocol::SpineTreeNodeStatus;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -1977,6 +1980,86 @@ async fn slash_rollout_handles_missing_path() {
         rendered.contains("not available"),
         "expected missing rollout path message: {rendered}"
     );
+}
+
+#[tokio::test]
+async fn slash_spinetree_reports_when_snapshot_is_not_available() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::SpineTaskTree, /*enabled*/ true);
+
+    chat.dispatch_command(SlashCommand::Spinetree);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Spine Tree is not available yet."),
+        "expected missing Spine Tree message: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn slash_spinetree_renders_cached_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::SpineTaskTree, /*enabled*/ true);
+    chat.last_spine_tree_snapshot = Some(SpineTreeUpdatedNotification {
+        thread_id: "thread".to_string(),
+        turn_id: "turn".to_string(),
+        snapshot_seq: 7,
+        active_node_id: "2.1".to_string(),
+        nodes: vec![
+            SpineTreeNode {
+                node_id: "1".to_string(),
+                parent_id: None,
+                summary: Some("previous root".to_string()),
+                status: SpineTreeNodeStatus::Compacted,
+            },
+            SpineTreeNode {
+                node_id: "2.1".to_string(),
+                parent_id: None,
+                summary: Some("active scope".to_string()),
+                status: SpineTreeNodeStatus::Live,
+            },
+        ],
+    });
+
+    chat.dispatch_command(SlashCommand::Spinetree);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Spine Tree"), "got {rendered}");
+    assert!(rendered.contains("2.1"), "got {rendered}");
+    assert!(rendered.contains("active scope"), "got {rendered}");
+    assert!(rendered.contains("current"), "got {rendered}");
+}
+
+#[tokio::test]
+async fn slash_spinetree_uses_startup_seeded_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::SpineTaskTree, /*enabled*/ true);
+
+    chat.on_spine_tree_update(SpineTreeUpdatedNotification {
+        thread_id: "thread".to_string(),
+        turn_id: String::new(),
+        snapshot_seq: 7,
+        active_node_id: "2.1".to_string(),
+        nodes: vec![SpineTreeNode {
+            node_id: "2.1".to_string(),
+            parent_id: None,
+            summary: Some("restored scope".to_string()),
+            status: SpineTreeNodeStatus::Live,
+        }],
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "startup seed should not insert an automatic history cell"
+    );
+
+    chat.dispatch_command(SlashCommand::Spinetree);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("2.1"), "got {rendered}");
+    assert!(rendered.contains("restored scope"), "got {rendered}");
 }
 
 #[tokio::test]

@@ -2,6 +2,11 @@ use super::*;
 use crate::spine::CHECKPOINT_VERSION;
 use crate::spine::io::hash_response_items;
 use codex_protocol::models::ContentItem;
+use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
+use codex_protocol::spine_tree::SpineTreeNodeStatus;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 fn rollout_path(dir: &tempfile::TempDir) -> PathBuf {
@@ -161,6 +166,233 @@ fn close_task(
             )),
         )
         .expect("commit close");
+}
+
+fn snapshot_nodes_by_id(snapshot: &SpineTreeUpdateEvent) -> BTreeMap<&str, &SpineTreeNodeSnapshot> {
+    snapshot
+        .nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), node))
+        .collect()
+}
+
+fn assert_snapshot_is_self_contained_forest(snapshot: &SpineTreeUpdateEvent) {
+    let ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for node in &snapshot.nodes {
+        if let Some(parent_id) = node.parent_id.as_deref() {
+            assert!(
+                ids.contains(parent_id),
+                "dangling parent {parent_id} in {snapshot:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn initial_tree_snapshot_projects_root_epoch_with_live_first_child() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    let snapshot = runtime.build_tree_snapshot().expect("snapshot");
+    assert_snapshot_is_self_contained_forest(&snapshot);
+    let nodes = snapshot_nodes_by_id(&snapshot);
+
+    assert_eq!(snapshot.active_node_id, "1.1");
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes["1"].parent_id, None);
+    assert_eq!(nodes["1"].summary.as_deref(), Some("root"));
+    assert_eq!(nodes["1"].status, SpineTreeNodeStatus::Opened);
+    assert_eq!(nodes["1.1"].parent_id.as_deref(), Some("1"));
+    assert_eq!(nodes["1.1"].summary.as_deref(), Some("root"));
+    assert_eq!(nodes["1.1"].status, SpineTreeNodeStatus::Live);
+}
+
+#[test]
+fn nested_tree_snapshot_promotes_only_missing_projection_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    open_task(&mut runtime, &mut raw, "open-child", "child task");
+
+    let snapshot = runtime.build_tree_snapshot().expect("snapshot");
+    assert_snapshot_is_self_contained_forest(&snapshot);
+    let nodes = snapshot_nodes_by_id(&snapshot);
+
+    assert_eq!(snapshot.active_node_id, "1.1.1");
+    assert_eq!(nodes["1"].parent_id, None);
+    assert_eq!(nodes["1"].status, SpineTreeNodeStatus::Opened);
+    assert_eq!(nodes["1.1"].parent_id.as_deref(), Some("1"));
+    assert_eq!(nodes["1.1"].status, SpineTreeNodeStatus::Opened);
+    assert_eq!(nodes["1.1.1"].parent_id.as_deref(), Some("1.1"));
+    assert_eq!(nodes["1.1.1"].summary.as_deref(), Some("child task"));
+    assert_eq!(nodes["1.1.1"].status, SpineTreeNodeStatus::Live);
+}
+
+#[test]
+fn root_compact_tree_snapshot_promotes_new_root_epoch_holder() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "root work");
+    runtime
+        .root_compact("root summary".to_string(), &raw)
+        .expect("compact root");
+
+    let snapshot = runtime.build_tree_snapshot().expect("snapshot");
+    assert_snapshot_is_self_contained_forest(&snapshot);
+    let nodes = snapshot_nodes_by_id(&snapshot);
+
+    assert_eq!(snapshot.active_node_id, "2.1");
+    assert_eq!(nodes["1"].parent_id, None);
+    assert_eq!(nodes["1"].status, SpineTreeNodeStatus::Compacted);
+    assert_eq!(nodes["2"].parent_id, None);
+    assert_eq!(nodes["2"].summary.as_deref(), Some("root"));
+    assert_eq!(nodes["2"].status, SpineTreeNodeStatus::Opened);
+    assert_eq!(nodes["2.1"].parent_id.as_deref(), Some("2"));
+    assert_eq!(nodes["2.1"].summary.as_deref(), Some("root"));
+    assert_eq!(nodes["2.1"].status, SpineTreeNodeStatus::Live);
+}
+
+#[test]
+fn closed_child_tree_snapshot_keeps_visible_parent_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    open_task(&mut runtime, &mut raw, "open-child", "child task");
+    append_msg(&mut runtime, &mut raw, "child work");
+    close_task(&mut runtime, &mut raw, "close-child", "1.1.1");
+
+    let snapshot = runtime.build_tree_snapshot().expect("snapshot");
+    assert_snapshot_is_self_contained_forest(&snapshot);
+    let nodes = snapshot_nodes_by_id(&snapshot);
+
+    assert_eq!(snapshot.active_node_id, "1.1");
+    assert_eq!(nodes["1"].parent_id, None);
+    assert_eq!(nodes["1"].status, SpineTreeNodeStatus::Opened);
+    assert_eq!(nodes["1.1"].parent_id.as_deref(), Some("1"));
+    assert_eq!(nodes["1.1"].status, SpineTreeNodeStatus::Live);
+    assert_eq!(nodes["1.1.1"].parent_id.as_deref(), Some("1.1"));
+    assert_eq!(nodes["1.1.1"].summary.as_deref(), Some("child task"));
+    assert_eq!(nodes["1.1.1"].status, SpineTreeNodeStatus::Closed);
+}
+
+#[test]
+fn root_depth_open_node_can_close_and_next_open_creates_sibling() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "root child work");
+    close_task(&mut runtime, &mut raw, "close-1-1", "1.1");
+
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1"), "{tree}");
+    assert!(tree.contains("[1] Current root"), "{tree}");
+    assert!(tree.contains("[1.1] Done root"), "{tree}");
+
+    let materialized = runtime.materialize_history(&raw).expect("materialize");
+    assert_eq!(materialized.len(), 1);
+    assert!(matches!(
+        &materialized[0],
+        ResponseItem::Message { content, .. }
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }]
+                    if text.contains("Spine Memory 1.1")
+                        && text.contains("real compact body for 1.1")
+            )
+    ));
+
+    let snapshot = runtime.build_tree_snapshot().expect("snapshot");
+    assert_snapshot_is_self_contained_forest(&snapshot);
+    let nodes = snapshot_nodes_by_id(&snapshot);
+    assert_eq!(snapshot.active_node_id, "1");
+    assert_eq!(nodes["1"].status, SpineTreeNodeStatus::Live);
+    assert_eq!(nodes["1.1"].parent_id.as_deref(), Some("1"));
+    assert_eq!(nodes["1.1"].status, SpineTreeNodeStatus::Closed);
+
+    open_task(&mut runtime, &mut raw, "open-1-2", "task 1.2");
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            Symbol::Control(ControlSymbol::Init(_)),
+            Symbol::SpineTreeNodes(_),
+            Symbol::Control(ControlSymbol::Open(open)),
+        ] if open.id == NodeId::root_epoch(1).child(2)
+            && open.summary == "task 1.2"
+    ));
+}
+
+#[test]
+fn checkpoint_after_root_depth_close_records_root_cursor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "root child work");
+    close_task(&mut runtime, &mut raw, "close-1-1", "1.1");
+    let context = runtime.materialize_history(&raw).expect("materialize");
+
+    runtime
+        .checkpoint_before_user_msg(&rollout, runtime.raw_len, &context)
+        .expect("write root cursor checkpoint");
+    let checkpoint = runtime
+        .store
+        .checkpoint_for_test(runtime.raw_len)
+        .expect("read root cursor checkpoint");
+
+    assert_eq!(checkpoint.cursor, "1");
+    assert_eq!(
+        checkpoint.h_ps_hash,
+        hash_response_items(&context).expect("hash root cursor context")
+    );
+    assert!(matches!(
+        checkpoint.parse_stack.symbols.as_slice(),
+        [
+            Symbol::Control(ControlSymbol::Init(_)),
+            Symbol::SpineTreeNodes(nodes),
+        ] if matches!(
+            nodes.as_slice(),
+            [SpineTreeNode::SpineTree { meta, .. }]
+                if meta.id == NodeId::root_epoch(1).child(1)
+        )
+    ));
+}
+
+#[test]
+fn close_at_root_cursor_fails_without_mutating_parse_stack() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "root child work");
+    close_task(&mut runtime, &mut raw, "close-1-1", "1.1");
+    let before = runtime.parse_stack().clone();
+    runtime
+        .stage_close("close-root".to_string(), None)
+        .expect("stage root close");
+    let err = runtime
+        .pending_commit("close-root")
+        .expect_err("root cursor close should fail before compact");
+    assert!(
+        err.to_string().contains("cannot close root epoch cursor 1"),
+        "unexpected root close error: {err}"
+    );
+    assert_eq!(runtime.parse_stack(), &before);
 }
 
 #[test]
@@ -1664,6 +1896,104 @@ fn native_compact_shifts_compact_and_new_root_open() {
         replayed.parse_stack().symbols,
         runtime.parse_stack().symbols
     );
+}
+
+#[test]
+fn root_depth_open_after_native_compact_can_close_and_open_sibling() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "epoch one work");
+    runtime
+        .root_compact("root summary".to_string(), &raw)
+        .expect("compact root");
+    let post_compact_len = runtime
+        .materialize_history(&raw)
+        .expect("materialize")
+        .len();
+
+    append_msg(&mut runtime, &mut raw, "epoch two child work");
+    close_task(&mut runtime, &mut raw, "close-2-1", "2.1");
+
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 2"), "{tree}");
+    assert!(tree.contains("[1] Done root"), "{tree}");
+    assert!(tree.contains("[2] Current root"), "{tree}");
+    assert!(tree.contains("[2.1] Done root"), "{tree}");
+
+    open_task(&mut runtime, &mut raw, "open-2-2", "task 2.2");
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            Symbol::Control(ControlSymbol::Init(_)),
+            Symbol::RootEpoches(root_epochs),
+            Symbol::SpineTreeNodes(_),
+            Symbol::Control(ControlSymbol::Open(open)),
+        ] if root_epochs.len() == 1
+            && open.id == NodeId::root_epoch(2).child(2)
+            && open.index == post_compact_len + 1
+            && open.summary == "task 2.2"
+    ));
+}
+
+#[test]
+fn root_compact_from_root_cursor_after_closing_first_child_opens_next_epoch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "root child work");
+    close_task(&mut runtime, &mut raw, "close-1-1", "1.1");
+    let pre_compact = runtime.materialize_history(&raw).expect("materialize");
+
+    let materialized = runtime
+        .root_compact("root epoch summary after closing 1.1".to_string(), &raw)
+        .expect("compact root cursor");
+    assert_eq!(materialized.len(), 1);
+
+    let events = event_log(&runtime);
+    assert!(matches!(
+        events.as_slice(),
+        [
+            KEvent::Init { .. },
+            KEvent::Open { child: first_child, .. },
+            KEvent::Msg { .. },
+            KEvent::Close { node: closed_node, .. },
+            KEvent::RootCompact {
+                node: compacted_epoch,
+                next_open_index: 1,
+                ..
+            },
+        ] if *first_child == NodeId::root_epoch(1).child(1)
+            && *closed_node == NodeId::root_epoch(1).child(1)
+            && *compacted_epoch == NodeId::root_epoch(1)
+    ));
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            Symbol::Control(ControlSymbol::Init(_)),
+            Symbol::RootEpoches(root_epochs),
+            Symbol::Control(ControlSymbol::Open(next_root)),
+        ] if root_epochs.len() == 1
+            && root_epochs[0].memory.node_id == NodeId::root_epoch(1)
+            && root_epochs[0].memory.source_context_range == (0..pre_compact.len())
+            && next_root.id == NodeId::root_epoch(2).child(1)
+            && next_root.index == materialized.len()
+    ));
+
+    let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
+        .expect("reload spine")
+        .expect("sidecar exists");
+    assert_eq!(
+        replayed.parse_stack().symbols,
+        runtime.parse_stack().symbols
+    );
+    let snapshot = replayed.build_tree_snapshot().expect("snapshot");
+    assert_snapshot_is_self_contained_forest(&snapshot);
+    assert_eq!(snapshot.active_node_id, "2.1");
 }
 
 #[test]
