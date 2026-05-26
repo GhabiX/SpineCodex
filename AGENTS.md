@@ -12,7 +12,7 @@ Commit and push this repo separately, then update the outer submodule pointer
 when needed. Current Spine semantics are defined only by:
 
 ```text
-/data/swe/FramePilot/cachetree/doc/refactor/ckq-design/FormularDef.md
+/data/swe/FramePilot/cachetree/doc/FormalDef.md
 ```
 
 Older Open/Close, mini-spine, SpineJIT, and `taskctx` designs are not

@@ -37,6 +37,13 @@ fn event_log_debug(runtime: &SpineRuntime) -> Vec<String> {
         .collect()
 }
 
+fn current_context_len(runtime: &SpineRuntime, raw: &[Option<ResponseItem>]) -> usize {
+    runtime
+        .materialize_history(raw)
+        .expect("materialize current h(PS)")
+        .len()
+}
+
 fn spine_call(name: &str, call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
@@ -72,14 +79,11 @@ fn open_task(
 ) {
     let request = spine_call(SPINE_TOOL_OPEN, call_id);
     let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    let request_context_index = current_context_len(runtime, raw);
     raw.push(Some(request.clone()));
     runtime.observe_raw_items(1).expect("record open request");
     runtime
-        .observe_context_item(
-            request_ordinal,
-            usize::try_from(request_ordinal).expect("context index fits usize"),
-            &request,
-        )
+        .observe_context_item(request_ordinal, request_context_index, &request)
         .expect("observe open request");
     runtime
         .stage_open(call_id.to_string(), summary.to_string())
@@ -104,14 +108,11 @@ fn open_task(
 fn append_msg(runtime: &mut SpineRuntime, raw: &mut Vec<Option<ResponseItem>>, text: &str) {
     let item = text_item(text);
     let raw_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    let context_index = current_context_len(runtime, raw);
     raw.push(Some(item.clone()));
     runtime.observe_raw_items(1).expect("record msg");
     runtime
-        .observe_context_item(
-            raw_ordinal,
-            usize::try_from(raw_ordinal).expect("context index fits usize"),
-            &item,
-        )
+        .observe_context_item(raw_ordinal, context_index, &item)
         .expect("observe msg");
 }
 
@@ -123,14 +124,11 @@ fn close_task(
 ) {
     let request = spine_call(SPINE_TOOL_CLOSE, call_id);
     let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    let request_context_index = current_context_len(runtime, raw);
     raw.push(Some(request.clone()));
     runtime.observe_raw_items(1).expect("record close request");
     runtime
-        .observe_context_item(
-            request_ordinal,
-            usize::try_from(request_ordinal).expect("context index fits usize"),
-            &request,
-        )
+        .observe_context_item(request_ordinal, request_context_index, &request)
         .expect("observe close request");
     runtime
         .stage_close(call_id.to_string(), None)
@@ -1026,8 +1024,12 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
     close_task(&mut runtime, &mut raw, "close-1-2", "1.2");
     append_msg(&mut runtime, &mut raw, "1.3 work");
     runtime
-        .root_compact("root epoch 1 memory".to_string(), raw.len())
+        .root_compact("root epoch 1 memory".to_string(), &raw)
         .expect("root compact");
+    let post_compact_len = runtime
+        .materialize_history(&raw)
+        .expect("post-compact h(PS)")
+        .len();
     append_msg(&mut runtime, &mut raw, "2.1 work");
 
     assert!(matches!(
@@ -1040,7 +1042,7 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
         ] if root_epochs.len() == 1
             && root_epochs[0].memory.node_id == NodeId::root_epoch(1)
             && next_root.id == NodeId::root_epoch(2).child(1)
-            && next_root.index == raw.len() - 1
+            && next_root.index == post_compact_len
             && matches!(
                 nodes.as_slice(),
                 [
@@ -1052,7 +1054,7 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
                         ..
                     }
                 ] if *raw_ordinal == u64::try_from(raw.len() - 1).expect("ordinal")
-                    && *context_index == raw.len() - 1
+                    && *context_index == post_compact_len
             )
     ));
 
@@ -1149,7 +1151,7 @@ fn fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
         std::fs::read_to_string(child_meta_dir.join("Trajs.md")).expect("child Trajs.md");
     assert!(child_memory_archive.contains("Spine Memory 1.1.1"));
     assert!(child_trajs_archive.contains("raw raw_ordinal=3"));
-    assert!(child_trajs_archive.contains("context_index=3"));
+    assert!(child_trajs_archive.contains("context_index=1"));
     assert!(child_meta_dir.join("Memory.md").exists());
     assert!(child_meta_dir.join("Trajs.md").exists());
 
@@ -1608,6 +1610,10 @@ fn rollback_hole_rejects_suffix_memory_span() {
 fn native_compact_shifts_compact_and_new_root_open() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
+    let raw = vec![
+        Some(text_item("before compact")),
+        Some(text_item("more context")),
+    ];
 
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
     runtime.observe_raw_items(2).expect("record raw");
@@ -1619,7 +1625,7 @@ fn native_compact_shifts_compact_and_new_root_open() {
         .expect("observe second context item");
 
     runtime
-        .root_compact("root summary".to_string(), 1)
+        .root_compact("root summary".to_string(), &raw)
         .expect("compact root");
 
     let events = event_log(&runtime);
@@ -1661,6 +1667,65 @@ fn native_compact_shifts_compact_and_new_root_open() {
 }
 
 #[test]
+fn root_compact_separates_source_context_range_from_next_open_index() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let raw = vec![
+        Some(text_item("root visible item 1")),
+        Some(text_item("root visible item 2")),
+        Some(text_item("root visible item 3")),
+    ];
+
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    runtime.observe_raw_items(raw.len()).expect("record raw");
+    for (index, item) in raw.iter().enumerate() {
+        runtime
+            .observe_context_item(
+                u64::try_from(index).expect("raw ordinal"),
+                index,
+                item.as_ref().expect("raw item"),
+            )
+            .expect("observe context item");
+    }
+
+    let before_len = runtime
+        .materialize_history(&raw)
+        .expect("pre-compact h(PS)")
+        .len();
+    assert_eq!(before_len, 3);
+    let materialized = runtime
+        .root_compact("root compact summary".to_string(), &raw)
+        .expect("compact root");
+    assert_eq!(materialized.len(), 1);
+
+    let events = event_log(&runtime);
+    assert!(matches!(
+        events.as_slice(),
+        [
+            KEvent::Init { .. },
+            KEvent::Open { .. },
+            KEvent::Msg { .. },
+            KEvent::Msg { .. },
+            KEvent::Msg { .. },
+            KEvent::RootCompact {
+                next_open_index: 1,
+                ..
+            },
+        ]
+    ));
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            Symbol::Control(ControlSymbol::Init(_)),
+            Symbol::RootEpoches(root_epochs),
+            Symbol::Control(ControlSymbol::Open(next_root)),
+        ] if root_epochs.len() == 1
+            && root_epochs[0].memory.source_context_range == (0..before_len)
+            && next_root.index == materialized.len()
+    ));
+}
+
+#[test]
 fn native_compact_failure_leaves_parse_stack_unchanged() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -1680,7 +1745,10 @@ fn native_compact_failure_leaves_parse_stack_unchanged() {
         .len();
 
     let err = runtime
-        .root_compact("   \n\t".to_string(), 1)
+        .root_compact(
+            "   \n\t".to_string(),
+            &[Some(text_item("before failed compact"))],
+        )
         .expect_err("empty native compact body must fail closed");
     assert!(
         err.to_string()
@@ -1710,7 +1778,10 @@ fn root_compact_survives_rollback_without_new_raw_items() {
     runtime.observe_raw_items(2).expect("record raw");
     runtime.raw_live = vec![true, false];
     runtime
-        .root_compact("root summary after rollback".to_string(), 1)
+        .root_compact(
+            "root summary after rollback".to_string(),
+            &raw_after_rollback,
+        )
         .expect("compact root");
 
     let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw_after_rollback, &[])

@@ -117,6 +117,10 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                     .spine_tree()
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                session
+                    .emit_spine_tree_snapshot(turn.as_ref())
+                    .await
+                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
                     tree,
                     Some(true),

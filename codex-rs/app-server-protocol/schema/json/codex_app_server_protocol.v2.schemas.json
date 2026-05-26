@@ -11426,6 +11426,26 @@
           "properties": {
             "method": {
               "enum": [
+                "turn/spineTree/updated"
+              ],
+              "title": "Turn/spineTree/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SpineTreeUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/spineTree/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/started"
               ],
               "title": "Item/startedNotificationMethod",
@@ -12798,6 +12818,76 @@
         "desc"
       ],
       "type": "string"
+    },
+    "SpineTreeNode": {
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/SpineTreeNodeStatus"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "nodeId",
+        "status"
+      ],
+      "type": "object"
+    },
+    "SpineTreeNodeStatus": {
+      "enum": [
+        "live",
+        "opened",
+        "closed",
+        "compacted"
+      ],
+      "type": "string"
+    },
+    "SpineTreeUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "activeNodeId": {
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/definitions/SpineTreeNode"
+          },
+          "type": "array"
+        },
+        "snapshotSeq": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "activeNodeId",
+        "nodes",
+        "snapshotSeq",
+        "threadId",
+        "turnId"
+      ],
+      "title": "SpineTreeUpdatedNotification",
+      "type": "object"
     },
     "SubAgentSource": {
       "oneOf": [

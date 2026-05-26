@@ -56,6 +56,12 @@ impl SessionTask for RegularTask {
             collaboration_mode_kind: ctx.collaboration_mode.mode,
         });
         sess.send_event(ctx.as_ref(), event).await;
+        if let Err(err) = sess
+            .emit_initial_spine_tree_snapshot_if_needed(ctx.as_ref())
+            .await
+        {
+            tracing::error!("failed to emit initial Spine tree snapshot: {err}");
+        }
         sess.set_server_reasoning_included(/*included*/ false).await;
         let prewarmed_client_session = match sess
             .consume_startup_prewarm_for_regular_turn(&cancellation_token)

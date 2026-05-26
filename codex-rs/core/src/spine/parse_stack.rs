@@ -17,6 +17,8 @@ use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
+use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
+use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -201,6 +203,23 @@ impl ParseStack {
         Ok(format_tree_rows(rows))
     }
 
+    pub(super) fn tree_snapshot_nodes(&self) -> Result<Vec<SpineTreeNodeSnapshot>, SpineError> {
+        Ok(self
+            .tree_rows()?
+            .into_iter()
+            .map(|row| {
+                let status = row.snapshot_status();
+                let summary = Some(row.summary).filter(|summary| !summary.trim().is_empty());
+                SpineTreeNodeSnapshot {
+                    parent_id: row.id.parent().map(|id| id.as_path()),
+                    node_id: row.id.as_path(),
+                    summary,
+                    status,
+                }
+            })
+            .collect())
+    }
+
     pub(super) fn current_open_meta(&self) -> Result<&TreeMeta, SpineError> {
         self.symbols
             .iter()
@@ -251,6 +270,16 @@ impl ParseStack {
     }
 }
 
+impl From<NodeStatus> for SpineTreeNodeStatus {
+    fn from(value: NodeStatus) -> Self {
+        match value {
+            NodeStatus::Live => Self::Live,
+            NodeStatus::Opened => Self::Opened,
+            NodeStatus::Closed => Self::Closed,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TreeRenderRow {
     id: NodeId,
@@ -258,6 +287,19 @@ struct TreeRenderRow {
     summary: String,
     memory_path: Option<PathBuf>,
     trajs_path: Option<PathBuf>,
+}
+
+impl TreeRenderRow {
+    fn snapshot_status(&self) -> SpineTreeNodeStatus {
+        if self.status == NodeStatus::Closed
+            && self.id.is_root_epoch()
+            && self.memory_path.is_some()
+            && self.trajs_path.is_none()
+        {
+            return SpineTreeNodeStatus::Compacted;
+        }
+        self.status.into()
+    }
 }
 
 fn collect_tree_render_rows(

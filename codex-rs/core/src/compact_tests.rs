@@ -108,7 +108,8 @@ fn remote_root_compact_body_preserves_remote_summary_without_context_prefixes() 
         },
     ];
 
-    let body = crate::compact_remote::remote_root_compact_body(&replacement_history);
+    let body = crate::compact_remote::remote_root_compact_body(&replacement_history)
+        .expect("replacement history should produce root memory");
 
     assert!(body.contains("# Spine Remote Compact Memory"));
     assert!(body.contains("surviving user prompt"));
@@ -130,10 +131,25 @@ fn remote_root_compact_body_rejects_encrypted_only_output() {
         },
     ];
 
-    let body = crate::compact_remote::remote_root_compact_body(&replacement_history);
+    let body = crate::compact_remote::remote_root_compact_body(&replacement_history)
+        .expect("encrypted compact entries are usable remote compact memory");
 
     assert!(body.contains("REMOTE_ENCRYPTED_SUMMARY"));
     assert!(body.contains("REMOTE_CONTEXT_SUMMARY"));
+}
+
+#[test]
+fn remote_root_compact_body_rejects_empty_output() {
+    let replacement_history = vec![ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "stale developer instructions".to_string(),
+        }],
+        phase: None,
+    }];
+
+    assert!(crate::compact_remote::remote_root_compact_body(&replacement_history).is_none());
 }
 
 #[test]
