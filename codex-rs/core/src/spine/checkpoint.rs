@@ -65,7 +65,7 @@ pub(super) fn build_checkpoint(
         token_seq,
         raw_live_hash: hash_raw_live(&raw_live[..raw_ordinal_usize]),
         context_len: context.len(),
-        cursor: parse_stack.current_open_meta()?.id.to_string(),
+        cursor: parse_stack.current_cursor_id()?.to_string(),
         parse_stack: parse_stack.clone(),
         parse_stack_symbols: parse_stack
             .symbols

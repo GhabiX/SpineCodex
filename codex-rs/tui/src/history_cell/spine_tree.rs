@@ -9,13 +9,34 @@ pub(crate) fn new_spine_tree_update(
     turn_id: String,
     snapshot: SpineTreeUpdatedNotification,
 ) -> SpineTreeUpdateCell {
-    SpineTreeUpdateCell { turn_id, snapshot }
+    SpineTreeUpdateCell {
+        turn_id,
+        snapshot,
+        source: SpineTreeUpdateSource::Live,
+    }
+}
+
+pub(crate) fn new_manual_spine_tree_snapshot(
+    snapshot: SpineTreeUpdatedNotification,
+) -> SpineTreeUpdateCell {
+    SpineTreeUpdateCell {
+        turn_id: snapshot.turn_id.clone(),
+        snapshot,
+        source: SpineTreeUpdateSource::Manual,
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct SpineTreeUpdateCell {
     turn_id: String,
     snapshot: SpineTreeUpdatedNotification,
+    source: SpineTreeUpdateSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpineTreeUpdateSource {
+    Live,
+    Manual,
 }
 
 impl SpineTreeUpdateCell {
@@ -25,6 +46,10 @@ impl SpineTreeUpdateCell {
 
     pub(crate) fn snapshot_seq(&self) -> u64 {
         self.snapshot.snapshot_seq
+    }
+
+    pub(crate) fn is_live_update(&self) -> bool {
+        self.source == SpineTreeUpdateSource::Live
     }
 }
 
@@ -193,11 +218,18 @@ mod tests {
     }
 
     fn snapshot(nodes: Vec<SpineTreeNode>) -> SpineTreeUpdatedNotification {
+        snapshot_with_active("2.1", nodes)
+    }
+
+    fn snapshot_with_active(
+        active_node_id: &str,
+        nodes: Vec<SpineTreeNode>,
+    ) -> SpineTreeUpdatedNotification {
         SpineTreeUpdatedNotification {
             thread_id: "thread".to_string(),
             turn_id: "turn".to_string(),
             snapshot_seq: 7,
-            active_node_id: "2.1".to_string(),
+            active_node_id: active_node_id.to_string(),
             nodes,
         }
     }
@@ -259,5 +291,48 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         assert!(rendered.contains("1 old root compacted"));
         assert!(!rendered.contains("1 old root done"));
+    }
+
+    #[test]
+    fn renders_promoted_snapshot_root_without_empty_placeholder() {
+        let cell = new_spine_tree_update(
+            "turn".to_string(),
+            snapshot_with_active(
+                "1.1.1",
+                vec![
+                    node("1.1", None, Some("root"), SpineTreeNodeStatus::Opened),
+                    node(
+                        "1.1.1",
+                        Some("1.1"),
+                        Some("focused task"),
+                        SpineTreeNodeStatus::Live,
+                    ),
+                ],
+            ),
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        assert!(!rendered.contains("(empty)"));
+        assert!(rendered.contains("1.1 root open"));
+        assert!(rendered.contains("1.1.1 focused task current"));
+    }
+
+    #[test]
+    fn renders_active_root_cursor_with_closed_child() {
+        let cell = new_spine_tree_update(
+            "turn".to_string(),
+            snapshot_with_active(
+                "1",
+                vec![
+                    node("1", None, Some("root"), SpineTreeNodeStatus::Live),
+                    node("1.1", Some("1"), Some("root"), SpineTreeNodeStatus::Closed),
+                ],
+            ),
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        assert!(!rendered.contains("(empty)"));
+        assert!(rendered.contains("1 root current"));
+        assert!(rendered.contains("1.1 root done"));
     }
 }

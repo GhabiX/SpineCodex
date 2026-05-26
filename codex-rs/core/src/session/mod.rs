@@ -1209,12 +1209,18 @@ impl Session {
                 if let Err(err) = self.initialize_spine_for_new_session().await {
                     panic!("failed to initialize Spine runtime: {err}");
                 }
+                if let Err(err) = self.seed_spine_tree_snapshot_if_available().await {
+                    tracing::error!("failed to seed Spine tree snapshot: {err}");
+                }
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
+                if let Err(err) = self.seed_spine_tree_snapshot_if_available().await {
+                    tracing::error!("failed to seed Spine tree snapshot: {err}");
+                }
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info.slug.as_str();
@@ -1252,6 +1258,9 @@ impl Session {
             InitialHistory::Forked(rollout_items) => {
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
+                if let Err(err) = self.seed_spine_tree_snapshot_if_available().await {
+                    tracing::error!("failed to seed Spine tree snapshot: {err}");
+                }
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.

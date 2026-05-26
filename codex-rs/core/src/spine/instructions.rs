@@ -17,6 +17,7 @@ To continue with a sibling task, first close the current child. Open the sibling
 There is no production spine.next tool. Treat next-like movement as two explicit steps: close the current child, then open a new sibling from the resumed parent.
 
 Use spine.close after substantial raw history has accumulated or when future work can rely on the runtime-generated memory. Do not treat spine.open/close as end-of-response cleanup.
+Because later turns will see the memory instead of the raw node history, close a node only at a coherent boundary and use the optional close instruction to name facts that must survive compaction.
 At root depth, close a root child to return to the root scope. Calling spine.close on the true root fails.
 Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../memory.md` against that Base, not against the workspace cwd.
 When moving between nodes, rely on the runtime Spine Tree and closed-node memories; inspect sidecar trajs or memory files only when historical details are needed.

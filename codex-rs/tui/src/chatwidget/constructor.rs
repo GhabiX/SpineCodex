@@ -213,6 +213,7 @@ impl ChatWidget {
             status_line_git_summary_lookup_complete: false,
             current_goal_status_indicator: None,
             current_goal_status: None,
+            last_spine_tree_snapshot: None,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_display: None,
@@ -242,6 +243,7 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
+        widget.sync_spine_task_tree_enabled();
         widget.sync_mentions_v2_enabled();
         widget
             .bottom_pane

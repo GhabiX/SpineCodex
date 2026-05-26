@@ -339,13 +339,7 @@ impl SpineRuntime {
 
     pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineError> {
         let nodes = self.parse_stack.tree_snapshot_nodes()?;
-        let active_node_id = nodes
-            .iter()
-            .find(|node| node.status == codex_protocol::spine_tree::SpineTreeNodeStatus::Live)
-            .map(|node| node.node_id.clone())
-            .ok_or_else(|| {
-                SpineError::InvalidEvent("Spine tree snapshot has no live node".to_string())
-            })?;
+        let active_node_id = self.parse_stack.current_cursor_id()?.as_path();
         Ok(SpineTreeUpdateEvent {
             snapshot_seq: self.store.next_event_seq()?,
             active_node_id,
@@ -355,6 +349,26 @@ impl SpineRuntime {
 
     pub(crate) fn current_open_index(&self) -> Result<usize, SpineError> {
         Ok(self.parse_stack.current_open_meta()?.index)
+    }
+
+    fn current_close_open_meta(&self) -> Result<&TreeMeta, SpineError> {
+        let Some(open_meta) = self.parse_stack.current_open_meta_opt() else {
+            let cursor = self.parse_stack.current_cursor_id()?;
+            if cursor.is_root_epoch() {
+                return Err(SpineError::InvalidEvent(format!(
+                    "cannot close root epoch cursor {cursor}"
+                )));
+            }
+            return Err(SpineError::InvalidEvent(
+                "spine.close requires a live open task".to_string(),
+            ));
+        };
+        if open_meta.id.is_root_epoch() {
+            return Err(SpineError::InvalidEvent(
+                "cannot close root epoch".to_string(),
+            ));
+        }
+        Ok(open_meta)
     }
 
     #[cfg(test)]
@@ -601,20 +615,8 @@ impl SpineRuntime {
                 self.store.append_event(&event)?;
             }
             SpineOp::Close => {
-                let open_meta = self.parse_stack.current_open_meta()?.clone();
+                let open_meta = self.current_close_open_meta()?.clone();
                 let node = open_meta.id.clone();
-                if node.is_root_epoch() {
-                    return Err(SpineError::InvalidEvent(
-                        "cannot close root epoch".to_string(),
-                    ));
-                }
-                if node.parent().is_some_and(|parent| parent.is_root_epoch())
-                    && node.0.last() == Some(&1)
-                {
-                    return Err(SpineError::InvalidEvent(
-                        "cannot close root epoch holder".to_string(),
-                    ));
-                }
                 if !self.parse_stack.current_open_has_nodes()? {
                     return Err(SpineError::InvalidEvent(
                         "spine.close requires non-empty live suffix".to_string(),
@@ -692,7 +694,7 @@ impl SpineRuntime {
         Ok(Some(match pending.op {
             SpineOp::Open => SpinePendingCommit::Open,
             SpineOp::Close => {
-                let open_meta = self.parse_stack.current_open_meta()?;
+                let open_meta = self.current_close_open_meta()?;
                 SpinePendingCommit::Close {
                     node: open_meta.id.clone(),
                     suffix_start: open_meta.index,
