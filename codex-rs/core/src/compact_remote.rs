@@ -19,7 +19,6 @@ use crate::hook_runtime::run_pre_compact_hooks;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
-use crate::spine::root_epoch_compact_directive_message;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -34,7 +33,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
-use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
 use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
@@ -173,11 +171,7 @@ async fn run_remote_compact_task_inner_impl(
     // compact endpoint. The checkpoint below records it separately from the next sampling request,
     // whose prompt will repeat current developer/context prefix items.
     let trace_input_history = history.raw_items().to_vec();
-    let mut prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
-    let spine_enabled = sess.spine.is_some();
-    if spine_enabled {
-        prompt_input.push(root_epoch_compact_directive_message());
-    }
+    let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -191,7 +185,7 @@ async fn run_remote_compact_task_inner_impl(
         input: prompt_input,
         tools: tool_router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        tool_choice: if spine_enabled { "none" } else { "auto" }.to_string(),
+        tool_choice: "auto".to_string(),
         base_instructions,
         personality: turn_context.personality,
         output_schema: None,
@@ -247,20 +241,13 @@ async fn run_remote_compact_task_inner_impl(
         input_history: &trace_input_history,
         replacement_history: &new_history,
     });
-    let spine_tree_snapshot = if let Some((spine_history, snapshot)) =
-        install_remote_spine_root_compact(sess.as_ref(), &new_history).await?
-    {
-        new_history = spine_history;
-        Some(snapshot)
-    } else {
-        None
-    };
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
     };
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    let spine_tree_snapshot = sess
+        .replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .await?;
     if let Some(snapshot) = spine_tree_snapshot {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;
@@ -292,20 +279,6 @@ pub(crate) async fn process_compacted_history(
 
     compacted_history.retain(should_keep_compacted_history_item);
     insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
-}
-
-pub(crate) async fn install_remote_spine_root_compact(
-    sess: &Session,
-    replacement_history: &[ResponseItem],
-) -> CodexResult<Option<(Vec<ResponseItem>, SpineTreeUpdateEvent)>> {
-    let body = remote_root_compact_body(replacement_history).ok_or_else(|| {
-        CodexErr::Fatal(
-            "remote compact produced no model-visible Spine root memory body".to_string(),
-        )
-    })?;
-    sess.install_spine_root_compact(body)
-        .await
-        .map_err(|err| CodexErr::Fatal(format!("failed to install Spine root compact: {err}")))
 }
 
 pub(crate) fn remote_root_compact_body(replacement_history: &[ResponseItem]) -> Option<String> {

@@ -124,6 +124,7 @@ use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_rollout_trace::AgentResultTracePayload;
@@ -2548,17 +2549,18 @@ impl Session {
         let appends = self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
-            panic!("failed to initialize Spine runtime: {err}");
-        }
-        if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
-            panic!("failed to observe Spine raw items: {err}");
-        }
-        if !raw_ordinals.is_empty()
-            && let Err(err) = self
-                .observe_spine_context_items(&raw_ordinals, items, &appends)
-                .await
-        {
-            panic!("failed to observe Spine context items: {err}");
+            error!("failed to initialize Spine runtime: {err}");
+        } else {
+            if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
+                error!("failed to observe Spine raw items: {err}");
+            }
+            if !raw_ordinals.is_empty()
+                && let Err(err) = self
+                    .observe_spine_context_items(&raw_ordinals, items, &appends)
+                    .await
+            {
+                error!("failed to observe Spine context items: {err}");
+            }
         }
         self.send_raw_response_items(turn_context, items).await;
     }
@@ -2579,10 +2581,9 @@ impl Session {
         };
         self.persist_rollout_response_items(items).await;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
-            panic!("failed to initialize Spine runtime: {err}");
-        }
-        if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
-            panic!("failed to observe Spine raw items: {err}");
+            error!("failed to initialize Spine runtime: {err}");
+        } else if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
+            error!("failed to observe Spine raw items: {err}");
         }
         self.send_raw_response_items(turn_context, items).await;
     }
@@ -2659,10 +2660,13 @@ impl Session {
 
     pub(crate) async fn replace_compacted_history(
         &self,
-        items: Vec<ResponseItem>,
+        mut items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
-        compacted_item: CompactedItem,
-    ) {
+        mut compacted_item: CompactedItem,
+    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
+        let spine_tree_snapshot = self
+            .install_spine_root_compact_after_native_compact(&mut items, &mut compacted_item)
+            .await?;
         self.replace_history(items, reference_context_item.clone())
             .await;
 
@@ -2673,6 +2677,7 @@ impl Session {
                 .await;
         }
         self.services.model_client.advance_window_generation();
+        Ok(spine_tree_snapshot)
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {

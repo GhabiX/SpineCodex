@@ -11,10 +11,8 @@ use crate::hook_runtime::run_pre_compact_hooks;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
-use crate::session::turn::built_tools;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
-use crate::spine::root_epoch_compact_directive_message;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -41,8 +39,6 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
 use futures::prelude::*;
-use std::collections::HashSet;
-use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use codex_model_provider_info::ModelProviderInfo;
@@ -197,37 +193,15 @@ async fn run_compact_task_inner_impl(
 
     loop {
         // Clone is required because of the loop
-        let mut turn_input = history
+        let turn_input = history
             .clone()
             .for_prompt(&turn_context.model_info.input_modalities);
-        let spine_enabled = sess.spine.is_some();
-        if spine_enabled {
-            turn_input.push(root_epoch_compact_directive_message());
-        }
         let turn_input_len = turn_input.len();
-        let tool_router = if spine_enabled {
-            Some(
-                built_tools(
-                    sess.as_ref(),
-                    turn_context.as_ref(),
-                    &turn_input,
-                    &HashSet::new(),
-                    /*skills_outcome*/ None,
-                    &CancellationToken::new(),
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
         let prompt = Prompt {
             input: turn_input,
-            tools: tool_router
-                .as_ref()
-                .map(|router| router.model_visible_specs())
-                .unwrap_or_default(),
+            tools: Vec::new(),
             parallel_tool_calls: false,
-            tool_choice: if spine_enabled { "none" } else { "auto" }.to_string(),
+            tool_choice: "auto".to_string(),
             base_instructions: sess.get_base_instructions().await,
             personality: turn_context.personality,
             ..Default::default()
@@ -305,22 +279,13 @@ async fn run_compact_task_inner_impl(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
-    let spine_compact = sess
-        .install_spine_root_compact(summary_text.clone())
-        .await
-        .map_err(|err| CodexErr::Fatal(format!("failed to install Spine root compact: {err}")))?;
-    let spine_tree_snapshot = if let Some((spine_history, snapshot)) = spine_compact {
-        new_history = spine_history;
-        Some(snapshot)
-    } else {
-        None
-    };
     let compacted_item = CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
     };
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    let spine_tree_snapshot = sess
+        .replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .await?;
     if let Some(snapshot) = spine_tree_snapshot {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;
