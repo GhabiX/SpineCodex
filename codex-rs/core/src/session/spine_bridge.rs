@@ -449,6 +449,49 @@ impl Session {
             return Ok(Some((materialized, snapshot)));
         }
     }
+
+    pub(crate) async fn install_spine_root_compact_after_native_compact(
+        &self,
+        items: &mut Vec<ResponseItem>,
+        compacted_item: &mut CompactedItem,
+    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(None);
+        };
+        if spine_slot.lock().await.runtime().is_none() {
+            return Ok(None);
+        }
+        let body = spine_root_compact_body(items, compacted_item).ok_or_else(|| {
+            CodexErr::Fatal(
+                "native compact produced no model-visible Spine root memory body".to_string(),
+            )
+        })?;
+        let Some((spine_history, snapshot)) =
+            self.install_spine_root_compact(body).await.map_err(|err| {
+                CodexErr::Fatal(format!("failed to install Spine root compact: {err}"))
+            })?
+        else {
+            return Ok(None);
+        };
+        *items = spine_history;
+        compacted_item.replacement_history = Some(items.clone());
+        Ok(Some(snapshot))
+    }
+}
+
+fn spine_root_compact_body(
+    replacement_history: &[ResponseItem],
+    compacted_item: &CompactedItem,
+) -> Option<String> {
+    let message = compacted_item.message.trim();
+    if !message.is_empty() {
+        return Some(compacted_item.message.clone());
+    }
+    compacted_item
+        .replacement_history
+        .as_deref()
+        .and_then(crate::compact_remote::remote_root_compact_body)
+        .or_else(|| crate::compact_remote::remote_root_compact_body(replacement_history))
 }
 
 pub(super) fn assign_spine_raw_ordinals(

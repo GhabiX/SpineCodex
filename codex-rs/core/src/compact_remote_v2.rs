@@ -9,7 +9,6 @@ use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact_remote::build_compact_request_log_data;
-use crate::compact_remote::install_remote_spine_root_compact;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
@@ -20,7 +19,6 @@ use crate::hook_runtime::run_pre_compact_hooks;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
-use crate::spine::root_epoch_compact_directive_message;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -178,11 +176,7 @@ async fn run_remote_compact_task_inner_impl(
     }
 
     let trace_input_history = history.raw_items().to_vec();
-    let mut prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
-    let spine_enabled = sess.spine.is_some();
-    if spine_enabled {
-        prompt_input.push(root_epoch_compact_directive_message());
-    }
+    let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -198,7 +192,7 @@ async fn run_remote_compact_task_inner_impl(
         input,
         tools: tool_router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        tool_choice: if spine_enabled { "none" } else { "auto" }.to_string(),
+        tool_choice: "auto".to_string(),
         base_instructions,
         personality: turn_context.personality,
         output_schema: None,
@@ -237,7 +231,7 @@ async fn run_remote_compact_task_inner_impl(
     );
     let (compaction_output, response_id) = compaction_output_result?;
     let compacted_history = build_v2_compacted_history(&prompt_input, compaction_output);
-    let mut new_history = process_compacted_history(
+    let new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
         compacted_history,
@@ -253,20 +247,13 @@ async fn run_remote_compact_task_inner_impl(
         input_history: &trace_input_history,
         replacement_history: &new_history,
     });
-    let spine_tree_snapshot = if let Some((spine_history, snapshot)) =
-        install_remote_spine_root_compact(sess.as_ref(), &new_history).await?
-    {
-        new_history = spine_history;
-        Some(snapshot)
-    } else {
-        None
-    };
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
     };
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    let spine_tree_snapshot = sess
+        .replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .await?;
     if let Some(snapshot) = spine_tree_snapshot {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;

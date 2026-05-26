@@ -8635,26 +8635,26 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
     let native_compact_request = &responses_mock.requests()[1];
     assert_eq!(
         native_compact_request.body_json()["tool_choice"].as_str(),
-        Some("none"),
-        "Spine native compact should preserve tool schemas without allowing tool calls"
+        Some("auto"),
+        "Spine must not change native compact tool choice before the request"
     );
     assert!(
-        !native_compact_request.body_json()["tools"]
+        native_compact_request.body_json()["tools"]
             .as_array()
             .expect("tools should be an array")
             .is_empty(),
-        "Spine native compact should expose the same tool namespace facts as a normal turn"
+        "local native compact should keep its base empty tool envelope"
     );
     assert!(
-        native_compact_request.body_contains_text(
+        !native_compact_request.body_contains_text(
             "You are compacting a Spine root epoch after native context compaction"
         ),
-        "Spine native compact must carry root-epoch memory semantics"
+        "Spine root-epoch semantics are installed after native compact succeeds"
     );
     assert!(
-        native_compact_request
+        !native_compact_request
             .body_contains_text("successful `spine.open`, `spine.close`, and `spine.tree` calls"),
-        "Spine native compact must tell the model to preserve actual Spine control facts"
+        "Spine must not inject prompt wording into native compact requests"
     );
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");

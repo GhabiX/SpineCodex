@@ -11,8 +11,11 @@ use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SpineCloseCompact;
 use crate::spine::SpineError;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::util::backoff;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
@@ -110,9 +113,7 @@ impl Session {
             personality: turn_context.personality,
             ..Default::default()
         };
-        let output = self
-            .spine_close_summary_items(turn_context, &prompt)
-            .await?;
+        let output = self.spine_close_summary_items(turn_context, prompt).await?;
         let body = spine_close_compact_body(&node_id, &output)?;
         Ok(SpineCloseCompact {
             body,
@@ -123,10 +124,65 @@ impl Session {
     async fn spine_close_summary_items(
         &self,
         turn_context: &TurnContext,
-        prompt: &Prompt,
+        mut prompt: Prompt,
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         let client_session = self.services.model_client.new_session();
+        let max_retries = turn_context.provider.info().stream_max_retries();
+        let mut retries = 0;
+
+        loop {
+            match self
+                .spine_close_summary_items_once(turn_context, &client_session, &prompt)
+                .await
+            {
+                Ok(output) => return Ok(output),
+                Err(CodexErr::Interrupted) => {
+                    return Err(SpineError::InvalidEvent(
+                        "spine.close compact interrupted".to_string(),
+                    ));
+                }
+                Err(e @ CodexErr::ContextWindowExceeded) => {
+                    if prompt.input.len() > 1 {
+                        prompt.input.remove(0);
+                        retries = 0;
+                        continue;
+                    }
+                    self.set_total_tokens_full(turn_context).await;
+                    self.send_event(turn_context, EventMsg::Error(e.to_error_event(None)))
+                        .await;
+                    return Err(SpineError::InvalidEvent(format!(
+                        "spine.close compact failed: {e}"
+                    )));
+                }
+                Err(e) => {
+                    if retries < max_retries {
+                        retries += 1;
+                        self.notify_stream_error(
+                            turn_context,
+                            format!("Reconnecting... {retries}/{max_retries}"),
+                            e,
+                        )
+                        .await;
+                        tokio::time::sleep(backoff(retries)).await;
+                        continue;
+                    }
+                    self.send_event(turn_context, EventMsg::Error(e.to_error_event(None)))
+                        .await;
+                    return Err(SpineError::InvalidEvent(format!(
+                        "spine.close compact failed: {e}"
+                    )));
+                }
+            }
+        }
+    }
+
+    async fn spine_close_summary_items_once(
+        &self,
+        turn_context: &TurnContext,
+        client_session: &crate::client::ModelClientSession,
+        prompt: &Prompt,
+    ) -> Result<Vec<ResponseItem>, CodexErr> {
+        let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         let mut stream = client_session
             .stream_responses_api(
                 prompt,
@@ -138,21 +194,16 @@ impl Session {
                 turn_metadata_header.as_deref(),
                 &InferenceTraceContext::disabled(),
             )
-            .await
-            .map_err(|err| {
-                SpineError::InvalidEvent(format!("spine.close compact failed: {err}"))
-            })?;
+            .await?;
 
         let mut output = Vec::new();
         loop {
             let Some(event) = stream.next().await else {
-                return Err(SpineError::InvalidEvent(
+                return Err(CodexErr::Fatal(
                     "spine.close compact stream closed before response.completed".to_string(),
                 ));
             };
-            match event.map_err(|err| {
-                SpineError::InvalidEvent(format!("spine.close compact failed: {err}"))
-            })? {
+            match event? {
                 ResponseEvent::OutputItemDone(item) => {
                     output.push(item);
                 }
@@ -176,16 +227,22 @@ impl Session {
 fn spine_close_compact_instruction_text(node_id: &str, instruction: Option<&str>) -> String {
     let mut text = format!(
         "---------- Spine Compact Directive ----------\n\n\
-You are writing runtime Spine memory for a closed task node. Write a Markdown memory, not a conversation reply.\n\
-This memory will replace the raw transcript for Spine node {node_id} in future context.\n\n\
-Summarize only this node's suffix as a compact continuity record for its parent scope:\n\
-- Scope: the user's question, intent, and what this node was trying to resolve.\n\
-- Current State: what is now known, decided, changed, or verified.\n\
-- Evidence: important files, functions, commands, tests, results, ids, and failures.\n\
-- Carry Forward: the user's current intent, facts the parent or later sibling needs, and the concrete direction for continuing the work if this task should keep moving after close.\n\
-- Open Questions: unresolved decisions, blockers, or user-facing conclusions that still matter.\n\n\
+Write a compact continuation memory for Spine node {node_id}. Write a Markdown memory, not a conversation reply.\n\
+This memory will replace this node's raw trajs in future context.\n\n\
+The memory should be detailed enough for the agent to continue naturally after this node's raw trajs are replaced by memory, and to trust the compressed history without replaying the full raw trace segment. Use the sections as guide rails: write concise, concrete prose, and include details only when they help preserve the agent's ability to continue correctly.\n\n\
+Use four sections:\n\n\
+Motivation:\n\
+Explain why this node existed, what the user was trying to accomplish, what constraints or authorization boundaries mattered, and what problem context is needed to understand the node.\n\n\
+Judgment:\n\
+Record the conclusions, decisions, accepted plan, or current technical understanding produced by this node. Include the main alternatives rejected only when they matter for future reasoning.\n\n\
+Evidence:\n\
+Preserve decisive facts that support the judgment or are needed to continue: important file paths, code locations, changed artifacts, key commands with outcomes, failed commands with reasons, review or user approval, task/worklog paths, and unresolved risks. Keep command output to the meaningful result, not full logs.\n\n\
+Continuation:\n\
+Explain how the parent conversation should naturally proceed from this memory. State whether the parent work should continue, wait for the user, report status, or treat later questions as review of completed work. Do not imply the overall user goal is complete unless the raw trace clearly establishes that.\n\n\
+Hard requirement: preserve exact critical identifiers, sentinel strings, file paths, commands, and test names from the suffix and from the optional close instruction. If the instruction says to preserve a value exactly, copy that value verbatim into the memory.\n\n\
+Lines containing `_CRITICAL_ID=`, `_FILE=`, sentinel values, or source paths are mandatory evidence and must appear in the memory. User-facing final-answer markers such as `TEST_WITH_LLM_*` are evidence only; never let such a marker be the whole memory.\n\n\
 Use prefix context only to interpret names and constraints. Use the optional close instruction as a hint about what to preserve.\n\
-If the folded node completed its user-facing work, make the memory read as completed history. If the task should continue after this node closes, state the user's current intent and continuation direction as carry-forward context rather than a generic instruction."
+Do not write a chronological report. Do not include routine progress updates, tool-call noise, or implementation minutiae unless they are needed as evidence. The goal is to preserve continuation behavior after replacing raw trajs with memory, not to archive every event."
     );
     if let Some(instruction) = instruction
         .map(str::trim)
