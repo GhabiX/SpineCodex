@@ -387,7 +387,8 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
-    let mut spine_control_overlay = SpineControlOverlay::default();
+    let spine_task_tree_enabled = sess.features.enabled(Feature::SpineTaskTree);
+    let mut spine_control_overlay = SpineControlOverlay::new(spine_task_tree_enabled);
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -1285,15 +1286,32 @@ struct SamplingRequestResult {
 
 #[derive(Debug, Default)]
 struct SpineControlOverlay {
+    enabled: bool,
     items: Vec<ResponseItem>,
 }
 
 impl SpineControlOverlay {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            items: Vec::new(),
+        }
+    }
+
     fn push_request(&mut self, item: ResponseItem) {
+        // FormalDef 3.1.4.5: this is a turn-local protocol closure overlay for
+        // Spine tool request/output pairs. It is not ContextManager history,
+        // sidecar state, or h(PS), and feature-off must be base Codex.
+        if !self.enabled {
+            return;
+        }
         self.items.push(item);
     }
 
     fn push_output_if_matching(&mut self, item: &ResponseItem) {
+        if !self.enabled {
+            return;
+        }
         if let ResponseItem::FunctionCallOutput { call_id, .. } = item
             && self.items.iter().any(|item| {
                 matches!(
@@ -1310,6 +1328,9 @@ impl SpineControlOverlay {
     }
 
     fn take_for_next_prompt(&mut self) -> Vec<ResponseItem> {
+        if !self.enabled {
+            return Vec::new();
+        }
         std::mem::take(&mut self.items)
     }
 }
@@ -1962,7 +1983,8 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut spine_control_overlay = SpineControlOverlay::default();
+    let mut spine_control_overlay =
+        SpineControlOverlay::new(sess.features.enabled(Feature::SpineTaskTree));
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
         String,
@@ -2116,7 +2138,9 @@ async fn try_run_sampling_request(
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
-                        spine_control_overlay: SpineControlOverlay::default(),
+                        spine_control_overlay: SpineControlOverlay::new(
+                            sess.features.enabled(Feature::SpineTaskTree),
+                        ),
                     });
                 }
             }
@@ -2250,7 +2274,9 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
-                    spine_control_overlay: SpineControlOverlay::default(),
+                    spine_control_overlay: SpineControlOverlay::new(
+                        sess.features.enabled(Feature::SpineTaskTree),
+                    ),
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {

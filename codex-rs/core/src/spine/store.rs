@@ -107,6 +107,11 @@ impl SpineStore {
         self.root.join(TREE_FILE)
     }
 
+    #[cfg(test)]
+    pub(crate) fn tree_path_for_test(&self) -> PathBuf {
+        self.tree_path()
+    }
+
     pub(super) fn mem_path(&self) -> PathBuf {
         self.root.join(MEM_FILE)
     }

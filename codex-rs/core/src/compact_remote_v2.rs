@@ -10,6 +10,7 @@ use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
+use crate::compact_remote::native_compact_tools;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
 use crate::hook_runtime::PostCompactHookOutcome;
@@ -190,7 +191,7 @@ async fn run_remote_compact_task_inner_impl(
     input.push(ResponseItem::CompactionTrigger);
     let prompt = Prompt {
         input,
-        tools: tool_router.model_visible_specs(),
+        tools: native_compact_tools(tool_router.model_visible_specs()),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         tool_choice: "auto".to_string(),
         base_instructions,

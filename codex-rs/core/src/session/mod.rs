@@ -2559,9 +2559,13 @@ impl Session {
         self.persist_rollout_response_items(items).await;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
             error!("failed to initialize Spine runtime: {err}");
+            self.invalidate_spine_runtime(format!("failed to initialize Spine runtime: {err}"))
+                .await;
         } else {
             if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
                 error!("failed to observe Spine raw items: {err}");
+                self.invalidate_spine_runtime(format!("failed to observe Spine raw items: {err}"))
+                    .await;
             }
             if !raw_ordinals.is_empty()
                 && let Err(err) = self
@@ -2569,6 +2573,10 @@ impl Session {
                     .await
             {
                 error!("failed to observe Spine context items: {err}");
+                self.invalidate_spine_runtime(format!(
+                    "failed to observe Spine context items: {err}"
+                ))
+                .await;
             }
         }
         self.send_raw_response_items(turn_context, items).await;
@@ -2591,8 +2599,12 @@ impl Session {
         self.persist_rollout_response_items(items).await;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
             error!("failed to initialize Spine runtime: {err}");
+            self.invalidate_spine_runtime(format!("failed to initialize Spine runtime: {err}"))
+                .await;
         } else if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
             error!("failed to observe Spine raw items: {err}");
+            self.invalidate_spine_runtime(format!("failed to observe Spine raw items: {err}"))
+                .await;
         }
         self.send_raw_response_items(turn_context, items).await;
     }

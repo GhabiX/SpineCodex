@@ -19,6 +19,7 @@ use crate::hook_runtime::run_pre_compact_hooks;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
+use crate::spine::SPINE_NAMESPACE;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -34,6 +35,7 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
+use codex_tools::ToolSpec;
 use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -183,7 +185,7 @@ async fn run_remote_compact_task_inner_impl(
     .await?;
     let prompt = Prompt {
         input: prompt_input,
-        tools: tool_router.model_visible_specs(),
+        tools: native_compact_tools(tool_router.model_visible_specs()),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         tool_choice: "auto".to_string(),
         base_instructions,
@@ -257,6 +259,13 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
+}
+
+pub(crate) fn native_compact_tools(tools: Vec<ToolSpec>) -> Vec<ToolSpec> {
+    tools
+        .into_iter()
+        .filter(|tool| !matches!(tool, ToolSpec::Namespace(namespace) if namespace.name == SPINE_NAMESPACE))
+        .collect()
 }
 
 pub(crate) async fn process_compacted_history(
