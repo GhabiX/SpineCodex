@@ -7736,15 +7736,15 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     assert_eq!(
         compact_request.body_json()["tool_choice"].as_str(),
-        Some("none"),
-        "spine.close compact should preserve tool schema shape without allowing tool calls"
+        Some("auto"),
+        "spine.close compact should use the normal Responses request envelope"
     );
     assert!(
-        !compact_request.body_json()["tools"]
+        compact_request.body_json()["tools"]
             .as_array()
             .expect("tools should be an array")
             .is_empty(),
-        "spine.close compact request should preserve normal turn tool schema shape"
+        "spine.close compact is an internal compact request and should not expose model-visible tools"
     );
     assert!(
         compact_request.body_json()["instructions"]

@@ -199,9 +199,6 @@ async fn run_compact_task_inner_impl(
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,
-            tools: Vec::new(),
-            parallel_tool_calls: false,
-            tool_choice: "auto".to_string(),
             base_instructions: sess.get_base_instructions().await,
             personality: turn_context.personality,
             ..Default::default()
