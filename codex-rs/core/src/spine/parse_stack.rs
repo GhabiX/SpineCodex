@@ -199,7 +199,15 @@ impl ParseStack {
 
     pub(super) fn render_tree(&self) -> Result<String, SpineError> {
         let rows = self.tree_rows()?;
-        Ok(format_tree_rows(rows))
+        Ok(format_tree_rows(rows, None))
+    }
+
+    pub(super) fn render_tree_with_current_annotation(
+        &self,
+        current_annotation: Option<&str>,
+    ) -> Result<String, SpineError> {
+        let rows = self.tree_rows()?;
+        Ok(format_tree_rows(rows, current_annotation))
     }
 
     pub(super) fn tree_snapshot_nodes(&self) -> Result<Vec<SpineTreeNodeSnapshot>, SpineError> {
@@ -487,7 +495,7 @@ fn spine_tree_node_msg_leaf_count(node: &SpineTreeNode) -> usize {
     }
 }
 
-fn format_tree_rows(rows: Vec<TreeRenderRow>) -> String {
+fn format_tree_rows(rows: Vec<TreeRenderRow>, current_annotation: Option<&str>) -> String {
     let rows = rows
         .into_iter()
         .map(|row| (row.id.clone(), row))
@@ -556,13 +564,23 @@ fn format_tree_rows(rows: Vec<TreeRenderRow>) -> String {
         let summary = visible_summary(&row)
             .map(|summary| format!(" {summary}"))
             .unwrap_or_default();
+        let annotation = if row.status == NodeStatus::Live {
+            current_annotation
+                .map(str::trim)
+                .filter(|annotation| !annotation.is_empty())
+                .map(|annotation| format!(" {annotation}"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         lines.push(format!(
-            "{}- [{}] {}{}{}",
+            "{}- [{}] {}{}{}{}",
             "  ".repeat(id.0.len().saturating_sub(1)),
             id,
             marker,
             summary,
-            detail
+            detail,
+            annotation
         ));
     }
     lines.join("\n")

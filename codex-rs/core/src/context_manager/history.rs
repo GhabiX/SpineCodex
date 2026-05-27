@@ -144,6 +144,21 @@ impl ContextManager {
         &self.items
     }
 
+    /// Estimate the token footprint of a suffix in the current materialized
+    /// working history.
+    pub(crate) fn estimate_suffix_token_count(&self, start: usize) -> Result<i64, String> {
+        if start > self.items.len() {
+            return Err(format!(
+                "suffix start {start} exceeds history length {}",
+                self.items.len()
+            ));
+        }
+        Ok(self.items[start..]
+            .iter()
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add))
+    }
+
     pub(crate) fn history_version(&self) -> u64 {
         self.history_version
     }

@@ -9307,8 +9307,273 @@ async fn spine_new_session_initializes_sidecar_before_tree() {
 
     let tree_from_tool = session.spine_tree().await.expect("tree");
     let events_after = store.event_count_for_test().expect("events after");
-    assert_eq!(tree_from_tool, tree_before);
+    assert!(
+        tree_from_tool.starts_with(&tree_before),
+        "tool tree should preserve pure runtime tree prefix\nbefore:\n{tree_before}\nafter:\n{tree_from_tool}"
+    );
     assert_eq!(events_after, events_before);
+}
+
+#[tokio::test]
+async fn spine_tree_tool_appends_context_pressure_from_last_usage() {
+    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+    session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize spine");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                total_tokens: 102_000,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                total_tokens: 61_200,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(258_000),
+        }));
+    }
+
+    let tree = session.spine_tree().await.expect("tree");
+    assert!(tree.contains("Context window:"), "{tree}");
+    assert!(tree.contains("80% left"), "{tree}");
+    assert!(tree.contains("61.2K used / 258K"), "{tree}");
+    assert!(
+        !tree.contains("102K"),
+        "context pressure must not use cumulative total token usage: {tree}"
+    );
+}
+
+#[tokio::test]
+async fn spine_tree_tool_omits_context_pressure_when_window_unknown() {
+    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+    session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize spine");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                total_tokens: 102_000,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                total_tokens: 61_200,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+
+    let tree = session.spine_tree().await.expect("tree");
+    assert!(!tree.contains("Context window:"), "{tree}");
+}
+
+#[tokio::test]
+async fn spine_tree_tool_node_context_counts_materialized_memory() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_summary_sse("inner-summary", "inner compact summary"),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let outer_open_request = spine_call(SPINE_TOOL_OPEN, "outer-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_open_request))
+        .await;
+    session
+        .stage_spine_open("outer-open".to_string(), "outer".to_string())
+        .await
+        .expect("stage outer open");
+    let outer_open_output = function_output("outer-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &outer_open_output)
+        .await
+        .expect("commit outer open");
+
+    let outer_setup = user_message("outer setup");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_setup))
+        .await;
+
+    let inner_open_request = spine_call(SPINE_TOOL_OPEN, "inner-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_open_request))
+        .await;
+    session
+        .stage_spine_open("inner-open".to_string(), "inner".to_string())
+        .await
+        .expect("stage inner open");
+    let inner_open_output = function_output("inner-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &inner_open_output)
+        .await
+        .expect("commit inner open");
+
+    let raw_marker = "INNER_RAW_TRAJ_SHOULD_NOT_BE_COUNTED_BY_PARENT_NODE_CONTEXT";
+    let inner_raw = assistant_message(&format!("{raw_marker} {}", "x".repeat(80_000)));
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_raw))
+        .await;
+
+    let inner_close_request = spine_call(SPINE_TOOL_CLOSE, "inner-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_close_request))
+        .await;
+    session
+        .stage_spine_close("inner-close".to_string(), None)
+        .await
+        .expect("stage inner close");
+    let inner_close_output = function_output("inner-close");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &inner_close_output)
+        .await
+        .expect("commit inner close");
+    session
+        .record_conversation_items_raw_only(
+            &turn_context,
+            std::slice::from_ref(&inner_close_output),
+        )
+        .await;
+
+    let after_inner = user_message("after inner in outer suffix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&after_inner))
+        .await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    assert!(compact_mock.single_request().body_contains_text(raw_marker));
+
+    let history = session.clone_history().await;
+    let history_json = serde_json::to_string(history.raw_items()).expect("history json");
+    assert!(
+        history_json.contains("inner compact summary")
+            && history_json.contains("after inner in outer suffix"),
+        "{history_json}"
+    );
+    assert!(
+        !history_json.contains(raw_marker),
+        "materialized history must contain child memory, not child raw trajs"
+    );
+    let open_index = {
+        let spine = session.spine.as_ref().expect("spine enabled");
+        let guard = spine.lock().await;
+        guard
+            .runtime()
+            .expect("runtime exists")
+            .current_open_index()
+            .expect("current open index")
+    };
+    let expected_tokens = history
+        .estimate_suffix_token_count(open_index)
+        .expect("suffix estimate");
+    assert!(
+        expected_tokens < 5_000,
+        "parent node context should be the materialized suffix with child memory, not the 80k raw child traj: {expected_tokens}"
+    );
+    let expected_annotation = format!(
+        "(~{} node context)",
+        codex_protocol::num_format::format_si_suffix(expected_tokens)
+    );
+    let tree = session.spine_tree().await.expect("tree");
+    assert!(tree.contains("[1.1.1] Current outer"), "{tree}");
+    assert!(tree.contains(&expected_annotation), "{tree}");
+}
+
+#[tokio::test]
+async fn spine_tree_tool_fails_fast_when_current_open_index_exceeds_history_len() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let prefix = user_message("prefix before invalid range open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await;
+    session
+        .stage_spine_open("open".to_string(), "invalid range".to_string())
+        .await
+        .expect("stage open");
+    let open_output = function_output("open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await;
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    session.replace_history(Vec::new(), None).await;
+
+    let err = session
+        .spine_tree()
+        .await
+        .expect_err("invalid current-open range should fail fast");
+    assert!(
+        err.to_string().contains("suffix start")
+            && err.to_string().contains("exceeds history length"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -9372,6 +9637,12 @@ async fn spine_sidecar_write_failure_invalidates_runtime_and_resume_fails_closed
         err.to_string().contains("missing token coverage"),
         "unexpected resume error: {err}"
     );
+    let mut tree_permissions = std::fs::metadata(&broken_tree_path)
+        .expect("tree metadata")
+        .permissions();
+    tree_permissions.set_readonly(false);
+    std::fs::set_permissions(&broken_tree_path, tree_permissions)
+        .expect("restore tree ledger permissions");
 }
 
 #[tokio::test]

@@ -9,6 +9,11 @@ Spine tools are task-boundary controls:
 - spine.close(instruction?): finish the current non-root task node, compact its raw history into memory, and resume its parent. The optional instruction only guides what the compact memory should preserve.
 
 Default to staying in the current live node while it remains focused. Use update_plan as the ordinary short-lived checklist for the current live work; it does not create, finish, close, compact, or move Spine nodes.
+Spine context follows the current cursor: the current path remains visible, closed left siblings appear as memory, and the current live node keeps raw history. Use that shape when choosing boundaries: keep cross-node intent and decisions in the parent, keep local work inside the child, and use sibling nodes for peer phases that should continue from prior phase memory.
+Typical context cases:
+- Focused investigation: when the parent needs a conclusion but the work will create many file reads, commands, or local evidence, open a child. State in the parent why the investigation matters; keep the raw trail in the child so it closes into memory.
+- Peer phase handoff: when discovery, implementation, or verification finishes with a judgment and evidence the next peer phase should rely on, close the current child and resume the parent before opening the next sibling. The sibling sees the completed phase as memory, not raw history.
+- Continuation boundary: when a node has enough judgment, evidence, and next-step context for later work to continue from memory, close it and resume the parent to continue, report, ask, or choose the next boundary.
 Move Spine only at coherent task boundaries. Do not call spine.open because you are continuing the same investigation, reading another file, running another command, updating a checklist, answering a short question, or starting a new conversation turn.
 Do not create one node per shell command, checklist item, short reply, observation, or turn. Keep simple tasks in one node.
 Before starting a genuine nested subproblem that needs its own compactable context, call spine.open(summary), then use update_plan inside that child if a local checklist is useful.
