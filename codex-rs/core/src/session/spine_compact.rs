@@ -124,6 +124,10 @@ impl Session {
                 }
                 Err(e @ CodexErr::ContextWindowExceeded) => {
                     if prompt.input.len() > 1 {
+                        // Keep the close path moving under window pressure. This is a
+                        // last-resort recovery path: trim the oldest item first so the
+                        // live suffix and compact directive stay intact, even if some
+                        // prefix reuse has to be sacrificed.
                         prompt.input.remove(0);
                         retries = 0;
                         continue;
@@ -205,6 +209,12 @@ impl Session {
     }
 }
 
+/// Builds the system directive that turns a closed Spine node into durable memory.
+///
+/// The close pass is a handoff artifact, not a conversation reply. The directive
+/// therefore asks for readable Markdown and calls out exact identifiers, file
+/// paths, sentinels, and test names so later turns and review can reconnect the
+/// compacted memory to the archived suffix without replaying the raw trace.
 fn spine_close_compact_instruction_text(node_id: &str, instruction: Option<&str>) -> String {
     let mut text = format!(
         "---------- Spine Compact Directive ----------\n\n\
@@ -277,6 +287,11 @@ fn is_current_spine_close_carrier(item: &ResponseItem, close_call_id: &str) -> b
     )
 }
 
+/// Extracts the stored memory body from the compact response.
+///
+/// Only readable assistant text is persisted because the resulting memory must be
+/// inspectable in later turns and survive as Markdown. Tool calls or encrypted-only
+/// output are rejected instead of being silently folded into the archive.
 fn spine_close_compact_body(node_id: &str, output: &[ResponseItem]) -> Result<String, SpineError> {
     if let Some(item) = output.iter().find(|item| {
         matches!(

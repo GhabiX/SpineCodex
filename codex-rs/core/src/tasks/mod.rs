@@ -475,13 +475,10 @@ impl Session {
 
         {
             let mut active_turn = self.active_turn.lock().await;
-            match active_turn.as_ref() {
-                Some(active_turn) if !active_turn.tasks.is_empty() => return,
-                Some(_) => {}
-                None => {
-                    *active_turn = Some(ActiveTurn::default());
-                }
+            if active_turn.is_some() {
+                return;
             }
+            *active_turn = Some(ActiveTurn::default());
         }
 
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;

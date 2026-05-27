@@ -4,6 +4,7 @@ use crate::spine::archive::archive_task_tree;
 use crate::spine::archive::memory_ref;
 use crate::spine::archive::next_root_open_symbol;
 use crate::spine::archive::tree_meta;
+use crate::spine::archive::tree_meta_with_open_input_tokens;
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::KEvent;
 use crate::spine::model::LoggedKEvent;
@@ -51,7 +52,12 @@ impl ParseStack {
             SpineToken::Compact {
                 memory,
                 next_open_index,
-            } => Symbol::Control(ControlSymbol::Compact(memory, next_open_index)),
+                next_open_input_tokens,
+            } => Symbol::Control(ControlSymbol::Compact(
+                memory,
+                next_open_index,
+                next_open_input_tokens,
+            )),
             SpineToken::Msg { seg, from_user } => {
                 Symbol::SpineTreeNode(SpineTreeNode::MsgAsLeafNode {
                     msg: seg,
@@ -164,12 +170,16 @@ impl ParseStack {
         else {
             return Ok(false);
         };
-        let Symbol::Control(ControlSymbol::Compact(memory, next_open_index)) =
-            self.symbols[compact_idx].clone()
+        let Symbol::Control(ControlSymbol::Compact(
+            memory,
+            next_open_index,
+            next_open_input_tokens,
+        )) = self.symbols[compact_idx].clone()
         else {
             unreachable!("compact symbol was checked before clone")
         };
-        let next_open = next_root_open_symbol(archive, &memory, next_open_index)?;
+        let next_open =
+            next_root_open_symbol(archive, &memory, next_open_index, next_open_input_tokens)?;
         let Some(boundary_idx) = self.symbols[..compact_idx].iter().rposition(|symbol| {
             matches!(
                 symbol,
@@ -410,7 +420,7 @@ fn collect_tree_render_rows(
             Symbol::Control(ControlSymbol::Init(_))
             | Symbol::Control(ControlSymbol::End)
             | Symbol::Control(ControlSymbol::Close(_))
-            | Symbol::Control(ControlSymbol::Compact(_, _)) => {}
+            | Symbol::Control(ControlSymbol::Compact(_, _, _)) => {}
             Symbol::Control(ControlSymbol::Open(meta)) => {
                 rows.push(TreeRenderRow {
                     id: meta.id.clone(),
@@ -625,9 +635,16 @@ pub(super) fn event_to_token(
             child,
             index,
             summary,
+            open_input_tokens,
             ..
         } => Ok(SpineToken::Open {
-            meta: tree_meta(archive, child.clone(), *index, summary.clone())?,
+            meta: tree_meta_with_open_input_tokens(
+                archive,
+                child.clone(),
+                *index,
+                summary.clone(),
+                *open_input_tokens,
+            )?,
         }),
         KEvent::Close { node, .. } => {
             let mem = mems.values().find(|mem| &mem.node == node).ok_or_else(|| {
@@ -654,6 +671,7 @@ pub(super) fn event_to_token(
         KEvent::RootCompact {
             mem,
             next_open_index,
+            next_open_input_tokens,
             ..
         } => {
             let mem = mems.get(mem).ok_or_else(|| {
@@ -678,6 +696,7 @@ pub(super) fn event_to_token(
                 next_open_index: usize::try_from(*next_open_index).map_err(|_| {
                     SpineError::InvalidEvent("root open index overflow".to_string())
                 })?,
+                next_open_input_tokens: *next_open_input_tokens,
             })
         }
     }

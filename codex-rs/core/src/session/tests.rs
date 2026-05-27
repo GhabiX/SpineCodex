@@ -9395,14 +9395,7 @@ async fn spine_tree_tool_omits_context_pressure_when_window_unknown() {
 }
 
 #[tokio::test]
-async fn spine_tree_tool_node_context_counts_materialized_memory() {
-    let server = start_mock_server().await;
-    let compact_mock = mount_sse_once(
-        &server,
-        spine_summary_sse("inner-summary", "inner compact summary"),
-    )
-    .await;
-    let base_url = format!("{}/v1", server.uri());
+async fn spine_tree_tool_node_context_uses_provider_input_delta() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -9411,123 +9404,82 @@ async fn spine_tree_tool_node_context_counts_materialized_memory() {
                 .features
                 .enable(Feature::SpineTaskTree)
                 .expect("enable spine feature");
-            config.model_provider.base_url = Some(base_url.clone());
         },
     )
     .await;
     attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
 
-    let outer_open_request = spine_call(SPINE_TOOL_OPEN, "outer-open");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "delta-open");
     session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_open_request))
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
         .await;
     session
-        .stage_spine_open("outer-open".to_string(), "outer".to_string())
+        .stage_spine_open("delta-open".to_string(), "delta child".to_string())
         .await
-        .expect("stage outer open");
-    let outer_open_output = function_output("outer-open");
+        .expect("stage open");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 37_002,
+                total_tokens: 37_002,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+    let open_output = function_output("delta-open");
     session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_open_output))
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await;
     session
-        .maybe_commit_spine_tool_output(&turn_context, &outer_open_output)
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
-        .expect("commit outer open");
+        .expect("commit open");
 
-    let outer_setup = user_message("outer setup");
     session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_setup))
+        .replace_history(Vec::new(), session.reference_context_item().await)
         .await;
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 218_548,
+                total_tokens: 218_548,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
 
-    let inner_open_request = spine_call(SPINE_TOOL_OPEN, "inner-open");
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_open_request))
-        .await;
-    session
-        .stage_spine_open("inner-open".to_string(), "inner".to_string())
-        .await
-        .expect("stage inner open");
-    let inner_open_output = function_output("inner-open");
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_open_output))
-        .await;
-    session
-        .maybe_commit_spine_tool_output(&turn_context, &inner_open_output)
-        .await
-        .expect("commit inner open");
-
-    let raw_marker = "INNER_RAW_TRAJ_SHOULD_NOT_BE_COUNTED_BY_PARENT_NODE_CONTEXT";
-    let inner_raw = assistant_message(&format!("{raw_marker} {}", "x".repeat(80_000)));
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_raw))
-        .await;
-
-    let inner_close_request = spine_call(SPINE_TOOL_CLOSE, "inner-close");
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_close_request))
-        .await;
-    session
-        .stage_spine_close("inner-close".to_string(), None)
-        .await
-        .expect("stage inner close");
-    let inner_close_output = function_output("inner-close");
-    session
-        .maybe_commit_spine_tool_output(&turn_context, &inner_close_output)
-        .await
-        .expect("commit inner close");
-    session
-        .record_conversation_items_raw_only(
-            &turn_context,
-            std::slice::from_ref(&inner_close_output),
-        )
-        .await;
-
-    let after_inner = user_message("after inner in outer suffix");
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&after_inner))
-        .await;
-
-    assert_eq!(compact_mock.requests().len(), 1);
-    assert!(compact_mock.single_request().body_contains_text(raw_marker));
-
-    let history = session.clone_history().await;
-    let history_json = serde_json::to_string(history.raw_items()).expect("history json");
-    assert!(
-        history_json.contains("inner compact summary")
-            && history_json.contains("after inner in outer suffix"),
-        "{history_json}"
-    );
-    assert!(
-        !history_json.contains(raw_marker),
-        "materialized history must contain child memory, not child raw trajs"
-    );
-    let open_index = {
-        let spine = session.spine.as_ref().expect("spine enabled");
-        let guard = spine.lock().await;
-        guard
-            .runtime()
-            .expect("runtime exists")
-            .current_open_index()
-            .expect("current open index")
-    };
-    let expected_tokens = history
-        .estimate_suffix_token_count(open_index)
-        .expect("suffix estimate");
-    assert!(
-        expected_tokens < 5_000,
-        "parent node context should be the materialized suffix with child memory, not the 80k raw child traj: {expected_tokens}"
-    );
-    let expected_annotation = format!(
-        "(~{} node context)",
-        codex_protocol::num_format::format_si_suffix(expected_tokens)
-    );
     let tree = session.spine_tree().await.expect("tree");
-    assert!(tree.contains("[1.1.1] Current outer"), "{tree}");
-    assert!(tree.contains(&expected_annotation), "{tree}");
+    assert!(tree.contains("[1.1.1] Current delta child"), "{tree}");
+    assert!(tree.contains("(~181.5K node context)"), "{tree}");
+
+    let rollout_path = session
+        .current_rollout_path()
+        .await
+        .expect("rollout path")
+        .expect("thread should have rollout path");
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(runtime.current_open_input_tokens(), Some(37_002));
 }
 
 #[tokio::test]
-async fn spine_tree_tool_fails_fast_when_current_open_index_exceeds_history_len() {
+async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -9540,11 +9492,6 @@ async fn spine_tree_tool_fails_fast_when_current_open_index_exceeds_history_len(
     )
     .await;
     attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
-
-    let prefix = user_message("prefix before invalid range open");
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
 
     let open_request = spine_call(SPINE_TOOL_OPEN, "open");
     session
@@ -9563,17 +9510,9 @@ async fn spine_tree_tool_fails_fast_when_current_open_index_exceeds_history_len(
         .await
         .expect("commit open");
 
-    session.replace_history(Vec::new(), None).await;
-
-    let err = session
-        .spine_tree()
-        .await
-        .expect_err("invalid current-open range should fail fast");
-    assert!(
-        err.to_string().contains("suffix start")
-            && err.to_string().contains("exceeds history length"),
-        "unexpected error: {err}"
-    );
+    let tree = session.spine_tree().await.expect("tree");
+    assert!(tree.contains("[1.1.1] Current invalid range"), "{tree}");
+    assert!(!tree.contains("node context"), "{tree}");
 }
 
 #[tokio::test]

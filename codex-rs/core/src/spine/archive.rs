@@ -53,6 +53,7 @@ pub(super) fn next_root_open_symbol(
     archive: &SpineArchive,
     memory: &MemoryRef,
     next_open_index: usize,
+    open_input_tokens: Option<i64>,
 ) -> Result<Symbol, SpineError> {
     let root_index = *memory
         .node_id
@@ -65,6 +66,7 @@ pub(super) fn next_root_open_symbol(
             id: next_id.clone(),
             index: next_open_index,
             summary: "root".to_string(),
+            open_input_tokens,
             node_dir: archive.node_dir(&next_id),
         },
     )))
@@ -175,6 +177,16 @@ pub(super) fn tree_meta(
     index: u64,
     summary: String,
 ) -> Result<TreeMeta, SpineError> {
+    tree_meta_with_open_input_tokens(archive, id, index, summary, None)
+}
+
+pub(super) fn tree_meta_with_open_input_tokens(
+    archive: &SpineArchive,
+    id: NodeId,
+    index: u64,
+    summary: String,
+    open_input_tokens: Option<i64>,
+) -> Result<TreeMeta, SpineError> {
     let index = usize::try_from(index)
         .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
     Ok(TreeMeta {
@@ -182,6 +194,7 @@ pub(super) fn tree_meta(
         id,
         index,
         summary,
+        open_input_tokens,
     })
 }
 

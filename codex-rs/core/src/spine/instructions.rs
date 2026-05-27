@@ -8,25 +8,25 @@ Spine tools are task-boundary controls:
 - spine.open(summary): start a focused child task under the current cursor. The summary is only a short tree label for the new child.
 - spine.close(instruction?): finish the current non-root task node, compact its raw history into memory, and resume its parent. The optional instruction only guides what the compact memory should preserve.
 
-Default to staying in the current live node while it remains focused. Use update_plan as the ordinary short-lived checklist for the current live work; it does not create, finish, close, compact, or move Spine nodes.
-Spine context follows the current cursor: the current path remains visible, closed left siblings appear as memory, and the current live node keeps raw history. Use that shape when choosing boundaries: keep cross-node intent and decisions in the parent, keep local work inside the child, and use sibling nodes for peer phases that should continue from prior phase memory.
-Typical context cases:
-- Focused investigation: when the parent needs a conclusion but the work will create many file reads, commands, or local evidence, open a child. State in the parent why the investigation matters; keep the raw trail in the child so it closes into memory.
-- Peer phase handoff: when discovery, implementation, or verification finishes with a judgment and evidence the next peer phase should rely on, close the current child and resume the parent before opening the next sibling. The sibling sees the completed phase as memory, not raw history.
-- Continuation boundary: when a node has enough judgment, evidence, and next-step context for later work to continue from memory, close it and resume the parent to continue, report, ask, or choose the next boundary.
-Move Spine only at coherent task boundaries. Do not call spine.open because you are continuing the same investigation, reading another file, running another command, updating a checklist, answering a short question, or starting a new conversation turn.
-Do not create one node per shell command, checklist item, short reply, observation, or turn. Keep simple tasks in one node.
-Before starting a genuine nested subproblem that needs its own compactable context, call spine.open(summary), then use update_plan inside that child if a local checklist is useful.
-When the nested task is complete, call spine.close(instruction?) to return to the parent. After close, continue parent work if the latest user request remains unfinished, or send the user-facing response if the request is complete, paused, blocked, or needs a decision.
-To continue with a sibling task, first close the current child. Open the sibling from the resumed parent only when that sibling work actually begins.
-There is no production spine.next tool. Treat next-like movement as two explicit steps: close the current child, then open a new sibling from the resumed parent.
+Default to staying in the current live node while it remains focused; move Spine only for compression or focus, and only when doing so gives a clear benefit. Use update_plan for ordinary task tracking; it does not create, close, compact, or move Spine nodes.
+Spine context follows the current cursor: the current path remains visible, closed left siblings appear as memory, and the current live node keeps raw history. Keep cross-node intent and decisions in the parent; keep local investigation, implementation, or verification trails inside children.
 
-Use spine.close after substantial raw history has accumulated or when future work can rely on the runtime-generated memory. Do not treat spine.open/close as end-of-response cleanup.
-Because later turns will see the memory instead of the raw node history, close a node only at a coherent boundary and use the optional close instruction to name facts that must survive compaction.
+For complex or long-running work, briefly sketch a provisional overall Spine task-tree plan before starting: the parent goal, likely child phases, and which phase begins now. Do not pre-open nodes for every planned phase; materialize a child only when that planned subproblem actually begins and has a clear compression or focus benefit. Revisit and adjust the tree at coherent boundaries as the work changes.
+
+Open a child when the next work is a coherent subproblem and at least one is true:
+- Compression: it will likely produce a large local trail of file reads, commands, logs, test output, iterations, or reasoning that future work should see as memory rather than raw history.
+- Focus: isolating it will help the agent stay oriented, avoid mixing phases, or hand off cleanly to later work.
+
+Close a node only at a coherent boundary, when the current subproblem has produced enough motivation, judgment, evidence, and next-step context for later work to continue from memory instead of raw history. Use the optional close instruction to name facts that must survive compaction. Do not close only because the turn is ending, context size crossed a soft threshold, or as end-of-response cleanup.
+
+Use Spine Tree context-pressure stats as hints, not hard rules: when the current live node grows beyond about 50K node context, actively look for the next coherent close boundary, but never move Spine solely because a size threshold was crossed.
+
+There is no production spine.next tool. To move to a sibling phase, close the current child, resume the parent, then open the next sibling child only when a new large phase or clearly separate focused phase actually begins.
+
+Do not open for routine continuation, another file read, another command, checklist updates, short replies, observations, ordinary turn boundaries, or one node per command, checklist item, or turn. Keep simple tasks in one node.
 At root depth, close a root child to return to the root scope. Calling spine.close on the true root fails.
 Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../memory.md` against that Base, not against the workspace cwd.
-When moving between nodes, rely on the runtime Spine Tree and closed-node memories; inspect sidecar trajs or memory files only when historical details are needed.
-Completed Spine nodes are read-only; rely on their memories instead of rewriting old nodes.
+When moving between nodes, rely on the runtime Spine Tree and closed-node memories; completed Spine nodes are read-only, and sidecar trajs or memory files should be inspected only when historical details are genuinely needed.
 In Plan mode, do not call mutating Spine operations.
 </spine_view>"#;
 
