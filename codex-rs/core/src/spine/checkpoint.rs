@@ -121,7 +121,7 @@ pub(super) fn collect_checkpoint_refs(
             }
             Symbol::Control(ControlSymbol::End) => {}
             Symbol::Control(ControlSymbol::Close(memory))
-            | Symbol::Control(ControlSymbol::Compact(memory, _)) => {
+            | Symbol::Control(ControlSymbol::Compact(memory, _, _)) => {
                 memory_refs.push(checkpoint_memory_ref(memory));
             }
             Symbol::SpineTreeNode(node) => {

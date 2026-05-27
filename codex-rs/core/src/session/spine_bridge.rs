@@ -232,7 +232,6 @@ impl Session {
 
     pub(crate) async fn spine_tree(&self) -> Result<String, SpineError> {
         let spine = self.ensure_spine_runtime().await?;
-        let history = self.clone_history().await;
         let token_info = self.token_usage_info().await;
         let guard = spine.lock().await;
         guard.ensure_valid()?;
@@ -241,11 +240,8 @@ impl Session {
                 "spine runtime missing after initialization".to_string(),
             ));
         };
-        let current_annotation = runtime
-            .current_open_index_opt()
-            .map(|start| format_current_node_context(&history, start))
-            .transpose()?
-            .flatten();
+        let current_annotation =
+            format_current_node_context(token_info.as_ref(), runtime.current_open_input_tokens());
         let mut tree = if let Some(annotation) = current_annotation.as_deref() {
             runtime.render_tree_with_current_annotation(Some(annotation))?
         } else {
@@ -374,7 +370,14 @@ impl Session {
                 ));
             }
             let close_compact = close_compact.map(|(compact, _)| compact);
-            let commit_kind = spine.maybe_commit_output(call_id, close_compact)?;
+            let open_input_tokens = state
+                .token_info()
+                .map(|info| info.last_token_usage.input_tokens);
+            let commit_kind = spine.maybe_commit_output_with_open_input_tokens(
+                call_id,
+                close_compact,
+                open_input_tokens,
+            )?;
             let mut snapshot = None;
             if let Some(commit_kind) = commit_kind.as_ref() {
                 match commit_kind {
@@ -496,13 +499,21 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&history.get_rollout_items());
+        let next_open_input_tokens = self
+            .token_usage_info()
+            .await
+            .map(|info| info.last_token_usage.input_tokens);
         {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
             let Some(spine) = guard.runtime_mut() else {
                 return Ok(None);
             };
-            let materialized = spine.root_compact(body, &raw_items)?;
+            let materialized = spine.root_compact_with_next_open_input_tokens(
+                body,
+                &raw_items,
+                next_open_input_tokens,
+            )?;
             let current_open_index = spine.current_open_index()?;
             if current_open_index != materialized.len() {
                 return Err(SpineError::InvalidEvent(format!(
@@ -568,19 +579,15 @@ fn spine_root_compact_body(
 }
 
 fn format_current_node_context(
-    history: &crate::context_manager::ContextManager,
-    start: usize,
-) -> Result<Option<String>, SpineError> {
-    let tokens = history
-        .estimate_suffix_token_count(start)
-        .map_err(SpineError::InvalidEvent)?;
+    current: Option<&TokenUsageInfo>,
+    open_input_tokens: Option<i64>,
+) -> Option<String> {
+    let current = current?.last_token_usage.input_tokens;
+    let tokens = current.saturating_sub(open_input_tokens?);
     if tokens <= 0 {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(format!(
-        "(~{} node context)",
-        format_si_suffix(tokens)
-    )))
+    Some(format!("(~{} node context)", format_si_suffix(tokens)))
 }
 
 fn format_context_window_pressure(info: Option<TokenUsageInfo>) -> Option<String> {

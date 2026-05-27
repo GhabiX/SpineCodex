@@ -69,6 +69,8 @@ pub(super) enum KEvent {
         boundary: u64,
         index: u64,
         summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        open_input_tokens: Option<i64>,
     },
     Close {
         node: NodeId,
@@ -82,6 +84,8 @@ pub(super) enum KEvent {
         mem: String,
         next_open_index: u64,
         raw_live_hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_open_input_tokens: Option<i64>,
     },
 }
 
@@ -127,6 +131,8 @@ pub(super) struct TreeMeta {
     pub(super) id: NodeId,
     pub(super) index: usize,
     pub(super) summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_input_tokens: Option<i64>,
     pub(super) node_dir: PathBuf,
 }
 
@@ -177,6 +183,7 @@ pub(super) enum SpineToken {
     Compact {
         memory: MemoryRef,
         next_open_index: usize,
+        next_open_input_tokens: Option<i64>,
     },
     Msg {
         seg: SegRef,
@@ -190,7 +197,7 @@ pub(super) enum ControlSymbol {
     End,
     Open(TreeMeta),
     Close(MemoryRef),
-    Compact(MemoryRef, usize),
+    Compact(MemoryRef, usize, Option<i64>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

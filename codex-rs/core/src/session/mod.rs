@@ -564,16 +564,19 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
-        let provider_capabilities = create_model_provider(
-            config.model_provider.clone(),
-            Some(Arc::clone(&auth_manager)),
-        )
-        .capabilities();
-        let base_instructions = crate::spine::append_spine_view_instructions(
-            base_instructions,
-            config.features.enabled(Feature::SpineTaskTree)
-                && provider_capabilities.namespace_tools,
-        );
+        let base_instructions = if config.features.enabled(Feature::SpineTaskTree) {
+            let provider_capabilities = create_model_provider(
+                config.model_provider.clone(),
+                Some(Arc::clone(&auth_manager)),
+            )
+            .capabilities();
+            crate::spine::append_spine_view_instructions(
+                base_instructions,
+                provider_capabilities.namespace_tools,
+            )
+        } else {
+            base_instructions
+        };
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -3284,14 +3287,14 @@ impl Session {
     ) -> Result<(), Vec<ResponseInputItem>> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
-            Some(at) if !at.tasks.is_empty() => {
+            Some(at) => {
                 let mut ts = at.turn_state.lock().await;
                 for item in input {
                     ts.push_pending_input(item);
                 }
                 Ok(())
             }
-            Some(_) | None => Err(input),
+            None => Err(input),
         }
     }
 

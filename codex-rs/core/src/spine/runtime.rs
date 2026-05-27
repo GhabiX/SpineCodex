@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::memory_ref;
-use crate::spine::archive::tree_meta;
+use crate::spine::archive::tree_meta_with_open_input_tokens;
 use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::checkpoint::build_checkpoint;
 use crate::spine::checkpoint::validate_checkpoint;
@@ -238,6 +238,7 @@ impl SpineRuntime {
                 boundary: raw_len,
                 index: raw_len,
                 summary: "root".to_string(),
+                open_input_tokens: None,
             })?;
         }
         Self::load(store, raw_len)
@@ -398,10 +399,10 @@ impl SpineRuntime {
         Ok(self.parse_stack.current_open_meta()?.index)
     }
 
-    pub(crate) fn current_open_index_opt(&self) -> Option<usize> {
+    pub(crate) fn current_open_input_tokens(&self) -> Option<i64> {
         self.parse_stack
             .current_open_meta_opt()
-            .map(|meta| meta.index)
+            .and_then(|meta| meta.open_input_tokens)
     }
 
     fn current_close_open_meta(&self) -> Result<&TreeMeta, SpineError> {
@@ -441,15 +442,6 @@ impl SpineRuntime {
 
     fn archive(&self) -> SpineArchive {
         SpineArchive::new(self.store.root.clone())
-    }
-
-    fn tree_meta_for_child(
-        &self,
-        child: NodeId,
-        index: u64,
-        summary: String,
-    ) -> Result<TreeMeta, SpineError> {
-        tree_meta(&self.archive(), child, index, summary)
     }
 
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
@@ -630,10 +622,20 @@ impl SpineRuntime {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn maybe_commit_output(
         &mut self,
         call_id: &str,
         close_compact: Option<SpineCloseCompact>,
+    ) -> Result<Option<SpineCommitKind>, SpineError> {
+        self.maybe_commit_output_with_open_input_tokens(call_id, close_compact, None)
+    }
+
+    pub(crate) fn maybe_commit_output_with_open_input_tokens(
+        &mut self,
+        call_id: &str,
+        close_compact: Option<SpineCloseCompact>,
+        open_input_tokens: Option<i64>,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         let Some(pending) = self.pending.clone() else {
             return Ok(None);
@@ -658,10 +660,17 @@ impl SpineRuntime {
                     boundary,
                     index,
                     summary: summary.clone(),
+                    open_input_tokens,
                 };
                 self.parse_stack.shift(
                     SpineToken::Open {
-                        meta: self.tree_meta_for_child(child.clone(), index, summary.clone())?,
+                        meta: tree_meta_with_open_input_tokens(
+                            &self.archive(),
+                            child.clone(),
+                            index,
+                            summary.clone(),
+                            open_input_tokens,
+                        )?,
                     },
                     &self.archive(),
                 )?;
@@ -757,10 +766,20 @@ impl SpineRuntime {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) fn root_compact(
         &mut self,
         body: String,
         raw_items: &[Option<ResponseItem>],
+    ) -> Result<Vec<ResponseItem>, SpineError> {
+        self.root_compact_with_next_open_input_tokens(body, raw_items, None)
+    }
+
+    pub(crate) fn root_compact_with_next_open_input_tokens(
+        &mut self,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        next_open_input_tokens: Option<i64>,
     ) -> Result<Vec<ResponseItem>, SpineError> {
         if body.trim().is_empty() {
             return Err(SpineError::InvalidEvent(
@@ -802,6 +821,7 @@ impl SpineRuntime {
             SpineToken::Compact {
                 memory: memory.clone(),
                 next_open_index: 0,
+                next_open_input_tokens,
             },
             &self.archive(),
         )?;
@@ -812,6 +832,7 @@ impl SpineRuntime {
             SpineToken::Compact {
                 memory,
                 next_open_index,
+                next_open_input_tokens,
             },
             &self.archive(),
         )?;
@@ -831,6 +852,7 @@ impl SpineRuntime {
             next_open_index: u64::try_from(next_open_index)
                 .map_err(|_| SpineError::InvalidEvent("root open index overflow".to_string()))?,
             raw_live_hash,
+            next_open_input_tokens,
         })?;
         self.parse_stack = staged_parse_stack;
         self.pending = None;

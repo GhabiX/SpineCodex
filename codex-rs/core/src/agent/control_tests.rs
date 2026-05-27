@@ -509,7 +509,7 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 }
 
 #[tokio::test]
-async fn append_message_starts_pending_work_turn() {
+async fn append_message_records_assistant_message() {
     let harness = AgentControlHarness::new().await;
     let (thread_id, thread) = harness.start_thread().await;
     let message =
@@ -534,14 +534,32 @@ async fn append_message_starts_pending_work_turn() {
 
     timeout(Duration::from_secs(5), async {
         loop {
-            let event = thread.next_event().await.expect("thread event should load");
-            if matches!(event.msg, EventMsg::TurnStarted(_)) {
+            let history_items = thread
+                .codex
+                .session
+                .clone_history()
+                .await
+                .raw_items()
+                .to_vec();
+            let recorded = history_items.iter().any(|item| {
+                matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "assistant"
+                            && content.iter().any(|content_item| matches!(
+                                content_item,
+                                ContentItem::InputText { text } if text == message
+                            ))
+                )
+            });
+            if recorded {
                 break;
             }
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("append_message should wake a pending-work turn");
+    .expect("assistant message should be recorded");
 }
 
 #[tokio::test]

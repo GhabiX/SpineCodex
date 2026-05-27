@@ -1,5 +1,6 @@
 use super::*;
 use crate::spine::CHECKPOINT_VERSION;
+use crate::spine::archive::tree_meta;
 use crate::spine::io::hash_response_items;
 use codex_protocol::models::ContentItem;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
