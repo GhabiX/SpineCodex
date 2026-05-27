@@ -4,7 +4,9 @@ use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCommitKind;
 use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRuntime;
+use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 
@@ -230,6 +232,8 @@ impl Session {
 
     pub(crate) async fn spine_tree(&self) -> Result<String, SpineError> {
         let spine = self.ensure_spine_runtime().await?;
+        let history = self.clone_history().await;
+        let token_info = self.token_usage_info().await;
         let guard = spine.lock().await;
         guard.ensure_valid()?;
         let Some(runtime) = guard.runtime() else {
@@ -237,7 +241,21 @@ impl Session {
                 "spine runtime missing after initialization".to_string(),
             ));
         };
-        runtime.render_tree()
+        let current_annotation = runtime
+            .current_open_index_opt()
+            .map(|start| format_current_node_context(&history, start))
+            .transpose()?
+            .flatten();
+        let mut tree = if let Some(annotation) = current_annotation.as_deref() {
+            runtime.render_tree_with_current_annotation(Some(annotation))?
+        } else {
+            runtime.render_tree()?
+        };
+        if let Some(line) = format_context_window_pressure(token_info) {
+            tree.push_str("\n\n");
+            tree.push_str(&line);
+        }
+        Ok(tree)
     }
 
     pub(crate) async fn emit_spine_tree_snapshot(
@@ -547,6 +565,43 @@ fn spine_root_compact_body(
         .as_deref()
         .and_then(crate::compact_remote::remote_root_compact_body)
         .or_else(|| crate::compact_remote::remote_root_compact_body(replacement_history))
+}
+
+fn format_current_node_context(
+    history: &crate::context_manager::ContextManager,
+    start: usize,
+) -> Result<Option<String>, SpineError> {
+    let tokens = history
+        .estimate_suffix_token_count(start)
+        .map_err(SpineError::InvalidEvent)?;
+    if tokens <= 0 {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "(~{} node context)",
+        format_si_suffix(tokens)
+    )))
+}
+
+fn format_context_window_pressure(info: Option<TokenUsageInfo>) -> Option<String> {
+    let info = info?;
+    let window = info.model_context_window?;
+    if window <= 0 {
+        return None;
+    }
+    let usage = info.last_token_usage;
+    let used = usage.tokens_in_context_window();
+    if used <= 0 {
+        return None;
+    }
+    let remaining = usage
+        .percent_of_context_window_remaining(window)
+        .clamp(0, 100);
+    Some(format!(
+        "Context window: {remaining}% left ({} used / {})",
+        format_si_suffix(used),
+        format_si_suffix(window)
+    ))
 }
 
 pub(super) fn assign_spine_raw_ordinals(

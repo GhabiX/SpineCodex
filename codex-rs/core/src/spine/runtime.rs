@@ -376,6 +376,14 @@ impl SpineRuntime {
         self.parse_stack.render_tree()
     }
 
+    pub(crate) fn render_tree_with_current_annotation(
+        &self,
+        current_annotation: Option<&str>,
+    ) -> Result<String, SpineError> {
+        self.parse_stack
+            .render_tree_with_current_annotation(current_annotation)
+    }
+
     pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineError> {
         let nodes = self.parse_stack.tree_snapshot_nodes()?;
         let active_node_id = self.parse_stack.current_cursor_id()?.as_path();
@@ -388,6 +396,12 @@ impl SpineRuntime {
 
     pub(crate) fn current_open_index(&self) -> Result<usize, SpineError> {
         Ok(self.parse_stack.current_open_meta()?.index)
+    }
+
+    pub(crate) fn current_open_index_opt(&self) -> Option<usize> {
+        self.parse_stack
+            .current_open_meta_opt()
+            .map(|meta| meta.index)
     }
 
     fn current_close_open_meta(&self) -> Result<&TreeMeta, SpineError> {
