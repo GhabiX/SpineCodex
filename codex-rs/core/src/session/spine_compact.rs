@@ -1,10 +1,7 @@
-use std::collections::HashSet;
-
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::context_manager::ContextManager;
 use crate::session::Session;
-use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
@@ -18,7 +15,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
-use tokio_util::sync::CancellationToken;
 
 impl Session {
     pub(crate) async fn spine_compact_close(
@@ -92,23 +88,8 @@ impl Session {
         prompt_input.push(spine_close_compact_suffix_boundary_message(&node_id));
         prompt_input.extend(suffix_items);
         prompt_input.push(spine_close_compact_system_message(&compact_instructions));
-        let tool_router = built_tools(
-            self,
-            turn_context,
-            &prompt_input,
-            &HashSet::new(),
-            /*skills_outcome*/ None,
-            &CancellationToken::new(),
-        )
-        .await
-        .map_err(|err| {
-            SpineError::InvalidEvent(format!("spine.close compact tool build failed: {err}"))
-        })?;
         let prompt = Prompt {
             input: prompt_input,
-            tools: tool_router.model_visible_specs(),
-            parallel_tool_calls: false,
-            tool_choice: "none".to_string(),
             base_instructions: self.get_base_instructions().await,
             personality: turn_context.personality,
             ..Default::default()

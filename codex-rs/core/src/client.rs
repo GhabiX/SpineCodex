@@ -748,7 +748,7 @@ impl ModelClient {
             instructions: instructions.clone(),
             input,
             tools,
-            tool_choice: prompt.tool_choice.clone(),
+            tool_choice: "auto".to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             store: provider.is_azure_responses_endpoint(),
