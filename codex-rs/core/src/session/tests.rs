@@ -9484,7 +9484,7 @@ async fn spine_tree_tool_omits_context_pressure_when_window_unknown() {
 
 #[tokio::test]
 async fn spine_tree_tool_node_context_uses_provider_input_delta() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -9527,6 +9527,7 @@ async fn spine_tree_tool_node_context_uses_provider_input_delta() {
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
         .expect("commit open");
+    while rx.try_recv().is_ok() {}
 
     session
         .replace_history(Vec::new(), session.reference_context_item().await)
@@ -9547,6 +9548,25 @@ async fn spine_tree_tool_node_context_uses_provider_input_delta() {
     let tree = session.spine_tree().await.expect("tree");
     assert!(tree.contains("[1.1.1] Current delta child"), "{tree}");
     assert!(tree.contains("(~182K node context)"), "{tree}");
+    session
+        .emit_spine_tree_snapshot(&turn_context)
+        .await
+        .expect("emit Spine tree snapshot");
+    let event = timeout(StdDuration::from_secs(1), rx.recv())
+        .await
+        .expect("timeout waiting for Spine tree snapshot")
+        .expect("event");
+    let snapshot = match event.msg {
+        EventMsg::SpineTreeUpdate(snapshot) => snapshot,
+        msg => panic!("expected Spine tree update, got {msg:?}"),
+    };
+    let active = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == snapshot.active_node_id)
+        .expect("active node");
+    let accounting = active.accounting.as_ref().expect("active accounting");
+    assert_eq!(accounting.current_node_context_tokens, Some(181_546));
 
     let rollout_path = session
         .current_rollout_path()
@@ -9561,11 +9581,71 @@ async fn spine_tree_tool_node_context_uses_provider_input_delta() {
     else {
         panic!("expected resumed rollout history");
     };
-    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let mut resumed_history = resumed.history;
+    let raw_items = spine_raw_items_after_rollback(&resumed_history);
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     assert_eq!(runtime.current_open_input_tokens(), Some(37_002));
+
+    resumed_history.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+        TokenCountEvent {
+            info: Some(TokenUsageInfo {
+                total_token_usage: TokenUsage::default(),
+                last_token_usage: TokenUsage {
+                    input_tokens: 218_548,
+                    total_tokens: 218_548,
+                    ..TokenUsage::default()
+                },
+                model_context_window: None,
+            }),
+            rate_limits: None,
+        },
+    )));
+
+    let (mut resumed_session, _resumed_context, resumed_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
+    SpineStore::clone_for_rollout_with_raw_live(&rollout_path, &resumed_rollout_path, &raw_live)
+        .expect("clone Spine sidecar");
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: resumed_history,
+            rollout_path: Some(rollout_path),
+        }))
+        .await
+        .expect("record resumed history");
+    let event = timeout(StdDuration::from_secs(1), resumed_rx.recv())
+        .await
+        .expect("timeout waiting for resumed Spine tree snapshot")
+        .expect("event");
+    let snapshot = match event.msg {
+        EventMsg::SpineTreeUpdate(snapshot) => snapshot,
+        msg => panic!("expected Spine tree update, got {msg:?}"),
+    };
+    let active = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == snapshot.active_node_id)
+        .expect("active node");
+    let accounting = active.accounting.as_ref().expect("active accounting");
+    assert_eq!(accounting.current_node_context_tokens, Some(181_546));
 }
 
 #[tokio::test]

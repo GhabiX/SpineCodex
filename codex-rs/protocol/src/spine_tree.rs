@@ -18,6 +18,15 @@ pub struct SpineTreeNodeSnapshot {
     pub parent_id: Option<String>,
     pub summary: Option<String>,
     pub status: SpineTreeNodeStatus,
+    pub accounting: Option<SpineTreeNodeAccountingSnapshot>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SpineTreeNodeAccountingSnapshot {
+    pub current_node_context_tokens: Option<i64>,
+    pub raw_input_tokens: Option<i64>,
+    pub memory_output_tokens: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]

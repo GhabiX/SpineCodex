@@ -28,6 +28,9 @@ use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
+use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot as CoreSpineTreeNodeAccountingSnapshot;
+use codex_protocol::spine_tree::SpineTreeNodeSnapshot as CoreSpineTreeNodeSnapshot;
+use codex_protocol::spine_tree::SpineTreeNodeStatus as CoreSpineTreeNodeStatus;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
@@ -195,6 +198,36 @@ fn collab_agent_state_maps_interrupted_status() {
         CollabAgentState {
             status: CollabAgentStatus::Interrupted,
             message: None,
+        }
+    );
+}
+
+#[test]
+fn spine_tree_node_maps_accounting() {
+    let core = CoreSpineTreeNodeSnapshot {
+        node_id: "1.1".to_string(),
+        parent_id: Some("1".to_string()),
+        summary: Some("focused".to_string()),
+        status: CoreSpineTreeNodeStatus::Live,
+        accounting: Some(CoreSpineTreeNodeAccountingSnapshot {
+            current_node_context_tokens: Some(181_546),
+            raw_input_tokens: Some(7_500),
+            memory_output_tokens: Some(1_250),
+        }),
+    };
+
+    assert_eq!(
+        SpineTreeNode::from(core),
+        SpineTreeNode {
+            node_id: "1.1".to_string(),
+            parent_id: Some("1".to_string()),
+            summary: Some("focused".to_string()),
+            status: SpineTreeNodeStatus::Live,
+            accounting: Some(SpineTreeNodeAccounting {
+                current_node_context_tokens: Some(181_546),
+                raw_input_tokens: Some(7_500),
+                memory_output_tokens: Some(1_250),
+            }),
         }
     );
 }

@@ -3,6 +3,7 @@ use crate::spine::CHECKPOINT_VERSION;
 use crate::spine::archive::tree_meta;
 use crate::spine::io::hash_response_items;
 use codex_protocol::models::ContentItem;
+use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
@@ -364,6 +365,26 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("[1.1.1] Done accounted child"), "{tree}");
     assert!(tree.contains("(~7.50K raw -> ~1.25K memory)"), "{tree}");
+    let materialized_before_snapshot = runtime
+        .materialize_history(&raw)
+        .expect("materialize before snapshot");
+    let snapshot = runtime.build_tree_snapshot().expect("snapshot");
+    assert_eq!(
+        runtime
+            .materialize_history(&raw)
+            .expect("materialize after snapshot"),
+        materialized_before_snapshot,
+        "tree snapshot accounting must remain projection-only and not change h(PS)"
+    );
+    let snapshot_nodes = snapshot_nodes_by_id(&snapshot);
+    assert_eq!(
+        snapshot_nodes["1.1.1"].accounting,
+        Some(SpineTreeNodeAccountingSnapshot {
+            current_node_context_tokens: None,
+            raw_input_tokens: Some(7_500),
+            memory_output_tokens: Some(1_250),
+        })
+    );
 
     let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
         .expect("load spine")

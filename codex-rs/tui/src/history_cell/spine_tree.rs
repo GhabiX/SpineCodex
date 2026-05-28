@@ -4,6 +4,7 @@ use super::*;
 use codex_app_server_protocol::SpineTreeNode;
 use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
+use codex_protocol::num_format::format_si_suffix;
 
 pub(crate) fn new_spine_tree_update(
     turn_id: String,
@@ -119,6 +120,10 @@ fn render_node(
         Span::from(status.to_string()).dim()
     };
     spans.push(status_span);
+    if let Some(accounting) = format_node_accounting(node, active) {
+        spans.push(Span::from(" "));
+        spans.push(Span::from(accounting).dim());
+    }
 
     let line = Line::from(spans);
     let wrapped = adaptive_wrap_line(
@@ -161,20 +166,49 @@ fn append_raw_children(
             .filter(|text| !text.is_empty())
             .map(|summary| format!(" {summary}"))
             .unwrap_or_default();
+        let active = node.node_id == snapshot.active_node_id;
+        let accounting = format_node_accounting(node, active)
+            .map(|accounting| format!(" {accounting}"))
+            .unwrap_or_default();
         out.push(Line::from(format!(
-            "{}{}{}{} {}",
+            "{}{}{}{} {}{}",
             "  ".repeat(depth),
             marker,
             node.node_id,
             summary,
-            if node.node_id == snapshot.active_node_id {
+            if active {
                 "current"
             } else {
                 status_label(node.status)
-            }
+            },
+            accounting
         )));
         append_raw_children(snapshot, Some(node.node_id.as_str()), depth + 1, out);
     }
+}
+
+fn format_node_accounting(node: &SpineTreeNode, active: bool) -> Option<String> {
+    let accounting = node.accounting.as_ref()?;
+    if active && let Some(tokens) = positive_tokens(accounting.current_node_context_tokens) {
+        return Some(format!("(~{} node context)", format_si_suffix(tokens)));
+    }
+    match (
+        positive_tokens(accounting.raw_input_tokens),
+        positive_tokens(accounting.memory_output_tokens),
+    ) {
+        (Some(raw), Some(memory)) => Some(format!(
+            "(~{} raw -> ~{} memory)",
+            format_si_suffix(raw),
+            format_si_suffix(memory)
+        )),
+        (Some(raw), None) => Some(format!("(~{} raw)", format_si_suffix(raw))),
+        (None, Some(memory)) => Some(format!("(~{} memory)", format_si_suffix(memory))),
+        (None, None) => None,
+    }
+}
+
+fn positive_tokens(tokens: Option<i64>) -> Option<i64> {
+    tokens.filter(|tokens| *tokens > 0)
 }
 
 fn child_nodes<'a>(
@@ -204,6 +238,7 @@ fn status_label(status: SpineTreeNodeStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::SpineTreeNodeAccounting;
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
         lines
@@ -245,7 +280,20 @@ mod tests {
             parent_id: parent_id.map(str::to_string),
             summary: summary.map(str::to_string),
             status,
+            accounting: None,
         }
+    }
+
+    fn accounting(
+        current_node_context_tokens: Option<i64>,
+        raw_input_tokens: Option<i64>,
+        memory_output_tokens: Option<i64>,
+    ) -> Option<SpineTreeNodeAccounting> {
+        Some(SpineTreeNodeAccounting {
+            current_node_context_tokens,
+            raw_input_tokens,
+            memory_output_tokens,
+        })
     }
 
     #[test]
@@ -280,6 +328,46 @@ mod tests {
         assert!(!rendered.contains("memory="));
         assert!(!rendered.contains("trajs="));
         assert!(!rendered.contains("PlanTree"));
+    }
+
+    #[test]
+    fn renders_context_accounting() {
+        let mut closed = node("1", None, Some("previous"), SpineTreeNodeStatus::Compacted);
+        closed.accounting = accounting(None, Some(7_500), Some(1_250));
+        let mut active = node("2.1", None, Some("active"), SpineTreeNodeStatus::Live);
+        active.accounting = accounting(Some(181_546), None, None);
+        let cell = new_spine_tree_update("turn".to_string(), snapshot(vec![closed, active]));
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          ├ 1 previous compacted (~7.50K raw -> ~1.25K memory)
+          └ 2.1 active current (~182K node context)
+        "###);
+        assert!(rendered.contains("1 previous compacted (~7.50K raw -> ~1.25K memory)"));
+        assert!(rendered.contains("2.1 active current (~182K node context)"));
+
+        let raw = render_lines(&cell.raw_lines()).join("\n");
+        insta::assert_snapshot!(raw, @r###"
+        Spine Tree
+        1 previous compacted (~7.50K raw -> ~1.25K memory)
+        * 2.1 active current (~182K node context)
+        "###);
+        assert!(raw.contains("1 previous compacted (~7.50K raw -> ~1.25K memory)"));
+        assert!(raw.contains("* 2.1 active current (~182K node context)"));
+    }
+
+    #[test]
+    fn omits_empty_context_accounting() {
+        let mut active = node("2.1", None, Some("active"), SpineTreeNodeStatus::Live);
+        active.accounting = accounting(Some(0), Some(0), Some(0));
+        let cell = new_spine_tree_update("turn".to_string(), snapshot(vec![active]));
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        assert!(rendered.contains("2.1 active current"));
+        assert!(!rendered.contains("node context"));
+        assert!(!rendered.contains("raw"));
+        assert!(!rendered.contains("memory"));
     }
 
     #[test]

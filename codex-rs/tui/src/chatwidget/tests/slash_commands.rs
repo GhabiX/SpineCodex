@@ -2012,12 +2012,14 @@ async fn slash_spinetree_renders_cached_snapshot() {
                 parent_id: None,
                 summary: Some("previous root".to_string()),
                 status: SpineTreeNodeStatus::Compacted,
+                accounting: None,
             },
             SpineTreeNode {
                 node_id: "2.1".to_string(),
                 parent_id: None,
                 summary: Some("active scope".to_string()),
                 status: SpineTreeNodeStatus::Live,
+                accounting: None,
             },
         ],
     });
@@ -2047,6 +2049,7 @@ async fn slash_spinetree_uses_startup_seeded_snapshot() {
             parent_id: None,
             summary: Some("restored scope".to_string()),
             status: SpineTreeNodeStatus::Live,
+            accounting: None,
         }],
     });
     assert!(
