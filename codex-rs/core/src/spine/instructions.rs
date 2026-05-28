@@ -4,7 +4,7 @@ When you close a node, runtime compacts that node's raw history into runtime-gen
 Spine memory is internal context; never expose or imitate it in user-visible messages.
 
 Spine tools are task-boundary controls:
-- spine.tree: inspect the current Spine Tree and cursor without moving it.
+- spine.tree: inspect the current Spine Tree, cursor, current live-node context pressure, and overall context-window pressure without moving it.
 - spine.open(summary): start a focused child task under the current cursor. The summary is only a short tree label for the new child.
 - spine.close(instruction?): finish the current non-root task node, compact its raw history into memory, and resume its parent. The optional instruction only guides what the compact memory should preserve.
 
@@ -26,7 +26,7 @@ Close a node only at a coherent boundary, when it has enough motivation, judgmen
 
 Context pressure is cumulative: even simple tasks can grow large after repeated user turns, tool outputs, and iterations. Manage local Spine boundaries before the session nears the context window; otherwise native/global compaction may open a new root epoch and broad raw history will leave the visible working context as coarse root memory. Prefer coherent task-local memories over relying on emergency global compaction.
 
-Use Spine Tree context-pressure stats as hints, not hard rules: when the current live node grows beyond about 50K node context, actively look for the next coherent close boundary, but never move Spine solely because a size threshold was crossed.
+When unsure, call spine.tree before moving Spine; use its node and global context-pressure stats as hints, not hard rules. When the current live node grows beyond about 50K node context, actively look for the next coherent close boundary, but never move Spine solely because a size threshold was crossed.
 
 There is no production spine.next tool. Moving to a sibling phase is `close ; open`.
 
