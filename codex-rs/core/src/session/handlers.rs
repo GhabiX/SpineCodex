@@ -566,8 +566,20 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+    if let Err(err) = sess
+        .apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+        .await
+    {
+        sess.send_event_raw(Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::Error(ErrorEvent {
+                message: format!("failed to rebuild thread history for rollback replay: {err}"),
+                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+            }),
+        })
         .await;
+        return;
+    }
     sess.recompute_token_usage(turn_context.as_ref()).await;
 
     sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])

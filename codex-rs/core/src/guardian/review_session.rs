@@ -765,11 +765,21 @@ async fn run_review_on_session(
 async fn append_guardian_followup_reminder(review_session: &GuardianReviewSession) {
     let turn_context = review_session.codex.session.new_default_turn().await;
     let reminder: ResponseItem = ContextualUserFragment::into(GuardianFollowupReviewReminder);
-    review_session
+    if let Err(err) = review_session
         .codex
         .session
         .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&reminder))
-        .await;
+        .await
+    {
+        review_session
+            .codex
+            .session
+            .send_event(
+                turn_context.as_ref(),
+                EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+            )
+            .await;
+    }
 }
 
 async fn load_rollout_items_for_fork(

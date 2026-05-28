@@ -1189,7 +1189,10 @@ impl Session {
         state.clear_connector_selection();
     }
 
-    async fn record_initial_history(&self, conversation_history: InitialHistory) {
+    async fn record_initial_history(
+        &self,
+        conversation_history: InitialHistory,
+    ) -> CodexResult<()> {
         let turn_context = self.new_default_turn().await;
         let is_subagent = {
             let state = self.state.lock().await;
@@ -1209,9 +1212,11 @@ impl Session {
                 // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(/*previous_turn_settings*/ None)
                     .await;
-                if let Err(err) = self.initialize_spine_for_new_session().await {
-                    panic!("failed to initialize Spine runtime: {err}");
-                }
+                self.initialize_spine_for_new_session()
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!("failed to initialize Spine runtime: {err}"))
+                    })?;
                 if let Err(err) = self.seed_spine_tree_snapshot_if_available().await {
                     tracing::error!("failed to seed Spine tree snapshot: {err}");
                 }
@@ -1220,7 +1225,7 @@ impl Session {
                 let rollout_items = resumed_history.history;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
-                    .await;
+                    .await?;
                 if let Err(err) = self.seed_spine_tree_snapshot_if_available().await {
                     tracing::error!("failed to seed Spine tree snapshot: {err}");
                 }
@@ -1260,7 +1265,7 @@ impl Session {
             }
             InitialHistory::Forked(rollout_items) => {
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
-                    .await;
+                    .await?;
                 if let Err(err) = self.seed_spine_tree_snapshot_if_available().await {
                     tracing::error!("failed to seed Spine tree snapshot: {err}");
                 }
@@ -1286,35 +1291,50 @@ impl Session {
                 }
             }
         }
+        Ok(())
     }
 
     pub(super) async fn apply_rollout_reconstruction(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) -> Option<PreviousTurnSettings> {
+    ) -> CodexResult<Option<PreviousTurnSettings>> {
         let reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
         let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
-        self.replace_history(
-            reconstructed_rollout.history,
-            reconstructed_rollout.reference_context_item,
-        )
-        .await;
-        if let Err(err) = self
-            .rebuild_spine_from_rollout_items(
+        let spine_replay = self
+            .prepare_spine_replay_from_rollout_items(
                 &reconstructed_rollout.raw_response_items,
                 &reconstructed_rollout.spine_rollback_cuts,
                 reconstructed_rollout.used_replacement_history,
+                &reconstructed_rollout.history,
             )
             .await
-        {
-            panic!("failed to rebuild Spine runtime from rollout: {err}");
-        }
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to rebuild Spine runtime from rollout: {err}"
+                ))
+            })?;
+        let spine_history = if let Some(spine_replay) = spine_replay {
+            self.install_prepared_spine_replay(spine_replay)
+                .await
+                .map_err(|err| {
+                    CodexErr::Fatal(format!(
+                        "failed to rebuild Spine runtime from rollout: {err}"
+                    ))
+                })?
+        } else {
+            None
+        };
+        self.replace_history(
+            spine_history.unwrap_or(reconstructed_rollout.history),
+            reconstructed_rollout.reference_context_item,
+        )
+        .await;
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
-        previous_turn_settings
+        Ok(previous_turn_settings)
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -1879,8 +1899,16 @@ impl Session {
         let message: ResponseItem = ContextualUserFragment::into(fragment);
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
+            if let Err(err) = self
+                .record_conversation_items(&turn_context, std::slice::from_ref(&message))
+                .await
+            {
+                self.send_event(
+                    &turn_context,
+                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                )
                 .await;
+            }
             return;
         }
 
@@ -1976,8 +2004,16 @@ impl Session {
         let message: ResponseItem = ContextualUserFragment::into(fragment);
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
+            if let Err(err) = self
+                .record_conversation_items(&turn_context, std::slice::from_ref(&message))
+                .await
+            {
+                self.send_event(
+                    &turn_context,
+                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                )
                 .await;
+            }
             return;
         }
 
@@ -2548,12 +2584,16 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
-    ) {
+    ) -> CodexResult<()> {
         let (raw_ordinals, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
             let raw_start = spine_slot.lock().await.raw_len();
             match assign_spine_raw_ordinals(raw_start, items) {
                 Ok(mapped) => mapped,
-                Err(err) => panic!("failed to assign Spine raw ordinals: {err}"),
+                Err(err) => {
+                    return Err(self
+                        .spine_append_fatal("assign Spine raw ordinals", err)
+                        .await);
+                }
             }
         } else {
             (Vec::new(), 0)
@@ -2561,55 +2601,66 @@ impl Session {
         let appends = self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
-            error!("failed to initialize Spine runtime: {err}");
-            self.invalidate_spine_runtime(format!("failed to initialize Spine runtime: {err}"))
-                .await;
+            return Err(self
+                .spine_append_fatal("initialize Spine runtime", err)
+                .await);
         } else {
             if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
-                error!("failed to observe Spine raw items: {err}");
-                self.invalidate_spine_runtime(format!("failed to observe Spine raw items: {err}"))
-                    .await;
+                return Err(self
+                    .spine_append_fatal("observe Spine raw items", err)
+                    .await);
             }
             if !raw_ordinals.is_empty()
                 && let Err(err) = self
                     .observe_spine_context_items(&raw_ordinals, items, &appends)
                     .await
             {
-                error!("failed to observe Spine context items: {err}");
-                self.invalidate_spine_runtime(format!(
-                    "failed to observe Spine context items: {err}"
-                ))
-                .await;
+                return Err(self
+                    .spine_append_fatal("observe Spine context items", err)
+                    .await);
             }
         }
         self.send_raw_response_items(turn_context, items).await;
+        Ok(())
     }
 
     pub(crate) async fn record_conversation_items_raw_only(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
-    ) {
+    ) -> CodexResult<()> {
         let (_, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
             let raw_start = spine_slot.lock().await.raw_len();
             match assign_spine_raw_ordinals(raw_start, items) {
                 Ok(mapped) => mapped,
-                Err(err) => panic!("failed to assign Spine raw ordinals: {err}"),
+                Err(err) => {
+                    return Err(self
+                        .spine_append_fatal("assign Spine raw ordinals", err)
+                        .await);
+                }
             }
         } else {
             (Vec::new(), 0)
         };
         self.persist_rollout_response_items(items).await;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
-            error!("failed to initialize Spine runtime: {err}");
-            self.invalidate_spine_runtime(format!("failed to initialize Spine runtime: {err}"))
-                .await;
+            return Err(self
+                .spine_append_fatal("initialize Spine runtime", err)
+                .await);
         } else if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
-            error!("failed to observe Spine raw items: {err}");
-            self.invalidate_spine_runtime(format!("failed to observe Spine raw items: {err}"))
-                .await;
+            return Err(self
+                .spine_append_fatal("observe Spine raw items", err)
+                .await);
         }
         self.send_raw_response_items(turn_context, items).await;
+        Ok(())
+    }
+
+    async fn spine_append_fatal(&self, operation: &str, err: SpineError) -> CodexErr {
+        let reason = format!("failed to {operation}: {err}");
+        error!("{reason}");
+        self.invalidate_spine_runtime(reason.clone()).await;
+        CodexErr::Fatal(format!("failed to record Spine sidecar append: {reason}"))
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -3002,7 +3053,7 @@ impl Session {
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
-    ) {
+    ) -> CodexResult<()> {
         let reference_context_item = {
             let state = self.state.lock().await;
             state.reference_context_item()
@@ -3018,7 +3069,7 @@ impl Session {
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
-                .await;
+                .await?;
         }
         // Persist one `TurnContextItem` per real user turn so resume/lazy replay can recover the
         // latest durable baseline even when this turn emitted no model-visible context diffs.
@@ -3029,6 +3080,7 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
+        Ok(())
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -3164,16 +3216,17 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         response_item: ResponseItem,
-    ) {
+    ) -> CodexResult<()> {
         // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
-            .await;
+            .await?;
 
         // Derive a turn item and emit lifecycle events if applicable.
         if let Some(item) = parse_turn_item(&response_item) {
             self.emit_turn_item_started(turn_context, &item).await;
             self.emit_turn_item_completed(turn_context, item).await;
         }
+        Ok(())
     }
 
     pub(crate) async fn record_user_prompt_and_emit_turn_item(
@@ -3181,16 +3234,17 @@ impl Session {
         turn_context: &TurnContext,
         input: &[UserInput],
         response_item: ResponseItem,
-    ) {
+    ) -> CodexResult<()> {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
-            .await;
+            .await?;
         let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
+        Ok(())
     }
 
     pub(crate) async fn notify_stream_error(

@@ -241,7 +241,7 @@ pub(crate) async fn exit_review_mode(
         (rendered, assistant_message)
     };
 
-    session
+    if let Err(err) = session
         .record_conversation_items(
             &ctx,
             &[ResponseItem::Message {
@@ -251,7 +251,16 @@ pub(crate) async fn exit_review_mode(
                 phase: None,
             }],
         )
-        .await;
+        .await
+    {
+        session
+            .send_event(
+                ctx.as_ref(),
+                EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+            )
+            .await;
+        return;
+    }
 
     session
         .send_event(
@@ -259,7 +268,7 @@ pub(crate) async fn exit_review_mode(
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
         )
         .await;
-    session
+    if let Err(err) = session
         .record_response_item_and_emit_turn_item(
             ctx.as_ref(),
             ResponseItem::Message {
@@ -271,7 +280,16 @@ pub(crate) async fn exit_review_mode(
                 phase: None,
             },
         )
-        .await;
+        .await
+    {
+        session
+            .send_event(
+                ctx.as_ref(),
+                EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+            )
+            .await;
+        return;
+    }
 
     // Review turns can run before any regular user turn, so explicitly
     // materialize rollout persistence. Do this after emitting review output so

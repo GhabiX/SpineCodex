@@ -130,14 +130,14 @@ pub(crate) async fn record_completed_response_item(
     sess: &Session,
     turn_context: &TurnContext,
     item: &ResponseItem,
-) {
+) -> Result<()> {
     record_completed_response_item_with_finalized_facts(
         sess,
         turn_context,
         item,
         /*finalized_facts*/ None,
     )
-    .await;
+    .await
 }
 
 pub(crate) async fn record_completed_response_item_with_finalized_facts(
@@ -145,9 +145,9 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     turn_context: &TurnContext,
     item: &ResponseItem,
     finalized_facts: Option<&FinalizedTurnItemFacts>,
-) {
+) -> Result<()> {
     sess.record_conversation_items(turn_context, std::slice::from_ref(item))
-        .await;
+        .await?;
     let defers_mailbox_delivery = finalized_facts.map_or_else(
         || {
             completed_item_defers_mailbox_delivery_to_next_turn(
@@ -178,6 +178,7 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
     }
+    Ok(())
 }
 
 fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
@@ -297,10 +298,13 @@ pub(crate) async fn finalize_non_tool_response_item(
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
-) -> Option<FinalizedTurnItem> {
+) -> Result<Option<FinalizedTurnItem>> {
     let turn_item =
         handle_non_tool_response_item(sess, turn_context, contributor_policy, item, plan_mode)
             .await?;
+    let Some(turn_item) = turn_item else {
+        return Ok(None);
+    };
     let (memory_citation, last_agent_message, defers_mailbox_delivery_to_next_turn) =
         match &turn_item {
             TurnItem::AgentMessage(agent_message) => {
@@ -328,14 +332,14 @@ pub(crate) async fn finalize_non_tool_response_item(
             TurnItem::ImageGeneration(_) => (None, None, true),
             _ => (None, None, false),
         };
-    Some(FinalizedTurnItem {
+    Ok(Some(FinalizedTurnItem {
         turn_item,
         facts: FinalizedTurnItemFacts {
             memory_citation,
             last_agent_message,
             defers_mailbox_delivery_to_next_turn,
         },
-    })
+    }))
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -363,7 +367,7 @@ pub(crate) async fn handle_output_item_done(
             );
 
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+                .await?;
 
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_future: InFlightFuture<'static> = Box::pin(
@@ -384,7 +388,7 @@ pub(crate) async fn handle_output_item_done(
                 &item,
                 plan_mode,
             )
-            .await;
+            .await?;
             let finalized_facts = finalized_turn_item
                 .as_ref()
                 .map(|finalized| finalized.facts.clone());
@@ -412,7 +416,7 @@ pub(crate) async fn handle_output_item_done(
                 &item,
                 finalized_facts.as_ref(),
             )
-            .await;
+            .await?;
 
             output.last_agent_message = finalized_facts.and_then(|facts| facts.last_agent_message);
         }
@@ -426,14 +430,14 @@ pub(crate) async fn handle_output_item_done(
                 },
             };
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+                .await?;
             if let Some(response_item) = response_input_to_response_item(&response) {
                 ctx.sess
                     .record_conversation_items(
                         &ctx.turn_context,
                         std::slice::from_ref(&response_item),
                     )
-                    .await;
+                    .await?;
             }
 
             output.needs_follow_up = true;
@@ -453,7 +457,7 @@ pub(crate) async fn handle_non_tool_response_item(
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
-) -> Option<TurnItem> {
+) -> Result<Option<TurnItem>> {
     debug!(?item, "Output item");
 
     match item {
@@ -461,7 +465,9 @@ pub(crate) async fn handle_non_tool_response_item(
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. } => {
-            let mut turn_item = parse_turn_item(item)?;
+            let Some(mut turn_item) = parse_turn_item(item) else {
+                return Ok(None);
+            };
             if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
                 apply_turn_item_contributors(sess, turn_store, &mut turn_item).await;
             }
@@ -507,7 +513,7 @@ pub(crate) async fn handle_non_tool_response_item(
                                 image_output_path.display(),
                             ));
                         sess.record_conversation_items(turn_context, &[message])
-                            .await;
+                            .await?;
                     }
                     Err(err) => {
                         let output_path = image_generation_artifact_path(
@@ -526,15 +532,15 @@ pub(crate) async fn handle_non_tool_response_item(
                     }
                 }
             }
-            Some(turn_item)
+            Ok(Some(turn_item))
         }
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. } => {
             debug!("unexpected tool output from stream");
-            None
+            Ok(None)
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 

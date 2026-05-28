@@ -88,7 +88,8 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
@@ -163,7 +164,8 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -696,7 +698,8 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
@@ -770,7 +773,8 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -799,7 +803,8 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_seed_referenc
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert!(session.reference_context_item().await.is_none());
 }
@@ -822,7 +827,8 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
@@ -977,7 +983,8 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1113,7 +1120,8 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1230,7 +1238,8 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1336,7 +1345,8 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1383,7 +1393,8 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_preserves_turn_
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,
@@ -1500,7 +1511,8 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.previous_turn_settings().await,

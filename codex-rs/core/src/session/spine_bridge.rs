@@ -10,6 +10,12 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 
+pub(super) struct PreparedSpineReplay {
+    raw_len: u64,
+    runtime: Option<SpineRuntime>,
+    materialized: Option<Vec<ResponseItem>>,
+}
+
 impl Session {
     pub(crate) async fn send_spine_tree_update(
         &self,
@@ -78,21 +84,22 @@ impl Session {
         Ok(())
     }
 
-    pub(super) async fn rebuild_spine_from_rollout_items(
+    pub(super) async fn prepare_spine_replay_from_rollout_items(
         &self,
         raw_items: &[Option<ResponseItem>],
         rollback_cuts: &[usize],
         used_replacement_history: bool,
-    ) -> Result<(), SpineError> {
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(());
+        reconstructed_history: &[ResponseItem],
+    ) -> Result<Option<PreparedSpineReplay>, SpineError> {
+        let Some(_spine_slot) = self.spine.as_ref() else {
+            return Ok(None);
         };
         let Some(rollout_path) = self
             .current_rollout_path()
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?
         else {
-            return Ok(());
+            return Ok(None);
         };
         let raw_len = u64::try_from(raw_items.len())
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
@@ -108,21 +115,33 @@ impl Session {
             .as_ref()
             .map(|runtime| runtime.materialize_history(raw_items))
             .transpose()?;
-        spine_slot.lock().await.set_replayed(raw_len, runtime)?;
-        if let Some(materialized) = materialized {
-            if used_replacement_history {
-                let host_history = self.clone_history().await;
-                if host_history.raw_items() != materialized.as_slice() {
-                    return Err(SpineError::InvalidStore(
-                        "spine_task_tree replacement_history does not match sidecar h(PS)"
-                            .to_string(),
-                    ));
-                }
-            }
-            self.replace_history(materialized, self.reference_context_item().await)
-                .await;
+        if used_replacement_history
+            && let Some(materialized) = materialized.as_ref()
+            && reconstructed_history != materialized.as_slice()
+        {
+            return Err(SpineError::InvalidStore(
+                "spine_task_tree replacement_history does not match sidecar h(PS)".to_string(),
+            ));
         }
-        Ok(())
+        Ok(Some(PreparedSpineReplay {
+            raw_len,
+            runtime,
+            materialized,
+        }))
+    }
+
+    pub(super) async fn install_prepared_spine_replay(
+        &self,
+        replay: PreparedSpineReplay,
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(replay.materialized);
+        };
+        spine_slot
+            .lock()
+            .await
+            .set_replayed(replay.raw_len, replay.runtime)?;
+        Ok(replay.materialized)
     }
 
     pub(super) async fn observe_spine_raw_items(&self, count: usize) -> Result<(), SpineError> {

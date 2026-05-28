@@ -292,12 +292,14 @@ async fn make_spine_session_with_closed_child(
     let prefix = user_message("prefix before spine");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let open_request = spine_call(SPINE_TOOL_OPEN, "resume-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("resume-open".to_string(), "resumed child".to_string())
         .await
@@ -305,7 +307,8 @@ async fn make_spine_session_with_closed_child(
     let open_output = function_output("resume-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -314,12 +317,14 @@ async fn make_spine_session_with_closed_child(
     let child_body = user_message("child body before close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let close_request = spine_call(SPINE_TOOL_CLOSE, "resume-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("resume-close".to_string(), None)
         .await
@@ -331,7 +336,8 @@ async fn make_spine_session_with_closed_child(
         .expect("commit close");
     session
         .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await;
+        .await
+        .expect("record conversation items");
 
     assert_eq!(compact_mock.requests().len(), 1);
     session.ensure_rollout_materialized().await;
@@ -1819,7 +1825,8 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
@@ -1829,7 +1836,10 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     let (session, _turn_context) = make_session_and_context().await;
 
-    session.record_initial_history(InitialHistory::New).await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("record initial history");
 
     let history = session.clone_history().await;
     assert_eq!(history.raw_items().to_vec(), Vec::<ResponseItem>::new());
@@ -1852,7 +1862,10 @@ async fn record_initial_history_new_seeds_initial_spine_tree_snapshot() {
     .await;
     attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
 
-    session.record_initial_history(InitialHistory::New).await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("record initial history");
 
     let event = timeout(StdDuration::from_secs(1), rx.recv())
         .await
@@ -1900,21 +1913,24 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     let history_before_seed = session.state.lock().await.clone_history();
     assert_eq!(expected, history_before_seed.raw_items());
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("record context updates");
     expected.extend(session.build_initial_context(&turn_context).await);
     let history_after_seed = session.clone_history().await;
     assert_eq!(expected, history_after_seed.raw_items());
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("record context updates");
     let history_after_second_seed = session.clone_history().await;
     assert_eq!(
         history_after_seed.raw_items(),
@@ -1993,7 +2009,8 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     let actual = session.state.lock().await.token_info();
     assert_eq!(actual, Some(info2));
@@ -2310,7 +2327,8 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
-        .await;
+        .await
+        .expect("record initial history");
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
@@ -2578,7 +2596,8 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
-        .await;
+        .await
+        .expect("record initial history");
 
     let history = session.clone_history().await;
     assert_eq!(
@@ -7541,7 +7560,8 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
     let (session, turn_context) = make_session_and_context().await;
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("record context updates");
     let history = session.clone_history().await;
     let initial_context = session.build_initial_context(&turn_context).await;
     assert_eq!(history.raw_items().to_vec(), initial_context);
@@ -7571,7 +7591,8 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         .await;
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("record context updates");
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(/*item*/ None);
@@ -7585,7 +7606,8 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("record context updates");
 
     let history = session.clone_history().await;
     let mut expected_history = vec![compacted_summary];
@@ -7619,7 +7641,8 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("record context updates");
 
     assert_eq!(
         session.clone_history().await.raw_items().to_vec(),
@@ -7681,12 +7704,14 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     let prefix = user_message("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let open_request = spine_call(SPINE_TOOL_OPEN, "open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("open".to_string(), "child".to_string())
         .await
@@ -7694,7 +7719,8 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     let open_output = function_output("open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -7704,12 +7730,14 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     let inner = user_message("inside");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let close_request = spine_call(SPINE_TOOL_CLOSE, "close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close(
             "close".to_string(),
@@ -7724,7 +7752,8 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .expect("commit close output");
     session
         .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await;
+        .await
+        .expect("record conversation items");
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
@@ -7950,12 +7979,14 @@ async fn spine_close_bridge_can_close_initial_root_child() {
     let root_child_work = user_message("initial root child work");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&root_child_work))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let close_request = spine_call(SPINE_TOOL_CLOSE, "close-root-child");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("close-root-child".to_string(), None)
         .await
@@ -7967,7 +7998,8 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         .expect("commit close output");
     session
         .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await;
+        .await
+        .expect("record conversation items");
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
@@ -8065,11 +8097,13 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
     let prefix = user_message("prefix");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
     let open_request = spine_call(SPINE_TOOL_OPEN, "open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("open".to_string(), "child".to_string())
         .await
@@ -8077,7 +8111,8 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
     let open_output = function_output("open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -8085,11 +8120,13 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
     let inner = user_message("inside");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
-        .await;
+        .await
+        .expect("record conversation items");
     let close_request = spine_call(SPINE_TOOL_CLOSE, "close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("close".to_string(), None)
         .await
@@ -8115,7 +8152,8 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
     let concurrent = user_message("concurrent history mutation");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&concurrent))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let err = commit_task
         .await
@@ -8209,11 +8247,13 @@ async fn spine_close_rejects_empty_live_suffix_before_compact_request() {
     let prefix = user_message("prefix before empty close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
     let open_request = spine_call(SPINE_TOOL_OPEN, "empty-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("empty-open".to_string(), "empty child".to_string())
         .await
@@ -8221,7 +8261,8 @@ async fn spine_close_rejects_empty_live_suffix_before_compact_request() {
     let open_output = function_output("empty-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -8230,7 +8271,8 @@ async fn spine_close_rejects_empty_live_suffix_before_compact_request() {
     let close_request = spine_call(SPINE_TOOL_CLOSE, "empty-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("empty-close".to_string(), None)
         .await
@@ -8309,11 +8351,13 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
     let prefix = user_message("prefix before encrypted only close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
     let open_request = spine_call(SPINE_TOOL_OPEN, "encrypted-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("encrypted-open".to_string(), "encrypted child".to_string())
         .await
@@ -8321,7 +8365,8 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
     let open_output = function_output("encrypted-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -8329,11 +8374,13 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
     let child_body = user_message("child body before encrypted only close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
-        .await;
+        .await
+        .expect("record conversation items");
     let close_request = spine_call(SPINE_TOOL_CLOSE, "encrypted-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("encrypted-close".to_string(), None)
         .await
@@ -8414,11 +8461,13 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
     let prefix = user_message("prefix before partial close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
     let open_request = spine_call(SPINE_TOOL_OPEN, "partial-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("partial-open".to_string(), "partial child".to_string())
         .await
@@ -8426,7 +8475,8 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
     let open_output = function_output("partial-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -8434,11 +8484,13 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
     let child_body = user_message("partial child work");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
-        .await;
+        .await
+        .expect("record conversation items");
     let close_request = spine_call(SPINE_TOOL_CLOSE, "partial-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("partial-close".to_string(), None)
         .await
@@ -8546,12 +8598,14 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     let prefix = user_message("prefix before outer");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let outer_open_request = spine_call(SPINE_TOOL_OPEN, "outer-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&outer_open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("outer-open".to_string(), "outer".to_string())
         .await
@@ -8559,7 +8613,8 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     let outer_open_output = function_output("outer-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&outer_open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &outer_open_output)
         .await
@@ -8568,12 +8623,14 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     let outer_setup = user_message("outer setup");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&outer_setup))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let inner_open_request = spine_call(SPINE_TOOL_OPEN, "inner-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner_open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("inner-open".to_string(), "inner".to_string())
         .await
@@ -8581,7 +8638,8 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     let inner_open_output = function_output("inner-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner_open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &inner_open_output)
         .await
@@ -8590,12 +8648,14 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     let inner_raw = assistant_message("inner assistant traj should be folded away");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner_raw))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let inner_close_request = spine_call(SPINE_TOOL_CLOSE, "inner-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner_close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("inner-close".to_string(), None)
         .await
@@ -8610,17 +8670,20 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
             &turn_context,
             std::slice::from_ref(&inner_close_output),
         )
-        .await;
+        .await
+        .expect("record conversation items");
 
     let after_inner = user_message("after inner in outer suffix");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&after_inner))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let outer_close_request = spine_call(SPINE_TOOL_CLOSE, "outer-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&outer_close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("outer-close".to_string(), None)
         .await
@@ -8635,7 +8698,8 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
             &turn_context,
             std::slice::from_ref(&outer_close_output),
         )
-        .await;
+        .await
+        .expect("record conversation items");
 
     let requests = compact_mock.requests();
     assert_eq!(requests.len(), 2);
@@ -8693,12 +8757,14 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
     let prefix = user_message("prefix before native compact");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let open_request = spine_call(SPINE_TOOL_OPEN, "native-compact-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open(
             "native-compact-open".to_string(),
@@ -8709,7 +8775,8 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
     let open_output = function_output("native-compact-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -8718,12 +8785,14 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
     let child_body = user_message("child body before native compact");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
-        .await;
+        .await
+        .expect("record conversation items");
 
     let close_request = spine_call(SPINE_TOOL_CLOSE, "native-compact-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("native-compact-close".to_string(), None)
         .await
@@ -8735,7 +8804,8 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
         .expect("commit close");
     session
         .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await;
+        .await
+        .expect("record conversation items");
 
     crate::compact::run_compact_task(
         Arc::clone(&session),
@@ -8850,13 +8920,15 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
     let prefix = user_message("sequence prefix");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 
     let open_request = spine_call(SPINE_TOOL_OPEN, "sequence-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("sequence-open".to_string(), "sequence child".to_string())
         .await
@@ -8864,7 +8936,8 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
     let open_output = function_output("sequence-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -8874,13 +8947,15 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
     let child_body = user_message("sequence child body");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
-        .await;
+        .await
+        .expect("record conversation items");
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 
     let close_request = spine_call(SPINE_TOOL_CLOSE, "sequence-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("sequence-close".to_string(), None)
         .await
@@ -8892,7 +8967,8 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
         .expect("commit close");
     session
         .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await;
+        .await
+        .expect("record conversation items");
     assert_eq!(responses_mock.requests().len(), 1);
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 
@@ -8955,7 +9031,8 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
             history: resumed.history,
             rollout_path: Some(rollout_path),
         }))
-        .await;
+        .await
+        .expect("record initial history");
     assert_eq!(
         resumed_session.clone_history().await.raw_items(),
         source_materialized.as_slice()
@@ -9002,7 +9079,8 @@ async fn spine_native_compact_new_root_open_index_matches_installed_history_befo
     for item in &precompact_items {
         session
             .record_conversation_items(&turn_context, std::slice::from_ref(item))
-            .await;
+            .await
+            .expect("record conversation items");
     }
 
     crate::compact::run_compact_task(
@@ -9054,7 +9132,8 @@ async fn spine_native_compact_new_root_open_index_matches_installed_history_befo
     let open_request = spine_call(SPINE_TOOL_OPEN, "post-native-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open(
             "post-native-open".to_string(),
@@ -9065,7 +9144,8 @@ async fn spine_native_compact_new_root_open_index_matches_installed_history_befo
     let open_output = function_output("post-native-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -9074,11 +9154,13 @@ async fn spine_native_compact_new_root_open_index_matches_installed_history_befo
     let post_native_body = user_message("post native root work");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&post_native_body))
-        .await;
+        .await
+        .expect("record conversation items");
     let close_request = spine_call(SPINE_TOOL_CLOSE, "post-native-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_close("post-native-close".to_string(), None)
         .await
@@ -9090,7 +9172,8 @@ async fn spine_native_compact_new_root_open_index_matches_installed_history_befo
         .expect("close after native compact should use corrected root open index");
     session
         .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await;
+        .await
+        .expect("record conversation items");
 
     assert_eq!(responses_mock.requests().len(), 2);
     let close_compact_request = &responses_mock.requests()[1];
@@ -9126,19 +9209,24 @@ async fn spine_feature_off_records_spine_shaped_items_as_plain_history_without_s
     let close_output = function_output("feature-off-close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_output))
-        .await;
+        .await
+        .expect("record conversation items");
 
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -9412,7 +9500,8 @@ async fn spine_tree_tool_node_context_uses_provider_input_delta() {
     let open_request = spine_call(SPINE_TOOL_OPEN, "delta-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("delta-open".to_string(), "delta child".to_string())
         .await
@@ -9432,7 +9521,8 @@ async fn spine_tree_tool_node_context_uses_provider_input_delta() {
     let open_output = function_output("delta-open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -9496,7 +9586,8 @@ async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
     let open_request = spine_call(SPINE_TOOL_OPEN, "open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .stage_spine_open("open".to_string(), "invalid range".to_string())
         .await
@@ -9504,7 +9595,8 @@ async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
     let open_output = function_output("open");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
-        .await;
+        .await
+        .expect("record conversation items");
     session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
@@ -9557,12 +9649,18 @@ async fn spine_sidecar_write_failure_invalidates_runtime_and_resume_fails_closed
     std::fs::set_permissions(&broken_tree_path, tree_permissions)
         .expect("make tree ledger readonly");
 
-    session
+    let err = session
         .record_conversation_items(
             &turn_context,
             std::slice::from_ref(&user_message("message that cannot reach sidecar")),
         )
-        .await;
+        .await
+        .expect_err("sidecar append failure should be fatal");
+    assert!(
+        err.to_string()
+            .contains("failed to record Spine sidecar append"),
+        "unexpected append error: {err}"
+    );
 
     let err = session
         .spine_tree()
@@ -9641,10 +9739,12 @@ async fn spine_feature_off_prompt_history_is_byte_identical_to_base_codex() {
     for item in &items {
         base_session
             .record_conversation_items(&base_turn_context, std::slice::from_ref(item))
-            .await;
+            .await
+            .expect("record conversation items");
         feature_off_session
             .record_conversation_items(&feature_off_turn_context, std::slice::from_ref(item))
-            .await;
+            .await
+            .expect("record conversation items");
     }
 
     let base_history = base_session.clone_history().await;
@@ -9756,7 +9856,8 @@ async fn spine_feature_off_replacement_history_resume_is_host_verbatim() {
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/feature-off-spine-looking.jsonl")),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -9803,7 +9904,8 @@ async fn spine_fixed_query_is_not_shifted_as_msg() {
     let user = user_message("actual task message");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&user))
-        .await;
+        .await
+        .expect("record conversation items");
     let msg_count = session
         .spine
         .as_ref()
@@ -9847,7 +9949,8 @@ async fn spine_raw_ordinals_follow_persisted_rollout_items_not_input_width() {
                 second.clone(),
             ],
         )
-        .await;
+        .await
+        .expect("record conversation items");
 
     let runtime = session
         .spine
@@ -9891,7 +9994,6 @@ async fn spine_raw_ordinals_follow_persisted_rollout_items_not_input_width() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "spine_task_tree replacement_history does not match sidecar h(PS)")]
 async fn spine_resume_rejects_replacement_history_mismatch() {
     let (_source_session, _source_turn_context, source_rollout_path, mut rollout_items) =
         make_spine_session_with_closed_child("sidecar resume summary").await;
@@ -9928,17 +10030,81 @@ async fn spine_resume_rejects_replacement_history_mismatch() {
     )
     .expect("clone spine sidecar");
 
-    resumed_session
+    let err = resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
             rollout_path: Some(source_rollout_path),
         }))
-        .await;
+        .await
+        .expect_err("replacement_history mismatch should fail closed");
+    assert!(
+        err.to_string()
+            .contains("spine_task_tree replacement_history does not match sidecar h(PS)"),
+        "unexpected resume error: {err}"
+    );
 }
 
 #[tokio::test]
-#[should_panic(expected = "spine_task_tree resume requires Spine sidecar")]
+async fn failed_spine_replay_does_not_mutate_live_session_history() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let live_rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize spine");
+    let live_message = user_message("live history must survive failed replay");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&live_message))
+        .await
+        .expect("record live history");
+    let original_history = session.clone_history().await.raw_items().to_vec();
+
+    let (_source_session, _source_turn_context, source_rollout_path, mut rollout_items) =
+        make_spine_session_with_closed_child("sidecar replay mismatch").await;
+    rollout_items.push(RolloutItem::Compacted(CompactedItem {
+        message: "stale compact checkpoint".to_string(),
+        replacement_history: Some(vec![user_message("stale replacement_history should fail")]),
+    }));
+    let raw_live = spine_raw_items_after_rollback(&rollout_items)
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    SpineStore::clone_for_rollout_with_raw_live(
+        &source_rollout_path,
+        &live_rollout_path,
+        &raw_live,
+    )
+    .expect("clone mismatching sidecar");
+
+    let err = session
+        .apply_rollout_reconstruction(&turn_context, &rollout_items)
+        .await
+        .expect_err("replay mismatch should fail");
+    assert!(
+        err.to_string()
+            .contains("failed to rebuild Spine runtime from rollout"),
+        "unexpected replay error: {err}"
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        original_history.as_slice()
+    );
+}
+
+#[tokio::test]
 async fn replacement_history_not_used_as_spine_replay_source() {
     let (mut resumed_session, _resumed_context, _rx) =
         make_session_and_context_with_auth_and_config_and_rx(
@@ -9961,7 +10127,7 @@ async fn replacement_history_not_used_as_spine_replay_source() {
         "<spine_memory runtime_generated=\"true\">rendered snapshot only</spine_memory>",
     )];
 
-    resumed_session
+    let err = resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: vec![RolloutItem::Compacted(CompactedItem {
@@ -9970,7 +10136,13 @@ async fn replacement_history_not_used_as_spine_replay_source() {
             })],
             rollout_path: Some(rollout_path),
         }))
-        .await;
+        .await
+        .expect_err("missing sidecar should fail closed");
+    assert!(
+        err.to_string()
+            .contains("spine_task_tree resume requires Spine sidecar"),
+        "unexpected resume error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -10024,7 +10196,8 @@ async fn spine_resume_accepts_matching_replacement_history_checkpoint() {
             history: rollout_items,
             rollout_path: Some(source_rollout_path),
         }))
-        .await;
+        .await
+        .expect("record initial history");
 
     let resumed_history = resumed_session.clone_history().await;
     assert_eq!(
@@ -10049,7 +10222,6 @@ async fn spine_resume_accepts_matching_replacement_history_checkpoint() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "spine_task_tree resume requires Spine sidecar")]
 async fn spine_resume_non_spine_session_fails_closed() {
     let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -10069,13 +10241,19 @@ async fn spine_resume_non_spine_session_fails_closed() {
         "ordinary non-spine history",
     ))];
 
-    session
+    let err = session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
             rollout_path: Some(rollout_path),
         }))
-        .await;
+        .await
+        .expect_err("missing sidecar should fail closed");
+    assert!(
+        err.to_string()
+            .contains("spine_task_tree resume requires Spine sidecar"),
+        "unexpected resume error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -10092,7 +10270,8 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("record context updates");
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
 
@@ -10172,7 +10351,8 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         .await;
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("record context updates");
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
 
@@ -10600,6 +10780,97 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
             ..
         }) if turn_id == tc.sub_id
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_finish_pending_input_append_failure_does_not_emit_turn_complete() {
+    let (mut session, tc, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize spine");
+    let sess = session;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    while rx.try_recv().is_ok() {}
+
+    sess.inject_response_items(vec![ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "late pending input".to_string(),
+        }],
+        phase: None,
+    }])
+    .await
+    .expect("inject pending input into active turn");
+
+    let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
+    let broken_tree_path = store.tree_path_for_test();
+    let mut tree_permissions = std::fs::metadata(&broken_tree_path)
+        .expect("tree metadata")
+        .permissions();
+    tree_permissions.set_readonly(true);
+    std::fs::set_permissions(&broken_tree_path, tree_permissions)
+        .expect("make tree ledger readonly");
+
+    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+        .await;
+
+    let mut tree_permissions = std::fs::metadata(&broken_tree_path)
+        .expect("tree metadata")
+        .permissions();
+    tree_permissions.set_readonly(false);
+    std::fs::set_permissions(&broken_tree_path, tree_permissions)
+        .expect("restore tree ledger permissions");
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected append error")
+        .expect("channel open");
+    assert!(
+        matches!(event.msg, EventMsg::Error(_)),
+        "unexpected event: {:?}",
+        event.msg
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "fatal pending append failure must not emit normal turn completion"
+    );
+    assert!(
+        sess.inject_response_items(vec![ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "new input".to_string(),
+            }],
+            phase: None,
+        }])
+        .await
+        .is_err(),
+        "failed cleanup should clear the active turn"
+    );
 }
 
 #[tokio::test]

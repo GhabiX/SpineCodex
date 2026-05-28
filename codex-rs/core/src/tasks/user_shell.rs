@@ -351,9 +351,18 @@ async fn persist_user_shell_output(
     let output_item = user_shell_command_record_item(raw_command, exec_output, turn_context);
 
     if mode == UserShellCommandMode::StandaloneTurn {
-        session
+        if let Err(err) = session
             .record_conversation_items(turn_context, std::slice::from_ref(&output_item))
-            .await;
+            .await
+        {
+            session
+                .send_event(
+                    turn_context,
+                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                )
+                .await;
+            return;
+        }
         // Standalone shell turns can run before any regular user turn, so
         // explicitly materialize rollout persistence after recording output.
         session.ensure_rollout_materialized().await;
@@ -382,8 +391,16 @@ async fn persist_user_shell_output(
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<_>>();
-        session
+        if let Err(err) = session
             .record_conversation_items(turn_context, &response_items)
-            .await;
+            .await
+        {
+            session
+                .send_event(
+                    turn_context,
+                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                )
+                .await;
+        }
     }
 }

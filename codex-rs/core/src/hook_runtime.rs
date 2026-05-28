@@ -17,6 +17,7 @@ use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -109,9 +110,9 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
 pub(crate) async fn run_pending_session_start_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-) -> bool {
+) -> CodexResult<bool> {
     let Some(session_start_source) = sess.take_pending_session_start_source().await else {
-        return false;
+        return Ok(false);
     };
 
     let request = codex_hooks::SessionStartRequest {
@@ -147,7 +148,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
     tool_use_id: String,
     tool_name: &HookToolName,
     tool_input: &Value,
-) -> PreToolUseHookResult {
+) -> CodexResult<PreToolUseHookResult> {
     let request = PreToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -173,30 +174,32 @@ pub(crate) async fn run_pre_tool_use_hooks(
         updated_input,
     } = hooks.run_pre_tool_use(request).await;
     emit_hook_completed_events(sess, turn_context, hook_events).await;
-    record_additional_contexts(sess, turn_context, additional_contexts).await;
+    record_additional_contexts(sess, turn_context, additional_contexts).await?;
 
     if !should_block {
-        return PreToolUseHookResult::Continue { updated_input };
+        return Ok(PreToolUseHookResult::Continue { updated_input });
     }
 
     let Some(reason) = block_reason else {
-        return PreToolUseHookResult::Continue {
+        return Ok(PreToolUseHookResult::Continue {
             updated_input: None,
-        };
+        });
     };
 
-    if (tool_name.name() == "Bash" || tool_name.name() == "apply_patch")
-        && let Some(command) = tool_input.get("command").and_then(Value::as_str)
-    {
-        PreToolUseHookResult::Blocked(format!(
-            "Command blocked by PreToolUse hook: {reason}. Command: {command}"
-        ))
-    } else {
-        PreToolUseHookResult::Blocked(format!(
-            "Tool call blocked by PreToolUse hook: {reason}. Tool: {}",
-            tool_name.name()
-        ))
-    }
+    Ok(
+        if (tool_name.name() == "Bash" || tool_name.name() == "apply_patch")
+            && let Some(command) = tool_input.get("command").and_then(Value::as_str)
+        {
+            PreToolUseHookResult::Blocked(format!(
+                "Command blocked by PreToolUse hook: {reason}. Command: {command}"
+            ))
+        } else {
+            PreToolUseHookResult::Blocked(format!(
+                "Tool call blocked by PreToolUse hook: {reason}. Tool: {}",
+                tool_name.name()
+            ))
+        },
+    )
 }
 
 // PermissionRequest hooks share the same preview/start/completed event flow as
@@ -393,7 +396,7 @@ pub(crate) async fn record_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     pending_input: PendingInputRecord,
-) {
+) -> CodexResult<()> {
     match pending_input {
         PendingInputRecord::UserMessage {
             content,
@@ -405,14 +408,15 @@ pub(crate) async fn record_pending_input(
                 content.as_slice(),
                 response_item,
             )
-            .await;
-            record_additional_contexts(sess, turn_context, additional_contexts).await;
+            .await?;
+            record_additional_contexts(sess, turn_context, additional_contexts).await?;
         }
         PendingInputRecord::ConversationItem { response_item } => {
             sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
-                .await;
+                .await?;
         }
     }
+    Ok(())
 }
 
 async fn run_context_injecting_hook<Fut, Outcome>(
@@ -437,10 +441,10 @@ impl HookRuntimeOutcome {
         self,
         sess: &Arc<Session>,
         turn_context: &Arc<TurnContext>,
-    ) -> bool {
-        record_additional_contexts(sess, turn_context, self.additional_contexts).await;
+    ) -> CodexResult<bool> {
+        record_additional_contexts(sess, turn_context, self.additional_contexts).await?;
 
-        self.should_stop
+        Ok(self.should_stop)
     }
 }
 
@@ -448,14 +452,14 @@ pub(crate) async fn record_additional_contexts(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     additional_contexts: Vec<String>,
-) {
+) -> CodexResult<()> {
     let developer_messages = additional_context_messages(additional_contexts);
     if developer_messages.is_empty() {
-        return;
+        return Ok(());
     }
 
     sess.record_conversation_items(turn_context, developer_messages.as_slice())
-        .await;
+        .await
 }
 
 fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {
