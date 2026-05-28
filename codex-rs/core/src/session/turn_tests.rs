@@ -79,7 +79,8 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
         /*previously_active_item*/ None,
         &mut last_agent_message,
     )
-    .await;
+    .await
+    .expect("plan-mode assistant item should record");
 
     assert!(handled);
     assert_eq!(

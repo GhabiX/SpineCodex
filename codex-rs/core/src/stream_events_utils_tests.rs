@@ -139,6 +139,7 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
         /*plan_mode*/ false,
     )
     .await
+    .expect("assistant message should record")
     .expect("assistant message should parse");
 
     let TurnItem::AgentMessage(agent_message) = turn_item else {
@@ -227,6 +228,7 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
         /*plan_mode*/ false,
     )
     .await
+    .expect("assistant message should record")
     .expect("assistant message should parse");
 
     assert!(turn_store.get::<TurnItemContributorRan>().is_none());
@@ -243,6 +245,7 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
         /*plan_mode*/ false,
     )
     .await
+    .expect("assistant message should record")
     .expect("assistant message should parse");
 
     assert!(turn_store.get::<TurnItemContributorRan>().is_some());
@@ -321,6 +324,7 @@ async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text() {
         /*plan_mode*/ false,
     )
     .await
+    .expect("assistant message should record")
     .expect("assistant message should parse");
 
     assert_eq!(
@@ -347,6 +351,7 @@ async fn finalized_turn_item_keeps_mailbox_open_for_commentary_text() {
         /*plan_mode*/ false,
     )
     .await
+    .expect("assistant message should record")
     .expect("assistant message should parse");
 
     assert_eq!(

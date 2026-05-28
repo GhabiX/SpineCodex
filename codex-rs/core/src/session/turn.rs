@@ -176,8 +176,13 @@ pub(crate) async fn run_turn(
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
-        .await;
+    if let Err(err) = sess
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+        .await
+    {
+        send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+        return None;
+    }
 
     let loaded_plugins = sess
         .services
@@ -309,8 +314,13 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>();
 
-    if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return None;
+    match run_pending_session_start_hooks(&sess, &turn_context).await {
+        Ok(true) => return None,
+        Ok(false) => {}
+        Err(err) => {
+            send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+            return None;
+        }
     }
     let additional_contexts = if input.is_empty() {
         Vec::new()
@@ -324,16 +334,24 @@ pub(crate) async fn run_turn(
         )
         .await;
         if user_prompt_submit_outcome.should_stop {
-            record_additional_contexts(
+            if let Err(err) = record_additional_contexts(
                 &sess,
                 &turn_context,
                 user_prompt_submit_outcome.additional_contexts,
             )
-            .await;
+            .await
+            {
+                send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+            }
             return None;
         }
-        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-            .await;
+        if let Err(err) = sess
+            .record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await
+        {
+            send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+            return None;
+        }
         user_prompt_submit_outcome.additional_contexts
     };
     sess.services
@@ -346,7 +364,10 @@ pub(crate) async fn run_turn(
     }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-    record_additional_contexts(&sess, &turn_context, additional_contexts).await;
+    if let Err(err) = record_additional_contexts(&sess, &turn_context, additional_contexts).await {
+        send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+        return None;
+    }
     if !input.is_empty() {
         // Track the previous-turn baseline from the regular user-turn path only so
         // standalone tasks (compact/shell/review) cannot suppress future
@@ -358,12 +379,22 @@ pub(crate) async fn run_turn(
         .await;
     }
     if !skill_items.is_empty() {
-        sess.record_conversation_items(&turn_context, &skill_items)
-            .await;
+        if let Err(err) = sess
+            .record_conversation_items(&turn_context, &skill_items)
+            .await
+        {
+            send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+            return None;
+        }
     }
     if !plugin_items.is_empty() {
-        sess.record_conversation_items(&turn_context, &plugin_items)
-            .await;
+        if let Err(err) = sess
+            .record_conversation_items(&turn_context, &plugin_items)
+            .await
+        {
+            send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+            return None;
+        }
     }
 
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
@@ -391,8 +422,13 @@ pub(crate) async fn run_turn(
     let mut spine_control_overlay = SpineControlOverlay::new(spine_task_tree_enabled);
 
     loop {
-        if run_pending_session_start_hooks(&sess, &turn_context).await {
-            break;
+        match run_pending_session_start_hooks(&sess, &turn_context).await {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(err) => {
+                send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+                break;
+            }
         }
 
         // Note that pending_input would be something like a message the user
@@ -433,9 +469,17 @@ pub(crate) async fn run_turn(
 
         let has_accepted_pending_input = !accepted_pending_input.is_empty();
         for pending_input in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input).await;
+            if let Err(err) = record_pending_input(&sess, &turn_context, pending_input).await {
+                send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+                return None;
+            }
         }
-        record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
+        if let Err(err) =
+            record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await
+        {
+            send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+            return None;
+        }
 
         if blocked_pending_input && !has_accepted_pending_input {
             if requeued_pending_input {
@@ -564,11 +608,16 @@ pub(crate) async fn run_turn(
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
                         {
-                            sess.record_conversation_items(
-                                &turn_context,
-                                std::slice::from_ref(&hook_prompt_message),
-                            )
-                            .await;
+                            if let Err(err) = sess
+                                .record_conversation_items(
+                                    &turn_context,
+                                    std::slice::from_ref(&hook_prompt_message),
+                                )
+                                .await
+                            {
+                                send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+                                return None;
+                            }
                             stop_hook_active = true;
                             continue;
                         } else {
@@ -681,6 +730,12 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn send_turn_error(sess: &Session, turn_context: &TurnContext, err: CodexErr) {
+    info!("Turn error: {err:#}");
+    let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
+    sess.send_event(turn_context, event).await;
 }
 
 async fn track_turn_resolved_config_analytics(
@@ -1832,7 +1887,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     state: &mut PlanModeStreamState,
     previously_active_item: Option<&TurnItem>,
     last_agent_message: &mut Option<String>,
-) -> bool {
+) -> CodexResult<bool> {
     if let ResponseItem::Message { role, .. } = item
         && role == "assistant"
     {
@@ -1846,7 +1901,7 @@ async fn handle_assistant_item_done_in_plan_mode(
             item,
             /*plan_mode*/ true,
         )
-        .await
+        .await?
         {
             finalized_facts = Some(finalized_turn_item.facts.clone());
             emit_turn_item_in_plan_mode(
@@ -1868,13 +1923,13 @@ async fn handle_assistant_item_done_in_plan_mode(
             item,
             finalized_facts.as_ref(),
         )
-        .await;
+        .await?;
         if let Some(agent_message) = final_last_agent_message {
             *last_agent_message = Some(agent_message);
         }
-        return true;
+        return Ok(true);
     }
-    false
+    Ok(false)
 }
 
 async fn drain_in_flight(
@@ -1904,13 +1959,13 @@ async fn drain_in_flight(
                         &turn_context,
                         std::slice::from_ref(&response_item),
                     )
-                    .await;
+                    .await?;
                 } else {
                     sess.record_conversation_items(
                         &turn_context,
                         std::slice::from_ref(&response_item),
                     )
-                    .await;
+                    .await?;
                     sess.maybe_commit_spine_tool_output(&turn_context, &response_item)
                         .await
                         .map_err(|err| {
@@ -2069,8 +2124,8 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
-                if let Some(state) = plan_mode_state.as_mut()
-                    && handle_assistant_item_done_in_plan_mode(
+                if let Some(state) = plan_mode_state.as_mut() {
+                    if handle_assistant_item_done_in_plan_mode(
                         &sess,
                         &turn_context,
                         turn_store.as_ref(),
@@ -2079,9 +2134,10 @@ async fn try_run_sampling_request(
                         previously_streamed_item.as_ref(),
                         &mut last_agent_message,
                     )
-                    .await
-                {
-                    continue;
+                    .await?
+                    {
+                        continue;
+                    }
                 }
 
                 let mut ctx = HandleOutputCtx {
@@ -2159,7 +2215,7 @@ async fn try_run_sampling_request(
                     &item,
                     plan_mode,
                 )
-                .await
+                .await?
                 {
                     let mut turn_item = turn_item;
                     let stream_item_to_client = !defer_streamed_turn_items_for_contributors;

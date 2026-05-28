@@ -357,10 +357,22 @@ impl CodexThread {
             .is_err()
         {
             let turn_context = self.codex.session.new_default_turn().await;
-            self.codex
+            if let Err(err) = self
+                .codex
                 .session
                 .record_conversation_items(turn_context.as_ref(), &[message])
-                .await;
+                .await
+            {
+                self.codex
+                    .session
+                    .send_event(
+                        turn_context.as_ref(),
+                        codex_protocol::protocol::EventMsg::Error(
+                            err.to_error_event(/*message_prefix*/ None),
+                        ),
+                    )
+                    .await;
+            }
         }
     }
 
@@ -383,7 +395,7 @@ impl CodexThread {
             self.codex
                 .session
                 .record_conversation_items(turn_context.as_ref(), &items)
-                .await;
+                .await?;
         }
 
         Ok(submission_id)
@@ -402,12 +414,12 @@ impl CodexThread {
             self.codex
                 .session
                 .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
-                .await;
+                .await?;
         }
         self.codex
             .session
             .record_conversation_items(turn_context.as_ref(), &items)
-            .await;
+            .await?;
         self.codex.session.flush_rollout().await?;
         Ok(())
     }

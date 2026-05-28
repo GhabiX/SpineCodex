@@ -394,7 +394,7 @@ impl ToolRegistry {
         }
 
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
-            match run_pre_tool_use_hooks(
+            let pre_tool_use_result = match run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
@@ -403,6 +403,14 @@ impl ToolRegistry {
             )
             .await
             {
+                Ok(result) => result,
+                Err(err) => {
+                    let err = FunctionCallError::Fatal(err.to_string());
+                    dispatch_trace.record_failed(&err);
+                    return Err(err);
+                }
+            };
+            match pre_tool_use_result {
                 PreToolUseHookResult::Blocked(message) => {
                     let err = FunctionCallError::RespondToModel(message);
                     dispatch_trace.record_failed(&err);
@@ -479,12 +487,17 @@ impl ToolRegistry {
         };
 
         if let Some(outcome) = &post_tool_use_outcome {
-            record_additional_contexts(
+            if let Err(err) = record_additional_contexts(
                 &invocation.session,
                 &invocation.turn,
                 outcome.additional_contexts.clone(),
             )
-            .await;
+            .await
+            {
+                let err = FunctionCallError::Fatal(err.to_string());
+                dispatch_trace.record_failed(&err);
+                return Err(err);
+            }
             let replacement_text = if outcome.should_stop {
                 Some(
                     outcome

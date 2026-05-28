@@ -590,6 +590,7 @@ impl Session {
         let mut turn_had_memory_citation = false;
         let mut turn_tool_calls = 0_u64;
         let mut records_turn_token_usage_on_span = false;
+        let mut pending_record_failed = false;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             if let Some(at) = active.as_mut()
@@ -618,15 +619,67 @@ impl Session {
             for pending_input_item in pending_input {
                 match inspect_pending_input(self, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
-                        record_pending_input(self, &turn_context, *pending_input).await;
+                        if let Err(err) =
+                            record_pending_input(self, &turn_context, *pending_input).await
+                        {
+                            self.send_event(
+                                &turn_context,
+                                EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                            )
+                            .await;
+                            pending_record_failed = true;
+                            break;
+                        }
                     }
                     PendingInputHookDisposition::Blocked {
                         additional_contexts,
                     } => {
-                        record_additional_contexts(self, &turn_context, additional_contexts).await;
+                        if let Err(err) =
+                            record_additional_contexts(self, &turn_context, additional_contexts)
+                                .await
+                        {
+                            self.send_event(
+                                &turn_context,
+                                EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                            )
+                            .await;
+                            pending_record_failed = true;
+                            break;
+                        }
                     }
                 }
             }
+        }
+        if pending_record_failed {
+            if should_clear_active_turn {
+                self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref());
+            }
+            if let Err(err) = self
+                .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
+                    turn_context: turn_context.as_ref(),
+                    turn_completed: false,
+                })
+                .await
+            {
+                warn!("failed to apply goal runtime turn-failed event: {err}");
+            }
+            self.services
+                .guardian_rejection_circuit_breaker
+                .lock()
+                .await
+                .clear_turn(&turn_context.sub_id);
+            if should_clear_active_turn {
+                let mut active = self.active_turn.lock().await;
+                if let Some(active_turn) = active.as_ref()
+                    && active_turn.tasks.is_empty()
+                    && turn_state
+                        .as_ref()
+                        .is_some_and(|turn_state| Arc::ptr_eq(&active_turn.turn_state, turn_state))
+                {
+                    *active = None;
+                }
+            }
+            return;
         }
         // Emit token usage metrics.
         if let Some(token_usage_at_turn_start) = token_usage_at_turn_start {
