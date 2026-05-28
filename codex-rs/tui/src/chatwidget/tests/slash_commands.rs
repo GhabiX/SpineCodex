@@ -1,6 +1,7 @@
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use codex_app_server_protocol::SpineTreeNode;
+use codex_app_server_protocol::SpineTreeNodeAccounting;
 use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use pretty_assertions::assert_eq;
@@ -2012,14 +2013,22 @@ async fn slash_spinetree_renders_cached_snapshot() {
                 parent_id: None,
                 summary: Some("previous root".to_string()),
                 status: SpineTreeNodeStatus::Compacted,
-                accounting: None,
+                accounting: Some(SpineTreeNodeAccounting {
+                    current_node_context_tokens: None,
+                    raw_input_tokens: Some(7_500),
+                    memory_output_tokens: Some(1_250),
+                }),
             },
             SpineTreeNode {
                 node_id: "2.1".to_string(),
                 parent_id: None,
                 summary: Some("active scope".to_string()),
                 status: SpineTreeNodeStatus::Live,
-                accounting: None,
+                accounting: Some(SpineTreeNodeAccounting {
+                    current_node_context_tokens: Some(181_546),
+                    raw_input_tokens: None,
+                    memory_output_tokens: None,
+                }),
             },
         ],
     });
@@ -2032,6 +2041,65 @@ async fn slash_spinetree_renders_cached_snapshot() {
     assert!(rendered.contains("2.1"), "got {rendered}");
     assert!(rendered.contains("active scope"), "got {rendered}");
     assert!(rendered.contains("current"), "got {rendered}");
+    assert!(!rendered.contains("node context"), "got {rendered}");
+    assert!(!rendered.contains("raw ->"), "got {rendered}");
+    assert!(!rendered.contains("compacted"), "got {rendered}");
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::SpineTaskTree, /*enabled*/ true);
+    chat.last_spine_tree_snapshot = Some(SpineTreeUpdatedNotification {
+        thread_id: "thread".to_string(),
+        turn_id: "turn".to_string(),
+        snapshot_seq: 7,
+        active_node_id: "2.1".to_string(),
+        nodes: vec![
+            SpineTreeNode {
+                node_id: "1".to_string(),
+                parent_id: None,
+                summary: Some("previous root".to_string()),
+                status: SpineTreeNodeStatus::Compacted,
+                accounting: Some(SpineTreeNodeAccounting {
+                    current_node_context_tokens: None,
+                    raw_input_tokens: Some(7_500),
+                    memory_output_tokens: Some(1_250),
+                }),
+            },
+            SpineTreeNode {
+                node_id: "2.1".to_string(),
+                parent_id: None,
+                summary: Some("active scope".to_string()),
+                status: SpineTreeNodeStatus::Live,
+                accounting: Some(SpineTreeNodeAccounting {
+                    current_node_context_tokens: Some(181_546),
+                    raw_input_tokens: None,
+                    memory_output_tokens: None,
+                }),
+            },
+        ],
+    });
+
+    chat.dispatch_command(SlashCommand::DebugSpine);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Debug Spine Tree"), "got {rendered}");
+    assert!(
+        rendered.contains("1 previous root compacted"),
+        "got {rendered}"
+    );
+    assert!(
+        rendered.contains("2.1 active scope current"),
+        "got {rendered}"
+    );
+    assert!(
+        rendered.contains("~7.50K raw -> ~1.25K memory"),
+        "got {rendered}"
+    );
+    assert!(rendered.contains("~182K node context"), "got {rendered}");
 }
 
 #[tokio::test]
