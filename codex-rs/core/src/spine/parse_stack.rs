@@ -20,6 +20,7 @@ use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use codex_protocol::num_format::format_si_suffix;
+use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use serde::Deserialize;
@@ -245,6 +246,7 @@ impl ParseStack {
                     node_id: row.id.as_path(),
                     summary,
                     status,
+                    accounting: row.accounting.as_ref().and_then(snapshot_accounting),
                 }
             })
             .collect())
@@ -624,6 +626,17 @@ fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
     })
     .filter(|accounting| {
         accounting.live_input_tokens.is_some() || accounting.memory_output_tokens.is_some()
+    })
+}
+
+fn snapshot_accounting(accounting: &NodeAccounting) -> Option<SpineTreeNodeAccountingSnapshot> {
+    Some(SpineTreeNodeAccountingSnapshot {
+        current_node_context_tokens: None,
+        raw_input_tokens: accounting.live_input_tokens,
+        memory_output_tokens: accounting.memory_output_tokens,
+    })
+    .filter(|accounting| {
+        accounting.raw_input_tokens.is_some() || accounting.memory_output_tokens.is_some()
     })
 }
 

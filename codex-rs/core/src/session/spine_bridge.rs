@@ -7,6 +7,7 @@ use crate::spine::SpineRuntime;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 
@@ -47,6 +48,7 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
+        let token_info = self.token_usage_info().await;
         // Host UI projection only: seeding the TUI snapshot must not mutate
         // ContextManager, ParseStack, or sidecar state.
         let snapshot = {
@@ -55,7 +57,13 @@ impl Session {
             let Some(runtime) = guard.runtime() else {
                 return Ok(());
             };
-            runtime.build_tree_snapshot()?
+            let mut snapshot = runtime.build_tree_snapshot()?;
+            annotate_current_node_context(
+                &mut snapshot,
+                token_info.as_ref(),
+                runtime.current_open_input_tokens(),
+            );
+            snapshot
         };
         self.send_event_raw(Event {
             id: INITIAL_SUBMIT_ID.to_string(),
@@ -278,6 +286,7 @@ impl Session {
         turn_context: &TurnContext,
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
+        let token_info = self.token_usage_info().await;
         let snapshot = {
             let guard = spine.lock().await;
             guard.ensure_valid()?;
@@ -286,7 +295,13 @@ impl Session {
                     "spine runtime missing after initialization".to_string(),
                 ));
             };
-            runtime.build_tree_snapshot()?
+            let mut snapshot = runtime.build_tree_snapshot()?;
+            annotate_current_node_context(
+                &mut snapshot,
+                token_info.as_ref(),
+                runtime.current_open_input_tokens(),
+            );
+            snapshot
         };
         self.send_spine_tree_update(turn_context, snapshot).await;
         Ok(())
@@ -456,7 +471,14 @@ impl Session {
                             .map_err(SpineError::InvalidEvent)?;
                     }
                 }
-                snapshot = Some(spine.build_tree_snapshot()?);
+                let mut tree_snapshot = spine.build_tree_snapshot()?;
+                let token_info = state.token_info();
+                annotate_current_node_context(
+                    &mut tree_snapshot,
+                    token_info.as_ref(),
+                    spine.current_open_input_tokens(),
+                );
+                snapshot = Some(tree_snapshot);
             }
             snapshot
         };
@@ -601,12 +623,39 @@ fn format_current_node_context(
     current: Option<&TokenUsageInfo>,
     open_input_tokens: Option<i64>,
 ) -> Option<String> {
+    let tokens = current_node_context_tokens(current, open_input_tokens)?;
+    Some(format!("(~{} node context)", format_si_suffix(tokens)))
+}
+
+fn annotate_current_node_context(
+    snapshot: &mut SpineTreeUpdateEvent,
+    current: Option<&TokenUsageInfo>,
+    open_input_tokens: Option<i64>,
+) {
+    let Some(tokens) = current_node_context_tokens(current, open_input_tokens) else {
+        return;
+    };
+    let active_node_id = snapshot.active_node_id.as_str();
+    let Some(active_node) = snapshot
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id == active_node_id)
+    else {
+        return;
+    };
+    active_node
+        .accounting
+        .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default)
+        .current_node_context_tokens = Some(tokens);
+}
+
+fn current_node_context_tokens(
+    current: Option<&TokenUsageInfo>,
+    open_input_tokens: Option<i64>,
+) -> Option<i64> {
     let current = current?.last_token_usage.input_tokens;
     let tokens = current.saturating_sub(open_input_tokens?);
-    if tokens <= 0 {
-        return None;
-    }
-    Some(format!("(~{} node context)", format_si_suffix(tokens)))
+    (tokens > 0).then_some(tokens)
 }
 
 fn format_context_window_pressure(info: Option<TokenUsageInfo>) -> Option<String> {

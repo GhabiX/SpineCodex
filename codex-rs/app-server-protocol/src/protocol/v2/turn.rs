@@ -10,6 +10,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot as CoreSpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot as CoreSpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus as CoreSpineTreeNodeStatus;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -376,11 +377,19 @@ pub struct SpineTreeUpdatedNotification {
 #[ts(export_to = "v2/")]
 pub struct SpineTreeNode {
     pub node_id: String,
-    #[ts(optional = nullable)]
     pub parent_id: Option<String>,
-    #[ts(optional = nullable)]
     pub summary: Option<String>,
     pub status: SpineTreeNodeStatus,
+    pub accounting: Option<SpineTreeNodeAccounting>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineTreeNodeAccounting {
+    pub current_node_context_tokens: Option<i64>,
+    pub raw_input_tokens: Option<i64>,
+    pub memory_output_tokens: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -436,6 +445,17 @@ impl From<CoreSpineTreeNodeSnapshot> for SpineTreeNode {
             parent_id: value.parent_id,
             summary: value.summary,
             status: value.status.into(),
+            accounting: value.accounting.map(Into::into),
+        }
+    }
+}
+
+impl From<CoreSpineTreeNodeAccountingSnapshot> for SpineTreeNodeAccounting {
+    fn from(value: CoreSpineTreeNodeAccountingSnapshot) -> Self {
+        Self {
+            current_node_context_tokens: value.current_node_context_tokens,
+            raw_input_tokens: value.raw_input_tokens,
+            memory_output_tokens: value.memory_output_tokens,
         }
     }
 }

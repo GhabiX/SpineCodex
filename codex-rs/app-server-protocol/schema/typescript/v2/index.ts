@@ -345,6 +345,7 @@ export type { SkillsListParams } from "./SkillsListParams";
 export type { SkillsListResponse } from "./SkillsListResponse";
 export type { SortDirection } from "./SortDirection";
 export type { SpineTreeNode } from "./SpineTreeNode";
+export type { SpineTreeNodeAccounting } from "./SpineTreeNodeAccounting";
 export type { SpineTreeNodeStatus } from "./SpineTreeNodeStatus";
 export type { SpineTreeUpdatedNotification } from "./SpineTreeUpdatedNotification";
 export type { SubagentMigration } from "./SubagentMigration";

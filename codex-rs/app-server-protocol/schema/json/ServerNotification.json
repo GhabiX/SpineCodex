@@ -2860,6 +2860,16 @@
     },
     "SpineTreeNode": {
       "properties": {
+        "accounting": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineTreeNodeAccounting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "nodeId": {
           "type": "string"
         },
@@ -2883,6 +2893,32 @@
         "nodeId",
         "status"
       ],
+      "type": "object"
+    },
+    "SpineTreeNodeAccounting": {
+      "properties": {
+        "currentNodeContextTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memoryOutputTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rawInputTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "SpineTreeNodeStatus": {
