@@ -16,8 +16,7 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
         tools: vec![
             ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                 name: SPINE_TOOL_TREE.to_string(),
-                description: "Inspect the current Spine tree without moving the cursor."
-                    .to_string(),
+                description: "Inspect the current Spine tree, cursor, current live-node context pressure, and overall context-window pressure without moving the cursor.".to_string(),
                 strict: false,
                 defer_loading: None,
                 parameters: JsonSchema::object(
