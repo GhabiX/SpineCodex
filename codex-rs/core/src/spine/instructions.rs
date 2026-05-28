@@ -8,20 +8,27 @@ Spine tools are task-boundary controls:
 - spine.open(summary): start a focused child task under the current cursor. The summary is only a short tree label for the new child.
 - spine.close(instruction?): finish the current non-root task node, compact its raw history into memory, and resume its parent. The optional instruction only guides what the compact memory should preserve.
 
-Default to staying in the current live node while it remains focused; move Spine only for compression or focus, and only when doing so gives a clear benefit. Use update_plan for ordinary task tracking; it does not create, close, compact, or move Spine nodes.
-Spine context follows the current cursor: the current path remains visible, closed left siblings appear as memory, and the current live node keeps raw history. Keep cross-node intent and decisions in the parent; keep local investigation, implementation, or verification trails inside children.
+Default to staying in the current live node while it remains focused. Use update_plan for ordinary task tracking; it does not create, close, compact, or move Spine nodes.
+Spine context follows the current cursor: the current path remains visible, closed left siblings appear as memory, and the current live node keeps raw history.
 
-For complex or long-running work, briefly sketch a provisional overall Spine task-tree plan before starting: the parent goal, likely child phases, and which phase begins now. Do not pre-open nodes for every planned phase; materialize a child only when that planned subproblem actually begins and has a clear compression or focus benefit. Revisit and adjust the tree at coherent boundaries as the work changes.
+Use Spine to model the evolving structure of the work. A good Spine tree makes the work readable: parents hold shared intent, constraints, decisions, and the phase map; siblings are peer phases at a similar level; children are focused subproblems whose result helps the parent continue.
 
-Open a child when the next work is a coherent subproblem and at least one is true:
-- Compression: it will likely produce a large local trail of file reads, commands, logs, test output, iterations, or reasoning that future work should see as memory rather than raw history.
-- Focus: isolating it will help the agent stay oriented, avoid mixing phases, or hand off cleanly to later work.
+For complex or long-running work, briefly sketch a provisional tree shape before starting: the parent goal, likely peer phases, and which phase begins now. Do not pre-open planned phases. Revisit and adjust the tree at coherent boundaries as the work changes.
 
-Close a node only at a coherent boundary, when the current subproblem has produced enough motivation, judgment, evidence, and next-step context for later work to continue from memory instead of raw history. Use the optional close instruction to name facts that must survive compaction. Do not close only because the turn is ending, context size crossed a soft threshold, or as end-of-response cleanup.
+Open a child when it gives a clear structural benefit:
+- Dependency: the parent needs this focused result to continue cleanly.
+- Compression: the work will produce noisy local reads, logs, experiments, tests, or reasoning that future work should see as memory rather than raw history.
+- Focus: isolating the work helps avoid mixing phases or makes handoff cleaner.
+
+When one phase reaches a coherent boundary and the next phase is a peer step in the same goal, close the current child, return to the parent, then open a sibling. Discovery, implementation, verification, documentation, and synthesis are usually siblings.
+
+Close a node only at a coherent boundary, when it has enough motivation, judgment, evidence, and next-step context to return a compact result to the parent. Use the optional close instruction to name facts that must survive compaction. Do not close only because the turn is ending, context size crossed a soft threshold, or as end-of-response cleanup.
+
+Context pressure is cumulative: even simple tasks can grow large after repeated user turns, tool outputs, and iterations. Manage local Spine boundaries before the session nears the context window; otherwise native/global compaction may open a new root epoch and broad raw history will leave the visible working context as coarse root memory. Prefer coherent task-local memories over relying on emergency global compaction.
 
 Use Spine Tree context-pressure stats as hints, not hard rules: when the current live node grows beyond about 50K node context, actively look for the next coherent close boundary, but never move Spine solely because a size threshold was crossed.
 
-There is no production spine.next tool. To move to a sibling phase, close the current child, resume the parent, then open the next sibling child only when a new large phase or clearly separate focused phase actually begins.
+There is no production spine.next tool. Moving to a sibling phase is `close ; open`.
 
 Do not open for routine continuation, another file read, another command, checklist updates, short replies, observations, ordinary turn boundaries, or one node per command, checklist item, or turn. Keep simple tasks in one node.
 At root depth, close a root child to return to the root scope. Calling spine.close on the true root fails.
