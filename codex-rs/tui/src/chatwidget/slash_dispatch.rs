@@ -136,6 +136,15 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_manual_spine_tree_snapshot(snapshot));
     }
 
+    #[cfg(debug_assertions)]
+    fn add_debug_spine_tree_output(&mut self) {
+        let Some(snapshot) = self.last_spine_tree_snapshot.clone() else {
+            self.add_info_message("Spine Tree is not available yet.".to_string(), None);
+            return;
+        };
+        self.add_to_history(history_cell::new_manual_debug_spine_tree_snapshot(snapshot));
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
@@ -394,6 +403,13 @@ impl ChatWidget {
                     return;
                 }
                 self.add_spine_tree_output();
+            }
+            #[cfg(debug_assertions)]
+            SlashCommand::DebugSpine => {
+                if !self.config.features.enabled(Feature::SpineTaskTree) {
+                    return;
+                }
+                self.add_debug_spine_tree_output();
             }
             SlashCommand::Ide => {
                 self.handle_ide_command();
@@ -958,6 +974,8 @@ impl ChatWidget {
             | SlashCommand::Diff
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,
+            #[cfg(debug_assertions)]
+            SlashCommand::DebugSpine => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New
             | SlashCommand::Clear

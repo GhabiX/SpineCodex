@@ -44,6 +44,9 @@ pub enum SlashCommand {
     Mention,
     Status,
     Spinetree,
+    #[cfg(debug_assertions)]
+    #[strum(to_string = "debugspine")]
+    DebugSpine,
     DebugConfig,
     Title,
     Statusline,
@@ -97,6 +100,8 @@ impl SlashCommand {
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Spinetree => "show the current Spine tree",
+            #[cfg(debug_assertions)]
+            SlashCommand::DebugSpine => "show Spine tree ids, statuses, and accounting",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -221,6 +226,8 @@ impl SlashCommand {
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Side => true,
+            #[cfg(debug_assertions)]
+            SlashCommand::DebugSpine => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
@@ -279,6 +286,18 @@ mod tests {
         );
         assert!(SlashCommand::Spinetree.available_during_task());
         assert!(!SlashCommand::Spinetree.available_in_side_conversation());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debugspine_command_parses_and_is_available_during_task() {
+        assert_eq!(
+            SlashCommand::from_str("debugspine"),
+            Ok(SlashCommand::DebugSpine)
+        );
+        assert_eq!(SlashCommand::DebugSpine.command(), "debugspine");
+        assert!(SlashCommand::DebugSpine.available_during_task());
+        assert!(!SlashCommand::DebugSpine.available_in_side_conversation());
     }
 
     #[test]
