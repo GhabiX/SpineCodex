@@ -77,6 +77,8 @@ pub(super) enum KEvent {
         boundary: u64,
         summary: String,
         instruction: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        close_input_tokens: Option<i64>,
     },
     RootCompact {
         node: NodeId,
@@ -122,6 +124,12 @@ pub(super) struct MemRecord {
     pub(super) context_end: usize,
     #[serde(default)]
     pub(super) raw_live_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) close_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) memory_output_tokens: Option<i64>,
     pub(super) body_path: String,
     pub(super) body_hash: String,
 }
@@ -166,6 +174,12 @@ pub(super) struct MemoryRef {
     pub(super) source_raw_range: Range<u64>,
     pub(super) source_context_range: Range<usize>,
     pub(super) source_token_seq: Range<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) close_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) memory_output_tokens: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -9456,7 +9456,7 @@ async fn spine_tree_tool_node_context_uses_provider_input_delta() {
 
     let tree = session.spine_tree().await.expect("tree");
     assert!(tree.contains("[1.1.1] Current delta child"), "{tree}");
-    assert!(tree.contains("(~181.5K node context)"), "{tree}");
+    assert!(tree.contains("(~182K node context)"), "{tree}");
 
     let rollout_path = session
         .current_rollout_path()
@@ -9509,6 +9509,18 @@ async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
         .expect("commit open");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 42_000,
+                total_tokens: 42_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
 
     let tree = session.spine_tree().await.expect("tree");
     assert!(tree.contains("[1.1.1] Current invalid range"), "{tree}");

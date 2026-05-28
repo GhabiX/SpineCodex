@@ -9,6 +9,7 @@ use crate::spine::model::ControlSymbol;
 use crate::spine::model::KEvent;
 use crate::spine::model::LoggedKEvent;
 use crate::spine::model::MemRecord;
+use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::NodeStatus;
 use crate::spine::model::RawMask;
@@ -18,6 +19,7 @@ use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
+use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use serde::Deserialize;
@@ -355,6 +357,13 @@ struct TreeRenderRow {
     summary: String,
     memory_path: Option<PathBuf>,
     trajs_path: Option<PathBuf>,
+    accounting: Option<NodeAccounting>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NodeAccounting {
+    live_input_tokens: Option<i64>,
+    memory_output_tokens: Option<i64>,
 }
 
 fn root_epoch_from_nodes(nodes: &[SpineTreeNode]) -> Option<NodeId> {
@@ -381,6 +390,7 @@ fn project_current_root_epoch_row(cursor: NodeId, rows: &mut Vec<TreeRenderRow>)
         summary: String::new(),
         memory_path: None,
         trajs_path: None,
+        accounting: None,
     });
 }
 
@@ -428,6 +438,7 @@ fn collect_tree_render_rows(
                     summary: meta.summary.clone(),
                     memory_path: None,
                     trajs_path: None,
+                    accounting: None,
                 });
             }
             Symbol::SpineTreeNode(node) => {
@@ -446,6 +457,7 @@ fn collect_tree_render_rows(
                         summary: String::new(),
                         memory_path: Some(root_epoch.memory.body_path.clone()),
                         trajs_path: None,
+                        accounting: memory_accounting(&root_epoch.memory),
                     });
                 }
             }
@@ -462,6 +474,7 @@ fn collect_tree_render_node(
     match node {
         SpineTreeNode::MsgAsLeafNode { .. } => {}
         SpineTreeNode::SpineTree {
+            memory,
             meta,
             children,
             memory_path,
@@ -474,6 +487,7 @@ fn collect_tree_render_node(
                 summary: meta.summary.clone(),
                 memory_path: Some(memory_path.clone()),
                 trajs_path: Some(trajs_path.clone()),
+                accounting: memory_accounting(memory),
             });
             for child in children {
                 collect_tree_render_node(child, rows)?;
@@ -571,6 +585,9 @@ fn format_tree_rows(rows: Vec<TreeRenderRow>, current_annotation: Option<&str>) 
         if let Some(trajs_path) = row.trajs_path.as_ref() {
             detail.push_str(&format!(" trajs={}", trajs_path.display()));
         }
+        if let Some(accounting) = row.accounting.as_ref().and_then(format_node_accounting) {
+            detail.push_str(&format!(" {accounting}"));
+        }
         let summary = visible_summary(&row)
             .map(|summary| format!(" {summary}"))
             .unwrap_or_default();
@@ -594,6 +611,36 @@ fn format_tree_rows(rows: Vec<TreeRenderRow>, current_annotation: Option<&str>) 
         ));
     }
     lines.join("\n")
+}
+
+fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
+    Some(NodeAccounting {
+        live_input_tokens: memory
+            .close_input_tokens
+            .zip(memory.open_input_tokens)
+            .map(|(close, open)| close.saturating_sub(open))
+            .filter(|tokens| *tokens > 0),
+        memory_output_tokens: memory.memory_output_tokens.filter(|tokens| *tokens > 0),
+    })
+    .filter(|accounting| {
+        accounting.live_input_tokens.is_some() || accounting.memory_output_tokens.is_some()
+    })
+}
+
+fn format_node_accounting(accounting: &NodeAccounting) -> Option<String> {
+    match (
+        accounting.live_input_tokens,
+        accounting.memory_output_tokens,
+    ) {
+        (Some(raw), Some(memory)) => Some(format!(
+            "(~{} raw -> ~{} memory)",
+            format_si_suffix(raw),
+            format_si_suffix(memory)
+        )),
+        (Some(raw), None) => Some(format!("(~{} raw)", format_si_suffix(raw))),
+        (None, Some(memory)) => Some(format!("(~{} memory)", format_si_suffix(memory))),
+        (None, None) => None,
+    }
 }
 
 fn visible_summary(row: &TreeRenderRow) -> Option<&str> {
@@ -665,6 +712,9 @@ pub(super) fn event_to_token(
                     mem.raw_start..mem.raw_end,
                     mem.context_start..mem.context_end,
                     event.seq..event.seq + 1,
+                    mem.open_input_tokens,
+                    mem.close_input_tokens,
+                    mem.memory_output_tokens,
                 ),
             })
         }
@@ -692,6 +742,9 @@ pub(super) fn event_to_token(
                     mem.raw_start..mem.raw_end,
                     mem.context_start..mem.context_end,
                     event.seq..event.seq + 1,
+                    mem.open_input_tokens,
+                    mem.close_input_tokens,
+                    mem.memory_output_tokens,
                 ),
                 next_open_index: usize::try_from(*next_open_index).map_err(|_| {
                     SpineError::InvalidEvent("root open index overflow".to_string())

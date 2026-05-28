@@ -108,9 +108,24 @@ fn render_memory_archive(memory: &MemoryRef) -> Result<String, SpineError> {
         memory.source_context_range.start, memory.source_context_range.end
     ));
     out.push_str(&format!(
-        "source_token_seq: [{}..{})\n\n",
+        "source_token_seq: [{}..{})\n",
         memory.source_token_seq.start, memory.source_token_seq.end
     ));
+    if let Some(tokens) = memory.open_input_tokens {
+        out.push_str(&format!("open_input_tokens: {tokens}\n"));
+    }
+    if let Some(tokens) = memory.close_input_tokens {
+        out.push_str(&format!("close_input_tokens: {tokens}\n"));
+    }
+    if let Some(tokens) = memory.memory_output_tokens {
+        out.push_str(&format!("memory_output_tokens: {tokens}\n"));
+    }
+    if memory.open_input_tokens.is_some()
+        || memory.close_input_tokens.is_some()
+        || memory.memory_output_tokens.is_some()
+    {
+        out.push('\n');
+    }
     out.push_str("## Body\n\n");
     out.push_str(&body);
     if !body.ends_with('\n') {
@@ -206,6 +221,9 @@ pub(super) fn memory_ref(
     source_raw_range: Range<u64>,
     source_context_range: Range<usize>,
     source_token_seq: Range<u64>,
+    open_input_tokens: Option<i64>,
+    close_input_tokens: Option<i64>,
+    memory_output_tokens: Option<i64>,
 ) -> MemoryRef {
     MemoryRef {
         body_path: archive.root.join(BODY_DIR).join(format!("{compact_id}.md")),
@@ -215,5 +233,8 @@ pub(super) fn memory_ref(
         source_raw_range,
         source_context_range,
         source_token_seq,
+        open_input_tokens,
+        close_input_tokens,
+        memory_output_tokens,
     }
 }

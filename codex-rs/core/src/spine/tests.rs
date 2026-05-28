@@ -74,6 +74,7 @@ fn compact_body_with_context_range(
     SpineCloseCompact {
         body: format!("# Spine Memory {node_id}\n\nreal compact body for {node_id}\n"),
         source_context_range,
+        memory_output_tokens: Some(1_250),
     }
 }
 
@@ -286,6 +287,94 @@ fn closed_child_tree_snapshot_keeps_visible_parent_link() {
     assert_eq!(nodes["1.1.1"].parent_id.as_deref(), Some("1.1"));
     assert_eq!(nodes["1.1.1"].summary.as_deref(), Some("child task"));
     assert_eq!(nodes["1.1.1"].status, SpineTreeNodeStatus::Closed);
+}
+
+#[test]
+fn closed_child_tree_records_raw_and_memory_context_accounting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let raw = vec![
+        Some(spine_call(SPINE_TOOL_OPEN, "open")),
+        Some(function_output("open")),
+        Some(text_item("inside")),
+        Some(spine_call(SPINE_TOOL_CLOSE, "close")),
+        Some(function_output("close")),
+    ];
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(1).expect("record open request");
+    runtime
+        .observe_context_item(0, 0, &spine_call(SPINE_TOOL_OPEN, "open"))
+        .expect("observe open request");
+    runtime
+        .stage_open("open".to_string(), "accounted child".to_string())
+        .expect("stage open");
+    runtime.observe_raw_items(1).expect("record open output");
+    runtime
+        .observe_context_item(1, 1, &function_output("open"))
+        .expect("observe open output");
+    runtime
+        .maybe_commit_output_with_open_input_tokens("open", None, Some(10_000))
+        .expect("commit open");
+
+    runtime.observe_raw_items(1).expect("observe child item");
+    runtime
+        .observe_context_item(2, 2, &text_item("inside"))
+        .expect("observe child item");
+    runtime.observe_raw_items(1).expect("record close request");
+    runtime
+        .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "close"))
+        .expect("observe close request");
+    runtime
+        .stage_close("close".to_string(), None)
+        .expect("stage close");
+    let suffix_start = match runtime.pending_commit("close").expect("pending close") {
+        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
+        other => panic!("expected pending close, got {other:?}"),
+    };
+    runtime.observe_raw_items(1).expect("record close output");
+    runtime
+        .observe_context_item(4, 4, &function_output("close"))
+        .expect("observe close output");
+    runtime
+        .maybe_commit_output_with_open_input_tokens(
+            "close",
+            Some(compact_body_with_context_range("1.1.1", suffix_start..5)),
+            Some(17_500),
+        )
+        .expect("commit close");
+
+    let Some(Symbol::SpineTreeNodes(nodes)) = runtime.parse_stack().symbols.last() else {
+        panic!("closed child should reduce into ParseStack nodes")
+    };
+    let memory = nodes
+        .iter()
+        .find_map(|node| match node {
+            SpineTreeNode::SpineTree { memory, .. } => Some(memory),
+            _ => None,
+        })
+        .expect("closed child memory ref");
+    assert_eq!(memory.open_input_tokens, Some(10_000));
+    assert_eq!(memory.close_input_tokens, Some(17_500));
+    let memory_output_tokens = memory
+        .memory_output_tokens
+        .expect("memory output token count");
+    assert_eq!(memory_output_tokens, 1_250);
+
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("[1.1.1] Done accounted child"), "{tree}");
+    assert!(tree.contains("(~7.50K raw -> ~1.25K memory)"), "{tree}");
+
+    let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
+        .expect("load spine")
+        .expect("sidecar exists");
+    let replayed_tree = replayed.render_tree().expect("render replayed tree");
+    assert!(
+        replayed_tree.contains("(~7.50K raw -> ~"),
+        "{replayed_tree}"
+    );
+    let materialized = replayed.materialize_history(&raw).expect("materialize");
+    assert_eq!(materialized.len(), 1);
 }
 
 #[test]
@@ -647,6 +736,9 @@ fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
         context_start: 0,
         context_end: 1,
         raw_live_hash: None,
+        open_input_tokens: None,
+        close_input_tokens: None,
+        memory_output_tokens: None,
         body_path: "bodies/mem-missing.md".to_string(),
         body_hash: sha1_hex(b"missing body"),
     };
@@ -796,6 +888,9 @@ fn empty_task_tree_reduce_fails_without_archive_side_effects() {
         0..0,
         0..0,
         0..0,
+        None,
+        None,
+        None,
     );
     let mut parse_stack = ParseStack {
         symbols: vec![open, Symbol::Control(ControlSymbol::Close(memory))],
