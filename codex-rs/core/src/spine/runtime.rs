@@ -111,6 +111,7 @@ pub(crate) enum SpinePendingCommit {
 pub(crate) struct SpineCloseCompact {
     pub(crate) body: String,
     pub(crate) source_context_range: Range<usize>,
+    pub(crate) memory_output_tokens: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -635,7 +636,7 @@ impl SpineRuntime {
         &mut self,
         call_id: &str,
         close_compact: Option<SpineCloseCompact>,
-        open_input_tokens: Option<i64>,
+        input_tokens: Option<i64>,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         let Some(pending) = self.pending.clone() else {
             return Ok(None);
@@ -660,7 +661,7 @@ impl SpineRuntime {
                     boundary,
                     index,
                     summary: summary.clone(),
-                    open_input_tokens,
+                    open_input_tokens: input_tokens,
                 };
                 self.parse_stack.shift(
                     SpineToken::Open {
@@ -669,7 +670,7 @@ impl SpineRuntime {
                             child.clone(),
                             index,
                             summary.clone(),
-                            open_input_tokens,
+                            input_tokens,
                         )?,
                     },
                     &self.archive(),
@@ -691,6 +692,7 @@ impl SpineRuntime {
                     boundary: self.raw_len,
                     summary: summary.clone(),
                     instruction: pending.instruction.clone(),
+                    close_input_tokens: input_tokens,
                 };
                 let close_compact = close_compact.ok_or_else(|| {
                     SpineError::InvalidEvent(
@@ -704,7 +706,7 @@ impl SpineRuntime {
                         close_compact.source_context_range.start
                     )));
                 }
-                let mem = self.stage_close_mem(&open_meta, close_compact)?;
+                let mem = self.stage_close_mem(&open_meta, close_compact, input_tokens)?;
                 let body = self.store.read_memory_body(&mem)?;
                 let memory = memory_ref(
                     &self.archive(),
@@ -714,6 +716,9 @@ impl SpineRuntime {
                     mem.raw_start..mem.raw_end,
                     mem.context_start..mem.context_end,
                     seq..seq + 1,
+                    mem.open_input_tokens,
+                    mem.close_input_tokens,
+                    mem.memory_output_tokens,
                 );
                 let mut staged_parse_stack = self.parse_stack.clone();
                 staged_parse_stack.shift(SpineToken::Close { memory }, &self.archive())?;
@@ -800,6 +805,9 @@ impl SpineRuntime {
             context_start: 0,
             context_end: source_context_end,
             raw_live_hash: Some(raw_live_hash.clone()),
+            open_input_tokens: None,
+            close_input_tokens: next_open_input_tokens,
+            memory_output_tokens: None,
             body_path,
             body_hash: sha1_hex(body.as_bytes()),
         };
@@ -812,6 +820,9 @@ impl SpineRuntime {
             mem.raw_start..mem.raw_end,
             mem.context_start..mem.context_end,
             seq..seq + 1,
+            mem.open_input_tokens,
+            mem.close_input_tokens,
+            mem.memory_output_tokens,
         );
 
         // Probe first because source_context_range records the pre-compact source
@@ -863,6 +874,7 @@ impl SpineRuntime {
         &self,
         open_meta: &TreeMeta,
         close_compact: SpineCloseCompact,
+        close_input_tokens: Option<i64>,
     ) -> Result<MemRecord, SpineError> {
         let node_id = open_meta.id.clone();
         let raw_start = self.open_raw_start(&node_id)?;
@@ -885,6 +897,9 @@ impl SpineRuntime {
             context_start: close_compact.source_context_range.start,
             context_end: close_compact.source_context_range.end,
             raw_live_hash: None,
+            open_input_tokens: open_meta.open_input_tokens,
+            close_input_tokens,
+            memory_output_tokens: close_compact.memory_output_tokens,
             body_path,
             body_hash: sha1_hex(close_compact.body.as_bytes()),
         };

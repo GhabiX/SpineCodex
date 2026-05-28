@@ -370,13 +370,13 @@ impl Session {
                 ));
             }
             let close_compact = close_compact.map(|(compact, _)| compact);
-            let open_input_tokens = state
+            let input_tokens = state
                 .token_info()
                 .map(|info| info.last_token_usage.input_tokens);
             let commit_kind = spine.maybe_commit_output_with_open_input_tokens(
                 call_id,
                 close_compact,
-                open_input_tokens,
+                input_tokens,
             )?;
             let mut snapshot = None;
             if let Some(commit_kind) = commit_kind.as_ref() {

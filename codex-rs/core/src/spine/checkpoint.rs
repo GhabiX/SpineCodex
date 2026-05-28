@@ -84,6 +84,8 @@ pub(super) struct CheckpointTreeMeta {
     pub(super) id: String,
     pub(super) index: usize,
     pub(super) summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_input_tokens: Option<i64>,
     pub(super) node_dir: String,
 }
 
@@ -99,6 +101,12 @@ pub(super) struct CheckpointMemoryRef {
     pub(super) source_context_end: usize,
     pub(super) source_token_seq_start: u64,
     pub(super) source_token_seq_end: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) close_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) memory_output_tokens: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -174,6 +182,7 @@ fn checkpoint_tree_meta(meta: &TreeMeta) -> CheckpointTreeMeta {
         id: meta.id.to_string(),
         index: meta.index,
         summary: meta.summary.clone(),
+        open_input_tokens: meta.open_input_tokens,
         node_dir: meta.node_dir.display().to_string(),
     }
 }
@@ -190,6 +199,9 @@ fn checkpoint_memory_ref(memory: &MemoryRef) -> CheckpointMemoryRef {
         source_context_end: memory.source_context_range.end,
         source_token_seq_start: memory.source_token_seq.start,
         source_token_seq_end: memory.source_token_seq.end,
+        open_input_tokens: memory.open_input_tokens,
+        close_input_tokens: memory.close_input_tokens,
+        memory_output_tokens: memory.memory_output_tokens,
     }
 }
 

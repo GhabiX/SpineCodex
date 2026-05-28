@@ -13,6 +13,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
 
@@ -94,11 +95,12 @@ impl Session {
             personality: turn_context.personality,
             ..Default::default()
         };
-        let output = self.spine_close_summary_items(turn_context, prompt).await?;
+        let (output, token_usage) = self.spine_close_summary_items(turn_context, prompt).await?;
         let body = spine_close_compact_body(&node_id, &output)?;
         Ok(SpineCloseCompact {
             body,
             source_context_range: suffix_start..close_request_index,
+            memory_output_tokens: token_usage.map(|usage| usage.output_tokens),
         })
     }
 
@@ -106,7 +108,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         mut prompt: Prompt,
-    ) -> Result<Vec<ResponseItem>, SpineError> {
+    ) -> Result<(Vec<ResponseItem>, Option<TokenUsage>), SpineError> {
         let client_session = self.services.model_client.new_session();
         let max_retries = turn_context.provider.info().stream_max_retries();
         let mut retries = 0;
@@ -166,7 +168,7 @@ impl Session {
         turn_context: &TurnContext,
         client_session: &crate::client::ModelClientSession,
         prompt: &Prompt,
-    ) -> Result<Vec<ResponseItem>, CodexErr> {
+    ) -> Result<(Vec<ResponseItem>, Option<TokenUsage>), CodexErr> {
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         let mut stream = client_session
             .stream_responses_api(
@@ -201,7 +203,7 @@ impl Session {
                 ResponseEvent::Completed { token_usage, .. } => {
                     self.update_token_usage_info(turn_context, token_usage.as_ref())
                         .await;
-                    return Ok(output);
+                    return Ok((output, token_usage));
                 }
                 _ => {}
             }
