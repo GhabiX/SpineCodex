@@ -1,8 +1,10 @@
 use super::*;
 use crate::context_manager::ContextAppend;
+use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCommitKind;
 use crate::spine::SpinePendingCommit;
+use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::EventMsg;
@@ -97,7 +99,7 @@ impl Session {
         raw_items: &[Option<ResponseItem>],
         rollback_cuts: &[usize],
         used_replacement_history: bool,
-        reconstructed_history: &[ResponseItem],
+        replacement_history_boundaries: &[ReplacementHistoryBoundary],
     ) -> Result<Option<PreparedSpineReplay>, SpineError> {
         let Some(_spine_slot) = self.spine.as_ref() else {
             return Ok(None);
@@ -123,13 +125,17 @@ impl Session {
             .as_ref()
             .map(|runtime| runtime.materialize_history(raw_items))
             .transpose()?;
-        if used_replacement_history
-            && let Some(materialized) = materialized.as_ref()
-            && reconstructed_history != materialized.as_slice()
-        {
-            return Err(SpineError::InvalidStore(
-                "spine_task_tree replacement_history does not match sidecar h(PS)".to_string(),
-            ));
+        if used_replacement_history {
+            let store = SpineStore::for_rollout(&rollout_path)?;
+            let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
+            for boundary in replacement_history_boundaries {
+                store.validate_compact_checkpoint_for_boundary(
+                    &rollout_path,
+                    &raw_live,
+                    boundary.raw_boundary,
+                    &boundary.replacement_history,
+                )?;
+            }
         }
         Ok(Some(PreparedSpineReplay {
             raw_len,
@@ -512,7 +518,7 @@ impl Session {
     pub(crate) async fn install_spine_root_compact(
         &self,
         body: String,
-    ) -> Result<Option<(Vec<ResponseItem>, SpineTreeUpdateEvent)>, SpineError> {
+    ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent, PathBuf)>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -550,20 +556,20 @@ impl Session {
             let Some(spine) = guard.runtime_mut() else {
                 return Ok(None);
             };
-            let materialized = spine.root_compact_with_next_open_input_tokens(
+            let result = spine.root_compact_with_next_open_input_tokens(
                 body,
                 &raw_items,
                 next_open_input_tokens,
             )?;
             let current_open_index = spine.current_open_index()?;
-            if current_open_index != materialized.len() {
+            if current_open_index != result.materialized.len() {
                 return Err(SpineError::InvalidEvent(format!(
                     "spine root compact open index {current_open_index} does not match materialized history length {}",
-                    materialized.len()
+                    result.materialized.len()
                 )));
             }
             let snapshot = spine.build_tree_snapshot()?;
-            return Ok(Some((materialized, snapshot)));
+            return Ok(Some((result, snapshot, rollout_path)));
         }
     }
 
@@ -589,15 +595,31 @@ impl Session {
                 "native compact produced no model-visible Spine root memory body".to_string(),
             )
         })?;
-        let Some((spine_history, snapshot)) =
+        let Some((root_compact, snapshot, rollout_path)) =
             self.install_spine_root_compact(body).await.map_err(|err| {
                 CodexErr::Fatal(format!("failed to install Spine root compact: {err}"))
             })?
         else {
             return Ok(None);
         };
-        *items = spine_history;
+        *items = root_compact.materialized.clone();
         compacted_item.replacement_history = Some(items.clone());
+        {
+            let mut guard = spine_slot.lock().await;
+            guard.ensure_valid().map_err(|err| {
+                CodexErr::Fatal(format!("failed to install Spine root compact: {err}"))
+            })?;
+            let Some(spine) = guard.runtime_mut() else {
+                return Ok(None);
+            };
+            if let Err(err) =
+                spine.write_root_compact_checkpoint(&rollout_path, &root_compact, items)
+            {
+                let reason = format!("failed to install Spine root compact: {err}");
+                guard.invalidate(reason.clone());
+                return Err(CodexErr::Fatal(reason));
+            }
+        }
         Ok(Some(snapshot))
     }
 }

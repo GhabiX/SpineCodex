@@ -8,9 +8,16 @@ pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
     pub(super) raw_response_items: Vec<Option<ResponseItem>>,
     pub(super) spine_rollback_cuts: Vec<usize>,
+    pub(super) replacement_history_boundaries: Vec<ReplacementHistoryBoundary>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
     pub(super) used_replacement_history: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ReplacementHistoryBoundary {
+    pub(super) raw_boundary: u64,
+    pub(super) replacement_history: Vec<ResponseItem>,
 }
 
 pub(crate) struct SpineRawItemsAfterRollback {
@@ -40,7 +47,13 @@ struct ActiveReplaySegment<'a> {
     counts_as_user_turn: bool,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
-    base_replacement_history: Option<&'a [ResponseItem]>,
+    base_replacement_history: Option<SegmentReplacementHistory<'a>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SegmentReplacementHistory<'a> {
+    raw_boundary: u64,
+    replacement_history: &'a [ResponseItem],
 }
 
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
@@ -51,6 +64,7 @@ fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&s
 fn finalize_active_segment<'a>(
     active_segment: ActiveReplaySegment<'a>,
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
+    replacement_history_boundaries: &mut Vec<ReplacementHistoryBoundary>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
     pending_rollback_turns: &mut usize,
@@ -70,7 +84,13 @@ fn finalize_active_segment<'a>(
     if base_replacement_history.is_none()
         && let Some(segment_base_replacement_history) = active_segment.base_replacement_history
     {
-        *base_replacement_history = Some(segment_base_replacement_history);
+        *base_replacement_history = Some(segment_base_replacement_history.replacement_history);
+        replacement_history_boundaries.push(ReplacementHistoryBoundary {
+            raw_boundary: segment_base_replacement_history.raw_boundary,
+            replacement_history: segment_base_replacement_history
+                .replacement_history
+                .to_vec(),
+        });
     }
 
     // `previous_turn_settings` come from the newest surviving user turn that established them.
@@ -103,6 +123,7 @@ impl Session {
         // are both known; then replay only the buffered surviving tail forward to preserve exact
         // history semantics.
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
+        let mut replacement_history_boundaries = Vec::<ReplacementHistoryBoundary>::new();
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
@@ -114,6 +135,7 @@ impl Session {
         // Reverse replay accumulates rollout items into the newest in-progress turn segment until
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
         let mut active_segment: Option<ActiveReplaySegment<'_>> = None;
+        let raw_boundaries = raw_boundaries_before_rollout_items(rollout_items);
 
         for (index, item) in rollout_items.iter().enumerate().rev() {
             match item {
@@ -131,7 +153,10 @@ impl Session {
                     if active_segment.base_replacement_history.is_none()
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
-                        active_segment.base_replacement_history = Some(replacement_history);
+                        active_segment.base_replacement_history = Some(SegmentReplacementHistory {
+                            raw_boundary: raw_boundaries[index],
+                            replacement_history,
+                        });
                         rollout_suffix = &rollout_items[index + 1..];
                     }
                 }
@@ -204,6 +229,7 @@ impl Session {
                         finalize_active_segment(
                             active_segment,
                             &mut base_replacement_history,
+                            &mut replacement_history_boundaries,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
                             &mut pending_rollback_turns,
@@ -233,6 +259,7 @@ impl Session {
             finalize_active_segment(
                 active_segment,
                 &mut base_replacement_history,
+                &mut replacement_history_boundaries,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
                 &mut pending_rollback_turns,
@@ -307,6 +334,7 @@ impl Session {
             history: history.raw_items().to_vec(),
             raw_response_items: spine_raw_items.raw_items,
             spine_rollback_cuts: spine_raw_items.rollback_cuts,
+            replacement_history_boundaries,
             previous_turn_settings,
             reference_context_item,
             used_replacement_history,
@@ -352,4 +380,20 @@ pub(crate) fn spine_raw_items_after_rollback_with_cuts(
         raw_items,
         rollback_cuts,
     }
+}
+
+fn raw_boundaries_before_rollout_items(rollout_items: &[RolloutItem]) -> Vec<u64> {
+    let mut raw_count = 0u64;
+    rollout_items
+        .iter()
+        .map(|item| {
+            let boundary = raw_count;
+            if matches!(item, RolloutItem::ResponseItem(_)) {
+                raw_count = raw_count
+                    .checked_add(1)
+                    .expect("raw item count should fit into u64");
+            }
+            boundary
+        })
+        .collect()
 }

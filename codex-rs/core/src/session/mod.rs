@@ -1308,7 +1308,7 @@ impl Session {
                 &reconstructed_rollout.raw_response_items,
                 &reconstructed_rollout.spine_rollback_cuts,
                 reconstructed_rollout.used_replacement_history,
-                &reconstructed_rollout.history,
+                &reconstructed_rollout.replacement_history_boundaries,
             )
             .await
             .map_err(|err| {
@@ -2654,6 +2654,69 @@ impl Session {
         }
         self.send_raw_response_items(turn_context, items).await;
         Ok(())
+    }
+
+    pub(crate) async fn record_conversation_items_spine_control_overlay_only(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) -> CodexResult<()> {
+        if self.spine.is_none() {
+            return self.record_conversation_items(turn_context, items).await;
+        }
+        let (raw_ordinals, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
+            let raw_start = spine_slot.lock().await.raw_len();
+            match assign_spine_raw_ordinals(raw_start, items) {
+                Ok(mapped) => mapped,
+                Err(err) => {
+                    return Err(self
+                        .spine_append_fatal("assign Spine raw ordinals", err)
+                        .await);
+                }
+            }
+        } else {
+            (Vec::new(), 0)
+        };
+        let context_index = self.clone_history().await.raw_items().len();
+        let appends = items
+            .iter()
+            .enumerate()
+            .filter_map(|(input_index, item)| {
+                crate::stream_events_utils::is_spine_control_function_call(item).then_some(
+                    ContextAppend {
+                        input_index,
+                        context_index,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        self.persist_rollout_response_items(items).await;
+        if let Err(err) = self.ensure_spine_runtime_if_available().await {
+            return Err(self
+                .spine_append_fatal("initialize Spine runtime", err)
+                .await);
+        } else {
+            if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
+                return Err(self
+                    .spine_append_fatal("observe Spine raw items", err)
+                    .await);
+            }
+            if !appends.is_empty()
+                && let Err(err) = self
+                    .observe_spine_context_items(&raw_ordinals, items, &appends)
+                    .await
+            {
+                return Err(self
+                    .spine_append_fatal("observe Spine control items", err)
+                    .await);
+            }
+        }
+        self.send_raw_response_items(turn_context, items).await;
+        Ok(())
+    }
+
+    pub(crate) fn has_spine_runtime_state(&self) -> bool {
+        self.spine.is_some()
     }
 
     async fn spine_append_fatal(&self, operation: &str, err: SpineError) -> CodexErr {

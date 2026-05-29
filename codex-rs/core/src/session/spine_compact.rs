@@ -43,7 +43,7 @@ impl Session {
             ));
         };
         let close_call_id = call_id.as_str();
-        let Some(close_request_index) = raw_items.iter().position(|item| {
+        let close_request_index = raw_items.iter().position(|item| {
             matches!(
                 item,
                 ResponseItem::FunctionCall {
@@ -55,24 +55,23 @@ impl Session {
                     && namespace.as_deref() == Some(SPINE_NAMESPACE)
                     && name == SPINE_TOOL_CLOSE
             )
-        }) else {
-            return Err(SpineError::InvalidEvent(format!(
-                "spine.close compact missing request for call {close_call_id}"
-            )));
-        };
-        if close_request_index < suffix_start {
+        });
+        let close_context_end = close_request_index.unwrap_or(raw_items.len());
+        if let Some(close_request_index) = close_request_index
+            && close_request_index < suffix_start
+        {
             return Err(SpineError::InvalidEvent(format!(
                 "spine.close request index {close_request_index} precedes suffix start {suffix_start}"
             )));
         }
-        if close_request_index == suffix_start {
+        if close_context_end == suffix_start {
             return Err(SpineError::InvalidEvent(
                 "spine.close requires non-empty live suffix".to_string(),
             ));
         }
         let original_prompt_len = prompt_input.len();
         prompt_input.retain(|item| !is_current_spine_close_carrier(item, close_call_id));
-        if prompt_input.len() == original_prompt_len {
+        if close_request_index.is_some() && prompt_input.len() == original_prompt_len {
             return Err(SpineError::InvalidEvent(format!(
                 "spine.close compact prompt missing carrier for call {close_call_id}"
             )));
@@ -99,7 +98,7 @@ impl Session {
         let body = spine_close_compact_body(&node_id, &output)?;
         Ok(SpineCloseCompact {
             body,
-            source_context_range: suffix_start..close_request_index,
+            source_context_range: suffix_start..close_context_end,
             memory_output_tokens: token_usage.map(|usage| usage.output_tokens),
         })
     }

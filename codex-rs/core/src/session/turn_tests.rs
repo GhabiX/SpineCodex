@@ -1,4 +1,6 @@
 use super::*;
+use crate::spine::SPINE_NAMESPACE;
+use crate::spine::SPINE_TOOL_TREE;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributionFuture;
 use codex_extension_api::TurnItemContributor;
@@ -57,6 +59,33 @@ fn spine_control_overlay_disabled_drops_carriers() {
     overlay.push_output_if_matching(&output);
 
     assert_eq!(overlay.take_for_next_prompt(), Vec::<ResponseItem>::new());
+}
+
+#[test]
+fn spine_control_overlay_detects_matching_output_before_push() {
+    let mut overlay = SpineControlOverlay::new(true);
+    let request = ResponseItem::FunctionCall {
+        id: Some("call-item".to_string()),
+        name: SPINE_TOOL_TREE.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+        call_id: "call-spine-tree".to_string(),
+    };
+    let matching = ResponseItem::FunctionCallOutput {
+        call_id: "call-spine-tree".to_string(),
+        output: FunctionCallOutputPayload::from_text("tree output".to_string()),
+    };
+    let unrelated = ResponseItem::FunctionCallOutput {
+        call_id: "other-call".to_string(),
+        output: FunctionCallOutputPayload::from_text("other output".to_string()),
+    };
+
+    overlay.push_request(request.clone());
+
+    assert!(overlay.contains_matching_request(&matching));
+    assert!(!overlay.contains_matching_request(&unrelated));
+    overlay.push_output_if_matching(&matching);
+    assert_eq!(overlay.take_for_next_prompt(), vec![request, matching]);
 }
 
 #[tokio::test]
