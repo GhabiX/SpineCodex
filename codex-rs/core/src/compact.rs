@@ -178,7 +178,10 @@ async fn run_compact_task_inner_impl(
         .await;
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
-    let mut history = sess.clone_history().await;
+    let pre_compact_history = sess.clone_history().await;
+    let pre_compact_items = pre_compact_history.raw_items().to_vec();
+    let pre_compact_reference_context_item = pre_compact_history.reference_context_item();
+    let mut history = pre_compact_history;
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
@@ -280,9 +283,17 @@ async fn run_compact_task_inner_impl(
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
     };
-    let spine_tree_snapshot = sess
+    let spine_tree_snapshot = match sess
         .replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await?;
+        .await
+    {
+        Ok(spine_tree_snapshot) => spine_tree_snapshot,
+        Err(err) => {
+            sess.replace_history(pre_compact_items, pre_compact_reference_context_item)
+                .await;
+            return Err(err);
+        }
+    };
     if let Some(snapshot) = spine_tree_snapshot {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;
