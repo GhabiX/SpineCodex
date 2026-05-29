@@ -16,16 +16,26 @@ use crate::spine::io::write_json_file;
 use crate::spine::io::write_json_file_if_unchanged;
 use crate::spine::model::KEvent;
 use crate::spine::model::LoggedKEvent;
+use crate::spine::model::LoggedPressureEvent;
 use crate::spine::model::MemRecord;
+use crate::spine::model::PressureEvent;
 use crate::spine::model::RawMask;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
+use std::io::Seek;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
 const LOCATOR_VERSION: u32 = 1;
 const TREE_FILE: &str = "tree.jsonl";
+const PRESSURE_FILE: &str = "pressure.jsonl";
 const MEM_FILE: &str = "mem.jsonl";
 const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
 const CHECKPOINT_DIR: &str = "checkpoints";
@@ -92,7 +102,12 @@ impl SpineStore {
         let mask = RawMask::new(raw_live);
         for event in source.events()? {
             if event.allowed_by(mask)? {
-                target.append_event(&event.event)?;
+                target.append_logged_event(&event)?;
+            }
+        }
+        for pressure in source.pressure_events()? {
+            if pressure.allowed_by(raw_live) {
+                target.append_logged_pressure_event(&pressure)?;
             }
         }
         let mut cloned_memory_paths = BTreeMap::new();
@@ -140,6 +155,15 @@ impl SpineStore {
         self.root.join(MEM_FILE)
     }
 
+    pub(super) fn pressure_path(&self) -> PathBuf {
+        self.root.join(PRESSURE_FILE)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pressure_path_for_test(&self) -> PathBuf {
+        self.pressure_path()
+    }
+
     fn compact_checkpoint_path(&self) -> PathBuf {
         self.root.join(COMPACT_CHECKPOINT_FILE)
     }
@@ -164,14 +188,28 @@ impl SpineStore {
 
     pub(super) fn append_event(&self, event: &KEvent) -> Result<u64, SpineError> {
         let seq = self.next_event_seq()?;
-        append_json_line(
-            &self.tree_path(),
-            &LoggedKEvent {
-                seq,
-                event: event.clone(),
-            },
-        )?;
+        self.append_logged_event(&LoggedKEvent {
+            seq,
+            event: event.clone(),
+        })?;
         Ok(seq)
+    }
+
+    fn append_logged_event(&self, event: &LoggedKEvent) -> Result<(), SpineError> {
+        append_json_line(&self.tree_path(), event)
+    }
+
+    pub(super) fn append_pressure_event(&self, event: &PressureEvent) -> Result<u64, SpineError> {
+        let pressure_seq = self.next_pressure_seq()?;
+        self.append_logged_pressure_event(&LoggedPressureEvent {
+            pressure_seq,
+            event: event.clone(),
+        })?;
+        Ok(pressure_seq)
+    }
+
+    fn append_logged_pressure_event(&self, event: &LoggedPressureEvent) -> Result<(), SpineError> {
+        append_pressure_json_line(&self.pressure_path(), event)
     }
 
     pub(super) fn append_mem(&self, mem: &MemRecord) -> Result<(), SpineError> {
@@ -187,6 +225,13 @@ impl SpineStore {
 
     pub(super) fn events(&self) -> Result<Vec<LoggedKEvent>, SpineError> {
         read_json_lines(&self.tree_path())
+    }
+
+    pub(super) fn pressure_events(&self) -> Result<Vec<LoggedPressureEvent>, SpineError> {
+        if !self.pressure_path().exists() {
+            return Ok(Vec::new());
+        }
+        read_pressure_json_lines(&self.pressure_path())
     }
 
     #[cfg(test)]
@@ -245,8 +290,32 @@ impl SpineStore {
         }
         Ok(self
             .events()?
-            .last()
-            .map(|event| event.seq + 1)
+            .into_iter()
+            .map(|event| event.seq)
+            .max()
+            .map(|seq| {
+                seq.checked_add(1)
+                    .ok_or_else(|| SpineError::InvalidEvent("spine event seq overflow".to_string()))
+            })
+            .transpose()?
+            .unwrap_or(0))
+    }
+
+    pub(super) fn next_pressure_seq(&self) -> Result<u64, SpineError> {
+        if !self.pressure_path().exists() {
+            return Ok(0);
+        }
+        Ok(self
+            .pressure_events()?
+            .into_iter()
+            .map(|event| event.pressure_seq)
+            .max()
+            .map(|pressure_seq| {
+                pressure_seq.checked_add(1).ok_or_else(|| {
+                    SpineError::InvalidEvent("spine pressure seq overflow".to_string())
+                })
+            })
+            .transpose()?
             .unwrap_or(0))
     }
 
@@ -398,6 +467,72 @@ impl SpineStore {
         }
         Ok(body)
     }
+}
+
+fn append_pressure_json_line<T: Serialize>(path: &Path, value: &T) -> Result<(), SpineError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    if file.metadata()?.len() > 0 && last_byte(path)? != Some(b'\n') {
+        file.write_all(b"\n")?;
+    }
+    serde_json::to_writer(&mut file, value)?;
+    file.write_all(b"\n")?;
+    Ok(())
+}
+
+fn last_byte(path: &Path) -> Result<Option<u8>, SpineError> {
+    let mut file = File::open(path)?;
+    if file.metadata()?.len() == 0 {
+        return Ok(None);
+    }
+    file.seek(std::io::SeekFrom::End(-1))?;
+    let mut byte = [0u8; 1];
+    file.read_exact(&mut byte)?;
+    Ok(Some(byte[0]))
+}
+
+fn read_pressure_json_lines(path: &Path) -> Result<Vec<LoggedPressureEvent>, SpineError> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) => {
+            tracing::debug!(
+                "skipping Spine pressure metadata: failed to open {}: {err}",
+                path.display()
+            );
+            return Ok(Vec::new());
+        }
+    };
+    let reader = BufReader::new(file);
+    let mut out = Vec::new();
+    for (line_index, line) in reader.lines().enumerate() {
+        let line = match line {
+            Ok(line) => line,
+            Err(err) => {
+                tracing::debug!(
+                    "skipping Spine pressure metadata line {} in {}: {err}",
+                    line_index + 1,
+                    path.display()
+                );
+                continue;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str(&line) {
+            Ok(event) => out.push(event),
+            Err(err) => {
+                tracing::debug!(
+                    "skipping malformed Spine pressure metadata line {} in {}: {err}",
+                    line_index + 1,
+                    path.display()
+                );
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn clone_compact_checkpoint_for_target(

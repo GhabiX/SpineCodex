@@ -3177,6 +3177,8 @@ impl Session {
                         token_info,
                     );
                 }
+                self.repair_spine_pressure_after_token_usage(token_info)
+                    .await;
             }
         }
     }
@@ -3189,7 +3191,7 @@ impl Session {
         else {
             return;
         };
-        {
+        let token_info = {
             let mut state = self.state.lock().await;
             let mut info = state.token_info().unwrap_or(TokenUsageInfo {
                 total_token_usage: TokenUsage::default(),
@@ -3210,6 +3212,11 @@ impl Session {
             }
 
             state.set_token_info(Some(info));
+            state.token_info()
+        };
+        if let Some(token_info) = token_info.as_ref() {
+            self.repair_spine_pressure_after_token_usage(token_info)
+                .await;
         }
         self.send_token_count_event(turn_context).await;
     }

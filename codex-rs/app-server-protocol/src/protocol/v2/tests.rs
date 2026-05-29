@@ -211,6 +211,9 @@ fn spine_tree_node_maps_accounting() {
         status: CoreSpineTreeNodeStatus::Live,
         accounting: Some(CoreSpineTreeNodeAccountingSnapshot {
             current_node_context_tokens: Some(181_546),
+            current_node_context_unavailable: None,
+            current_node_context_baseline_source: None,
+            raw_context_tokens: None,
             raw_input_tokens: Some(7_500),
             memory_output_tokens: Some(1_250),
         }),
@@ -225,6 +228,9 @@ fn spine_tree_node_maps_accounting() {
             status: SpineTreeNodeStatus::Live,
             accounting: Some(SpineTreeNodeAccounting {
                 current_node_context_tokens: Some(181_546),
+                current_node_context_unavailable: None,
+                current_node_context_baseline_source: None,
+                raw_context_tokens: None,
                 raw_input_tokens: Some(7_500),
                 memory_output_tokens: Some(1_250),
             }),

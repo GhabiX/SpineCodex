@@ -4,7 +4,7 @@ use crate::spine::archive::archive_task_tree;
 use crate::spine::archive::memory_ref;
 use crate::spine::archive::next_root_open_symbol;
 use crate::spine::archive::tree_meta;
-use crate::spine::archive::tree_meta_with_open_input_tokens;
+use crate::spine::archive::tree_meta_with_token_baselines;
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::KEvent;
 use crate::spine::model::LoggedKEvent;
@@ -56,10 +56,12 @@ impl ParseStack {
                 memory,
                 next_open_index,
                 next_open_input_tokens,
+                next_open_context_tokens,
             } => Symbol::Control(ControlSymbol::Compact(
                 memory,
                 next_open_index,
                 next_open_input_tokens,
+                next_open_context_tokens,
             )),
             SpineToken::Msg { seg, from_user } => {
                 Symbol::SpineTreeNode(SpineTreeNode::MsgAsLeafNode {
@@ -177,12 +179,18 @@ impl ParseStack {
             memory,
             next_open_index,
             next_open_input_tokens,
+            next_open_context_tokens,
         )) = self.symbols[compact_idx].clone()
         else {
             unreachable!("compact symbol was checked before clone")
         };
-        let next_open =
-            next_root_open_symbol(archive, &memory, next_open_index, next_open_input_tokens)?;
+        let next_open = next_root_open_symbol(
+            archive,
+            &memory,
+            next_open_index,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        )?;
         let Some(boundary_idx) = self.symbols[..compact_idx].iter().rposition(|symbol| {
             matches!(
                 symbol,
@@ -262,6 +270,16 @@ impl ParseStack {
             Symbol::Control(ControlSymbol::Open(meta)) => Some(meta),
             _ => None,
         })
+    }
+
+    pub(super) fn live_open_metas(&self) -> Vec<&TreeMeta> {
+        self.symbols
+            .iter()
+            .filter_map(|symbol| match symbol {
+                Symbol::Control(ControlSymbol::Open(meta)) => Some(meta),
+                _ => None,
+            })
+            .collect()
     }
 
     pub(super) fn current_open_has_nodes(&self) -> Result<bool, SpineError> {
@@ -364,6 +382,7 @@ struct TreeRenderRow {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct NodeAccounting {
+    live_context_tokens: Option<i64>,
     live_input_tokens: Option<i64>,
     memory_output_tokens: Option<i64>,
 }
@@ -432,7 +451,7 @@ fn collect_tree_render_rows(
             Symbol::Control(ControlSymbol::Init(_))
             | Symbol::Control(ControlSymbol::End)
             | Symbol::Control(ControlSymbol::Close(_))
-            | Symbol::Control(ControlSymbol::Compact(_, _, _)) => {}
+            | Symbol::Control(ControlSymbol::Compact(_, _, _, _)) => {}
             Symbol::Control(ControlSymbol::Open(meta)) => {
                 rows.push(TreeRenderRow {
                     id: meta.id.clone(),
@@ -617,6 +636,11 @@ fn format_tree_rows(rows: Vec<TreeRenderRow>, current_annotation: Option<&str>) 
 
 fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
     Some(NodeAccounting {
+        live_context_tokens: memory
+            .close_context_tokens
+            .zip(memory.open_context_tokens)
+            .map(|(close, open)| close.saturating_sub(open))
+            .filter(|tokens| *tokens > 0),
         live_input_tokens: memory
             .close_input_tokens
             .zip(memory.open_input_tokens)
@@ -625,26 +649,33 @@ fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
         memory_output_tokens: memory.memory_output_tokens.filter(|tokens| *tokens > 0),
     })
     .filter(|accounting| {
-        accounting.live_input_tokens.is_some() || accounting.memory_output_tokens.is_some()
+        accounting.live_context_tokens.is_some()
+            || accounting.live_input_tokens.is_some()
+            || accounting.memory_output_tokens.is_some()
     })
 }
 
 fn snapshot_accounting(accounting: &NodeAccounting) -> Option<SpineTreeNodeAccountingSnapshot> {
     Some(SpineTreeNodeAccountingSnapshot {
         current_node_context_tokens: None,
+        current_node_context_unavailable: None,
+        current_node_context_baseline_source: None,
+        raw_context_tokens: accounting.live_context_tokens,
         raw_input_tokens: accounting.live_input_tokens,
         memory_output_tokens: accounting.memory_output_tokens,
     })
     .filter(|accounting| {
-        accounting.raw_input_tokens.is_some() || accounting.memory_output_tokens.is_some()
+        accounting.raw_context_tokens.is_some()
+            || accounting.raw_input_tokens.is_some()
+            || accounting.memory_output_tokens.is_some()
     })
 }
 
 fn format_node_accounting(accounting: &NodeAccounting) -> Option<String> {
-    match (
-        accounting.live_input_tokens,
-        accounting.memory_output_tokens,
-    ) {
+    let raw_tokens = accounting
+        .live_context_tokens
+        .or(accounting.live_input_tokens);
+    match (raw_tokens, accounting.memory_output_tokens) {
         (Some(raw), Some(memory)) => Some(format!(
             "(~{} raw -> ~{} memory)",
             format_si_suffix(raw),
@@ -696,14 +727,18 @@ pub(super) fn event_to_token(
             index,
             summary,
             open_input_tokens,
+            open_context_tokens,
+            open_context_source,
             ..
         } => Ok(SpineToken::Open {
-            meta: tree_meta_with_open_input_tokens(
+            meta: tree_meta_with_token_baselines(
                 archive,
                 child.clone(),
                 *index,
                 summary.clone(),
                 *open_input_tokens,
+                *open_context_tokens,
+                *open_context_source,
             )?,
         }),
         KEvent::Close { node, .. } => {
@@ -727,6 +762,9 @@ pub(super) fn event_to_token(
                     event.seq..event.seq + 1,
                     mem.open_input_tokens,
                     mem.close_input_tokens,
+                    mem.open_context_tokens,
+                    mem.close_context_tokens,
+                    mem.open_context_source,
                     mem.memory_output_tokens,
                 ),
             })
@@ -735,6 +773,7 @@ pub(super) fn event_to_token(
             mem,
             next_open_index,
             next_open_input_tokens,
+            next_open_context_tokens,
             ..
         } => {
             let mem = mems.get(mem).ok_or_else(|| {
@@ -757,12 +796,16 @@ pub(super) fn event_to_token(
                     event.seq..event.seq + 1,
                     mem.open_input_tokens,
                     mem.close_input_tokens,
+                    mem.open_context_tokens,
+                    mem.close_context_tokens,
+                    mem.open_context_source,
                     mem.memory_output_tokens,
                 ),
                 next_open_index: usize::try_from(*next_open_index).map_err(|_| {
                     SpineError::InvalidEvent("root open index overflow".to_string())
                 })?,
                 next_open_input_tokens: *next_open_input_tokens,
+                next_open_context_tokens: *next_open_context_tokens,
             })
         }
     }

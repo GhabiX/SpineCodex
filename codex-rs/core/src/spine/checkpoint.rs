@@ -22,6 +22,8 @@ pub(super) struct SpineCheckpoint {
     pub(super) rollout_path: String,
     pub(super) raw_ordinal: u64,
     pub(super) token_seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) pressure_seq_watermark: Option<u64>,
     pub(super) raw_live_hash: String,
     pub(super) context_len: usize,
     pub(super) cursor: String,
@@ -37,6 +39,7 @@ pub(super) fn build_checkpoint(
     rollout_path: &Path,
     raw_ordinal: u64,
     token_seq: u64,
+    pressure_seq_watermark: Option<u64>,
     raw_live: &[bool],
     parse_stack: &ParseStack,
     context: &[ResponseItem],
@@ -63,6 +66,7 @@ pub(super) fn build_checkpoint(
         rollout_path: rollout_path.display().to_string(),
         raw_ordinal,
         token_seq,
+        pressure_seq_watermark,
         raw_live_hash: hash_raw_live(&raw_live[..raw_ordinal_usize]),
         context_len: context.len(),
         cursor: parse_stack.current_cursor_id()?.to_string(),
@@ -86,6 +90,10 @@ pub(super) struct CheckpointTreeMeta {
     pub(super) summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) open_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_source: Option<crate::spine::model::ContextBaselineSource>,
     pub(super) node_dir: String,
 }
 
@@ -105,6 +113,12 @@ pub(super) struct CheckpointMemoryRef {
     pub(super) open_input_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) close_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) close_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_source: Option<crate::spine::model::ContextBaselineSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) memory_output_tokens: Option<i64>,
 }
@@ -129,7 +143,7 @@ pub(super) fn collect_checkpoint_refs(
             }
             Symbol::Control(ControlSymbol::End) => {}
             Symbol::Control(ControlSymbol::Close(memory))
-            | Symbol::Control(ControlSymbol::Compact(memory, _, _)) => {
+            | Symbol::Control(ControlSymbol::Compact(memory, _, _, _)) => {
                 memory_refs.push(checkpoint_memory_ref(memory));
             }
             Symbol::SpineTreeNode(node) => {
@@ -183,6 +197,8 @@ fn checkpoint_tree_meta(meta: &TreeMeta) -> CheckpointTreeMeta {
         index: meta.index,
         summary: meta.summary.clone(),
         open_input_tokens: meta.open_input_tokens,
+        open_context_tokens: meta.open_context_tokens,
+        open_context_source: meta.open_context_source,
         node_dir: meta.node_dir.display().to_string(),
     }
 }
@@ -201,6 +217,9 @@ fn checkpoint_memory_ref(memory: &MemoryRef) -> CheckpointMemoryRef {
         source_token_seq_end: memory.source_token_seq.end,
         open_input_tokens: memory.open_input_tokens,
         close_input_tokens: memory.close_input_tokens,
+        open_context_tokens: memory.open_context_tokens,
+        close_context_tokens: memory.close_context_tokens,
+        open_context_source: memory.open_context_source,
         memory_output_tokens: memory.memory_output_tokens,
     }
 }

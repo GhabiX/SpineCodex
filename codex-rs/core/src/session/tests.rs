@@ -134,6 +134,8 @@ use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
+use codex_protocol::spine_tree::SpineNodeContextUnavailableReason;
 use codex_rmcp_client::ElicitationAction;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -9949,7 +9951,7 @@ async fn spine_tree_tool_omits_context_pressure_when_window_unknown() {
 }
 
 #[tokio::test]
-async fn spine_tree_tool_node_context_uses_provider_input_delta() {
+async fn spine_tree_tool_node_context_uses_provider_context_delta() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -10033,6 +10035,11 @@ async fn spine_tree_tool_node_context_uses_provider_input_delta() {
         .expect("active node");
     let accounting = active.accounting.as_ref().expect("active accounting");
     assert_eq!(accounting.current_node_context_tokens, Some(181_546));
+    assert_eq!(
+        accounting.current_node_context_baseline_source,
+        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
+    );
+    assert_eq!(accounting.current_node_context_unavailable, None);
 
     let rollout_path = session
         .current_rollout_path()
@@ -10053,6 +10060,7 @@ async fn spine_tree_tool_node_context_uses_provider_input_delta() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     assert_eq!(runtime.current_open_input_tokens(), Some(37_002));
+    assert_eq!(runtime.current_open_context_tokens(), Some(37_002));
 
     resumed_history.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
@@ -10112,11 +10120,16 @@ async fn spine_tree_tool_node_context_uses_provider_input_delta() {
         .expect("active node");
     let accounting = active.accounting.as_ref().expect("active accounting");
     assert_eq!(accounting.current_node_context_tokens, Some(181_546));
+    assert_eq!(
+        accounting.current_node_context_baseline_source,
+        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
+    );
+    assert_eq!(accounting.current_node_context_unavailable, None);
 }
 
 #[tokio::test]
 async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -10163,6 +10176,28 @@ async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
     let tree = session.spine_tree().await.expect("tree");
     assert!(tree.contains("[1.1.1] Current invalid range"), "{tree}");
     assert!(!tree.contains("node context"), "{tree}");
+    let mut snapshot = None;
+    session
+        .emit_spine_tree_snapshot(&turn_context)
+        .await
+        .expect("emit Spine tree snapshot");
+    while let Ok(event) = rx.try_recv() {
+        if let EventMsg::SpineTreeUpdate(update) = event.msg {
+            snapshot = Some(update);
+        }
+    }
+    let snapshot = snapshot.expect("spine tree snapshot");
+    let active = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == snapshot.active_node_id)
+        .expect("active node");
+    let accounting = active.accounting.as_ref().expect("active accounting");
+    assert_eq!(accounting.current_node_context_tokens, None);
+    assert_eq!(
+        accounting.current_node_context_unavailable,
+        Some(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)
+    );
 }
 
 #[tokio::test]

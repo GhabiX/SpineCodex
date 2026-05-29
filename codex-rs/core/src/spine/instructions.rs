@@ -11,16 +11,23 @@ Spine tools are task-boundary controls:
 Default to staying in the current live node while it remains focused. Use update_plan for ordinary task tracking; it does not create, close, compact, or move Spine nodes.
 Spine context follows the current cursor: the current path remains visible, closed left siblings appear as memory, and the current live node keeps raw history.
 
-Use Spine to model the evolving structure of the work. A good Spine tree makes the work readable: parents hold shared intent, constraints, decisions, and the phase map; siblings are peer phases at a similar level; children are focused subproblems whose result helps the parent continue.
+Use Spine to model the evolving structure of the work as a balanced task tree. A good Spine tree reflects the real decomposition of the work: parents hold shared intent, constraints, decisions, and the phase map; children are coherent peer phases or independently compactable subproblems; each child may itself have a subtree when its own work has real nested structure.
 
-For complex or long-running work, briefly sketch a provisional tree shape before starting: the parent goal, likely peer phases, and which phase begins now. Do not pre-open planned phases. Revisit and adjust the tree at coherent boundaries as the work changes.
+For complex or long-running work, briefly sketch a provisional tree shape before starting: the parent goal, likely peer phases, and which phase begins now. Do not pre-open planned phases. Revisit and adjust the tree at coherent boundaries as the work changes. For example, a review task may have sibling phases for discovery, focused subsystem review, test review, and synthesis; any one of those phases may open children only when it has focused nested dependencies of its own.
+
+Before changing Spine, classify the next work:
+- Continuation: same scope as the current live node. Keep working in the current node.
+- Child: a nested dependency or focused subproblem whose result the current scope needs before it can continue. Open a child.
+- Peer: a next phase at the same abstraction level under the same parent. Close the current child, return to the parent, then open a sibling.
+- Parent-level redirect: the user shifts back to the parent goal or asks to re-evaluate the current structure. Close the current child before continuing at the parent level when the child has enough context to compact.
 
 Open a child when it gives a clear structural benefit:
+- Decomposition: the child is a real refinement of the current scope, not a duplicate label for the same work.
 - Dependency: the parent needs this focused result to continue cleanly.
 - Compression: the work will produce noisy local reads, logs, experiments, tests, or reasoning that future work should see as memory rather than raw history.
 - Focus: isolating the work helps avoid mixing phases or makes handoff cleaner.
 
-When one phase reaches a coherent boundary and the next phase is a peer step in the same goal, close the current child, return to the parent, then open a sibling. Discovery, implementation, verification, documentation, and synthesis are usually siblings.
+When one phase reaches a coherent boundary and the next phase is a peer step in the same goal, close the current child, return to the parent, then open a sibling. Discovery, implementation, verification, documentation, review, and synthesis are usually siblings when they are phases of the same parent goal. Do not open a peer phase as a child of the previous peer phase.
 
 Close a node only at a coherent boundary, when it has enough motivation, judgment, evidence, and next-step context to return a compact result to the parent. Use the optional close instruction to name facts that must survive compaction. Do not close only because the turn is ending, context size crossed a soft threshold, or as end-of-response cleanup.
 
@@ -31,6 +38,7 @@ When unsure, call spine.tree before moving Spine; use its node and global contex
 There is no production spine.next tool. Moving to a sibling phase is `close ; open`.
 
 Do not open for routine continuation, another file read, another command, checklist updates, short replies, observations, ordinary turn boundaries, or one node per command, checklist item, or turn. Keep simple tasks in one node.
+Control both depth and breadth. Repeated or paraphrased summaries along the current path are a sign of accidental over-nesting; continue in place or close back to the right parent instead of opening another child. A long chain of single-child nodes usually means peer phases or continuations were modeled as children. A wide list of tiny nodes usually means commands or checklist items were modeled as phases. Prefer a readable subtree with meaningful phases and focused subproblems.
 At root depth, close a root child to return to the root scope. Calling spine.close on the true root fails.
 Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../memory.md` against that Base, not against the workspace cwd.
 When moving between nodes, rely on the runtime Spine Tree and closed-node memories; completed Spine nodes are read-only, and sidecar trajs or memory files should be inspected only when historical details are genuinely needed.
