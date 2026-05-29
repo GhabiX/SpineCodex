@@ -1,6 +1,8 @@
 use super::*;
 use crate::spine::CHECKPOINT_VERSION;
 use crate::spine::archive::tree_meta;
+use crate::spine::checkpoint::CheckpointMemoryRef;
+use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
 use crate::spine::io::hash_response_items;
 use codex_protocol::models::ContentItem;
 use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
@@ -772,6 +774,187 @@ fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
         err.to_string().contains("No such file") || err.to_string().contains("os error 2"),
         "unexpected clone error: {err}"
     );
+}
+
+#[test]
+fn clone_for_rollout_rewrites_compact_checkpoint_memory_refs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source_rollout = dir.path().join("source.jsonl");
+    let target_rollout = dir.path().join("target.jsonl");
+    let source = SpineStore::create_for_rollout(&source_rollout).expect("create source store");
+    source
+        .append_event(&KEvent::Init { raw_start: 0 })
+        .expect("append init");
+    let body = "root compact body";
+    let body_path = source
+        .write_memory_body("root-1-1", body)
+        .expect("write source body");
+    let mem = MemRecord {
+        compact_id: "root-1-1".to_string(),
+        kind: MemKind::RootEpoch,
+        node: NodeId::root_epoch(1).child(1),
+        raw_start: 0,
+        raw_end: 0,
+        context_start: 0,
+        context_end: 1,
+        raw_live_hash: Some(hash_raw_live(&[])),
+        open_input_tokens: None,
+        close_input_tokens: None,
+        memory_output_tokens: None,
+        body_path: body_path.clone(),
+        body_hash: sha1_hex(body.as_bytes()),
+    };
+    source.append_mem(&mem).expect("append mem");
+    source
+        .append_compact_checkpoint(&SpineCompactCheckpoint {
+            version: CHECKPOINT_VERSION,
+            rollout_path: source_rollout.display().to_string(),
+            raw_boundary: 0,
+            token_seq: 1,
+            raw_live_hash: hash_raw_live(&[]),
+            context_len: 1,
+            h_ps_hash: hash_response_items(&[memory_response_item(body)]).expect("hash h(PS)"),
+            replacement_history_hash: hash_response_items(&[memory_response_item(body)])
+                .expect("hash replacement_history"),
+            memory_refs: vec![CheckpointMemoryRef {
+                compact_id: "root-1-1".to_string(),
+                node_id: NodeId::root_epoch(1).child(1).to_string(),
+                body_path: "memory/source-only.md".to_string(),
+                body_hash: sha1_hex(body.as_bytes()),
+                source_raw_start: 0,
+                source_raw_end: 0,
+                source_context_start: 0,
+                source_context_end: 1,
+                source_token_seq_start: 0,
+                source_token_seq_end: 1,
+                open_input_tokens: None,
+                close_input_tokens: None,
+                memory_output_tokens: None,
+            }],
+        })
+        .expect("append compact checkpoint");
+
+    SpineStore::clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[])
+        .expect("clone sidecar");
+    let target = SpineStore::for_rollout(&target_rollout).expect("target store");
+    let checkpoint = target
+        .compact_checkpoints()
+        .expect("read target checkpoints")
+        .pop()
+        .expect("target checkpoint");
+
+    assert_eq!(
+        checkpoint.rollout_path,
+        target_rollout.display().to_string()
+    );
+    assert_eq!(checkpoint.memory_refs[0].body_path, body_path);
+    target
+        .validate_compact_checkpoint_for_boundary(
+            &target_rollout,
+            &[],
+            0,
+            &[memory_response_item(body)],
+        )
+        .expect("cloned checkpoint should validate against target sidecar");
+}
+
+#[test]
+fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source_rollout = dir.path().join("source.jsonl");
+    let target_rollout = dir.path().join("target.jsonl");
+    let source = SpineStore::create_for_rollout(&source_rollout).expect("create source store");
+    source
+        .append_event(&KEvent::Init { raw_start: 0 })
+        .expect("append init");
+    source
+        .append_event(&KEvent::Open {
+            child: NodeId::root_epoch(1).child(1),
+            boundary: 0,
+            index: 0,
+            summary: "root".to_string(),
+            open_input_tokens: None,
+        })
+        .expect("append open");
+    let raw_live = vec![true, false];
+    let raw_live_hash = hash_raw_live(&raw_live);
+    let body = "root compact after rollback hole";
+    let body_path = source
+        .write_memory_body("root-1-2", body)
+        .expect("write source body");
+    let mem = MemRecord {
+        compact_id: "root-1-2".to_string(),
+        kind: MemKind::RootEpoch,
+        node: NodeId::root_epoch(1).child(1),
+        raw_start: 0,
+        raw_end: 2,
+        context_start: 0,
+        context_end: 1,
+        raw_live_hash: Some(raw_live_hash.clone()),
+        open_input_tokens: None,
+        close_input_tokens: None,
+        memory_output_tokens: None,
+        body_path: body_path.clone(),
+        body_hash: sha1_hex(body.as_bytes()),
+    };
+    source.append_mem(&mem).expect("append mem");
+    source
+        .append_event(&KEvent::RootCompact {
+            node: NodeId::root_epoch(1).child(1),
+            boundary: 2,
+            mem: "root-1-2".to_string(),
+            next_open_index: 1,
+            raw_live_hash: raw_live_hash.clone(),
+            next_open_input_tokens: None,
+        })
+        .expect("append root compact");
+    source
+        .append_compact_checkpoint(&SpineCompactCheckpoint {
+            version: CHECKPOINT_VERSION,
+            rollout_path: source_rollout.display().to_string(),
+            raw_boundary: 2,
+            token_seq: 2,
+            raw_live_hash,
+            context_len: 1,
+            h_ps_hash: hash_response_items(&[memory_response_item(body)]).expect("hash h(PS)"),
+            replacement_history_hash: hash_response_items(&[memory_response_item(body)])
+                .expect("hash replacement_history"),
+            memory_refs: vec![CheckpointMemoryRef {
+                compact_id: "root-1-2".to_string(),
+                node_id: NodeId::root_epoch(1).child(1).to_string(),
+                body_path: "memory/source-only.md".to_string(),
+                body_hash: sha1_hex(body.as_bytes()),
+                source_raw_start: 0,
+                source_raw_end: 2,
+                source_context_start: 0,
+                source_context_end: 1,
+                source_token_seq_start: 1,
+                source_token_seq_end: 2,
+                open_input_tokens: None,
+                close_input_tokens: None,
+                memory_output_tokens: None,
+            }],
+        })
+        .expect("append compact checkpoint");
+
+    SpineStore::clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &raw_live)
+        .expect("clone sidecar");
+    let target = SpineStore::for_rollout(&target_rollout).expect("target store");
+    assert_eq!(
+        target
+            .compact_checkpoints()
+            .expect("read target checkpoints")
+            .len(),
+        1
+    );
+    target
+        .validate_compact_checkpoint_for_boundary(
+            &target_rollout,
+            &raw_live,
+            2,
+            &[memory_response_item(body)],
+        )
+        .expect("rollback-hole checkpoint should validate against target sidecar");
 }
 
 #[test]

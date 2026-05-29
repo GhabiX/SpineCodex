@@ -1,5 +1,6 @@
 mod archive;
 mod checkpoint;
+mod compact_checkpoint;
 mod instructions;
 mod io;
 mod model;
@@ -16,6 +17,7 @@ pub(crate) use runtime::SpineCloseCompact;
 pub(crate) use runtime::SpineCommitKind;
 pub(crate) use runtime::SpineError;
 pub(crate) use runtime::SpinePendingCommit;
+pub(crate) use runtime::SpineRootCompactResult;
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::is_user_message;

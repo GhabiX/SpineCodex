@@ -15,6 +15,10 @@ use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::spine::SPINE_NAMESPACE;
+use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_OPEN;
+use crate::spine::SPINE_TOOL_TREE;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_memories_read::citations::parse_memory_citation;
@@ -146,8 +150,16 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     item: &ResponseItem,
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) -> Result<()> {
-    sess.record_conversation_items(turn_context, std::slice::from_ref(item))
+    if sess.has_spine_runtime_state() && is_spine_control_function_call(item) {
+        sess.record_conversation_items_spine_control_overlay_only(
+            turn_context,
+            std::slice::from_ref(item),
+        )
         .await?;
+    } else {
+        sess.record_conversation_items(turn_context, std::slice::from_ref(item))
+            .await?;
+    }
     let defers_mailbox_delivery = finalized_facts.map_or_else(
         || {
             completed_item_defers_mailbox_delivery_to_next_turn(
@@ -179,6 +191,18 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
             .await;
     }
     Ok(())
+}
+
+pub(crate) fn is_spine_control_function_call(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::FunctionCall {
+            namespace: Some(namespace),
+            name,
+            ..
+        } if namespace == SPINE_NAMESPACE
+            && matches!(name.as_str(), SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE)
+    )
 }
 
 fn response_item_may_include_external_context(item: &ResponseItem) -> bool {

@@ -1,6 +1,11 @@
 use crate::spine::SpineError;
+use crate::spine::checkpoint::CheckpointMemoryRef;
 use crate::spine::checkpoint::SpineCheckpoint;
+use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
+use crate::spine::compact_checkpoint::compact_checkpoint_replacement_history_hash;
+use crate::spine::compact_checkpoint::validate_compact_checkpoint;
 use crate::spine::io::append_json_line;
+use crate::spine::io::hash_raw_live;
 use crate::spine::io::locator_path;
 use crate::spine::io::read_json_file;
 use crate::spine::io::read_json_lines;
@@ -15,12 +20,14 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
 const LOCATOR_VERSION: u32 = 1;
 const TREE_FILE: &str = "tree.jsonl";
 const MEM_FILE: &str = "mem.jsonl";
+const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
 const CHECKPOINT_DIR: &str = "checkpoints";
 const INITIAL_CHECKPOINT_FILE: &str = "initial.json";
 
@@ -88,12 +95,29 @@ impl SpineStore {
                 target.append_event(&event.event)?;
             }
         }
+        let mut cloned_memory_paths = BTreeMap::new();
         for mem in source.mems()? {
             if mem.allowed_by(mask)? {
                 let body = source.read_memory_body(&mem)?;
                 let body_path = target.write_memory_body(&mem.compact_id, &body)?;
+                cloned_memory_paths.insert(mem.compact_id.clone(), body_path.clone());
                 let cloned = MemRecord { body_path, ..mem };
                 target.append_mem(&cloned)?;
+            }
+        }
+        for checkpoint in source.compact_checkpoints()? {
+            let boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
+                SpineError::InvalidEvent("compact checkpoint raw boundary overflow".to_string())
+            })?;
+            if boundary <= raw_live.len()
+                && checkpoint.raw_live_hash == hash_raw_live(&raw_live[..boundary])
+            {
+                let checkpoint = clone_compact_checkpoint_for_target(
+                    checkpoint,
+                    target_rollout_path,
+                    &cloned_memory_paths,
+                )?;
+                target.append_compact_checkpoint(&checkpoint)?;
             }
         }
         Ok(())
@@ -114,6 +138,15 @@ impl SpineStore {
 
     pub(super) fn mem_path(&self) -> PathBuf {
         self.root.join(MEM_FILE)
+    }
+
+    fn compact_checkpoint_path(&self) -> PathBuf {
+        self.root.join(COMPACT_CHECKPOINT_FILE)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compact_checkpoint_path_for_test(&self) -> PathBuf {
+        self.compact_checkpoint_path()
     }
 
     fn checkpoint_dir(&self) -> PathBuf {
@@ -143,6 +176,13 @@ impl SpineStore {
 
     pub(super) fn append_mem(&self, mem: &MemRecord) -> Result<(), SpineError> {
         append_json_line(&self.mem_path(), mem)
+    }
+
+    pub(super) fn append_compact_checkpoint(
+        &self,
+        checkpoint: &SpineCompactCheckpoint,
+    ) -> Result<(), SpineError> {
+        append_json_line(&self.compact_checkpoint_path(), checkpoint)
     }
 
     pub(super) fn events(&self) -> Result<Vec<LoggedKEvent>, SpineError> {
@@ -217,6 +257,77 @@ impl SpineStore {
         read_json_lines(&self.mem_path())
     }
 
+    pub(super) fn compact_checkpoints(&self) -> Result<Vec<SpineCompactCheckpoint>, SpineError> {
+        if !self.compact_checkpoint_path().exists() {
+            return Ok(Vec::new());
+        }
+        read_json_lines(&self.compact_checkpoint_path())
+    }
+
+    pub(crate) fn validate_compact_checkpoint_for_boundary(
+        &self,
+        rollout_path: &Path,
+        raw_live: &[bool],
+        raw_boundary: u64,
+        replacement_history: &[codex_protocol::models::ResponseItem],
+    ) -> Result<(), SpineError> {
+        let replacement_history_hash =
+            compact_checkpoint_replacement_history_hash(replacement_history)?;
+        let checkpoints = self
+            .compact_checkpoints()?
+            .into_iter()
+            .filter(|checkpoint| checkpoint.raw_boundary == raw_boundary)
+            .collect::<Vec<_>>();
+        if checkpoints.is_empty() {
+            return Err(SpineError::InvalidStore(format!(
+                "missing spine compact checkpoint at raw boundary {raw_boundary}"
+            )));
+        }
+        let mut checkpoints = checkpoints
+            .into_iter()
+            .filter(|checkpoint| {
+                checkpoint.replacement_history_hash == replacement_history_hash
+                    && checkpoint.h_ps_hash == replacement_history_hash
+            })
+            .collect::<Vec<_>>();
+        if checkpoints.is_empty() {
+            return Err(SpineError::InvalidStore(format!(
+                "spine_task_tree replacement_history does not match sidecar h(PS) compact checkpoint at raw boundary {raw_boundary}"
+            )));
+        }
+        checkpoints.sort_by_key(|checkpoint| checkpoint.token_seq);
+        let mut last_err = None;
+        for checkpoint in checkpoints.into_iter().rev() {
+            match validate_compact_checkpoint(
+                &checkpoint,
+                rollout_path,
+                raw_live,
+                replacement_history,
+            ) {
+                Ok(()) => {
+                    for memory in &checkpoint.memory_refs {
+                        let body = std::fs::read_to_string(self.root.join(&memory.body_path))?;
+                        if sha1_hex(body.as_bytes()) != memory.body_hash {
+                            return Err(SpineError::InvalidStore(format!(
+                                "memory body hash mismatch for {}",
+                                memory.compact_id
+                            )));
+                        }
+                    }
+                    return Ok(());
+                }
+                Err(err) => {
+                    last_err = Some(err);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            SpineError::InvalidStore(format!(
+                "missing spine compact checkpoint at raw boundary {raw_boundary}"
+            ))
+        }))
+    }
+
     fn checkpoints(&self) -> Result<Vec<SpineCheckpoint>, SpineError> {
         let dir = self.checkpoint_dir();
         if !dir.exists() {
@@ -287,4 +398,32 @@ impl SpineStore {
         }
         Ok(body)
     }
+}
+
+fn clone_compact_checkpoint_for_target(
+    checkpoint: SpineCompactCheckpoint,
+    target_rollout_path: &Path,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<SpineCompactCheckpoint, SpineError> {
+    let mut memory_refs = Vec::with_capacity(checkpoint.memory_refs.len());
+    for memory in checkpoint.memory_refs {
+        let body_path = cloned_memory_paths
+            .get(&memory.compact_id)
+            .ok_or_else(|| {
+                SpineError::InvalidStore(format!(
+                    "compact checkpoint references uncloned memory {}",
+                    memory.compact_id
+                ))
+            })?
+            .clone();
+        memory_refs.push(CheckpointMemoryRef {
+            body_path,
+            ..memory
+        });
+    }
+    Ok(SpineCompactCheckpoint {
+        rollout_path: target_rollout_path.display().to_string(),
+        memory_refs,
+        ..checkpoint
+    })
 }

@@ -43,15 +43,12 @@ use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::spine::SPINE_NAMESPACE;
-use crate::spine::SPINE_TOOL_CLOSE;
-use crate::spine::SPINE_TOOL_OPEN;
-use crate::spine::SPINE_TOOL_TREE;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
+use crate::stream_events_utils::is_spine_control_function_call;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
@@ -1367,18 +1364,32 @@ impl SpineControlOverlay {
             return;
         }
         if let ResponseItem::FunctionCallOutput { call_id, .. } = item
-            && self.items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::FunctionCall {
-                        call_id: existing,
-                        ..
-                    } if existing == call_id
-                )
-            })
+            && self.contains_call_id(call_id)
         {
             self.items.push(item.clone());
         }
+    }
+
+    fn contains_matching_request(&self, item: &ResponseItem) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        match item {
+            ResponseItem::FunctionCallOutput { call_id, .. } => self.contains_call_id(call_id),
+            _ => false,
+        }
+    }
+
+    fn contains_call_id(&self, call_id: &str) -> bool {
+        self.items.iter().any(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCall {
+                    call_id: existing,
+                    ..
+                } if existing == call_id
+            )
+        })
     }
 
     fn take_for_next_prompt(&mut self) -> Vec<ResponseItem> {
@@ -1387,18 +1398,6 @@ impl SpineControlOverlay {
         }
         std::mem::take(&mut self.items)
     }
-}
-
-fn is_spine_control_function_call(item: &ResponseItem) -> bool {
-    matches!(
-        item,
-        ResponseItem::FunctionCall {
-            namespace: Some(namespace),
-            name,
-            ..
-        } if namespace == SPINE_NAMESPACE
-            && matches!(name.as_str(), SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE)
-    )
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -1961,11 +1960,19 @@ async fn drain_in_flight(
                     )
                     .await?;
                 } else {
-                    sess.record_conversation_items(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await?;
+                    if spine_control_overlay.contains_matching_request(&response_item) {
+                        sess.record_conversation_items_spine_control_overlay_only(
+                            &turn_context,
+                            std::slice::from_ref(&response_item),
+                        )
+                        .await?;
+                    } else {
+                        sess.record_conversation_items(
+                            &turn_context,
+                            std::slice::from_ref(&response_item),
+                        )
+                        .await?;
+                    }
                     sess.maybe_commit_spine_tool_output(&turn_context, &response_item)
                         .await
                         .map_err(|err| {
