@@ -53,6 +53,15 @@ pub(super) enum NodeStatus {
     Closed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ContextBaselineSource {
+    ProviderAtOpen,
+    RootCompactHandoff,
+    EstimatedFromLiveSuffix,
+    CheckpointReplay,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum KEvent {
@@ -71,6 +80,10 @@ pub(super) enum KEvent {
         summary: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         open_input_tokens: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        open_context_tokens: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        open_context_source: Option<ContextBaselineSource>,
     },
     Close {
         node: NodeId,
@@ -79,6 +92,8 @@ pub(super) enum KEvent {
         instruction: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         close_input_tokens: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        close_context_tokens: Option<i64>,
     },
     RootCompact {
         node: NodeId,
@@ -88,6 +103,8 @@ pub(super) enum KEvent {
         raw_live_hash: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         next_open_input_tokens: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_open_context_tokens: Option<i64>,
     },
 }
 
@@ -104,6 +121,57 @@ impl std::ops::Deref for LoggedKEvent {
     fn deref(&self) -> &Self::Target {
         &self.event
     }
+}
+
+impl LoggedPressureEvent {
+    pub(super) fn allowed_by(&self, raw_live: &[bool]) -> bool {
+        match &self.event {
+            PressureEvent::OpenContextBaseline {
+                observed_raw_ordinal,
+                observed_raw_live_hash,
+                ..
+            } => {
+                let Ok(end) = usize::try_from(*observed_raw_ordinal) else {
+                    return false;
+                };
+                if end > raw_live.len() {
+                    return false;
+                }
+                observed_raw_live_hash
+                    .as_deref()
+                    .map(|hash| hash_raw_live(&raw_live[..end]) == hash)
+                    .unwrap_or(true)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum PressureEvent {
+    OpenContextBaseline {
+        node: NodeId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        open_structural_seq: Option<u64>,
+        observed_structural_seq: u64,
+        observed_raw_ordinal: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        observed_raw_live_hash: Option<String>,
+        observed_context_index: usize,
+        context_tokens: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_tokens: Option<i64>,
+        source: ContextBaselineSource,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        estimated_live_suffix_tokens: Option<i64>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct LoggedPressureEvent {
+    pub(super) pressure_seq: u64,
+    #[serde(flatten)]
+    pub(super) event: PressureEvent,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -129,6 +197,12 @@ pub(super) struct MemRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) close_input_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) close_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_source: Option<ContextBaselineSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) memory_output_tokens: Option<i64>,
     pub(super) body_path: String,
     pub(super) body_hash: String,
@@ -141,6 +215,10 @@ pub(super) struct TreeMeta {
     pub(super) summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) open_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_source: Option<ContextBaselineSource>,
     pub(super) node_dir: PathBuf,
 }
 
@@ -179,6 +257,12 @@ pub(super) struct MemoryRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) close_input_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) close_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) open_context_source: Option<ContextBaselineSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) memory_output_tokens: Option<i64>,
 }
 
@@ -198,6 +282,7 @@ pub(super) enum SpineToken {
         memory: MemoryRef,
         next_open_index: usize,
         next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
     },
     Msg {
         seg: SegRef,
@@ -211,7 +296,7 @@ pub(super) enum ControlSymbol {
     End,
     Open(TreeMeta),
     Close(MemoryRef),
-    Compact(MemoryRef, usize, Option<i64>),
+    Compact(MemoryRef, usize, Option<i64>, Option<i64>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

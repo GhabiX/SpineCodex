@@ -28,7 +28,7 @@ fn render_symbols_to_context(
             | Symbol::Control(ControlSymbol::End)
             | Symbol::Control(ControlSymbol::Open(_))
             | Symbol::Control(ControlSymbol::Close(_))
-            | Symbol::Control(ControlSymbol::Compact(_, _, _)) => {}
+            | Symbol::Control(ControlSymbol::Compact(_, _, _, _)) => {}
             Symbol::SpineTreeNode(node) => render_node_to_context(node, raw_items, out)?,
             Symbol::SpineTreeNodes(nodes) => {
                 for node in nodes {

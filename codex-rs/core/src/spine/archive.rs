@@ -54,6 +54,7 @@ pub(super) fn next_root_open_symbol(
     memory: &MemoryRef,
     next_open_index: usize,
     open_input_tokens: Option<i64>,
+    open_context_tokens: Option<i64>,
 ) -> Result<Symbol, SpineError> {
     let root_index = *memory
         .node_id
@@ -67,6 +68,9 @@ pub(super) fn next_root_open_symbol(
             index: next_open_index,
             summary: "root".to_string(),
             open_input_tokens,
+            open_context_tokens,
+            open_context_source: open_context_tokens
+                .map(|_| crate::spine::model::ContextBaselineSource::RootCompactHandoff),
             node_dir: archive.node_dir(&next_id),
         },
     )))
@@ -117,11 +121,23 @@ fn render_memory_archive(memory: &MemoryRef) -> Result<String, SpineError> {
     if let Some(tokens) = memory.close_input_tokens {
         out.push_str(&format!("close_input_tokens: {tokens}\n"));
     }
+    if let Some(tokens) = memory.open_context_tokens {
+        out.push_str(&format!("open_context_tokens: {tokens}\n"));
+    }
+    if let Some(tokens) = memory.close_context_tokens {
+        out.push_str(&format!("close_context_tokens: {tokens}\n"));
+    }
+    if let Some(source) = memory.open_context_source {
+        out.push_str(&format!("open_context_source: {source:?}\n"));
+    }
     if let Some(tokens) = memory.memory_output_tokens {
         out.push_str(&format!("memory_output_tokens: {tokens}\n"));
     }
     if memory.open_input_tokens.is_some()
         || memory.close_input_tokens.is_some()
+        || memory.open_context_tokens.is_some()
+        || memory.close_context_tokens.is_some()
+        || memory.open_context_source.is_some()
         || memory.memory_output_tokens.is_some()
     {
         out.push('\n');
@@ -192,15 +208,17 @@ pub(super) fn tree_meta(
     index: u64,
     summary: String,
 ) -> Result<TreeMeta, SpineError> {
-    tree_meta_with_open_input_tokens(archive, id, index, summary, None)
+    tree_meta_with_token_baselines(archive, id, index, summary, None, None, None)
 }
 
-pub(super) fn tree_meta_with_open_input_tokens(
+pub(super) fn tree_meta_with_token_baselines(
     archive: &SpineArchive,
     id: NodeId,
     index: u64,
     summary: String,
     open_input_tokens: Option<i64>,
+    open_context_tokens: Option<i64>,
+    open_context_source: Option<crate::spine::model::ContextBaselineSource>,
 ) -> Result<TreeMeta, SpineError> {
     let index = usize::try_from(index)
         .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
@@ -210,6 +228,8 @@ pub(super) fn tree_meta_with_open_input_tokens(
         index,
         summary,
         open_input_tokens,
+        open_context_tokens,
+        open_context_source,
     })
 }
 
@@ -223,6 +243,9 @@ pub(super) fn memory_ref(
     source_token_seq: Range<u64>,
     open_input_tokens: Option<i64>,
     close_input_tokens: Option<i64>,
+    open_context_tokens: Option<i64>,
+    close_context_tokens: Option<i64>,
+    open_context_source: Option<crate::spine::model::ContextBaselineSource>,
     memory_output_tokens: Option<i64>,
 ) -> MemoryRef {
     MemoryRef {
@@ -235,6 +258,9 @@ pub(super) fn memory_ref(
         source_token_seq,
         open_input_tokens,
         close_input_tokens,
+        open_context_tokens,
+        close_context_tokens,
+        open_context_source,
         memory_output_tokens,
     }
 }

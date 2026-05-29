@@ -373,7 +373,8 @@ fn format_node_accounting(node: &SpineTreeNode, active: bool) -> Option<String> 
         return Some(format!("(~{} node context)", format_si_suffix(tokens)));
     }
     match (
-        positive_tokens(accounting.raw_input_tokens),
+        positive_tokens(accounting.raw_context_tokens)
+            .or_else(|| positive_tokens(accounting.raw_input_tokens)),
         positive_tokens(accounting.memory_output_tokens),
     ) {
         (Some(raw), Some(memory)) => Some(format!(
@@ -469,11 +470,15 @@ mod tests {
 
     fn accounting(
         current_node_context_tokens: Option<i64>,
+        raw_context_tokens: Option<i64>,
         raw_input_tokens: Option<i64>,
         memory_output_tokens: Option<i64>,
     ) -> Option<SpineTreeNodeAccounting> {
         Some(SpineTreeNodeAccounting {
             current_node_context_tokens,
+            current_node_context_unavailable: None,
+            current_node_context_baseline_source: None,
+            raw_context_tokens,
             raw_input_tokens,
             memory_output_tokens,
         })
@@ -566,9 +571,9 @@ mod tests {
     #[test]
     fn pretty_omits_context_accounting() {
         let mut closed = node("1", None, Some("previous"), SpineTreeNodeStatus::Compacted);
-        closed.accounting = accounting(None, Some(7_500), Some(1_250));
+        closed.accounting = accounting(None, Some(7_500), Some(7_500), Some(1_250));
         let mut active = node("2.1", None, Some("active"), SpineTreeNodeStatus::Live);
-        active.accounting = accounting(Some(181_546), None, None);
+        active.accounting = accounting(Some(181_546), None, None, None);
         let cell = new_spine_tree_update("turn".to_string(), snapshot(vec![closed, active]));
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
@@ -597,9 +602,9 @@ mod tests {
     #[test]
     fn debug_renders_context_accounting() {
         let mut closed = node("1", None, Some("previous"), SpineTreeNodeStatus::Compacted);
-        closed.accounting = accounting(None, Some(7_500), Some(1_250));
+        closed.accounting = accounting(None, Some(7_500), Some(7_500), Some(1_250));
         let mut active = node("2.1", None, Some("active"), SpineTreeNodeStatus::Live);
-        active.accounting = accounting(Some(181_546), None, None);
+        active.accounting = accounting(Some(181_546), None, None, None);
         let cell = new_manual_debug_spine_tree_snapshot(snapshot(vec![closed, active]));
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
@@ -625,7 +630,7 @@ mod tests {
     #[test]
     fn omits_empty_context_accounting() {
         let mut active = node("2.1", None, Some("active"), SpineTreeNodeStatus::Live);
-        active.accounting = accounting(Some(0), Some(0), Some(0));
+        active.accounting = accounting(Some(0), Some(0), Some(0), Some(0));
         let cell = new_manual_debug_spine_tree_snapshot(snapshot(vec![active]));
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");

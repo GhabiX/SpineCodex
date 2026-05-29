@@ -1,17 +1,22 @@
 use super::*;
 use crate::context_manager::ContextAppend;
+use crate::context_manager::ContextManager;
+use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCommitKind;
 use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
+use crate::spine::SpineTokenBaselines;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::spine_tree::SpineNodeContextUnavailableReason;
 use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
+use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 
 pub(super) struct PreparedSpineReplay {
     raw_len: u64,
@@ -63,7 +68,8 @@ impl Session {
             annotate_current_node_context(
                 &mut snapshot,
                 token_info.as_ref(),
-                runtime.current_open_input_tokens(),
+                runtime.current_open_context_tokens(),
+                runtime.current_open_context_baseline_source(),
             );
             snapshot
         };
@@ -172,6 +178,52 @@ impl Session {
             return Ok(());
         };
         spine_slot.lock().await.observe_raw_items(count)
+    }
+
+    pub(super) async fn repair_spine_pressure_after_token_usage(
+        &self,
+        token_info: &TokenUsageInfo,
+    ) {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return;
+        };
+        let current_context_tokens = token_info.last_token_usage.tokens_in_context_window();
+        if current_context_tokens <= 0 {
+            return;
+        }
+        let history = self.clone_history().await;
+        let estimated_live_suffix_tokens = {
+            let guard = spine_slot.lock().await;
+            if guard.ensure_valid().is_err() {
+                return;
+            }
+            let Some(runtime) = guard.runtime() else {
+                return;
+            };
+            let Ok(open_index) = runtime.current_open_index() else {
+                return;
+            };
+            Some(estimate_history_suffix_tokens(&history, open_index))
+        };
+        let result = {
+            let mut guard = spine_slot.lock().await;
+            if let Err(err) = guard.ensure_valid() {
+                tracing::debug!("skipping Spine pressure repair: {err}");
+                return;
+            }
+            let Some(runtime) = guard.runtime_mut() else {
+                return;
+            };
+            runtime.ensure_current_open_context_baseline(
+                current_context_tokens,
+                Some(token_info.last_token_usage.input_tokens),
+                estimated_live_suffix_tokens,
+                history.raw_items().len(),
+            )
+        };
+        if let Err(err) = result {
+            tracing::debug!("failed to append Spine pressure repair metadata: {err}");
+        }
     }
 
     pub(super) async fn ensure_spine_runtime_if_available(&self) -> Result<(), SpineError> {
@@ -283,7 +335,7 @@ impl Session {
             ));
         };
         let current_annotation =
-            format_current_node_context(token_info.as_ref(), runtime.current_open_input_tokens());
+            format_current_node_context(token_info.as_ref(), runtime.current_open_context_tokens());
         let mut tree = if let Some(annotation) = current_annotation.as_deref() {
             runtime.render_tree_with_current_annotation(Some(annotation))?
         } else {
@@ -314,7 +366,8 @@ impl Session {
             annotate_current_node_context(
                 &mut snapshot,
                 token_info.as_ref(),
-                runtime.current_open_input_tokens(),
+                runtime.current_open_context_tokens(),
+                runtime.current_open_context_baseline_source(),
             );
             snapshot
         };
@@ -419,13 +472,11 @@ impl Session {
                 ));
             }
             let close_compact = close_compact.map(|(compact, _)| compact);
-            let input_tokens = state
-                .token_info()
-                .map(|info| info.last_token_usage.input_tokens);
-            let commit_kind = spine.maybe_commit_output_with_open_input_tokens(
+            let token_baselines = token_baselines_from_info(state.token_info().as_ref());
+            let commit_kind = spine.maybe_commit_output_with_token_baselines(
                 call_id,
                 close_compact,
-                input_tokens,
+                token_baselines,
             )?;
             let mut snapshot = None;
             if let Some(commit_kind) = commit_kind.as_ref() {
@@ -491,7 +542,8 @@ impl Session {
                 annotate_current_node_context(
                     &mut tree_snapshot,
                     token_info.as_ref(),
-                    spine.current_open_input_tokens(),
+                    spine.current_open_context_tokens(),
+                    spine.current_open_context_baseline_source(),
                 );
                 snapshot = Some(tree_snapshot);
             }
@@ -555,10 +607,7 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&history.get_rollout_items());
-        let next_open_input_tokens = self
-            .token_usage_info()
-            .await
-            .map(|info| info.last_token_usage.input_tokens);
+        let next_open_baselines = token_baselines_from_info(self.token_usage_info().await.as_ref());
         {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
@@ -573,7 +622,8 @@ impl Session {
                     &rollout_path,
                     body,
                     &raw_items,
-                    next_open_input_tokens,
+                    next_open_baselines.input_tokens,
+                    next_open_baselines.context_tokens,
                 ) {
                 Ok(result) => result,
                 Err(err) => {
@@ -650,20 +700,18 @@ fn spine_root_compact_body(
 
 fn format_current_node_context(
     current: Option<&TokenUsageInfo>,
-    open_input_tokens: Option<i64>,
+    open_context_tokens: Option<i64>,
 ) -> Option<String> {
-    let tokens = current_node_context_tokens(current, open_input_tokens)?;
+    let tokens = current_node_context_tokens(current, open_context_tokens).ok()??;
     Some(format!("(~{} node context)", format_si_suffix(tokens)))
 }
 
 fn annotate_current_node_context(
     snapshot: &mut SpineTreeUpdateEvent,
     current: Option<&TokenUsageInfo>,
-    open_input_tokens: Option<i64>,
+    open_context_tokens: Option<i64>,
+    open_context_source: Option<codex_protocol::spine_tree::SpineNodeContextBaselineSource>,
 ) {
-    let Some(tokens) = current_node_context_tokens(current, open_input_tokens) else {
-        return;
-    };
     let active_node_id = snapshot.active_node_id.as_str();
     let Some(active_node) = snapshot
         .nodes
@@ -672,19 +720,62 @@ fn annotate_current_node_context(
     else {
         return;
     };
-    active_node
+    let accounting = active_node
         .accounting
-        .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default)
-        .current_node_context_tokens = Some(tokens);
+        .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default);
+    match current_node_context_tokens(current, open_context_tokens) {
+        Ok(Some(tokens)) => {
+            accounting.current_node_context_tokens = Some(tokens);
+            accounting.current_node_context_baseline_source = open_context_source;
+            accounting.current_node_context_unavailable = None;
+        }
+        Ok(None) => {
+            accounting.current_node_context_tokens = None;
+            accounting.current_node_context_baseline_source = open_context_source;
+            accounting.current_node_context_unavailable =
+                Some(SpineNodeContextUnavailableReason::NonPositiveDelta);
+        }
+        Err(reason) => {
+            accounting.current_node_context_tokens = None;
+            accounting.current_node_context_baseline_source = open_context_source;
+            accounting.current_node_context_unavailable = Some(reason);
+        }
+    }
 }
 
 fn current_node_context_tokens(
     current: Option<&TokenUsageInfo>,
-    open_input_tokens: Option<i64>,
-) -> Option<i64> {
-    let current = current?.last_token_usage.input_tokens;
-    let tokens = current.saturating_sub(open_input_tokens?);
-    (tokens > 0).then_some(tokens)
+    open_context_tokens: Option<i64>,
+) -> Result<Option<i64>, SpineNodeContextUnavailableReason> {
+    let current = current
+        .ok_or(SpineNodeContextUnavailableReason::MissingCurrentUsage)?
+        .last_token_usage
+        .tokens_in_context_window();
+    let open_context_tokens =
+        open_context_tokens.ok_or(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)?;
+    let tokens = current.saturating_sub(open_context_tokens);
+    Ok((tokens > 0).then_some(tokens))
+}
+
+fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {
+    let Some(current) = current else {
+        return SpineTokenBaselines::default();
+    };
+    SpineTokenBaselines {
+        input_tokens: Some(current.last_token_usage.input_tokens),
+        context_tokens: Some(current.last_token_usage.tokens_in_context_window()),
+    }
+}
+
+fn estimate_history_suffix_tokens(history: &ContextManager, open_index: usize) -> i64 {
+    let bytes = history
+        .raw_items()
+        .get(open_index..)
+        .unwrap_or(&[])
+        .iter()
+        .map(estimate_response_item_model_visible_bytes)
+        .fold(0i64, i64::saturating_add);
+    approx_tokens_from_byte_count_i64(bytes)
 }
 
 fn format_context_window_pressure(info: Option<TokenUsageInfo>) -> Option<String> {

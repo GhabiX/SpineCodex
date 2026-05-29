@@ -2015,6 +2015,9 @@ async fn slash_spinetree_renders_cached_snapshot() {
                 status: SpineTreeNodeStatus::Compacted,
                 accounting: Some(SpineTreeNodeAccounting {
                     current_node_context_tokens: None,
+                    current_node_context_unavailable: None,
+                    current_node_context_baseline_source: None,
+                    raw_context_tokens: Some(7_500),
                     raw_input_tokens: Some(7_500),
                     memory_output_tokens: Some(1_250),
                 }),
@@ -2026,6 +2029,9 @@ async fn slash_spinetree_renders_cached_snapshot() {
                 status: SpineTreeNodeStatus::Live,
                 accounting: Some(SpineTreeNodeAccounting {
                     current_node_context_tokens: Some(181_546),
+                    current_node_context_unavailable: None,
+                    current_node_context_baseline_source: None,
+                    raw_context_tokens: None,
                     raw_input_tokens: None,
                     memory_output_tokens: None,
                 }),
@@ -2064,6 +2070,9 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
                 status: SpineTreeNodeStatus::Compacted,
                 accounting: Some(SpineTreeNodeAccounting {
                     current_node_context_tokens: None,
+                    current_node_context_unavailable: None,
+                    current_node_context_baseline_source: None,
+                    raw_context_tokens: Some(7_500),
                     raw_input_tokens: Some(7_500),
                     memory_output_tokens: Some(1_250),
                 }),
@@ -2075,6 +2084,9 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
                 status: SpineTreeNodeStatus::Live,
                 accounting: Some(SpineTreeNodeAccounting {
                     current_node_context_tokens: Some(181_546),
+                    current_node_context_unavailable: None,
+                    current_node_context_baseline_source: None,
+                    raw_context_tokens: None,
                     raw_input_tokens: None,
                     memory_output_tokens: None,
                 }),

@@ -20,6 +20,7 @@ pub(crate) use runtime::SpinePendingCommit;
 pub(crate) use runtime::SpineRootCompactResult;
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
+pub(crate) use runtime::SpineTokenBaselines;
 pub(crate) use runtime::is_user_message;
 pub(crate) use store::SpineStore;
 

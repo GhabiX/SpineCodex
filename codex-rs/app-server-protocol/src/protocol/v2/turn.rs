@@ -10,6 +10,8 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use codex_protocol::spine_tree::SpineNodeContextBaselineSource as CoreSpineNodeContextBaselineSource;
+use codex_protocol::spine_tree::SpineNodeContextUnavailableReason as CoreSpineNodeContextUnavailableReason;
 use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot as CoreSpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot as CoreSpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus as CoreSpineTreeNodeStatus;
@@ -388,8 +390,31 @@ pub struct SpineTreeNode {
 #[ts(export_to = "v2/")]
 pub struct SpineTreeNodeAccounting {
     pub current_node_context_tokens: Option<i64>,
+    pub current_node_context_unavailable: Option<SpineNodeContextUnavailableReason>,
+    pub current_node_context_baseline_source: Option<SpineNodeContextBaselineSource>,
+    pub raw_context_tokens: Option<i64>,
     pub raw_input_tokens: Option<i64>,
     pub memory_output_tokens: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum SpineNodeContextUnavailableReason {
+    MissingCurrentUsage,
+    MissingOpenContextBaseline,
+    NonPositiveDelta,
+    CorruptPressureMetadata,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum SpineNodeContextBaselineSource {
+    ProviderAtOpen,
+    RootCompactHandoff,
+    EstimatedFromLiveSuffix,
+    CheckpointReplay,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -454,8 +479,43 @@ impl From<CoreSpineTreeNodeAccountingSnapshot> for SpineTreeNodeAccounting {
     fn from(value: CoreSpineTreeNodeAccountingSnapshot) -> Self {
         Self {
             current_node_context_tokens: value.current_node_context_tokens,
+            current_node_context_unavailable: value
+                .current_node_context_unavailable
+                .map(Into::into),
+            current_node_context_baseline_source: value
+                .current_node_context_baseline_source
+                .map(Into::into),
+            raw_context_tokens: value.raw_context_tokens,
             raw_input_tokens: value.raw_input_tokens,
             memory_output_tokens: value.memory_output_tokens,
+        }
+    }
+}
+
+impl From<CoreSpineNodeContextUnavailableReason> for SpineNodeContextUnavailableReason {
+    fn from(value: CoreSpineNodeContextUnavailableReason) -> Self {
+        match value {
+            CoreSpineNodeContextUnavailableReason::MissingCurrentUsage => Self::MissingCurrentUsage,
+            CoreSpineNodeContextUnavailableReason::MissingOpenContextBaseline => {
+                Self::MissingOpenContextBaseline
+            }
+            CoreSpineNodeContextUnavailableReason::NonPositiveDelta => Self::NonPositiveDelta,
+            CoreSpineNodeContextUnavailableReason::CorruptPressureMetadata => {
+                Self::CorruptPressureMetadata
+            }
+        }
+    }
+}
+
+impl From<CoreSpineNodeContextBaselineSource> for SpineNodeContextBaselineSource {
+    fn from(value: CoreSpineNodeContextBaselineSource) -> Self {
+        match value {
+            CoreSpineNodeContextBaselineSource::ProviderAtOpen => Self::ProviderAtOpen,
+            CoreSpineNodeContextBaselineSource::RootCompactHandoff => Self::RootCompactHandoff,
+            CoreSpineNodeContextBaselineSource::EstimatedFromLiveSuffix => {
+                Self::EstimatedFromLiveSuffix
+            }
+            CoreSpineNodeContextBaselineSource::CheckpointReplay => Self::CheckpointReplay,
         }
     }
 }

@@ -8,20 +8,23 @@ use thiserror::Error;
 
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::memory_ref;
-use crate::spine::archive::tree_meta_with_open_input_tokens;
+use crate::spine::archive::tree_meta_with_token_baselines;
 use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::checkpoint::build_checkpoint;
 use crate::spine::checkpoint::validate_checkpoint;
 use crate::spine::compact_checkpoint::build_compact_checkpoint;
 use crate::spine::io::hash_raw_live;
 use crate::spine::io::sha1_hex;
+use crate::spine::model::ContextBaselineSource;
 #[cfg(test)]
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::KEvent;
 use crate::spine::model::LoggedKEvent;
+use crate::spine::model::LoggedPressureEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::NodeId;
+use crate::spine::model::PressureEvent;
 use crate::spine::model::RawMask;
 use crate::spine::model::SegRef;
 use crate::spine::model::SpineToken;
@@ -56,6 +59,7 @@ pub(crate) struct SpineRuntime {
     open_requests: BTreeMap<String, OpenRequestAnchor>,
     control_call_ids: BTreeSet<String>,
     pending: Option<PendingTransition>,
+    pressure_baselines: BTreeMap<NodeId, OpenContextBaseline>,
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +83,13 @@ struct PendingMsg {
     raw_ordinal: u64,
     context_index: u64,
     from_user: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OpenContextBaseline {
+    context_tokens: i64,
+    input_tokens: Option<i64>,
+    source: ContextBaselineSource,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +124,12 @@ pub(crate) struct SpineCloseCompact {
     pub(crate) body: String,
     pub(crate) source_context_range: Range<usize>,
     pub(crate) memory_output_tokens: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SpineTokenBaselines {
+    pub(crate) input_tokens: Option<i64>,
+    pub(crate) context_tokens: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -248,6 +265,8 @@ impl SpineRuntime {
                 index: raw_len,
                 summary: "root".to_string(),
                 open_input_tokens: None,
+                open_context_tokens: None,
+                open_context_source: None,
             })?;
         }
         Self::load(store, raw_len)
@@ -325,6 +344,14 @@ impl SpineRuntime {
         };
         let archive = SpineArchive::new(store.root.clone());
         let parse_stack = replay_from_events(&archive, &events, &mems, &raw_live, None, None)?;
+        let pressure_baselines = replay_pressure_baselines(
+            &parse_stack,
+            &store.pressure_events()?,
+            &raw_live,
+            store.next_event_seq()?,
+            None,
+            false,
+        );
         Ok(Self {
             store,
             parse_stack,
@@ -334,6 +361,7 @@ impl SpineRuntime {
             open_requests: BTreeMap::new(),
             control_call_ids: BTreeSet::new(),
             pending: None,
+            pressure_baselines,
         })
     }
 
@@ -370,6 +398,14 @@ impl SpineRuntime {
             Some(&checkpoint.parse_stack),
             Some(checkpoint.token_seq),
         )?;
+        let pressure_baselines = replay_pressure_baselines(
+            &parse_stack,
+            &store.pressure_events()?,
+            &raw_live,
+            store.next_event_seq()?,
+            checkpoint.pressure_seq_watermark,
+            true,
+        );
         Ok(Self {
             store,
             parse_stack,
@@ -379,6 +415,7 @@ impl SpineRuntime {
             open_requests: BTreeMap::new(),
             control_call_ids: BTreeSet::new(),
             pending: None,
+            pressure_baselines,
         })
     }
 
@@ -408,10 +445,42 @@ impl SpineRuntime {
         Ok(self.parse_stack.current_open_meta()?.index)
     }
 
+    #[cfg(test)]
     pub(crate) fn current_open_input_tokens(&self) -> Option<i64> {
         self.parse_stack
             .current_open_meta_opt()
             .and_then(|meta| meta.open_input_tokens)
+    }
+
+    pub(crate) fn current_open_context_tokens(&self) -> Option<i64> {
+        self.current_open_context_baseline()
+            .map(|baseline| baseline.context_tokens)
+    }
+
+    pub(crate) fn current_open_context_baseline_source(
+        &self,
+    ) -> Option<codex_protocol::spine_tree::SpineNodeContextBaselineSource> {
+        self.current_open_context_baseline()
+            .map(|baseline| baseline.source)
+            .map(protocol_context_baseline_source)
+    }
+
+    fn current_open_context_baseline(&self) -> Option<OpenContextBaseline> {
+        self.parse_stack
+            .current_open_meta_opt()
+            .and_then(|meta| self.open_context_baseline_for(meta))
+    }
+
+    fn open_context_baseline_for(&self, meta: &TreeMeta) -> Option<OpenContextBaseline> {
+        meta.open_context_tokens
+            .map(|context_tokens| OpenContextBaseline {
+                context_tokens,
+                input_tokens: meta.open_input_tokens,
+                source: meta
+                    .open_context_source
+                    .unwrap_or(ContextBaselineSource::ProviderAtOpen),
+            })
+            .or_else(|| self.pressure_baselines.get(&meta.id).copied())
     }
 
     fn current_close_open_meta(&self) -> Result<&TreeMeta, SpineError> {
@@ -464,6 +533,48 @@ impl SpineRuntime {
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
         self.raw_live.extend(std::iter::repeat(true).take(count));
         Ok(())
+    }
+
+    pub(crate) fn ensure_current_open_context_baseline(
+        &mut self,
+        current_context_tokens: i64,
+        current_input_tokens: Option<i64>,
+        estimated_live_suffix_tokens: Option<i64>,
+        observed_context_index: usize,
+    ) -> Result<bool, SpineError> {
+        let Some(open_meta) = self.parse_stack.current_open_meta_opt() else {
+            return Ok(false);
+        };
+        if open_meta.open_context_tokens.is_some()
+            || self.pressure_baselines.contains_key(&open_meta.id)
+        {
+            return Ok(false);
+        }
+
+        let estimated_live_suffix_tokens = estimated_live_suffix_tokens.unwrap_or(0).max(0);
+        let context_tokens = current_context_tokens.saturating_sub(estimated_live_suffix_tokens);
+        let event = PressureEvent::OpenContextBaseline {
+            node: open_meta.id.clone(),
+            open_structural_seq: open_structural_seq_for(&self.store.events()?, &open_meta.id),
+            observed_structural_seq: self.store.next_event_seq()?,
+            observed_raw_ordinal: self.raw_len,
+            observed_raw_live_hash: Some(hash_raw_live(&self.raw_live)),
+            observed_context_index,
+            context_tokens,
+            input_tokens: current_input_tokens,
+            source: ContextBaselineSource::EstimatedFromLiveSuffix,
+            estimated_live_suffix_tokens: Some(estimated_live_suffix_tokens),
+        };
+        self.store.append_pressure_event(&event)?;
+        self.pressure_baselines.insert(
+            open_meta.id.clone(),
+            OpenContextBaseline {
+                context_tokens,
+                input_tokens: current_input_tokens,
+                source: ContextBaselineSource::EstimatedFromLiveSuffix,
+            },
+        );
+        Ok(true)
     }
 
     pub(crate) fn observe_context_item(
@@ -530,6 +641,7 @@ impl SpineRuntime {
             rollout_path,
             raw_ordinal,
             self.store.next_event_seq()?,
+            self.pressure_seq_watermark()?,
             &self.raw_live,
             &self.parse_stack,
             context,
@@ -546,12 +658,17 @@ impl SpineRuntime {
             rollout_path,
             0,
             self.store.next_event_seq()?,
+            self.pressure_seq_watermark()?,
             &self.raw_live,
             &self.parse_stack,
             context,
         )?;
         checkpoint.checkpoint_id = "initial".to_string();
         self.store.write_initial_checkpoint(&checkpoint)
+    }
+
+    fn pressure_seq_watermark(&self) -> Result<Option<u64>, SpineError> {
+        Ok(self.store.next_pressure_seq()?.checked_sub(1))
     }
 
     fn append_msg_event(&self, msg: &PendingMsg) -> Result<u64, SpineError> {
@@ -637,14 +754,35 @@ impl SpineRuntime {
         call_id: &str,
         close_compact: Option<SpineCloseCompact>,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
-        self.maybe_commit_output_with_open_input_tokens(call_id, close_compact, None)
+        self.maybe_commit_output_with_token_baselines(
+            call_id,
+            close_compact,
+            SpineTokenBaselines::default(),
+        )
     }
 
+    #[cfg(test)]
     pub(crate) fn maybe_commit_output_with_open_input_tokens(
         &mut self,
         call_id: &str,
         close_compact: Option<SpineCloseCompact>,
         input_tokens: Option<i64>,
+    ) -> Result<Option<SpineCommitKind>, SpineError> {
+        self.maybe_commit_output_with_token_baselines(
+            call_id,
+            close_compact,
+            SpineTokenBaselines {
+                input_tokens,
+                context_tokens: input_tokens,
+            },
+        )
+    }
+
+    pub(crate) fn maybe_commit_output_with_token_baselines(
+        &mut self,
+        call_id: &str,
+        close_compact: Option<SpineCloseCompact>,
+        token_baselines: SpineTokenBaselines,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         let Some(pending) = self.pending.clone() else {
             return Ok(None);
@@ -669,16 +807,24 @@ impl SpineRuntime {
                     boundary,
                     index,
                     summary: summary.clone(),
-                    open_input_tokens: input_tokens,
+                    open_input_tokens: token_baselines.input_tokens,
+                    open_context_tokens: token_baselines.context_tokens,
+                    open_context_source: token_baselines
+                        .context_tokens
+                        .map(|_| ContextBaselineSource::ProviderAtOpen),
                 };
                 self.parse_stack.shift(
                     SpineToken::Open {
-                        meta: tree_meta_with_open_input_tokens(
+                        meta: tree_meta_with_token_baselines(
                             &self.archive(),
                             child.clone(),
                             index,
                             summary.clone(),
-                            input_tokens,
+                            token_baselines.input_tokens,
+                            token_baselines.context_tokens,
+                            token_baselines
+                                .context_tokens
+                                .map(|_| ContextBaselineSource::ProviderAtOpen),
                         )?,
                     },
                     &self.archive(),
@@ -700,7 +846,8 @@ impl SpineRuntime {
                     boundary: self.raw_len,
                     summary: summary.clone(),
                     instruction: pending.instruction.clone(),
-                    close_input_tokens: input_tokens,
+                    close_input_tokens: token_baselines.input_tokens,
+                    close_context_tokens: token_baselines.context_tokens,
                 };
                 let close_compact = close_compact.ok_or_else(|| {
                     SpineError::InvalidEvent(
@@ -714,7 +861,7 @@ impl SpineRuntime {
                         close_compact.source_context_range.start
                     )));
                 }
-                let mem = self.stage_close_mem(&open_meta, close_compact, input_tokens)?;
+                let mem = self.stage_close_mem(&open_meta, close_compact, token_baselines)?;
                 let body = self.store.read_memory_body(&mem)?;
                 let memory = memory_ref(
                     &self.archive(),
@@ -726,6 +873,9 @@ impl SpineRuntime {
                     seq..seq + 1,
                     mem.open_input_tokens,
                     mem.close_input_tokens,
+                    mem.open_context_tokens,
+                    mem.close_context_tokens,
+                    mem.open_context_source,
                     mem.memory_output_tokens,
                 );
                 let mut staged_parse_stack = self.parse_stack.clone();
@@ -785,7 +935,7 @@ impl SpineRuntime {
         body: String,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        self.root_compact_impl(body, raw_items, None, None)
+        self.root_compact_impl(body, raw_items, None, None, None)
             .map(|result| result.materialized)
     }
 
@@ -795,8 +945,15 @@ impl SpineRuntime {
         body: String,
         raw_items: &[Option<ResponseItem>],
         next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
     ) -> Result<SpineRootCompactResult, SpineError> {
-        self.root_compact_impl(body, raw_items, next_open_input_tokens, Some(rollout_path))
+        self.root_compact_impl(
+            body,
+            raw_items,
+            next_open_input_tokens,
+            next_open_context_tokens,
+            Some(rollout_path),
+        )
     }
 
     fn root_compact_impl(
@@ -804,6 +961,7 @@ impl SpineRuntime {
         body: String,
         raw_items: &[Option<ResponseItem>],
         next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
         checkpoint_rollout_path: Option<&Path>,
     ) -> Result<SpineRootCompactResult, SpineError> {
         if body.trim().is_empty() {
@@ -827,6 +985,9 @@ impl SpineRuntime {
             raw_live_hash: Some(raw_live_hash.clone()),
             open_input_tokens: None,
             close_input_tokens: next_open_input_tokens,
+            open_context_tokens: None,
+            close_context_tokens: next_open_context_tokens,
+            open_context_source: None,
             memory_output_tokens: None,
             body_path,
             body_hash: sha1_hex(body.as_bytes()),
@@ -842,6 +1003,9 @@ impl SpineRuntime {
             seq..seq + 1,
             mem.open_input_tokens,
             mem.close_input_tokens,
+            mem.open_context_tokens,
+            mem.close_context_tokens,
+            mem.open_context_source,
             mem.memory_output_tokens,
         );
 
@@ -853,6 +1017,7 @@ impl SpineRuntime {
                 memory: memory.clone(),
                 next_open_index: 0,
                 next_open_input_tokens,
+                next_open_context_tokens,
             },
             &self.archive(),
         )?;
@@ -864,6 +1029,7 @@ impl SpineRuntime {
                 memory,
                 next_open_index,
                 next_open_input_tokens,
+                next_open_context_tokens,
             },
             &self.archive(),
         )?;
@@ -905,6 +1071,7 @@ impl SpineRuntime {
             next_open_index,
             raw_live_hash,
             next_open_input_tokens,
+            next_open_context_tokens,
         })?;
         self.parse_stack = staged_parse_stack;
         self.pending = None;
@@ -915,7 +1082,7 @@ impl SpineRuntime {
         &self,
         open_meta: &TreeMeta,
         close_compact: SpineCloseCompact,
-        close_input_tokens: Option<i64>,
+        token_baselines: SpineTokenBaselines,
     ) -> Result<MemRecord, SpineError> {
         let node_id = open_meta.id.clone();
         let raw_start = self.open_raw_start(&node_id)?;
@@ -929,6 +1096,7 @@ impl SpineRuntime {
         let body_path = self
             .store
             .write_memory_body(&compact_id, &close_compact.body)?;
+        let open_context_baseline = self.open_context_baseline_for(open_meta);
         let mem = MemRecord {
             compact_id: compact_id.clone(),
             kind: MemKind::Suffix,
@@ -938,8 +1106,13 @@ impl SpineRuntime {
             context_start: close_compact.source_context_range.start,
             context_end: close_compact.source_context_range.end,
             raw_live_hash: None,
-            open_input_tokens: open_meta.open_input_tokens,
-            close_input_tokens,
+            open_input_tokens: open_context_baseline
+                .and_then(|baseline| baseline.input_tokens)
+                .or(open_meta.open_input_tokens),
+            close_input_tokens: token_baselines.input_tokens,
+            open_context_tokens: open_context_baseline.map(|baseline| baseline.context_tokens),
+            close_context_tokens: token_baselines.context_tokens,
+            open_context_source: open_context_baseline.map(|baseline| baseline.source),
             memory_output_tokens: close_compact.memory_output_tokens,
             body_path,
             body_hash: sha1_hex(close_compact.body.as_bytes()),
@@ -1082,6 +1255,103 @@ impl SpineRuntime {
         }
         Ok(false)
     }
+}
+
+fn protocol_context_baseline_source(
+    source: ContextBaselineSource,
+) -> codex_protocol::spine_tree::SpineNodeContextBaselineSource {
+    match source {
+        ContextBaselineSource::ProviderAtOpen => {
+            codex_protocol::spine_tree::SpineNodeContextBaselineSource::ProviderAtOpen
+        }
+        ContextBaselineSource::RootCompactHandoff => {
+            codex_protocol::spine_tree::SpineNodeContextBaselineSource::RootCompactHandoff
+        }
+        ContextBaselineSource::EstimatedFromLiveSuffix => {
+            codex_protocol::spine_tree::SpineNodeContextBaselineSource::EstimatedFromLiveSuffix
+        }
+        ContextBaselineSource::CheckpointReplay => {
+            codex_protocol::spine_tree::SpineNodeContextBaselineSource::CheckpointReplay
+        }
+    }
+}
+
+fn replay_pressure_baselines(
+    parse_stack: &ParseStack,
+    events: &[LoggedPressureEvent],
+    raw_live: &[bool],
+    current_structural_seq: u64,
+    pressure_seq_watermark: Option<u64>,
+    limit_to_pressure_watermark: bool,
+) -> BTreeMap<NodeId, OpenContextBaseline> {
+    let live_open_nodes = parse_stack
+        .live_open_metas()
+        .into_iter()
+        .map(|meta| meta.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut baselines = BTreeMap::new();
+    for event in events {
+        if limit_to_pressure_watermark {
+            let Some(watermark) = pressure_seq_watermark else {
+                continue;
+            };
+            if event.pressure_seq > watermark {
+                continue;
+            }
+        }
+        if !limit_to_pressure_watermark
+            && pressure_seq_watermark.is_some_and(|watermark| event.pressure_seq > watermark)
+        {
+            continue;
+        }
+        if !event.allowed_by(raw_live) {
+            continue;
+        }
+        match &event.event {
+            PressureEvent::OpenContextBaseline {
+                node,
+                observed_structural_seq,
+                context_tokens,
+                input_tokens,
+                source,
+                ..
+            } => {
+                if *observed_structural_seq > current_structural_seq
+                    || !live_open_nodes.contains(node)
+                    || *context_tokens < 0
+                {
+                    continue;
+                }
+                baselines.insert(
+                    node.clone(),
+                    OpenContextBaseline {
+                        context_tokens: *context_tokens,
+                        input_tokens: *input_tokens,
+                        source: *source,
+                    },
+                );
+            }
+        }
+    }
+    baselines
+}
+
+fn open_structural_seq_for(events: &[LoggedKEvent], node_id: &NodeId) -> Option<u64> {
+    events.iter().find_map(|event| match &event.event {
+        KEvent::Open { child, .. } if child == node_id => Some(event.seq),
+        KEvent::RootCompact { node, .. }
+            if node
+                .0
+                .first()
+                .and_then(|root| root.checked_add(1))
+                .map(NodeId::root_epoch)
+                .map(|next_root| next_root.child(1) == *node_id)
+                .unwrap_or(false) =>
+        {
+            Some(event.seq)
+        }
+        _ => None,
+    })
 }
 
 fn replay_from_events(
