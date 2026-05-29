@@ -121,6 +121,15 @@ impl Session {
                 "spine_task_tree resume requires Spine sidecar".to_string(),
             ));
         }
+        if !used_replacement_history
+            && let Some(runtime) = runtime.as_ref()
+            && runtime.has_live_root_compact_event()?
+        {
+            return Err(SpineError::InvalidStore(
+                "spine_task_tree root compact sidecar is missing rollout compact boundary"
+                    .to_string(),
+            ));
+        }
         let materialized = runtime
             .as_ref()
             .map(|runtime| runtime.materialize_history(raw_items))
@@ -518,7 +527,7 @@ impl Session {
     pub(crate) async fn install_spine_root_compact(
         &self,
         body: String,
-    ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent, PathBuf)>, SpineError> {
+    ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -553,14 +562,28 @@ impl Session {
         {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let Some(spine) = guard.runtime_mut() else {
+            let result = match guard
+                .runtime_mut()
+                .ok_or_else(|| {
+                    SpineError::InvalidStore(
+                        "spine runtime missing after initialization".to_string(),
+                    )
+                })?
+                .root_compact_with_checkpoint(
+                    &rollout_path,
+                    body,
+                    &raw_items,
+                    next_open_input_tokens,
+                ) {
+                Ok(result) => result,
+                Err(err) => {
+                    guard.invalidate(format!("failed to install Spine root compact: {err}"));
+                    return Err(err);
+                }
+            };
+            let Some(spine) = guard.runtime() else {
                 return Ok(None);
             };
-            let result = spine.root_compact_with_next_open_input_tokens(
-                body,
-                &raw_items,
-                next_open_input_tokens,
-            )?;
             let current_open_index = spine.current_open_index()?;
             if current_open_index != result.materialized.len() {
                 return Err(SpineError::InvalidEvent(format!(
@@ -569,7 +592,7 @@ impl Session {
                 )));
             }
             let snapshot = spine.build_tree_snapshot()?;
-            return Ok(Some((result, snapshot, rollout_path)));
+            return Ok(Some((result, snapshot)));
         }
     }
 
@@ -595,7 +618,7 @@ impl Session {
                 "native compact produced no model-visible Spine root memory body".to_string(),
             )
         })?;
-        let Some((root_compact, snapshot, rollout_path)) =
+        let Some((root_compact, snapshot)) =
             self.install_spine_root_compact(body).await.map_err(|err| {
                 CodexErr::Fatal(format!("failed to install Spine root compact: {err}"))
             })?
@@ -604,22 +627,6 @@ impl Session {
         };
         *items = root_compact.materialized.clone();
         compacted_item.replacement_history = Some(items.clone());
-        {
-            let mut guard = spine_slot.lock().await;
-            guard.ensure_valid().map_err(|err| {
-                CodexErr::Fatal(format!("failed to install Spine root compact: {err}"))
-            })?;
-            let Some(spine) = guard.runtime_mut() else {
-                return Ok(None);
-            };
-            if let Err(err) =
-                spine.write_root_compact_checkpoint(&rollout_path, &root_compact, items)
-            {
-                let reason = format!("failed to install Spine root compact: {err}");
-                guard.invalidate(reason.clone());
-                return Err(CodexErr::Fatal(reason));
-            }
-        }
         Ok(Some(snapshot))
     }
 }

@@ -785,15 +785,26 @@ impl SpineRuntime {
         body: String,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        self.root_compact_with_next_open_input_tokens(body, raw_items, None)
+        self.root_compact_impl(body, raw_items, None, None)
             .map(|result| result.materialized)
     }
 
-    pub(crate) fn root_compact_with_next_open_input_tokens(
+    pub(crate) fn root_compact_with_checkpoint(
+        &mut self,
+        rollout_path: &Path,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        next_open_input_tokens: Option<i64>,
+    ) -> Result<SpineRootCompactResult, SpineError> {
+        self.root_compact_impl(body, raw_items, next_open_input_tokens, Some(rollout_path))
+    }
+
+    fn root_compact_impl(
         &mut self,
         body: String,
         raw_items: &[Option<ResponseItem>],
         next_open_input_tokens: Option<i64>,
+        checkpoint_rollout_path: Option<&Path>,
     ) -> Result<SpineRootCompactResult, SpineError> {
         if body.trim().is_empty() {
             return Err(SpineError::InvalidEvent(
@@ -864,42 +875,40 @@ impl SpineRuntime {
                 materialized.len()
             )));
         }
+        let next_open_index = u64::try_from(next_open_index)
+            .map_err(|_| SpineError::InvalidEvent("root open index overflow".to_string()))?;
+        let token_seq_after = seq.checked_add(1).ok_or_else(|| {
+            SpineError::InvalidEvent("root compact token seq overflow".to_string())
+        })?;
+        let result = SpineRootCompactResult {
+            materialized,
+            raw_boundary: self.raw_len,
+            token_seq_after,
+        };
         self.store.append_mem(&mem)?;
+        if let Some(rollout_path) = checkpoint_rollout_path {
+            let checkpoint = build_compact_checkpoint(
+                rollout_path,
+                result.raw_boundary,
+                result.token_seq_after,
+                &self.raw_live,
+                &staged_parse_stack,
+                &result.materialized,
+                &result.materialized,
+            )?;
+            self.store.append_compact_checkpoint(&checkpoint)?;
+        }
         self.store.append_event(&KEvent::RootCompact {
             node: node.clone(),
             boundary: self.raw_len,
             mem: compact_id.clone(),
-            next_open_index: u64::try_from(next_open_index)
-                .map_err(|_| SpineError::InvalidEvent("root open index overflow".to_string()))?,
+            next_open_index,
             raw_live_hash,
             next_open_input_tokens,
         })?;
         self.parse_stack = staged_parse_stack;
         self.pending = None;
-        let token_seq_after = self.store.next_event_seq()?;
-        Ok(SpineRootCompactResult {
-            materialized,
-            raw_boundary: self.raw_len,
-            token_seq_after,
-        })
-    }
-
-    pub(crate) fn write_root_compact_checkpoint(
-        &self,
-        rollout_path: &Path,
-        result: &SpineRootCompactResult,
-        replacement_history: &[ResponseItem],
-    ) -> Result<(), SpineError> {
-        let checkpoint = build_compact_checkpoint(
-            rollout_path,
-            result.raw_boundary,
-            result.token_seq_after,
-            &self.raw_live,
-            &self.parse_stack,
-            &result.materialized,
-            replacement_history,
-        )?;
-        self.store.append_compact_checkpoint(&checkpoint)
+        Ok(result)
     }
 
     fn stage_close_mem(
@@ -1062,6 +1071,16 @@ impl SpineRuntime {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn has_live_root_compact_event(&self) -> Result<bool, SpineError> {
+        let raw_mask = RawMask::new(&self.raw_live);
+        for event in self.store.events()? {
+            if event.allowed_by(raw_mask)? && matches!(event.event, KEvent::RootCompact { .. }) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 

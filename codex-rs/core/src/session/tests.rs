@@ -8957,6 +8957,112 @@ async fn spine_native_compact_checkpoint_failure_invalidates_without_replacing_h
         err.to_string().contains("spine runtime is invalid"),
         "unexpected runtime error: {err}"
     );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("checkpoint failure should leave a recoverable pre-compact prefix")
+        .expect("spine sidecar should exist");
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize recovered h(PS)"),
+        original_history
+    );
+}
+
+#[tokio::test]
+async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
+    let (mut source_session, turn_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let source_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut source_session).expect("session should be unique"),
+    )
+    .await;
+    let prefix = user_message("prefix before orphan root compact");
+    source_session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    source_session
+        .install_spine_root_compact("orphan root compact body".to_string())
+        .await
+        .expect("install sidecar root compact")
+        .expect("spine root compact should run");
+
+    source_session.ensure_rollout_materialized().await;
+    source_session
+        .flush_rollout()
+        .await
+        .expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) =
+        RolloutRecorder::get_rollout_history(&source_rollout_path)
+            .await
+            .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert!(
+        !resumed
+            .history
+            .iter()
+            .any(|item| matches!(item, RolloutItem::Compacted(_))),
+        "test setup must leave rollout without native compact boundary"
+    );
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    SpineStore::clone_for_rollout_with_raw_live(
+        &source_rollout_path,
+        &resumed_rollout_path,
+        &[true],
+    )
+    .expect("clone spine sidecar");
+
+    let err = resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: resumed.history,
+            rollout_path: Some(source_rollout_path),
+        }))
+        .await
+        .expect_err("orphan sidecar root compact must fail closed");
+    assert!(
+        err.to_string()
+            .contains("root compact sidecar is missing rollout compact boundary"),
+        "unexpected resume error: {err}"
+    );
 }
 
 #[tokio::test]
