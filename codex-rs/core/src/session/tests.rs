@@ -211,6 +211,17 @@ fn user_message(text: &str) -> ResponseItem {
     }
 }
 
+fn clone_spine_sidecar_for_test(source_rollout: &Path, target_rollout: &Path, raw_live: &[bool]) {
+    let boundary = SpineStore::clone_boundary_for_rollout(
+        source_rollout,
+        u64::try_from(raw_live.len()).expect("raw live len"),
+    )
+    .expect("capture clone boundary")
+    .expect("source sidecar exists");
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, target_rollout, raw_live)
+        .expect("clone spine sidecar");
+}
+
 fn assistant_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -2336,6 +2347,83 @@ async fn record_initial_history_reconstructs_forked_transcript() {
     assert_eq!(expected, history.raw_items());
 }
 
+#[tokio::test]
+async fn clone_spine_sidecar_for_fork_replays_interrupted_child_suffix() {
+    let (mut source_session, _source_context, _source_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let source_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut source_session).expect("source session should be unique"),
+    )
+    .await;
+    source_session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize source spine");
+    let source_item = user_message("source-visible");
+    source_session
+        .observe_spine_raw_items(1)
+        .await
+        .expect("observe source raw");
+    source_session
+        .observe_spine_context_items(
+            &[Some(0)],
+            std::slice::from_ref(&source_item),
+            &[ContextAppend {
+                input_index: 0,
+                context_index: 0,
+            }],
+        )
+        .await
+        .expect("observe source context");
+
+    let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout_path, 1)
+        .expect("capture boundary")
+        .expect("source sidecar exists");
+
+    let (mut child_session, _child_context, _child_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTaskTree)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let child_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut child_session).expect("child session should be unique"),
+    )
+    .await;
+    let marker = user_message("interrupted child suffix");
+    let child_raw_items = vec![Some(source_item.clone()), Some(marker.clone())];
+    child_session
+        .clone_spine_sidecar_for_fork(&boundary, &child_raw_items)
+        .await
+        .expect("clone and replay child suffix");
+
+    let runtime = SpineRuntime::load_for_rollout_items(&child_rollout_path, &child_raw_items, &[])
+        .expect("load child sidecar")
+        .expect("child sidecar exists");
+    assert_eq!(
+        runtime
+            .materialize_history(&child_raw_items)
+            .expect("materialize child h(PS)"),
+        vec![source_item, marker]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_configured_reports_permission_profile_for_external_sandbox() -> anyhow::Result<()>
 {
@@ -4396,7 +4484,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         tx_event,
         agent_status_tx,
         InitialHistory::New,
-        /*spine_fork_source_rollout_path*/ None,
+        /*spine_fork_source_boundary*/ None,
         SessionSource::Exec,
         skills_manager,
         plugins_manager,
@@ -4745,7 +4833,7 @@ async fn make_session_with_config_and_rx(
         tx_event,
         agent_status_tx,
         InitialHistory::New,
-        /*spine_fork_source_rollout_path*/ None,
+        /*spine_fork_source_boundary*/ None,
         SessionSource::Exec,
         skills_manager,
         plugins_manager,
@@ -4849,7 +4937,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         tx_event,
         agent_status_tx,
         initial_history,
-        /*spine_fork_source_rollout_path*/ None,
+        /*spine_fork_source_boundary*/ None,
         session_source,
         skills_manager,
         plugins_manager,
@@ -9045,12 +9133,7 @@ async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
         Arc::get_mut(&mut resumed_session).expect("session should be unique"),
     )
     .await;
-    SpineStore::clone_for_rollout_with_raw_live(
-        &source_rollout_path,
-        &resumed_rollout_path,
-        &[true],
-    )
-    .expect("clone spine sidecar");
+    clone_spine_sidecar_for_test(&source_rollout_path, &resumed_rollout_path, &[true]);
 
     let err = resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -9204,8 +9287,7 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
         .iter()
         .map(Option::is_some)
         .collect::<Vec<_>>();
-    SpineStore::clone_for_rollout_with_raw_live(&rollout_path, &resumed_rollout_path, &raw_live)
-        .expect("clone spine sidecar");
+    clone_spine_sidecar_for_test(&rollout_path, &resumed_rollout_path, &raw_live);
 
     resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -9414,8 +9496,7 @@ async fn spine_native_compact_new_root_open_index_matches_installed_history_befo
         .iter()
         .map(Option::is_some)
         .collect::<Vec<_>>();
-    SpineStore::clone_for_rollout_with_raw_live(&rollout_path, &resumed_rollout_path, &raw_live)
-        .expect("clone spine sidecar");
+    clone_spine_sidecar_for_test(&rollout_path, &resumed_rollout_path, &raw_live);
 
     resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -10094,8 +10175,7 @@ async fn spine_tree_tool_node_context_uses_provider_context_delta() {
     )
     .await;
     let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
-    SpineStore::clone_for_rollout_with_raw_live(&rollout_path, &resumed_rollout_path, &raw_live)
-        .expect("clone Spine sidecar");
+    clone_spine_sidecar_for_test(&rollout_path, &resumed_rollout_path, &raw_live);
 
     resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -10604,12 +10684,7 @@ async fn spine_resume_rejects_replacement_history_mismatch() {
         .iter()
         .map(Option::is_some)
         .collect::<Vec<_>>();
-    SpineStore::clone_for_rollout_with_raw_live(
-        &source_rollout_path,
-        &resumed_rollout_path,
-        &raw_live,
-    )
-    .expect("clone spine sidecar");
+    clone_spine_sidecar_for_test(&source_rollout_path, &resumed_rollout_path, &raw_live);
 
     let err = resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -10663,12 +10738,7 @@ async fn failed_spine_replay_does_not_mutate_live_session_history() {
         .iter()
         .map(Option::is_some)
         .collect::<Vec<_>>();
-    SpineStore::clone_for_rollout_with_raw_live(
-        &source_rollout_path,
-        &live_rollout_path,
-        &raw_live,
-    )
-    .expect("clone mismatching sidecar");
+    clone_spine_sidecar_for_test(&source_rollout_path, &live_rollout_path, &raw_live);
 
     let err = session
         .apply_rollout_reconstruction(&turn_context, &rollout_items)
@@ -10764,12 +10834,7 @@ async fn spine_resume_rejects_unproved_matching_replacement_history_checkpoint()
         .iter()
         .map(Option::is_some)
         .collect::<Vec<_>>();
-    SpineStore::clone_for_rollout_with_raw_live(
-        &source_rollout_path,
-        &resumed_rollout_path,
-        &raw_live,
-    )
-    .expect("clone spine sidecar");
+    clone_spine_sidecar_for_test(&source_rollout_path, &resumed_rollout_path, &raw_live);
 
     let err = resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {

@@ -23,6 +23,7 @@ use crate::spine::model::RawMask;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::BufRead;
@@ -42,6 +43,20 @@ const CHECKPOINT_DIR: &str = "checkpoints";
 const INITIAL_CHECKPOINT_FILE: &str = "initial.json";
 
 pub(super) const BODY_DIR: &str = "memory";
+
+#[derive(Clone, Debug)]
+pub struct SpineCloneBoundary {
+    pub(crate) source_rollout_path: PathBuf,
+    pub(crate) raw_ordinal_limit: u64,
+    pub(crate) structural_seq_limit: u64,
+    pub(crate) pressure_seq_watermark: Option<u64>,
+}
+
+impl SpineCloneBoundary {
+    pub(crate) fn raw_ordinal_limit(&self) -> u64 {
+        self.raw_ordinal_limit
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Locator {
@@ -86,33 +101,86 @@ impl SpineStore {
         Ok(Self { root })
     }
 
-    pub(crate) fn clone_for_rollout_with_raw_live(
+    pub(crate) fn clone_boundary_for_rollout(
         source_rollout_path: &Path,
+        raw_ordinal_limit: u64,
+    ) -> Result<Option<SpineCloneBoundary>, SpineError> {
+        if !Self::has_for_rollout(source_rollout_path)? {
+            return Ok(None);
+        }
+        let source = Self::for_rollout(source_rollout_path)?;
+        Ok(Some(SpineCloneBoundary {
+            source_rollout_path: source_rollout_path.to_path_buf(),
+            raw_ordinal_limit,
+            structural_seq_limit: source.next_event_seq()?,
+            pressure_seq_watermark: source.next_pressure_seq()?.checked_sub(1),
+        }))
+    }
+
+    pub(crate) fn clone_boundary_for_checkpoint(
+        source_rollout_path: &Path,
+        raw_ordinal: u64,
+    ) -> Result<Option<SpineCloneBoundary>, SpineError> {
+        if !Self::has_for_rollout(source_rollout_path)? {
+            return Ok(None);
+        }
+        let source = Self::for_rollout(source_rollout_path)?;
+        let checkpoint = source.checkpoint_for_raw_ordinal(raw_ordinal)?;
+        Ok(Some(SpineCloneBoundary {
+            source_rollout_path: source_rollout_path.to_path_buf(),
+            raw_ordinal_limit: raw_ordinal,
+            structural_seq_limit: checkpoint.token_seq,
+            pressure_seq_watermark: checkpoint.pressure_seq_watermark,
+        }))
+    }
+
+    pub(crate) fn clone_for_rollout_with_raw_live(
+        boundary: &SpineCloneBoundary,
         target_rollout_path: &Path,
         raw_live: &[bool],
     ) -> Result<(), SpineError> {
-        if !Self::has_for_rollout(source_rollout_path)? {
+        if !Self::has_for_rollout(&boundary.source_rollout_path)? {
             return Ok(());
         }
         if Self::has_for_rollout(target_rollout_path)? {
             return Ok(());
         }
-        let source = Self::for_rollout(source_rollout_path)?;
+        let raw_ordinal_limit = usize::try_from(boundary.raw_ordinal_limit).map_err(|_| {
+            SpineError::InvalidEvent("clone raw ordinal boundary overflow".to_string())
+        })?;
+        if raw_ordinal_limit > raw_live.len() {
+            return Err(SpineError::InvalidEvent(
+                "clone raw ordinal boundary exceeds raw live length".to_string(),
+            ));
+        }
+        let source = Self::for_rollout(&boundary.source_rollout_path)?;
         let target = Self::create_for_rollout(target_rollout_path)?;
-        let mask = RawMask::new(raw_live);
+        let source_raw_live = &raw_live[..raw_ordinal_limit];
+        let mask = RawMask::new(source_raw_live);
+        let mut cloned_events = Vec::new();
         for event in source.events()? {
-            if event.allowed_by(mask)? {
-                target.append_logged_event(&event)?;
+            if event.seq < boundary.structural_seq_limit && event.allowed_by(mask)? {
+                cloned_events.push(event);
             }
         }
+        for event in &cloned_events {
+            target.append_logged_event(event)?;
+        }
+        let source_mems = source.mems()?;
+        let required_memory_ids =
+            required_memory_ids_for_cloned_events(&cloned_events, &source_mems, mask)?;
         for pressure in source.pressure_events()? {
-            if pressure.allowed_by(raw_live) {
+            if boundary
+                .pressure_seq_watermark
+                .is_some_and(|watermark| pressure.pressure_seq <= watermark)
+                && pressure.allowed_by(source_raw_live)
+            {
                 target.append_logged_pressure_event(&pressure)?;
             }
         }
         let mut cloned_memory_paths = BTreeMap::new();
-        for mem in source.mems()? {
-            if mem.allowed_by(mask)? {
+        for mem in source_mems {
+            if required_memory_ids.contains(&mem.compact_id) && mem.allowed_by(mask)? {
                 let body = source.read_memory_body(&mem)?;
                 let body_path = target.write_memory_body(&mem.compact_id, &body)?;
                 cloned_memory_paths.insert(mem.compact_id.clone(), body_path.clone());
@@ -121,11 +189,14 @@ impl SpineStore {
             }
         }
         for checkpoint in source.compact_checkpoints()? {
-            let boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
+            let checkpoint_boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
                 SpineError::InvalidEvent("compact checkpoint raw boundary overflow".to_string())
             })?;
-            if boundary <= raw_live.len()
-                && checkpoint.raw_live_hash == hash_raw_live(&raw_live[..boundary])
+            if checkpoint.token_seq <= boundary.structural_seq_limit
+                && checkpoint.raw_boundary <= boundary.raw_ordinal_limit
+                && checkpoint_boundary <= source_raw_live.len()
+                && checkpoint.raw_live_hash
+                    == hash_raw_live(&source_raw_live[..checkpoint_boundary])
             {
                 let checkpoint = clone_compact_checkpoint_for_target(
                     checkpoint,
@@ -263,12 +334,16 @@ impl SpineStore {
             }))
     }
 
+    fn checkpoint_for_raw_ordinal(&self, raw_ordinal: u64) -> Result<SpineCheckpoint, SpineError> {
+        read_json_file(&self.checkpoint_path(raw_ordinal))
+    }
+
     #[cfg(test)]
     pub(super) fn checkpoint_for_test(
         &self,
         raw_ordinal: u64,
     ) -> Result<SpineCheckpoint, SpineError> {
-        read_json_file(&self.checkpoint_path(raw_ordinal))
+        self.checkpoint_for_raw_ordinal(raw_ordinal)
     }
 
     #[cfg(test)]
@@ -533,6 +608,53 @@ fn read_pressure_json_lines(path: &Path) -> Result<Vec<LoggedPressureEvent>, Spi
         }
     }
     Ok(out)
+}
+
+fn required_memory_ids_for_cloned_events(
+    events: &[LoggedKEvent],
+    mems: &[MemRecord],
+    raw_mask: RawMask<'_>,
+) -> Result<BTreeSet<String>, SpineError> {
+    let mut ids = BTreeSet::new();
+    for event in events {
+        match &event.event {
+            KEvent::Close { node, .. } => {
+                let mut candidates = mems
+                    .iter()
+                    .filter(|mem| &mem.node == node)
+                    .collect::<Vec<_>>();
+                candidates.sort_by(|left, right| left.compact_id.cmp(&right.compact_id));
+                let mut selected = None;
+                for mem in candidates {
+                    if mem.allowed_by(raw_mask)? {
+                        selected = Some(mem);
+                        break;
+                    }
+                }
+                let mem = selected.ok_or_else(|| {
+                    SpineError::InvalidEvent(format!("missing memory for close node {node}"))
+                })?;
+                ids.insert(mem.compact_id.clone());
+            }
+            KEvent::RootCompact { mem, .. } => {
+                let mem_record = mems
+                    .iter()
+                    .find(|record| record.compact_id == *mem)
+                    .ok_or_else(|| {
+                        SpineError::InvalidEvent("missing memory for root compact".to_string())
+                    })?;
+                if !mem_record.allowed_by(raw_mask)? {
+                    return Err(SpineError::InvalidEvent(format!(
+                        "memory {} does not cover live raw evidence",
+                        mem_record.compact_id
+                    )));
+                }
+                ids.insert(mem.clone());
+            }
+            KEvent::Init { .. } | KEvent::Msg { .. } | KEvent::Open { .. } => {}
+        }
+    }
+    Ok(ids)
 }
 
 fn clone_compact_checkpoint_for_target(

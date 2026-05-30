@@ -39,9 +39,9 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
+use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineError;
 use crate::spine::SpineSessionState;
-use crate::spine::SpineStore;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -407,7 +407,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
-    pub(crate) spine_fork_source_rollout_path: Option<PathBuf>,
+    pub(crate) spine_fork_source_boundary: Option<SpineCloneBoundary>,
     pub(crate) session_source: SessionSource,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
@@ -472,7 +472,7 @@ impl Codex {
             mcp_manager,
             extensions,
             conversation_history,
-            spine_fork_source_rollout_path,
+            spine_fork_source_boundary,
             session_source,
             thread_source,
             agent_control,
@@ -676,7 +676,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
-            spine_fork_source_rollout_path,
+            spine_fork_source_boundary,
             session_source_clone,
             skills_manager,
             plugins_manager,

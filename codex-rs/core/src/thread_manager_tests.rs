@@ -5,12 +5,15 @@ use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
+use crate::spine::SpineRuntime;
+use crate::spine::SpineStore;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -54,6 +57,23 @@ fn assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn spine_call(name: &str, call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        call_id: call_id.to_string(),
+        name: name.to_string(),
+        namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+    }
+}
+
+fn function_output(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload::from_text("ok".to_string()),
+    }
+}
+
 fn contextual_user_interrupted_marker() -> ResponseItem {
     interrupted_turn_history_marker(InterruptedTurnHistoryMarker::ContextualUser)
         .expect("contextual-user interrupted marker should be enabled")
@@ -62,6 +82,147 @@ fn contextual_user_interrupted_marker() -> ResponseItem {
 fn developer_interrupted_marker() -> ResponseItem {
     interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer)
         .expect("developer interrupted marker should be enabled")
+}
+
+fn build_spine_source_with_checkpoint_and_future_pressure(
+    dir: &tempfile::TempDir,
+) -> std::path::PathBuf {
+    let rollout = dir.path().join("source.jsonl");
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let first = user_msg("first");
+    runtime
+        .observe_raw_items(1)
+        .expect("observe first raw item");
+    runtime
+        .observe_context_item(0, 0, &first)
+        .expect("observe first context item");
+    runtime
+        .ensure_current_open_context_baseline(1_000, Some(1_100), Some(0), 1)
+        .expect("record checkpoint-visible pressure");
+    runtime
+        .checkpoint_before_user_msg(&rollout, 1, std::slice::from_ref(&first))
+        .expect("write pre-user checkpoint");
+
+    let open = spine_call(crate::spine::SPINE_TOOL_OPEN, "future-open");
+    runtime.observe_raw_items(1).expect("observe open raw item");
+    runtime
+        .observe_context_item(1, 1, &open)
+        .expect("observe open request");
+    runtime
+        .stage_open("future-open".to_string(), "future".to_string())
+        .expect("stage future open");
+    let output = function_output("future-open");
+    runtime
+        .observe_raw_items(1)
+        .expect("observe output raw item");
+    runtime
+        .observe_context_item(2, 2, &output)
+        .expect("observe open output");
+    runtime
+        .maybe_commit_output("future-open", None)
+        .expect("commit future open");
+    runtime
+        .ensure_current_open_context_baseline(2_000, Some(2_100), Some(0), 2)
+        .expect("record future pressure");
+    rollout
+}
+
+#[test]
+fn interrupted_spine_fork_boundary_uses_current_head() {
+    let dir = tempdir().expect("tempdir");
+    let source_rollout = build_spine_source_with_checkpoint_and_future_pressure(&dir);
+    let boundary = spine_clone_boundary_for_fork(
+        &source_rollout,
+        ForkSnapshot::Interrupted,
+        Some(3),
+        &InitialHistory::Forked(vec![
+            RolloutItem::ResponseItem(user_msg("first")),
+            RolloutItem::ResponseItem(contextual_user_interrupted_marker()),
+            RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: None,
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            })),
+        ]),
+    )
+    .expect("capture boundary")
+    .expect("source sidecar exists");
+    let target_rollout = dir.path().join("interrupted-child.jsonl");
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true, true, true])
+        .expect("clone sidecar");
+
+    let replayed = SpineRuntime::load_for_rollout_items(
+        &target_rollout,
+        &[
+            Some(user_msg("first")),
+            Some(spine_call(crate::spine::SPINE_TOOL_OPEN, "future-open")),
+            Some(function_output("future-open")),
+        ],
+        &[],
+    )
+    .expect("load target")
+    .expect("target sidecar exists");
+    assert_eq!(replayed.current_open_context_tokens(), Some(2_000));
+}
+
+#[test]
+fn truncated_spine_fork_boundary_uses_checkpoint_watermark() {
+    let dir = tempdir().expect("tempdir");
+    let source_rollout = build_spine_source_with_checkpoint_and_future_pressure(&dir);
+    let forked_history = InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("first"))]);
+    let boundary = spine_clone_boundary_for_fork(
+        &source_rollout,
+        ForkSnapshot::TruncateBeforeNthUserMessage(1),
+        Some(3),
+        &forked_history,
+    )
+    .expect("capture boundary")
+    .expect("source sidecar exists");
+    let target_rollout = dir.path().join("truncated-child.jsonl");
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true])
+        .expect("clone sidecar");
+
+    let replayed =
+        SpineRuntime::load_for_rollout_items(&target_rollout, &[Some(user_msg("first"))], &[])
+            .expect("load target")
+            .expect("target sidecar exists");
+    assert_eq!(replayed.current_open_context_tokens(), Some(1_000));
+}
+
+#[test]
+fn full_truncate_spine_fork_boundary_uses_current_head() {
+    let dir = tempdir().expect("tempdir");
+    let source_rollout = build_spine_source_with_checkpoint_and_future_pressure(&dir);
+    let forked_history = InitialHistory::Forked(vec![
+        RolloutItem::ResponseItem(user_msg("first")),
+        RolloutItem::ResponseItem(spine_call(crate::spine::SPINE_TOOL_OPEN, "future-open")),
+        RolloutItem::ResponseItem(function_output("future-open")),
+    ]);
+    let boundary = spine_clone_boundary_for_fork(
+        &source_rollout,
+        ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
+        Some(3),
+        &forked_history,
+    )
+    .expect("capture boundary")
+    .expect("source sidecar exists");
+    let target_rollout = dir.path().join("full-child.jsonl");
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true, true, true])
+        .expect("clone sidecar");
+
+    let replayed = SpineRuntime::load_for_rollout_items(
+        &target_rollout,
+        &[
+            Some(user_msg("first")),
+            Some(spine_call(crate::spine::SPINE_TOOL_OPEN, "future-open")),
+            Some(function_output("future-open")),
+        ],
+        &[],
+    )
+    .expect("load target")
+    .expect("target sidecar exists");
+    assert_eq!(replayed.current_open_context_tokens(), Some(2_000));
 }
 
 #[test]
@@ -329,7 +490,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
-            spine_fork_source_rollout_path: None,
+            spine_fork_source_boundary: None,
             parent_trace: None,
             environments: vec![TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
@@ -464,7 +625,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
-            spine_fork_source_rollout_path: None,
+            spine_fork_source_boundary: None,
             parent_trace: None,
             environments: Vec::new(),
         })
@@ -521,7 +682,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
-            spine_fork_source_rollout_path: None,
+            spine_fork_source_boundary: None,
             parent_trace: None,
             environments: environments.clone(),
         })
@@ -794,7 +955,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
-            spine_fork_source_rollout_path: None,
+            spine_fork_source_boundary: None,
             parent_trace: None,
             environments: Vec::new(),
         })

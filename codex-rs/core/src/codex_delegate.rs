@@ -85,7 +85,7 @@ pub(crate) async fn run_codex_thread_interactive(
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
-        spine_fork_source_rollout_path: None,
+        spine_fork_source_boundary: None,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
         thread_source: Some(ThreadSource::Subagent),
         agent_control: parent_session.services.agent_control.clone(),
