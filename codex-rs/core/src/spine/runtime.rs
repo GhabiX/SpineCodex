@@ -132,6 +132,13 @@ pub(crate) struct SpineTokenBaselines {
     pub(crate) context_tokens: Option<i64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpineOpenNodeContextProjection {
+    pub(crate) node_id: NodeId,
+    pub(crate) baseline_tokens: Option<i64>,
+    pub(crate) baseline_source: Option<codex_protocol::spine_tree::SpineNodeContextBaselineSource>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SpineRootCompactResult {
     pub(crate) materialized: Vec<ResponseItem>,
@@ -419,16 +426,17 @@ impl SpineRuntime {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn render_tree(&self) -> Result<String, SpineError> {
         self.parse_stack.render_tree()
     }
 
-    pub(crate) fn render_tree_with_current_annotation(
+    pub(crate) fn render_tree_with_context_annotations(
         &self,
-        current_annotation: Option<&str>,
+        annotations: &BTreeMap<NodeId, String>,
     ) -> Result<String, SpineError> {
         self.parse_stack
-            .render_tree_with_current_annotation(current_annotation)
+            .render_tree_with_context_annotations(annotations)
     }
 
     pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineError> {
@@ -452,11 +460,13 @@ impl SpineRuntime {
             .and_then(|meta| meta.open_input_tokens)
     }
 
+    #[cfg(test)]
     pub(crate) fn current_open_context_tokens(&self) -> Option<i64> {
         self.current_open_context_baseline()
             .map(|baseline| baseline.context_tokens)
     }
 
+    #[cfg(test)]
     pub(crate) fn current_open_context_baseline_source(
         &self,
     ) -> Option<codex_protocol::spine_tree::SpineNodeContextBaselineSource> {
@@ -465,10 +475,28 @@ impl SpineRuntime {
             .map(protocol_context_baseline_source)
     }
 
+    #[cfg(test)]
     fn current_open_context_baseline(&self) -> Option<OpenContextBaseline> {
         self.parse_stack
             .current_open_meta_opt()
             .and_then(|meta| self.open_context_baseline_for(meta))
+    }
+
+    pub(crate) fn open_node_context_projections(&self) -> Vec<SpineOpenNodeContextProjection> {
+        self.parse_stack
+            .live_open_metas()
+            .into_iter()
+            .map(|meta| {
+                let baseline = self.open_context_baseline_for(meta);
+                SpineOpenNodeContextProjection {
+                    node_id: meta.id.clone(),
+                    baseline_tokens: baseline.map(|baseline| baseline.context_tokens),
+                    baseline_source: baseline
+                        .map(|baseline| baseline.source)
+                        .map(protocol_context_baseline_source),
+                }
+            })
+            .collect()
     }
 
     fn open_context_baseline_for(&self, meta: &TreeMeta) -> Option<OpenContextBaseline> {
@@ -531,7 +559,7 @@ impl SpineRuntime {
             .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
         let count = usize::try_from(count)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
-        self.raw_live.extend(std::iter::repeat(true).take(count));
+        self.raw_live.extend(std::iter::repeat_n(true, count));
         Ok(())
     }
 
@@ -817,9 +845,9 @@ impl SpineRuntime {
                     SpineToken::Open {
                         meta: tree_meta_with_token_baselines(
                             &self.archive(),
-                            child.clone(),
+                            child,
                             index,
-                            summary.clone(),
+                            summary,
                             token_baselines.input_tokens,
                             token_baselines.context_tokens,
                             token_baselines
@@ -842,10 +870,10 @@ impl SpineRuntime {
                 let suffix_start = open_meta.index;
                 let summary = open_meta.summary.clone();
                 let event = KEvent::Close {
-                    node: node.clone(),
+                    node,
                     boundary: self.raw_len,
-                    summary: summary.clone(),
-                    instruction: pending.instruction.clone(),
+                    summary,
+                    instruction: pending.instruction,
                     close_input_tokens: token_baselines.input_tokens,
                     close_context_tokens: token_baselines.context_tokens,
                 };
@@ -1065,9 +1093,9 @@ impl SpineRuntime {
             self.store.append_compact_checkpoint(&checkpoint)?;
         }
         self.store.append_event(&KEvent::RootCompact {
-            node: node.clone(),
+            node,
             boundary: self.raw_len,
-            mem: compact_id.clone(),
+            mem: compact_id,
             next_open_index,
             raw_live_hash,
             next_open_input_tokens,
@@ -1098,9 +1126,9 @@ impl SpineRuntime {
             .write_memory_body(&compact_id, &close_compact.body)?;
         let open_context_baseline = self.open_context_baseline_for(open_meta);
         let mem = MemRecord {
-            compact_id: compact_id.clone(),
+            compact_id,
             kind: MemKind::Suffix,
-            node: node_id.clone(),
+            node: node_id,
             raw_start,
             raw_end: end,
             context_start: close_compact.source_context_range.start,

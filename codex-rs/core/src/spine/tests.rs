@@ -1301,7 +1301,7 @@ fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
         close_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
-        body_path: body_path.clone(),
+        body_path: body_path,
         body_hash: sha1_hex(body.as_bytes()),
     };
     source.append_mem(&mem).expect("append mem");
@@ -1606,7 +1606,7 @@ fn clone_boundary_excludes_future_structural_and_pressure_records() {
         })
         .expect("append checkpoint-visible pressure");
     let boundary = SpineCloneBoundary {
-        source_rollout_path: source_rollout.clone(),
+        source_rollout_path: source_rollout,
         raw_ordinal_limit: 1,
         structural_seq_limit: source.next_event_seq().expect("structural seq limit"),
         pressure_seq_watermark: source

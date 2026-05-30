@@ -9699,7 +9699,7 @@ async fn spine_new_session_initializes_sidecar_before_tree() {
         .await
         .expect("initialize spine");
     let tree_before = {
-        let runtime = session
+        session
             .spine
             .as_ref()
             .expect("spine enabled")
@@ -9708,8 +9708,7 @@ async fn spine_new_session_initializes_sidecar_before_tree() {
             .runtime()
             .expect("runtime exists")
             .render_tree()
-            .expect("render tree before");
-        runtime
+            .expect("render tree before")
     };
     let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
     let events_before = store.event_count_for_test().expect("events before");
@@ -9773,10 +9772,16 @@ async fn spine_control_carriers_are_not_durable_context_history() {
         )
         .await
         .expect("record open output as overlay-only");
-    session
+    let commit = session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
         .expect("commit open");
+    let output_text = commit
+        .output_text
+        .expect("open commit should return post-state output");
+    assert!(output_text.starts_with("Spine opened."), "{output_text}");
+    assert!(output_text.contains("overlay child"), "{output_text}");
+    assert!(output_text.contains("Cursor:"), "{output_text}");
 
     assert_eq!(session.clone_history().await.raw_items(), &[prefix.clone()]);
 
@@ -9884,10 +9889,16 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
         .await
         .expect("stage close");
     let close_output = function_output("overlay-close");
-    session
+    let commit = session
         .maybe_commit_spine_tool_output(&turn_context, &close_output)
         .await
         .expect("commit close");
+    let output_text = commit
+        .output_text
+        .expect("close commit should return post-state output");
+    assert!(output_text.starts_with("Spine closed."), "{output_text}");
+    assert!(output_text.contains("Done overlay child"), "{output_text}");
+    assert!(output_text.contains("Memory.md"), "{output_text}");
     session
         .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
         .await
@@ -10096,7 +10107,7 @@ async fn spine_tree_tool_node_context_uses_provider_context_delta() {
 
     let tree = session.spine_tree().await.expect("tree");
     assert!(tree.contains("[1.1.1] Current delta child"), "{tree}");
-    assert!(tree.contains("(~182K node context)"), "{tree}");
+    assert!(tree.contains("(~182K inclusive context)"), "{tree}");
     session
         .emit_spine_tree_snapshot(&turn_context)
         .await
@@ -10208,6 +10219,224 @@ async fn spine_tree_tool_node_context_uses_provider_context_delta() {
 }
 
 #[tokio::test]
+async fn spine_tree_tool_appends_inclusive_context_for_open_ancestors() {
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let outer_request = spine_call(SPINE_TOOL_OPEN, "outer-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_request))
+        .await
+        .expect("record outer open request");
+    session
+        .stage_spine_open("outer-open".to_string(), "outer scope".to_string())
+        .await
+        .expect("stage outer open");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 10_000,
+                total_tokens: 10_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+    let outer_output = function_output("outer-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&outer_output))
+        .await
+        .expect("record outer open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &outer_output)
+        .await
+        .expect("commit outer open");
+
+    let inner_request = spine_call(SPINE_TOOL_OPEN, "inner-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_request))
+        .await
+        .expect("record inner open request");
+    session
+        .stage_spine_open("inner-open".to_string(), "inner scope".to_string())
+        .await
+        .expect("stage inner open");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 30_000,
+                total_tokens: 30_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+    let inner_output = function_output("inner-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_output))
+        .await
+        .expect("record inner open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &inner_output)
+        .await
+        .expect("commit inner open");
+    while rx.try_recv().is_ok() {}
+
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 80_000,
+                total_tokens: 80_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+
+    let tree = session.spine_tree().await.expect("tree");
+    assert!(
+        tree.contains("[1.1.1] Open outer scope (~70.0K inclusive context)"),
+        "{tree}"
+    );
+    assert!(
+        tree.contains("[1.1.1.1] Current inner scope (~50.0K inclusive context)"),
+        "{tree}"
+    );
+
+    session
+        .emit_spine_tree_snapshot(&turn_context)
+        .await
+        .expect("emit Spine tree snapshot");
+    let event = timeout(StdDuration::from_secs(1), rx.recv())
+        .await
+        .expect("timeout waiting for Spine tree snapshot")
+        .expect("event");
+    let snapshot = match event.msg {
+        EventMsg::SpineTreeUpdate(snapshot) => snapshot,
+        msg => panic!("expected Spine tree update, got {msg:?}"),
+    };
+    let outer = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1.1")
+        .expect("outer node");
+    let inner = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1.1.1")
+        .expect("inner node");
+    assert_eq!(
+        outer
+            .accounting
+            .as_ref()
+            .and_then(|accounting| accounting.current_node_context_tokens),
+        Some(70_000)
+    );
+    assert_eq!(
+        inner
+            .accounting
+            .as_ref()
+            .and_then(|accounting| accounting.current_node_context_tokens),
+        Some(50_000)
+    );
+}
+
+#[tokio::test]
+async fn record_token_usage_refreshes_spine_tree_cache_only_snapshot() {
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "cache-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open("cache-open".to_string(), "cache scope".to_string())
+        .await
+        .expect("stage open");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 25_000,
+                total_tokens: 25_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+    let open_output = function_output("cache-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+    while rx.try_recv().is_ok() {}
+
+    let usage = TokenUsage {
+        input_tokens: 90_000,
+        total_tokens: 90_000,
+        ..TokenUsage::default()
+    };
+    session
+        .record_token_usage_info(&turn_context, Some(&usage))
+        .await;
+
+    let event = timeout(StdDuration::from_secs(1), rx.recv())
+        .await
+        .expect("timeout waiting for cache-only Spine tree snapshot")
+        .expect("event");
+    assert_eq!(event.id, INITIAL_SUBMIT_ID);
+    let snapshot = match event.msg {
+        EventMsg::SpineTreeUpdate(snapshot) => snapshot,
+        msg => panic!("expected Spine tree update, got {msg:?}"),
+    };
+    let active = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == snapshot.active_node_id)
+        .expect("active node");
+    assert_eq!(
+        active
+            .accounting
+            .as_ref()
+            .and_then(|accounting| accounting.current_node_context_tokens),
+        Some(65_000)
+    );
+}
+
+#[tokio::test]
 async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -10255,7 +10484,10 @@ async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
 
     let tree = session.spine_tree().await.expect("tree");
     assert!(tree.contains("[1.1.1] Current invalid range"), "{tree}");
-    assert!(!tree.contains("node context"), "{tree}");
+    assert!(
+        tree.contains("(context unavailable: missing open baseline)"),
+        "{tree}"
+    );
     let mut snapshot = None;
     session
         .emit_spine_tree_snapshot(&turn_context)

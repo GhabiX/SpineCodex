@@ -128,7 +128,7 @@ impl ParseStack {
         let (memory_path, trajs_path) = archive_task_tree(archive, &meta, &children, &memory)?;
         self.symbols
             .push(Symbol::SpineTreeNode(SpineTreeNode::SpineTree {
-                memory: memory.clone(),
+                memory,
                 meta,
                 children,
                 memory_path,
@@ -218,17 +218,18 @@ impl ParseStack {
         Ok(true)
     }
 
+    #[cfg(test)]
     pub(super) fn render_tree(&self) -> Result<String, SpineError> {
         let rows = self.tree_rows()?;
-        Ok(format_tree_rows(rows, None))
+        Ok(format_tree_rows(rows, &BTreeMap::new()))
     }
 
-    pub(super) fn render_tree_with_current_annotation(
+    pub(super) fn render_tree_with_context_annotations(
         &self,
-        current_annotation: Option<&str>,
+        annotations: &BTreeMap<NodeId, String>,
     ) -> Result<String, SpineError> {
         let rows = self.tree_rows()?;
-        Ok(format_tree_rows(rows, current_annotation))
+        Ok(format_tree_rows(rows, annotations))
     }
 
     pub(super) fn tree_snapshot_nodes(&self) -> Result<Vec<SpineTreeNodeSnapshot>, SpineError> {
@@ -540,7 +541,10 @@ fn spine_tree_node_msg_leaf_count(node: &SpineTreeNode) -> usize {
     }
 }
 
-fn format_tree_rows(rows: Vec<TreeRenderRow>, current_annotation: Option<&str>) -> String {
+fn format_tree_rows(
+    rows: Vec<TreeRenderRow>,
+    context_annotations: &BTreeMap<NodeId, String>,
+) -> String {
     let rows = rows
         .into_iter()
         .map(|row| (row.id.clone(), row))
@@ -612,15 +616,12 @@ fn format_tree_rows(rows: Vec<TreeRenderRow>, current_annotation: Option<&str>) 
         let summary = visible_summary(&row)
             .map(|summary| format!(" {summary}"))
             .unwrap_or_default();
-        let annotation = if row.status == NodeStatus::Live {
-            current_annotation
-                .map(str::trim)
-                .filter(|annotation| !annotation.is_empty())
-                .map(|annotation| format!(" {annotation}"))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let annotation = context_annotations
+            .get(&id)
+            .map(|annotation| annotation.trim())
+            .filter(|annotation| !annotation.is_empty())
+            .map(|annotation| format!(" {annotation}"))
+            .unwrap_or_default();
         lines.push(format!(
             "{}- [{}] {}{}{}{}",
             "  ".repeat(id.0.len().saturating_sub(1)),

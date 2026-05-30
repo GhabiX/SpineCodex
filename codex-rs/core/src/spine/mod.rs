@@ -9,6 +9,7 @@ mod render;
 mod runtime;
 mod store;
 
+pub(crate) use model::NodeId;
 pub(crate) use runtime::SPINE_NAMESPACE;
 pub(crate) use runtime::SPINE_TOOL_CLOSE;
 pub(crate) use runtime::SPINE_TOOL_OPEN;
@@ -16,6 +17,7 @@ pub(crate) use runtime::SPINE_TOOL_TREE;
 pub(crate) use runtime::SpineCloseCompact;
 pub(crate) use runtime::SpineCommitKind;
 pub(crate) use runtime::SpineError;
+pub(crate) use runtime::SpineOpenNodeContextProjection;
 pub(crate) use runtime::SpinePendingCommit;
 pub(crate) use runtime::SpineRootCompactResult;
 pub(crate) use runtime::SpineRuntime;

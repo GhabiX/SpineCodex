@@ -1,6 +1,24 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "SpineNodeContextBaselineSource": {
+      "enum": [
+        "provider_at_open",
+        "root_compact_handoff",
+        "estimated_from_live_suffix",
+        "checkpoint_replay"
+      ],
+      "type": "string"
+    },
+    "SpineNodeContextUnavailableReason": {
+      "enum": [
+        "missing_current_usage",
+        "missing_open_context_baseline",
+        "non_positive_delta",
+        "corrupt_pressure_metadata"
+      ],
+      "type": "string"
+    },
     "SpineTreeNode": {
       "properties": {
         "accounting": {
@@ -40,6 +58,16 @@
     },
     "SpineTreeNodeAccounting": {
       "properties": {
+        "currentNodeContextBaselineSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineNodeContextBaselineSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "currentNodeContextTokens": {
           "format": "int64",
           "type": [
@@ -47,7 +75,24 @@
             "null"
           ]
         },
+        "currentNodeContextUnavailable": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineNodeContextUnavailableReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "memoryOutputTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rawContextTokens": {
           "format": "int64",
           "type": [
             "integer",

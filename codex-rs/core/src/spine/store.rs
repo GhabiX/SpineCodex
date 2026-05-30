@@ -167,8 +167,28 @@ impl SpineStore {
             target.append_logged_event(event)?;
         }
         let source_mems = source.mems()?;
-        let required_memory_ids =
+        let source_compact_checkpoints = source.compact_checkpoints()?;
+        let mut cloned_compact_checkpoints = Vec::new();
+        for checkpoint in source_compact_checkpoints {
+            let checkpoint_boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
+                SpineError::InvalidEvent("compact checkpoint raw boundary overflow".to_string())
+            })?;
+            if checkpoint.token_seq <= boundary.structural_seq_limit
+                && checkpoint.raw_boundary <= boundary.raw_ordinal_limit
+                && checkpoint_boundary <= source_raw_live.len()
+                && checkpoint.raw_live_hash
+                    == hash_raw_live(&source_raw_live[..checkpoint_boundary])
+            {
+                cloned_compact_checkpoints.push(checkpoint);
+            }
+        }
+        let mut required_memory_ids =
             required_memory_ids_for_cloned_events(&cloned_events, &source_mems, mask)?;
+        for checkpoint in &cloned_compact_checkpoints {
+            for memory in &checkpoint.memory_refs {
+                required_memory_ids.insert(memory.compact_id.clone());
+            }
+        }
         for pressure in source.pressure_events()? {
             if boundary
                 .pressure_seq_watermark
@@ -180,31 +200,26 @@ impl SpineStore {
         }
         let mut cloned_memory_paths = BTreeMap::new();
         for mem in source_mems {
-            if required_memory_ids.contains(&mem.compact_id) && mem.allowed_by(mask)? {
+            if mem.allowed_by(mask)? {
+                // Memory records do not carry a structural sequence, so any
+                // raw-visible record must still be readable. Only records
+                // referenced by cloned events/checkpoints are copied.
                 let body = source.read_memory_body(&mem)?;
-                let body_path = target.write_memory_body(&mem.compact_id, &body)?;
-                cloned_memory_paths.insert(mem.compact_id.clone(), body_path.clone());
-                let cloned = MemRecord { body_path, ..mem };
-                target.append_mem(&cloned)?;
+                if required_memory_ids.contains(&mem.compact_id) {
+                    let body_path = target.write_memory_body(&mem.compact_id, &body)?;
+                    cloned_memory_paths.insert(mem.compact_id.clone(), body_path.clone());
+                    let cloned = MemRecord { body_path, ..mem };
+                    target.append_mem(&cloned)?;
+                }
             }
         }
-        for checkpoint in source.compact_checkpoints()? {
-            let checkpoint_boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
-                SpineError::InvalidEvent("compact checkpoint raw boundary overflow".to_string())
-            })?;
-            if checkpoint.token_seq <= boundary.structural_seq_limit
-                && checkpoint.raw_boundary <= boundary.raw_ordinal_limit
-                && checkpoint_boundary <= source_raw_live.len()
-                && checkpoint.raw_live_hash
-                    == hash_raw_live(&source_raw_live[..checkpoint_boundary])
-            {
-                let checkpoint = clone_compact_checkpoint_for_target(
-                    checkpoint,
-                    target_rollout_path,
-                    &cloned_memory_paths,
-                )?;
-                target.append_compact_checkpoint(&checkpoint)?;
-            }
+        for checkpoint in cloned_compact_checkpoints {
+            let checkpoint = clone_compact_checkpoint_for_target(
+                checkpoint,
+                target_rollout_path,
+                &cloned_memory_paths,
+            )?;
+            target.append_compact_checkpoint(&checkpoint)?;
         }
         Ok(())
     }

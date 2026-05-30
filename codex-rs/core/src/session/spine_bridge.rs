@@ -3,9 +3,12 @@ use crate::context_manager::ContextAppend;
 use crate::context_manager::ContextManager;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
+use crate::spine::NodeId;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCloneBoundary;
+use crate::spine::SpineCloseCompact;
 use crate::spine::SpineCommitKind;
+use crate::spine::SpineOpenNodeContextProjection;
 use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
@@ -19,11 +22,25 @@ use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
+use std::collections::BTreeMap;
 
 pub(super) struct PreparedSpineReplay {
     raw_len: u64,
     runtime: Option<SpineRuntime>,
     materialized: Option<Vec<ResponseItem>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SpineToolCommit {
+    pub(crate) output_text: Option<String>,
+}
+
+type SpineCommitOutput = (Option<SpineTreeUpdateEvent>, Option<String>);
+
+enum SpineCommitAttempt {
+    Done(SpineCommitOutput),
+    Retry,
+    RuntimeMissing,
 }
 
 impl Session {
@@ -66,14 +83,7 @@ impl Session {
             let Some(runtime) = guard.runtime() else {
                 return Ok(());
             };
-            let mut snapshot = runtime.build_tree_snapshot()?;
-            annotate_current_node_context(
-                &mut snapshot,
-                token_info.as_ref(),
-                runtime.current_open_context_tokens(),
-                runtime.current_open_context_baseline_source(),
-            );
-            snapshot
+            build_annotated_tree_snapshot(runtime, token_info.as_ref())?
         };
         self.send_event_raw(Event {
             id: INITIAL_SUBMIT_ID.to_string(),
@@ -285,6 +295,35 @@ impl Session {
         }
     }
 
+    pub(super) async fn emit_spine_tree_snapshot_cache_only_if_available(&self) {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return;
+        };
+        let token_info = self.token_usage_info().await;
+        let snapshot = {
+            let guard = spine_slot.lock().await;
+            if let Err(err) = guard.ensure_valid() {
+                tracing::debug!("skipping Spine tree cache refresh: {err}");
+                return;
+            }
+            let Some(runtime) = guard.runtime() else {
+                return;
+            };
+            match build_annotated_tree_snapshot(runtime, token_info.as_ref()) {
+                Ok(snapshot) => snapshot,
+                Err(err) => {
+                    tracing::debug!("failed to build Spine tree cache refresh snapshot: {err}");
+                    return;
+                }
+            }
+        };
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_string(),
+            msg: EventMsg::SpineTreeUpdate(snapshot),
+        })
+        .await;
+    }
+
     pub(super) async fn ensure_spine_runtime_if_available(&self) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
@@ -393,18 +432,7 @@ impl Session {
                 "spine runtime missing after initialization".to_string(),
             ));
         };
-        let current_annotation =
-            format_current_node_context(token_info.as_ref(), runtime.current_open_context_tokens());
-        let mut tree = if let Some(annotation) = current_annotation.as_deref() {
-            runtime.render_tree_with_current_annotation(Some(annotation))?
-        } else {
-            runtime.render_tree()?
-        };
-        if let Some(line) = format_context_window_pressure(token_info) {
-            tree.push_str("\n\n");
-            tree.push_str(&line);
-        }
-        Ok(tree)
+        render_spine_tree_for_model(runtime, token_info)
     }
 
     pub(crate) async fn emit_spine_tree_snapshot(
@@ -421,14 +449,7 @@ impl Session {
                     "spine runtime missing after initialization".to_string(),
                 ));
             };
-            let mut snapshot = runtime.build_tree_snapshot()?;
-            annotate_current_node_context(
-                &mut snapshot,
-                token_info.as_ref(),
-                runtime.current_open_context_tokens(),
-                runtime.current_open_context_baseline_source(),
-            );
-            snapshot
+            build_annotated_tree_snapshot(runtime, token_info.as_ref())?
         };
         self.send_spine_tree_update(turn_context, snapshot).await;
         Ok(())
@@ -470,18 +491,18 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         item: &ResponseItem,
-    ) -> Result<(), SpineError> {
+    ) -> Result<SpineToolCommit, SpineError> {
         let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
-            return Ok(());
+            return Ok(SpineToolCommit { output_text: None });
         };
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(());
+            return Ok(SpineToolCommit { output_text: None });
         };
         let pending_commit = {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
             let Some(spine) = guard.runtime() else {
-                return Ok(());
+                return Ok(SpineToolCommit { output_text: None });
             };
             spine.pending_commit(call_id)?
         };
@@ -516,102 +537,124 @@ impl Session {
                 ));
             }
         }
-        let snapshot = {
-            let mut guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(spine) = guard.runtime_mut() else {
-                return Ok(());
-            };
-            let mut state = self.state.lock().await;
-            if let Some((_, expected_history)) = close_compact.as_ref()
-                && state.clone_history().raw_items() != expected_history.as_slice()
-            {
-                return Err(SpineError::InvalidEvent(
-                    "spine.close history changed before suffix replacement".to_string(),
-                ));
-            }
-            let close_compact = close_compact.map(|(compact, _)| compact);
-            let token_baselines = token_baselines_from_info(state.token_info().as_ref());
-            let commit_kind = spine.maybe_commit_output_with_token_baselines(
+        let (snapshot, output_text) = loop {
+            match self.try_commit_spine_tool_output_once(
+                spine_slot,
                 call_id,
-                close_compact,
-                token_baselines,
-            )?;
-            let mut snapshot = None;
-            if let Some(commit_kind) = commit_kind.as_ref() {
-                match commit_kind {
-                    SpineCommitKind::Open { open_request_index } => {
-                        let history = state.clone_history();
-                        let history_items = history.raw_items();
-                        if *open_request_index > history_items.len() {
-                            return Err(SpineError::InvalidEvent(format!(
-                                "spine.open request index {open_request_index} exceeds history length {}",
-                                history_items.len()
-                            )));
-                        }
-                        let filtered = history_items
-                            .iter()
-                            .cloned()
-                            .enumerate()
-                            .filter_map(|(index, history_item)| {
-                                let remove = index >= *open_request_index
-                                    && match &history_item {
-                                        ResponseItem::FunctionCall {
-                                            call_id: existing,
-                                            namespace,
-                                            ..
-                                        } => {
-                                            existing == call_id
-                                                && namespace.as_deref() == Some(SPINE_NAMESPACE)
-                                        }
-                                        ResponseItem::FunctionCallOutput {
-                                            call_id: existing,
-                                            ..
-                                        } => existing == call_id,
-                                        _ => false,
-                                    };
-                                (!remove).then_some(history_item)
-                            })
-                            .collect();
-                        let reference_context_item = state.reference_context_item();
-                        state.replace_history(filtered, reference_context_item);
-                    }
-                    SpineCommitKind::Close {
-                        suffix_start,
-                        replacement,
-                    } => {
-                        let suffix_end = state.clone_history().raw_items().len();
-                        if *suffix_start > suffix_end {
-                            return Err(SpineError::InvalidEvent(format!(
-                                "spine.close suffix start {suffix_start} exceeds history length {suffix_end}"
-                            )));
-                        }
-                        let reference_context_item = state.reference_context_item();
-                        state
-                            .replace_history_suffix(
-                                *suffix_start..suffix_end,
-                                replacement.clone(),
-                                reference_context_item,
-                            )
-                            .map_err(SpineError::InvalidEvent)?;
-                    }
+                close_compact.clone(),
+            )? {
+                SpineCommitAttempt::Done(output) => break output,
+                SpineCommitAttempt::RuntimeMissing => {
+                    return Ok(SpineToolCommit { output_text: None });
                 }
-                let mut tree_snapshot = spine.build_tree_snapshot()?;
-                let token_info = state.token_info();
-                annotate_current_node_context(
-                    &mut tree_snapshot,
-                    token_info.as_ref(),
-                    spine.current_open_context_tokens(),
-                    spine.current_open_context_baseline_source(),
-                );
-                snapshot = Some(tree_snapshot);
+                SpineCommitAttempt::Retry => tokio::task::yield_now().await,
             }
-            snapshot
         };
         if let Some(snapshot) = snapshot {
             self.send_spine_tree_update(turn_context, snapshot).await;
         }
-        Ok(())
+        Ok(SpineToolCommit { output_text })
+    }
+
+    fn try_commit_spine_tool_output_once(
+        &self,
+        spine_slot: &Mutex<SpineSessionState>,
+        call_id: &str,
+        close_compact: Option<(SpineCloseCompact, Vec<ResponseItem>)>,
+    ) -> Result<SpineCommitAttempt, SpineError> {
+        let Ok(mut guard) = spine_slot.try_lock() else {
+            return Ok(SpineCommitAttempt::Retry);
+        };
+        guard.ensure_valid()?;
+        let Some(spine) = guard.runtime_mut() else {
+            return Ok(SpineCommitAttempt::RuntimeMissing);
+        };
+        let Ok(mut state) = self.state.try_lock() else {
+            return Ok(SpineCommitAttempt::Retry);
+        };
+        if let Some((_, expected_history)) = close_compact.as_ref()
+            && state.clone_history().raw_items() != expected_history.as_slice()
+        {
+            return Err(SpineError::InvalidEvent(
+                "spine.close history changed before suffix replacement".to_string(),
+            ));
+        }
+        let close_compact = close_compact.map(|(compact, _)| compact);
+        let token_baselines = token_baselines_from_info(state.token_info().as_ref());
+        let commit_kind = spine.maybe_commit_output_with_token_baselines(
+            call_id,
+            close_compact,
+            token_baselines,
+        )?;
+        let mut snapshot = None;
+        let mut output_text = None;
+        if let Some(commit_kind) = commit_kind.as_ref() {
+            let output_prefix = match commit_kind {
+                SpineCommitKind::Open { .. } => "Spine opened.",
+                SpineCommitKind::Close { .. } => "Spine closed.",
+            };
+            match commit_kind {
+                SpineCommitKind::Open { open_request_index } => {
+                    let history = state.clone_history();
+                    let history_items = history.raw_items();
+                    if *open_request_index > history_items.len() {
+                        return Err(SpineError::InvalidEvent(format!(
+                            "spine.open request index {open_request_index} exceeds history length {}",
+                            history_items.len()
+                        )));
+                    }
+                    let filtered = history_items
+                        .iter()
+                        .cloned()
+                        .enumerate()
+                        .filter_map(|(index, history_item)| {
+                            let remove = index >= *open_request_index
+                                && match &history_item {
+                                    ResponseItem::FunctionCall {
+                                        call_id: existing,
+                                        namespace,
+                                        ..
+                                    } => {
+                                        existing == call_id
+                                            && namespace.as_deref() == Some(SPINE_NAMESPACE)
+                                    }
+                                    ResponseItem::FunctionCallOutput {
+                                        call_id: existing, ..
+                                    } => existing == call_id,
+                                    _ => false,
+                                };
+                            (!remove).then_some(history_item)
+                        })
+                        .collect();
+                    let reference_context_item = state.reference_context_item();
+                    state.replace_history(filtered, reference_context_item);
+                }
+                SpineCommitKind::Close {
+                    suffix_start,
+                    replacement,
+                } => {
+                    let suffix_end = state.clone_history().raw_items().len();
+                    if *suffix_start > suffix_end {
+                        return Err(SpineError::InvalidEvent(format!(
+                            "spine.close suffix start {suffix_start} exceeds history length {suffix_end}"
+                        )));
+                    }
+                    let reference_context_item = state.reference_context_item();
+                    state
+                        .replace_history_suffix(
+                            *suffix_start..suffix_end,
+                            replacement.clone(),
+                            reference_context_item,
+                        )
+                        .map_err(SpineError::InvalidEvent)?;
+                }
+            }
+            let token_info = state.token_info();
+            snapshot = Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?);
+            let tree = render_spine_tree_for_model(spine, token_info)?;
+            output_text = Some(format!("{output_prefix}\n\n{tree}"));
+        }
+        Ok(SpineCommitAttempt::Done((snapshot, output_text)))
     }
 
     pub(crate) async fn is_pending_spine_close_output(
@@ -701,7 +744,7 @@ impl Session {
                 )));
             }
             let snapshot = spine.build_tree_snapshot()?;
-            return Ok(Some((result, snapshot)));
+            Ok(Some((result, snapshot)))
         }
     }
 
@@ -734,7 +777,7 @@ impl Session {
         else {
             return Ok(None);
         };
-        *items = root_compact.materialized.clone();
+        *items = root_compact.materialized;
         compacted_item.replacement_history = Some(items.clone());
         Ok(Some(snapshot))
     }
@@ -757,52 +800,90 @@ fn spine_root_compact_body(
         .or_else(|| crate::compact_remote::remote_root_compact_body(replacement_history))
 }
 
-fn format_current_node_context(
-    current: Option<&TokenUsageInfo>,
-    open_context_tokens: Option<i64>,
-) -> Option<String> {
-    let tokens = current_node_context_tokens(current, open_context_tokens).ok()??;
-    Some(format!("(~{} node context)", format_si_suffix(tokens)))
+fn build_annotated_tree_snapshot(
+    runtime: &SpineRuntime,
+    token_info: Option<&TokenUsageInfo>,
+) -> Result<SpineTreeUpdateEvent, SpineError> {
+    let mut snapshot = runtime.build_tree_snapshot()?;
+    let open_nodes = runtime.open_node_context_projections();
+    annotate_open_node_contexts(&mut snapshot, token_info, &open_nodes);
+    Ok(snapshot)
 }
 
-fn annotate_current_node_context(
+fn render_spine_tree_for_model(
+    runtime: &SpineRuntime,
+    token_info: Option<TokenUsageInfo>,
+) -> Result<String, SpineError> {
+    let open_nodes = runtime.open_node_context_projections();
+    let annotations = format_open_node_context_annotations(token_info.as_ref(), &open_nodes);
+    let mut tree = runtime.render_tree_with_context_annotations(&annotations)?;
+    if let Some(line) = format_context_window_pressure(token_info) {
+        tree.push_str("\n\n");
+        tree.push_str(&line);
+    }
+    Ok(tree)
+}
+
+fn format_open_node_context_annotations(
+    current: Option<&TokenUsageInfo>,
+    open_nodes: &[SpineOpenNodeContextProjection],
+) -> BTreeMap<NodeId, String> {
+    open_nodes
+        .iter()
+        .map(|open_node| {
+            let annotation = match node_context_tokens(current, open_node.baseline_tokens) {
+                Ok(Some(tokens)) => {
+                    format!("(~{} inclusive context)", format_si_suffix(tokens))
+                }
+                Ok(None) => "(context unavailable: non-positive delta)".to_string(),
+                Err(reason) => format!(
+                    "(context unavailable: {})",
+                    context_unavailable_reason_label(reason)
+                ),
+            };
+            (open_node.node_id.clone(), annotation)
+        })
+        .collect()
+}
+
+fn annotate_open_node_contexts(
     snapshot: &mut SpineTreeUpdateEvent,
     current: Option<&TokenUsageInfo>,
-    open_context_tokens: Option<i64>,
-    open_context_source: Option<codex_protocol::spine_tree::SpineNodeContextBaselineSource>,
+    open_nodes: &[SpineOpenNodeContextProjection],
 ) {
-    let active_node_id = snapshot.active_node_id.as_str();
-    let Some(active_node) = snapshot
-        .nodes
-        .iter_mut()
-        .find(|node| node.node_id == active_node_id)
-    else {
-        return;
-    };
-    let accounting = active_node
-        .accounting
-        .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default);
-    match current_node_context_tokens(current, open_context_tokens) {
-        Ok(Some(tokens)) => {
-            accounting.current_node_context_tokens = Some(tokens);
-            accounting.current_node_context_baseline_source = open_context_source;
-            accounting.current_node_context_unavailable = None;
-        }
-        Ok(None) => {
-            accounting.current_node_context_tokens = None;
-            accounting.current_node_context_baseline_source = open_context_source;
-            accounting.current_node_context_unavailable =
-                Some(SpineNodeContextUnavailableReason::NonPositiveDelta);
-        }
-        Err(reason) => {
-            accounting.current_node_context_tokens = None;
-            accounting.current_node_context_baseline_source = open_context_source;
-            accounting.current_node_context_unavailable = Some(reason);
+    let open_nodes_by_id = open_nodes
+        .iter()
+        .map(|node| (node.node_id.to_string(), node))
+        .collect::<BTreeMap<_, _>>();
+    for node in &mut snapshot.nodes {
+        let Some(open_node) = open_nodes_by_id.get(node.node_id.as_str()) else {
+            continue;
+        };
+        let accounting = node
+            .accounting
+            .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default);
+        match node_context_tokens(current, open_node.baseline_tokens) {
+            Ok(Some(tokens)) => {
+                accounting.current_node_context_tokens = Some(tokens);
+                accounting.current_node_context_baseline_source = open_node.baseline_source;
+                accounting.current_node_context_unavailable = None;
+            }
+            Ok(None) => {
+                accounting.current_node_context_tokens = None;
+                accounting.current_node_context_baseline_source = open_node.baseline_source;
+                accounting.current_node_context_unavailable =
+                    Some(SpineNodeContextUnavailableReason::NonPositiveDelta);
+            }
+            Err(reason) => {
+                accounting.current_node_context_tokens = None;
+                accounting.current_node_context_baseline_source = open_node.baseline_source;
+                accounting.current_node_context_unavailable = Some(reason);
+            }
         }
     }
 }
 
-fn current_node_context_tokens(
+fn node_context_tokens(
     current: Option<&TokenUsageInfo>,
     open_context_tokens: Option<i64>,
 ) -> Result<Option<i64>, SpineNodeContextUnavailableReason> {
@@ -814,6 +895,15 @@ fn current_node_context_tokens(
         open_context_tokens.ok_or(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)?;
     let tokens = current.saturating_sub(open_context_tokens);
     Ok((tokens > 0).then_some(tokens))
+}
+
+fn context_unavailable_reason_label(reason: SpineNodeContextUnavailableReason) -> &'static str {
+    match reason {
+        SpineNodeContextUnavailableReason::MissingCurrentUsage => "missing current usage",
+        SpineNodeContextUnavailableReason::MissingOpenContextBaseline => "missing open baseline",
+        SpineNodeContextUnavailableReason::NonPositiveDelta => "non-positive delta",
+        SpineNodeContextUnavailableReason::CorruptPressureMetadata => "corrupt pressure metadata",
+    }
 }
 
 fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {
