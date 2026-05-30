@@ -86,6 +86,8 @@ use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -375,23 +377,21 @@ pub(crate) async fn run_turn(
         }))
         .await;
     }
-    if !skill_items.is_empty() {
-        if let Err(err) = sess
+    if !skill_items.is_empty()
+        && let Err(err) = sess
             .record_conversation_items(&turn_context, &skill_items)
             .await
-        {
-            send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-            return None;
-        }
+    {
+        send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+        return None;
     }
-    if !plugin_items.is_empty() {
-        if let Err(err) = sess
+    if !plugin_items.is_empty()
+        && let Err(err) = sess
             .record_conversation_items(&turn_context, &plugin_items)
             .await
-        {
-            send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-            return None;
-        }
+    {
+        send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
+        return None;
     }
 
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
@@ -1400,6 +1400,15 @@ impl SpineControlOverlay {
     }
 }
 
+fn replace_function_output_text(item: &mut ResponseItem, text: String) {
+    if let ResponseItem::FunctionCallOutput { output, .. } = item {
+        *output = FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text(text),
+            success: Some(true),
+        };
+    }
+}
+
 /// Ephemeral per-response state for streaming a single proposed plan.
 /// This is intentionally not persisted or stored in session/state since it
 /// only exists while a response is actively streaming. The final plan text
@@ -1940,44 +1949,41 @@ async fn drain_in_flight(
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
-                let response_item = response_input.into();
-                spine_control_overlay.push_output_if_matching(&response_item);
+                let mut response_item = response_input.into();
                 let is_pending_spine_close = sess
                     .is_pending_spine_close_output(&response_item)
                     .await
                     .map_err(|err| {
                         CodexErr::Fatal(format!("failed to inspect Spine tool output: {err}"))
                     })?;
+                let commit = sess
+                    .maybe_commit_spine_tool_output(&turn_context, &response_item)
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!("failed to commit Spine tool output: {err}"))
+                    })?;
+                if let Some(text) = commit.output_text {
+                    replace_function_output_text(&mut response_item, text);
+                }
+                spine_control_overlay.push_output_if_matching(&response_item);
                 if is_pending_spine_close {
-                    sess.maybe_commit_spine_tool_output(&turn_context, &response_item)
-                        .await
-                        .map_err(|err| {
-                            CodexErr::Fatal(format!("failed to commit Spine tool output: {err}"))
-                        })?;
                     sess.record_conversation_items_raw_only(
                         &turn_context,
                         std::slice::from_ref(&response_item),
                     )
                     .await?;
+                } else if spine_control_overlay.contains_matching_request(&response_item) {
+                    sess.record_conversation_items_spine_control_overlay_only(
+                        &turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await?;
                 } else {
-                    if spine_control_overlay.contains_matching_request(&response_item) {
-                        sess.record_conversation_items_spine_control_overlay_only(
-                            &turn_context,
-                            std::slice::from_ref(&response_item),
-                        )
-                        .await?;
-                    } else {
-                        sess.record_conversation_items(
-                            &turn_context,
-                            std::slice::from_ref(&response_item),
-                        )
-                        .await?;
-                    }
-                    sess.maybe_commit_spine_tool_output(&turn_context, &response_item)
-                        .await
-                        .map_err(|err| {
-                            CodexErr::Fatal(format!("failed to commit Spine tool output: {err}"))
-                        })?;
+                    sess.record_conversation_items(
+                        &turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await?;
                 }
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
@@ -2131,8 +2137,8 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
-                if let Some(state) = plan_mode_state.as_mut() {
-                    if handle_assistant_item_done_in_plan_mode(
+                if let Some(state) = plan_mode_state.as_mut()
+                    && handle_assistant_item_done_in_plan_mode(
                         &sess,
                         &turn_context,
                         turn_store.as_ref(),
@@ -2142,9 +2148,8 @@ async fn try_run_sampling_request(
                         &mut last_agent_message,
                     )
                     .await?
-                    {
-                        continue;
-                    }
+                {
+                    continue;
                 }
 
                 let mut ctx = HandleOutputCtx {

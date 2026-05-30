@@ -367,10 +367,21 @@ fn append_debug_raw_children(
 }
 
 #[cfg(debug_assertions)]
-fn format_node_accounting(node: &SpineTreeNode, active: bool) -> Option<String> {
+fn format_node_accounting(node: &SpineTreeNode, _active: bool) -> Option<String> {
     let accounting = node.accounting.as_ref()?;
-    if active && let Some(tokens) = positive_tokens(accounting.current_node_context_tokens) {
-        return Some(format!("(~{} node context)", format_si_suffix(tokens)));
+    if matches!(
+        node.status,
+        SpineTreeNodeStatus::Live | SpineTreeNodeStatus::Opened
+    ) {
+        if let Some(tokens) = positive_tokens(accounting.current_node_context_tokens) {
+            return Some(format!("(~{} inclusive context)", format_si_suffix(tokens)));
+        }
+        if let Some(reason) = accounting.current_node_context_unavailable {
+            return Some(format!(
+                "(context unavailable: {})",
+                context_unavailable_reason_label(reason)
+            ));
+        }
     }
     match (
         positive_tokens(accounting.raw_context_tokens)
@@ -391,6 +402,26 @@ fn format_node_accounting(node: &SpineTreeNode, active: bool) -> Option<String> 
 #[cfg(debug_assertions)]
 fn positive_tokens(tokens: Option<i64>) -> Option<i64> {
     tokens.filter(|tokens| *tokens > 0)
+}
+
+#[cfg(debug_assertions)]
+fn context_unavailable_reason_label(
+    reason: codex_app_server_protocol::SpineNodeContextUnavailableReason,
+) -> &'static str {
+    match reason {
+        codex_app_server_protocol::SpineNodeContextUnavailableReason::MissingCurrentUsage => {
+            "missing current usage"
+        }
+        codex_app_server_protocol::SpineNodeContextUnavailableReason::MissingOpenContextBaseline => {
+            "missing open baseline"
+        }
+        codex_app_server_protocol::SpineNodeContextUnavailableReason::NonPositiveDelta => {
+            "non-positive delta"
+        }
+        codex_app_server_protocol::SpineNodeContextUnavailableReason::CorruptPressureMetadata => {
+            "corrupt pressure metadata"
+        }
+    }
 }
 
 fn child_nodes<'a>(
@@ -481,6 +512,20 @@ mod tests {
             raw_context_tokens,
             raw_input_tokens,
             memory_output_tokens,
+        })
+    }
+
+    #[cfg(debug_assertions)]
+    fn unavailable_accounting(
+        reason: codex_app_server_protocol::SpineNodeContextUnavailableReason,
+    ) -> Option<SpineTreeNodeAccounting> {
+        Some(SpineTreeNodeAccounting {
+            current_node_context_tokens: None,
+            current_node_context_unavailable: Some(reason),
+            current_node_context_baseline_source: None,
+            raw_context_tokens: None,
+            raw_input_tokens: None,
+            memory_output_tokens: None,
         })
     }
 
@@ -582,7 +627,7 @@ mod tests {
           ◌ previous
           ◉ active
         "###);
-        assert!(!rendered.contains("node context"));
+        assert!(!rendered.contains("inclusive context"));
         assert!(!rendered.contains("raw"));
         assert!(!rendered.contains("memory"));
         assert!(!rendered.contains("compacted"));
@@ -593,7 +638,7 @@ mod tests {
           ◌ previous
           ◉ active
         "###);
-        assert!(!raw.contains("node context"));
+        assert!(!raw.contains("inclusive context"));
         assert!(!raw.contains("raw"));
         assert!(!raw.contains("memory"));
     }
@@ -603,27 +648,49 @@ mod tests {
     fn debug_renders_context_accounting() {
         let mut closed = node("1", None, Some("previous"), SpineTreeNodeStatus::Compacted);
         closed.accounting = accounting(None, Some(7_500), Some(7_500), Some(1_250));
+        let mut opened = node("2", None, Some("outer"), SpineTreeNodeStatus::Opened);
+        opened.accounting = accounting(Some(231_546), None, None, None);
         let mut active = node("2.1", None, Some("active"), SpineTreeNodeStatus::Live);
         active.accounting = accounting(Some(181_546), None, None, None);
-        let cell = new_manual_debug_spine_tree_snapshot(snapshot(vec![closed, active]));
+        let cell = new_manual_debug_spine_tree_snapshot(snapshot(vec![closed, opened, active]));
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Debug Spine Tree  current 2.1
           ├ 1 previous compacted (~7.50K raw -> ~1.25K memory)
-          └ 2.1 active current (~182K node context)
+          ├ 2 outer open (~232K inclusive context)
+          └ 2.1 active current (~182K inclusive context)
         "###);
         assert!(rendered.contains("1 previous compacted (~7.50K raw -> ~1.25K memory)"));
-        assert!(rendered.contains("2.1 active current (~182K node context)"));
+        assert!(rendered.contains("2 outer open (~232K inclusive context)"));
+        assert!(rendered.contains("2.1 active current (~182K inclusive context)"));
 
         let raw = render_lines(&cell.raw_lines()).join("\n");
         insta::assert_snapshot!(raw, @r###"
         Debug Spine Tree current 2.1
         1 previous compacted (~7.50K raw -> ~1.25K memory)
-        * 2.1 active current (~182K node context)
+        2 outer open (~232K inclusive context)
+        * 2.1 active current (~182K inclusive context)
         "###);
         assert!(raw.contains("1 previous compacted (~7.50K raw -> ~1.25K memory)"));
-        assert!(raw.contains("* 2.1 active current (~182K node context)"));
+        assert!(raw.contains("2 outer open (~232K inclusive context)"));
+        assert!(raw.contains("* 2.1 active current (~182K inclusive context)"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_renders_context_unavailable_reason() {
+        let mut opened = node("2", None, Some("outer"), SpineTreeNodeStatus::Opened);
+        opened.accounting = unavailable_accounting(
+            codex_app_server_protocol::SpineNodeContextUnavailableReason::MissingOpenContextBaseline,
+        );
+        let mut active = node("2.1", Some("2"), Some("active"), SpineTreeNodeStatus::Live);
+        active.accounting = accounting(Some(181_546), None, None, None);
+        let cell = new_manual_debug_spine_tree_snapshot(snapshot(vec![opened, active]));
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        assert!(rendered.contains("2 outer open (context unavailable: missing open baseline)"));
+        assert!(rendered.contains("2.1 active current (~182K inclusive context)"));
     }
 
     #[cfg(debug_assertions)]
@@ -635,7 +702,7 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         assert!(rendered.contains("2.1 active current"));
-        assert!(!rendered.contains("node context"));
+        assert!(!rendered.contains("inclusive context"));
         assert!(!rendered.contains("raw"));
         assert!(!rendered.contains("memory"));
     }

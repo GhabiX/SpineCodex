@@ -741,18 +741,17 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
     assert_eq!(requests.len(), 12);
     assert!(request_log.saw_function_call("call-spine-open"));
     assert!(request_log.saw_function_call("call-spine-close"));
-    assert_eq!(
-        request_log
-            .function_call_output_text("call-spine-open")
-            .as_deref(),
-        Some("Spine opened after this tool output is recorded.")
-    );
-    assert_eq!(
-        request_log
-            .function_call_output_text("call-spine-close")
-            .as_deref(),
-        Some("Spine closed.")
-    );
+    let open_output = request_log
+        .function_call_output_text("call-spine-open")
+        .expect("missing spine open output");
+    assert!(open_output.starts_with("Spine opened."), "{open_output}");
+    assert!(open_output.contains("child scope"), "{open_output}");
+    let close_output = request_log
+        .function_call_output_text("call-spine-close")
+        .expect("missing spine close output");
+    assert!(close_output.starts_with("Spine closed."), "{close_output}");
+    assert!(close_output.contains("Done child scope"), "{close_output}");
+    assert!(close_output.contains("Memory.md"), "{close_output}");
 
     let rolled_back_turn_request = requests
         .iter()

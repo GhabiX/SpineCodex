@@ -2047,7 +2047,7 @@ async fn slash_spinetree_renders_cached_snapshot() {
     assert!(rendered.contains("2.1"), "got {rendered}");
     assert!(rendered.contains("active scope"), "got {rendered}");
     assert!(rendered.contains("current"), "got {rendered}");
-    assert!(!rendered.contains("node context"), "got {rendered}");
+    assert!(!rendered.contains("inclusive context"), "got {rendered}");
     assert!(!rendered.contains("raw ->"), "got {rendered}");
     assert!(!rendered.contains("compacted"), "got {rendered}");
 }
@@ -2078,8 +2078,22 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
                 }),
             },
             SpineTreeNode {
-                node_id: "2.1".to_string(),
+                node_id: "2".to_string(),
                 parent_id: None,
+                summary: Some("outer scope".to_string()),
+                status: SpineTreeNodeStatus::Opened,
+                accounting: Some(SpineTreeNodeAccounting {
+                    current_node_context_tokens: Some(231_546),
+                    current_node_context_unavailable: None,
+                    current_node_context_baseline_source: None,
+                    raw_context_tokens: None,
+                    raw_input_tokens: None,
+                    memory_output_tokens: None,
+                }),
+            },
+            SpineTreeNode {
+                node_id: "2.1".to_string(),
+                parent_id: Some("2".to_string()),
                 summary: Some("active scope".to_string()),
                 status: SpineTreeNodeStatus::Live,
                 accounting: Some(SpineTreeNodeAccounting {
@@ -2111,7 +2125,15 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
         rendered.contains("~7.50K raw -> ~1.25K memory"),
         "got {rendered}"
     );
-    assert!(rendered.contains("~182K node context"), "got {rendered}");
+    assert!(rendered.contains("2 outer scope open"), "got {rendered}");
+    assert!(
+        rendered.contains("~232K inclusive context"),
+        "got {rendered}"
+    );
+    assert!(
+        rendered.contains("~182K inclusive context"),
+        "got {rendered}"
+    );
 }
 
 #[tokio::test]

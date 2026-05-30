@@ -3179,6 +3179,8 @@ impl Session {
                 }
                 self.repair_spine_pressure_after_token_usage(token_info)
                     .await;
+                self.emit_spine_tree_snapshot_cache_only_if_available()
+                    .await;
             }
         }
     }
@@ -3216,6 +3218,8 @@ impl Session {
         };
         if let Some(token_info) = token_info.as_ref() {
             self.repair_spine_pressure_after_token_usage(token_info)
+                .await;
+            self.emit_spine_tree_snapshot_cache_only_if_available()
                 .await;
         }
         self.send_token_count_event(turn_context).await;
