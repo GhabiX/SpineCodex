@@ -2044,9 +2044,8 @@ async fn slash_spinetree_renders_cached_snapshot() {
     let cells = drain_insert_history(&mut rx);
     let rendered = lines_to_single_string(&cells[0]);
     assert!(rendered.contains("Spine Tree"), "got {rendered}");
-    assert!(rendered.contains("2.1"), "got {rendered}");
     assert!(rendered.contains("active scope"), "got {rendered}");
-    assert!(rendered.contains("current"), "got {rendered}");
+    assert!(!rendered.contains("2.1"), "got {rendered}");
     assert!(!rendered.contains("inclusive context"), "got {rendered}");
     assert!(!rendered.contains("raw ->"), "got {rendered}");
     assert!(!rendered.contains("compacted"), "got {rendered}");
@@ -2163,8 +2162,8 @@ async fn slash_spinetree_uses_startup_seeded_snapshot() {
 
     let cells = drain_insert_history(&mut rx);
     let rendered = lines_to_single_string(&cells[0]);
-    assert!(rendered.contains("2.1"), "got {rendered}");
     assert!(rendered.contains("restored scope"), "got {rendered}");
+    assert!(!rendered.contains("2.1"), "got {rendered}");
 }
 
 #[tokio::test]
