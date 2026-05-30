@@ -22,6 +22,7 @@ pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::SpineTokenBaselines;
 pub(crate) use runtime::is_user_message;
+pub use store::SpineCloneBoundary;
 pub(crate) use store::SpineStore;
 
 pub(crate) use instructions::append_spine_view_instructions;

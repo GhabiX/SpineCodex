@@ -1,5 +1,6 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
+use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineSessionState;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
@@ -423,7 +424,7 @@ impl Session {
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
-        spine_fork_source_rollout_path: Option<PathBuf>,
+        spine_fork_source_boundary: Option<SpineCloneBoundary>,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
@@ -1010,20 +1011,15 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            if let Some(source_rollout_path) = spine_fork_source_rollout_path.as_deref()
+            if let Some(boundary) = spine_fork_source_boundary.as_ref()
                 && config.features.enabled(Feature::SpineTaskTree)
                 && matches!(initial_history, InitialHistory::Forked(_))
-                && let Some(target_rollout_path) = rollout_path.as_deref()
             {
                 let raw_items =
                     spine_raw_items_after_rollback(&initial_history.get_rollout_items());
-                let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
-                SpineStore::clone_for_rollout_with_raw_live(
-                    source_rollout_path,
-                    target_rollout_path,
-                    &raw_live,
-                )
-                .map_err(|err| {
+                sess.clone_spine_sidecar_for_fork(boundary, &raw_items)
+                    .await
+                    .map_err(|err| {
                     anyhow::anyhow!("failed to clone Spine sidecar for fork: {err}")
                 })?;
             }

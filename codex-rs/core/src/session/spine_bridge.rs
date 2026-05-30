@@ -4,10 +4,12 @@ use crate::context_manager::ContextManager;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::spine::SPINE_NAMESPACE;
+use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCommitKind;
 use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
+use crate::spine::SpineStore;
 use crate::spine::SpineTokenBaselines;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::EventMsg;
@@ -97,6 +99,63 @@ impl Session {
         if let Some(runtime) = guard.runtime() {
             runtime.checkpoint_initial(&rollout_path, &[])?;
         }
+        Ok(())
+    }
+
+    pub(super) async fn clone_spine_sidecar_for_fork(
+        &self,
+        boundary: &SpineCloneBoundary,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let Some(target_rollout_path) = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+        else {
+            return Ok(());
+        };
+        let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
+        SpineStore::clone_for_rollout_with_raw_live(boundary, &target_rollout_path, &raw_live)?;
+        let raw_ordinal_limit = usize::try_from(boundary.raw_ordinal_limit()).map_err(|_| {
+            SpineError::InvalidEvent("clone raw ordinal boundary overflow".to_string())
+        })?;
+        if raw_ordinal_limit > raw_items.len() {
+            return Err(SpineError::InvalidEvent(
+                "clone raw ordinal boundary exceeds fork raw length".to_string(),
+            ));
+        }
+        if raw_ordinal_limit == raw_items.len() {
+            return Ok(());
+        }
+        let prefix_runtime = SpineRuntime::load_for_rollout_items(
+            &target_rollout_path,
+            &raw_items[..raw_ordinal_limit],
+            &[],
+        )?;
+        let mut runtime = prefix_runtime.ok_or_else(|| {
+            SpineError::InvalidStore("cloned Spine sidecar is missing after fork clone".to_string())
+        })?;
+        for (raw_ordinal, item) in raw_items.iter().enumerate().skip(raw_ordinal_limit) {
+            runtime.observe_raw_items(1)?;
+            let Some(item) = item.as_ref() else {
+                continue;
+            };
+            let context_index = runtime.materialize_history(raw_items)?.len();
+            runtime.observe_context_item(
+                u64::try_from(raw_ordinal)
+                    .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?,
+                context_index,
+                item,
+            )?;
+        }
+        spine_slot.lock().await.set_replayed(
+            u64::try_from(raw_items.len())
+                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
+            Some(runtime),
+        )?;
         Ok(())
     }
 

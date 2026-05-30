@@ -689,7 +689,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         mcp_manager,
         extensions: codex_extension_api::empty_extension_registry(),
         conversation_history: InitialHistory::New,
-        spine_fork_source_rollout_path: None,
+        spine_fork_source_boundary: None,
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),
         )),

@@ -1,5 +1,6 @@
 use super::*;
 use crate::spine::CHECKPOINT_VERSION;
+use crate::spine::SpineCloneBoundary;
 use crate::spine::archive::tree_meta;
 use crate::spine::checkpoint::CheckpointMemoryRef;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
@@ -31,6 +32,21 @@ fn text_item(text: &str) -> ResponseItem {
 
 fn logged_events(runtime: &SpineRuntime) -> Vec<LoggedKEvent> {
     runtime.store.events_for_test().expect("events")
+}
+
+fn clone_for_rollout_with_raw_live(
+    source_rollout: &std::path::Path,
+    target_rollout: &std::path::Path,
+    raw_live: &[bool],
+) {
+    let boundary = SpineStore::clone_boundary_for_rollout(
+        source_rollout,
+        u64::try_from(raw_live.len()).expect("raw live len"),
+    )
+    .expect("capture clone boundary")
+    .expect("source sidecar exists");
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, target_rollout, raw_live)
+        .expect("clone sidecar");
 }
 
 fn event_log(runtime: &SpineRuntime) -> Vec<KEvent> {
@@ -1146,9 +1162,11 @@ fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
     };
     source.append_mem(&mem).expect("append missing mem ref");
 
-    let err =
-        SpineStore::clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[true])
-            .expect_err("missing visible memory body must fail closed");
+    let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout, 1)
+        .expect("capture clone boundary")
+        .expect("source sidecar exists");
+    let err = SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true])
+        .expect_err("missing visible memory body must fail closed");
     assert!(
         err.to_string().contains("No such file") || err.to_string().contains("os error 2"),
         "unexpected clone error: {err}"
@@ -1219,8 +1237,7 @@ fn clone_for_rollout_rewrites_compact_checkpoint_memory_refs() {
         })
         .expect("append compact checkpoint");
 
-    SpineStore::clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[])
-        .expect("clone sidecar");
+    clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[]);
     let target = SpineStore::for_rollout(&target_rollout).expect("target store");
     let checkpoint = target
         .compact_checkpoints()
@@ -1331,8 +1348,7 @@ fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
         })
         .expect("append compact checkpoint");
 
-    SpineStore::clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &raw_live)
-        .expect("clone sidecar");
+    clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &raw_live);
     let target = SpineStore::for_rollout(&target_rollout).expect("target store");
     assert_eq!(
         target
@@ -1349,6 +1365,54 @@ fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
             &[memory_response_item(body)],
         )
         .expect("rollback-hole checkpoint should validate against target sidecar");
+}
+
+#[test]
+fn clone_boundary_excludes_future_compact_checkpoint_and_memory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source_rollout = dir.path().join("source.jsonl");
+    let target_rollout = dir.path().join("target.jsonl");
+    let mut raw = Vec::new();
+    let mut source_runtime =
+        SpineRuntime::load_or_create(&source_rollout, 0).expect("create source runtime");
+    append_msg(&mut source_runtime, &mut raw, "boundary-visible");
+    let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout, 1)
+        .expect("capture boundary")
+        .expect("source sidecar exists");
+
+    source_runtime
+        .root_compact_with_checkpoint(
+            &source_rollout,
+            "future compact body".to_string(),
+            &raw,
+            None,
+            None,
+        )
+        .expect("future root compact");
+
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true])
+        .expect("clone sidecar");
+    let target = SpineStore::for_rollout(&target_rollout).expect("target store");
+    assert!(
+        target.mems().expect("read target mem records").is_empty(),
+        "fork boundary must not clone future memory bodies"
+    );
+    assert!(
+        target
+            .compact_checkpoints()
+            .expect("read target compact checkpoints")
+            .is_empty(),
+        "fork boundary must not clone future compact checkpoints"
+    );
+    assert_eq!(
+        target
+            .events()
+            .expect("read target events")
+            .iter()
+            .map(|event| event.seq)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
 }
 
 #[test]
@@ -1386,8 +1450,7 @@ fn clone_preserves_structural_seq_gaps_and_appends_after_max() {
         })
         .expect("append kept msg");
 
-    SpineStore::clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[false, true])
-        .expect("clone sidecar");
+    clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[false, true]);
     let target = SpineStore::for_rollout(&target_rollout).expect("target store");
     let cloned_events = target.events().expect("read target events");
     assert_eq!(
@@ -1458,8 +1521,7 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
         .expect("append pressure event");
 
     let raw_items = vec![None, Some(text_item("kept"))];
-    SpineStore::clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[false, true])
-        .expect("clone sidecar");
+    clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[false, true]);
     let target = SpineStore::for_rollout(&target_rollout).expect("target store");
     assert_eq!(
         target
@@ -1500,6 +1562,107 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
         })
         .expect("append pressure after clone");
     assert_eq!(next_pressure_seq, 1);
+}
+
+#[test]
+fn clone_boundary_excludes_future_structural_and_pressure_records() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source_rollout = dir.path().join("source.jsonl");
+    let target_rollout = dir.path().join("target.jsonl");
+    let source = SpineStore::create_for_rollout(&source_rollout).expect("create source store");
+    source
+        .append_event(&KEvent::Init { raw_start: 0 })
+        .expect("append init");
+    source
+        .append_event(&KEvent::Open {
+            child: NodeId::root_epoch(1).child(1),
+            boundary: 0,
+            index: 0,
+            summary: "root".to_string(),
+            open_input_tokens: None,
+            open_context_tokens: None,
+            open_context_source: None,
+        })
+        .expect("append root open");
+    source
+        .append_event(&KEvent::Msg {
+            raw_ordinal: 0,
+            context_index: 0,
+            from_user: true,
+        })
+        .expect("append kept msg");
+    source
+        .append_pressure_event(&PressureEvent::OpenContextBaseline {
+            node: NodeId::root_epoch(1).child(1),
+            open_structural_seq: Some(1),
+            observed_structural_seq: 3,
+            observed_raw_ordinal: 1,
+            observed_raw_live_hash: Some(hash_raw_live(&[true])),
+            observed_context_index: 1,
+            context_tokens: 7_000,
+            input_tokens: Some(7_500),
+            source: ContextBaselineSource::EstimatedFromLiveSuffix,
+            estimated_live_suffix_tokens: Some(500),
+        })
+        .expect("append checkpoint-visible pressure");
+    let boundary = SpineCloneBoundary {
+        source_rollout_path: source_rollout.clone(),
+        raw_ordinal_limit: 1,
+        structural_seq_limit: source.next_event_seq().expect("structural seq limit"),
+        pressure_seq_watermark: source
+            .next_pressure_seq()
+            .expect("pressure seq limit")
+            .checked_sub(1),
+    };
+
+    source
+        .append_event(&KEvent::Msg {
+            raw_ordinal: 0,
+            context_index: 0,
+            from_user: true,
+        })
+        .expect("append future structural event");
+    source
+        .append_pressure_event(&PressureEvent::OpenContextBaseline {
+            node: NodeId::root_epoch(1).child(1),
+            open_structural_seq: Some(1),
+            observed_structural_seq: 4,
+            observed_raw_ordinal: 1,
+            observed_raw_live_hash: Some(hash_raw_live(&[true])),
+            observed_context_index: 1,
+            context_tokens: 11_000,
+            input_tokens: Some(11_500),
+            source: ContextBaselineSource::EstimatedFromLiveSuffix,
+            estimated_live_suffix_tokens: Some(500),
+        })
+        .expect("append future pressure");
+
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true])
+        .expect("clone sidecar");
+    let target = SpineStore::for_rollout(&target_rollout).expect("target store");
+    assert_eq!(
+        target
+            .events()
+            .expect("read target events")
+            .iter()
+            .map(|event| event.seq)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(
+        target
+            .pressure_events()
+            .expect("read target pressure")
+            .iter()
+            .map(|event| event.pressure_seq)
+            .collect::<Vec<_>>(),
+        vec![0]
+    );
+    let replayed =
+        SpineRuntime::load_for_rollout_items(&target_rollout, &[Some(text_item("kept"))], &[])
+            .expect("load target")
+            .expect("target sidecar exists");
+    assert_eq!(replayed.current_open_context_tokens(), Some(7_000));
 }
 
 #[test]
@@ -2189,8 +2352,7 @@ fn fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
     let parent_root = parent.store.root.clone();
 
     let raw_live = vec![true; raw.len()];
-    SpineStore::clone_for_rollout_with_raw_live(&parent_rollout, &child_rollout, &raw_live)
-        .expect("clone sidecar");
+    clone_for_rollout_with_raw_live(&parent_rollout, &child_rollout, &raw_live);
     let child = SpineRuntime::load_for_rollout_items(&child_rollout, &raw, &[])
         .expect("load child")
         .expect("child sidecar exists");

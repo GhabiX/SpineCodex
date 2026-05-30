@@ -12,7 +12,10 @@ use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
+use crate::session::spine_raw_items_after_rollback;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::spine::SpineCloneBoundary;
+use crate::spine::SpineStore;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
@@ -181,7 +184,7 @@ pub struct StartThreadOptions {
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub persist_extended_history: bool,
     pub metrics_service_name: Option<String>,
-    pub spine_fork_source_rollout_path: Option<PathBuf>,
+    pub spine_fork_source_boundary: Option<SpineCloneBoundary>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
 }
@@ -574,7 +577,7 @@ impl ThreadManager {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name: None,
-            spine_fork_source_rollout_path: None,
+            spine_fork_source_boundary: None,
             parent_trace: None,
             environments,
         }))
@@ -601,7 +604,7 @@ impl ThreadManager {
             options.dynamic_tools,
             options.persist_extended_history,
             options.metrics_service_name,
-            options.spine_fork_source_rollout_path,
+            options.spine_fork_source_boundary,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
             options.parent_trace,
@@ -634,13 +637,29 @@ impl ThreadManager {
             })?;
         let source_rollout_path = fork_source.rollout_path();
         let history = stored_thread_to_initial_history(stored_thread, source_rollout_path.clone())?;
+        let source_raw_len =
+            u64::try_from(spine_raw_items_after_rollback(&history.get_rollout_items()).len())
+                .map_err(|_| {
+                    CodexErr::Fatal(
+                        "failed to capture Spine fork boundary: raw length overflow".to_string(),
+                    )
+                })?;
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
             InterruptedTurnHistoryMarker::from_config(&options.config),
         );
         if options.config.features.enabled(Feature::SpineTaskTree) {
-            options.spine_fork_source_rollout_path = source_rollout_path;
+            options.spine_fork_source_boundary = source_rollout_path
+                .as_deref()
+                .map(|source_rollout_path| {
+                    SpineStore::clone_boundary_for_rollout(source_rollout_path, source_raw_len)
+                })
+                .transpose()
+                .map_err(|err| {
+                    CodexErr::Fatal(format!("failed to capture Spine fork boundary: {err}"))
+                })?
+                .flatten();
         }
         self.start_thread_with_options(options).await
     }
@@ -685,7 +704,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
-            /*spine_fork_source_rollout_path*/ None,
+            /*spine_fork_source_boundary*/ None,
             parent_trace,
             environments,
             /*user_shell_override*/ None,
@@ -711,7 +730,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
-            /*spine_fork_source_rollout_path*/ None,
+            /*spine_fork_source_boundary*/ None,
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
@@ -741,7 +760,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
-            /*spine_fork_source_rollout_path*/ None,
+            /*spine_fork_source_boundary*/ None,
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
@@ -894,7 +913,25 @@ impl ThreadManager {
             }
             _ => None,
         };
+        let spine_source_raw_len = spine_source_rollout_path
+            .as_ref()
+            .map(|_| spine_raw_items_after_rollback(&history.get_rollout_items()).len());
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
+        let spine_fork_source_boundary = spine_source_rollout_path
+            .as_deref()
+            .map(|source_rollout_path| {
+                spine_clone_boundary_for_fork(
+                    source_rollout_path,
+                    snapshot,
+                    spine_source_raw_len,
+                    &history,
+                )
+            })
+            .transpose()
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to capture Spine fork boundary: {err}"))
+            })?
+            .flatten();
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -908,7 +945,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
-            spine_source_rollout_path,
+            spine_fork_source_boundary,
             parent_trace,
             environments,
             /*user_shell_override*/ None,
@@ -1054,7 +1091,7 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             metrics_service_name,
-            /*spine_fork_source_rollout_path*/ None,
+            /*spine_fork_source_boundary*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1089,7 +1126,7 @@ impl ThreadManagerState {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
-            /*spine_fork_source_rollout_path*/ None,
+            /*spine_fork_source_boundary*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1125,7 +1162,7 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
-            /*spine_fork_source_rollout_path*/ None,
+            /*spine_fork_source_boundary*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1147,7 +1184,7 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
-        spine_fork_source_rollout_path: Option<PathBuf>,
+        spine_fork_source_boundary: Option<SpineCloneBoundary>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
@@ -1162,7 +1199,7 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-            spine_fork_source_rollout_path,
+            spine_fork_source_boundary,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
@@ -1184,7 +1221,7 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
-        spine_fork_source_rollout_path: Option<PathBuf>,
+        spine_fork_source_boundary: Option<SpineCloneBoundary>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
@@ -1238,7 +1275,7 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-            spine_fork_source_rollout_path,
+            spine_fork_source_boundary,
             inherited_shell_snapshot,
             inherited_exec_policy,
             parent_rollout_thread_trace,
@@ -1499,6 +1536,41 @@ fn fork_history_from_snapshot(
             }
         }
     }
+}
+
+fn spine_clone_boundary_for_fork(
+    source_rollout_path: &std::path::Path,
+    snapshot: ForkSnapshot,
+    source_raw_len: Option<usize>,
+    forked_history: &InitialHistory,
+) -> Result<Option<SpineCloneBoundary>, crate::spine::SpineError> {
+    if matches!(snapshot, ForkSnapshot::Interrupted) {
+        let raw_ordinal_limit = raw_ordinal_limit_for_head_boundary(source_raw_len)?;
+        return SpineStore::clone_boundary_for_rollout(source_rollout_path, raw_ordinal_limit);
+    }
+
+    let raw_items = spine_raw_items_after_rollback(&forked_history.get_rollout_items());
+    if source_raw_len.is_some_and(|source_raw_len| source_raw_len == raw_items.len()) {
+        let raw_ordinal_limit = raw_ordinal_limit_for_head_boundary(source_raw_len)?;
+        return SpineStore::clone_boundary_for_rollout(source_rollout_path, raw_ordinal_limit);
+    }
+    let raw_ordinal = u64::try_from(raw_items.len()).map_err(|_| {
+        crate::spine::SpineError::InvalidEvent("fork raw boundary overflow".to_string())
+    })?;
+    SpineStore::clone_boundary_for_checkpoint(source_rollout_path, raw_ordinal)
+}
+
+fn raw_ordinal_limit_for_head_boundary(
+    source_raw_len: Option<usize>,
+) -> Result<u64, crate::spine::SpineError> {
+    let source_raw_len = source_raw_len.ok_or_else(|| {
+        crate::spine::SpineError::InvalidEvent(
+            "missing source raw length for Spine head clone boundary".to_string(),
+        )
+    })?;
+    u64::try_from(source_raw_len).map_err(|_| {
+        crate::spine::SpineError::InvalidEvent("source raw length overflow".to_string())
+    })
 }
 
 /// Append the same persisted interrupt boundary used by the live interrupt path
