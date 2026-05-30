@@ -35,7 +35,7 @@ Context pressure is cumulative: even simple tasks can grow large after repeated 
 
 When unsure, call spine.tree before moving Spine; use its node and global context-pressure stats as hints, not hard rules. When the current live node grows beyond about 50K node context, actively look for the next coherent close boundary, but never move Spine solely because a size threshold was crossed.
 
-There is no production spine.next tool. Moving to a sibling phase is `close ; open`.
+Moving to a sibling phase is `spine.close` followed by `spine.open`.
 
 Do not open for routine continuation, another file read, another command, checklist updates, short replies, observations, ordinary turn boundaries, or one node per command, checklist item, or turn. Keep simple tasks in one node.
 Control both depth and breadth. Repeated or paraphrased summaries along the current path are a sign of accidental over-nesting; continue in place or close back to the right parent instead of opening another child. A long chain of single-child nodes usually means peer phases or continuations were modeled as children. A wide list of tiny nodes usually means commands or checklist items were modeled as phases. Prefer a readable subtree with meaningful phases and focused subproblems.
