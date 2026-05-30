@@ -133,10 +133,7 @@ fn debug_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> V
 }
 
 fn pretty_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(format!(
-        "Spine Tree current {}",
-        snapshot.active_node_id
-    ))];
+    let mut lines = vec![Line::from("Spine Tree")];
     append_pretty_raw_children(snapshot, None, 0, &mut lines);
     lines
 }
@@ -151,15 +148,8 @@ fn debug_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static>
     lines
 }
 
-fn pretty_header(snapshot: &SpineTreeUpdatedNotification) -> Line<'static> {
-    vec![
-        "• ".dim(),
-        "Spine Tree".bold(),
-        "  ".dim(),
-        "current ".dim(),
-        Span::from(snapshot.active_node_id.clone()).cyan().bold(),
-    ]
-    .into()
+fn pretty_header(_snapshot: &SpineTreeUpdatedNotification) -> Line<'static> {
+    vec!["• ".dim(), "Spine Tree".bold()].into()
 }
 
 #[cfg(debug_assertions)]
@@ -183,12 +173,18 @@ fn render_pretty_node(
 ) {
     let children = child_nodes(snapshot, Some(node.node_id.as_str()));
     let active = node.node_id == snapshot.active_node_id;
+    if should_elide_pretty_node(node, active, !children.is_empty()) {
+        for child in children {
+            render_pretty_node(snapshot, child, depth, width, out);
+        }
+        return;
+    }
     let mut spans = vec![
         Span::from(format!("  {}", "  ".repeat(depth))).dim(),
         pretty_marker(node, active, !children.is_empty()),
         Span::from(" "),
     ];
-    spans.push(pretty_node_label(node));
+    spans.push(pretty_node_label(node, active));
 
     let line = Line::from(spans);
     let wrapped = adaptive_wrap_line(
@@ -211,16 +207,17 @@ fn append_pretty_raw_children(
 ) {
     for node in child_nodes(snapshot, parent_id) {
         let children = child_nodes(snapshot, Some(node.node_id.as_str()));
-        let marker = pretty_marker_text(
-            node,
-            node.node_id == snapshot.active_node_id,
-            !children.is_empty(),
-        );
+        let active = node.node_id == snapshot.active_node_id;
+        if should_elide_pretty_node(node, active, !children.is_empty()) {
+            append_pretty_raw_children(snapshot, Some(node.node_id.as_str()), depth, out);
+            continue;
+        }
+        let marker = pretty_marker_text(node, active, !children.is_empty());
         out.push(Line::from(format!(
             "{}{} {}",
             "  ".repeat(depth + 1),
             marker,
-            pretty_node_label_text(node)
+            pretty_node_label_text(node, active)
         )));
         append_pretty_raw_children(snapshot, Some(node.node_id.as_str()), depth + 1, out);
     }
@@ -249,18 +246,18 @@ fn pretty_marker_text(node: &SpineTreeNode, active: bool, has_children: bool) ->
     }
 }
 
-fn pretty_node_label(node: &SpineTreeNode) -> Span<'static> {
+fn pretty_node_label(node: &SpineTreeNode, active: bool) -> Span<'static> {
     if let Some(summary) = trimmed_summary(node) {
         Span::from(summary.to_string())
     } else {
-        Span::from(node.node_id.clone()).cyan()
+        Span::from(pretty_default_node_label(node, active))
     }
 }
 
-fn pretty_node_label_text(node: &SpineTreeNode) -> String {
+fn pretty_node_label_text(node: &SpineTreeNode, active: bool) -> String {
     trimmed_summary(node)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| node.node_id.clone())
+        .unwrap_or_else(|| pretty_default_node_label(node, active).to_string())
 }
 
 fn trimmed_summary(node: &SpineTreeNode) -> Option<&str> {
@@ -268,6 +265,25 @@ fn trimmed_summary(node: &SpineTreeNode) -> Option<&str> {
         .as_deref()
         .map(str::trim)
         .filter(|text| !text.is_empty())
+}
+
+fn should_elide_pretty_node(node: &SpineTreeNode, active: bool, has_children: bool) -> bool {
+    !active
+        && has_children
+        && trimmed_summary(node).is_none()
+        && node.status == SpineTreeNodeStatus::Opened
+}
+
+fn pretty_default_node_label(node: &SpineTreeNode, active: bool) -> &'static str {
+    if active || node.status == SpineTreeNodeStatus::Live {
+        return "Current task";
+    }
+    match node.status {
+        SpineTreeNodeStatus::Live => "Current task",
+        SpineTreeNodeStatus::Opened => "Task",
+        SpineTreeNodeStatus::Closed => "Completed task",
+        SpineTreeNodeStatus::Compacted => "Previous task",
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -552,7 +568,7 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
-        • Spine Tree  current 2.1
+        • Spine Tree
           ✓ earlier work
           ▾ current scope
             ◉ focused task
@@ -623,7 +639,7 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
-        • Spine Tree  current 2.1
+        • Spine Tree
           ◌ previous
           ◉ active
         "###);
@@ -634,7 +650,7 @@ mod tests {
 
         let raw = render_lines(&cell.raw_lines()).join("\n");
         insta::assert_snapshot!(raw, @r###"
-        Spine Tree current 2.1
+        Spine Tree
           ◌ previous
           ◉ active
         "###);
@@ -741,8 +757,7 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         assert!(!rendered.contains("(empty)"));
-        assert!(rendered.contains("current 1.1.1"));
-        assert!(rendered.contains("▾ 1.1"));
+        assert!(!rendered.contains("1.1"));
         assert!(rendered.contains("◉ focused task"));
     }
 
@@ -761,9 +776,9 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         assert!(!rendered.contains("(empty)"));
-        assert!(rendered.contains("current 1"));
-        assert!(rendered.contains("◉ 1"));
-        assert!(rendered.contains("✓ 1.1"));
+        assert!(!rendered.contains(" 1"));
+        assert!(rendered.contains("◉ Current task"));
+        assert!(rendered.contains("✓ Completed task"));
         assert!(!rendered.contains("root"));
     }
 }
