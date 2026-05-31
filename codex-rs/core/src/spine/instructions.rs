@@ -1,29 +1,43 @@
 pub(crate) const SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
-Use Spine to manage long work as a progressive scope map for uncertain tasks. At the beginning, the true shape of the task is unknown: it may stay small, or it may grow into multi-step research, design, implementation, testing, review, and follow-up requests. Use Spine proactively from the beginning, but do not pretend the full tree is known upfront. Let the tree emerge as the work reveals its natural boundaries.
-The current live node is the frontier: the rightmost, deepest active scope where raw detail is still needed. Work proceeds there. Closed left siblings are mapped territory: compacted into memory so later work can keep orientation without carrying all raw messages.
-When you close a node, runtime compacts that node's raw history into runtime-generated memory, returns to the parent node, and uses that memory instead of the full raw history in later turns.
-Spine memory is internal context; never expose or imitate it in user-visible messages.
+Use Spine as the default workspace for substantial work, but treat it as a context-boundary map, not a todo list. Move Spine only when the work reaches a meaningful scope boundary.
 
-Spine tools are task-boundary controls:
-- spine.tree: inspect the current Spine Tree, cursor, current live-node context pressure, and overall context-window pressure without moving it.
-- spine.open(summary): start a focused child scope under the current cursor. The summary is only a short label for the new scope.
-- spine.close(instruction?): finish the current non-root scope, compact its raw history into memory, and resume its parent. The optional instruction only guides what the compact memory should preserve.
+Mental model:
+- Current node = live scratchpad for one coherent phase.
+- Closed node = runtime-generated compact memory for future orientation.
+- spine.open = enter a narrower blocker or dependency.
+- spine.next = finish this phase and start a sibling phase.
+- spine.close = finish this scope and return to its parent.
 
-A good Spine tree should be balanced in both depth and breadth. It should not be a flat dump where one node absorbs unrelated phases, and it should not be a long single-child chain. The final tree should look like a clean map of how the work was explored and solved: broad enough to show major peer scopes, deep enough to show real nested subproblems, and never a transcript of every command, question, or turn.
+Context savings happen only when a live node is closed: `spine.close` and the close step of `spine.next` replace that node's raw history with compact memory in future prompts. `spine.open` only creates a child boundary for narrower work; it does not shrink the current context window by itself.
 
-Open and close are natural task-boundary and context-boundary decisions. Continue in the current node while the work remains the same coherent scope. Open a child when the current scope needs a focused nested subproblem before it can continue. Close a node when that scope has enough motivation, judgment, evidence, and continuation context to be compacted into memory. When moving from one completed scope to the next peer scope, close the current node and open a sibling.
+Tools:
+- spine.tree: inspect the tree, cursor, and context pressure without moving the cursor.
+- spine.open(summary): open a focused child under the current node.
+- spine.close(instruction?): close the current node, compact its raw history into memory, and resume the parent.
+- spine.next(summary, instruction?): close the current node, preserve compact guidance as memory, then continue in a new sibling under the resumed parent.
 
-Use Spine to keep context focused and cheap. Local scope memories preserve important decisions and evidence without carrying all raw detail. Manage boundaries before the live context grows too large; otherwise native/global compaction may collapse unrelated work into one coarse memory and lose useful structure.
+At the start of a task, assume its shape may grow as evidence appears. Orient from the current tree, keep the tree ready to absorb new phases, and let structure emerge at natural boundaries. After every spine.open/close/next result, use the returned tree as the source of truth for cursor, parent, siblings, and the next boundary.
 
-Balance matters while the task evolves. Do not open a node for every command, file read, user follow-up, or minor refinement. Also do not let an evolving multi-phase task remain forever in the root or one large live node. As you learn the task's shape, keep adjusting future movement through the tree: continue for the same scope, open children for nested blockers, and use siblings for peer phases such as discovery, design, implementation, verification, review, and synthesis.
+Move Spine by matching the next work to the tree:
+- Same scope: continue in the current node.
+- Narrower blocker or dependency: open a child whose result helps the parent continue.
+- Peer phase: use spine.next to close the current phase and continue as a sibling.
+- Finished scope: close with one sentence naming what later work should remember.
+- Material user redirect: close or advance the stale phase before continuing.
+- Settled facts are being repeated or re-audited: close or advance first.
 
-When unsure, call spine.tree before moving Spine. Treat the tree as the map of the work so far: the rightmost live node is where you are now, closed left siblings are compacted prior scopes, and the parent path is the active context needed to continue.
+Good Spine boundaries follow the work: research, design, implementation, verification, review, synthesis, repeated passes, and user redirects usually form sibling phases; focused investigations or blockers are children. As context grows, prefer the next coherent handoff so completed detail becomes memory before the live node gets too large.
 
-At root depth, open a focused scope when substantive multi-step work begins. Calling spine.close on the true root fails. Moving to a sibling scope is spine.close followed by spine.open.
+Examples:
+- Research -> plan -> implementation -> verification are peer phases; use spine.next between them.
+- Implementation -> investigate one failing test is a nested blocker; use spine.open for the investigation.
+- If the user says "first make a POC" after you started implementing, close or advance into the POC phase before acting.
 
-Runtime output may show `Base: <spine sidecar root>`; resolve sidecar-relative paths such as `nodes/.../memory.md` against that Base, not against the workspace cwd. When moving between nodes, rely on the runtime Spine Tree and closed-node memories; completed Spine nodes are read-only, and sidecar trajs or memory files should be inspected only when historical details are genuinely needed.
-Use update_plan for ordinary task tracking; it does not create, close, compact, or move Spine nodes.
-In Plan mode, do not call mutating Spine operations.
+For spine.close and spine.next, keep the optional instruction to one short sentence about what future work should preserve. Do not write a full compact summary in the tool argument; runtime owns compact memory generation.
+
+Runtime may add context-pressure guidance: a boundary hint when the current live node reaches about 50K context tokens and each later 25K band, and a context warning when the overall prompt reaches about 80% of the model window. Under pressure, use `spine.open` only for a genuine narrower blocker; to reduce context, close or advance a completed scope so runtime can compact it.
+
+Use update_plan only as a checklist. In Plan mode, inspect with `spine.tree` only.
 </spine_view>"#;
 
 pub(crate) fn append_spine_view_instructions(

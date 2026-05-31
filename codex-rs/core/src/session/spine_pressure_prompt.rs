@@ -239,7 +239,7 @@ fn format_boundary_hint(signal: &SpinePressurePromptSignal) -> Option<String> {
         text.push_str(&context_window);
     }
     text.push_str(
-        ".\nBefore more broad investigation, decide whether this node has a compactable semantic boundary.\nIf yes, call spine.close with guidance preserving conclusion, evidence paths, decision, risks, and next step.\nIf no, continue in the current node; do not open another child unless it is a strictly narrower blocker.",
+        ".\nBefore broadening the work, pause and check whether there is a completed handoff boundary.\nIf there is, close with one short sentence naming what later work should remember, then continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.",
     );
     Some(text)
 }
@@ -259,7 +259,7 @@ fn format_context_warning(signal: &SpinePressurePromptSignal) -> Option<String> 
     );
     if signal.mode_allows_spine_close {
         text.push_str(
-            "\nPrioritize closing a complete Spine scope or summarizing the current decision before broadening the investigation.\nAvoid opening another child unless it is required to finish a strictly narrower blocker.",
+            "\nBefore broadening the work, pause and check whether there is a completed handoff boundary.\nIf there is, close with one short sentence naming what later work should remember, then continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.",
         );
     } else {
         text.push_str(
