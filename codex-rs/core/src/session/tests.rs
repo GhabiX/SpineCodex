@@ -9153,7 +9153,7 @@ async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
 }
 
 #[tokio::test]
-async fn spine_root_compact_records_close_tokens_and_next_open_baseline() {
+async fn spine_root_compact_records_close_tokens_without_next_open_baseline() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -9208,8 +9208,8 @@ async fn spine_root_compact_records_close_tokens_and_next_open_baseline() {
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
-    assert_eq!(runtime.current_open_input_tokens(), Some(229_136));
-    assert_eq!(runtime.current_open_context_tokens(), Some(230_871));
+    assert_eq!(runtime.current_open_input_tokens(), None);
+    assert_eq!(runtime.current_open_context_tokens(), None);
 }
 
 #[tokio::test]

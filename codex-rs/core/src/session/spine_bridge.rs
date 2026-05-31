@@ -709,8 +709,8 @@ impl Session {
         let token_metadata = SpineRootCompactTokenMetadata {
             close_input_tokens: close_baselines.input_tokens,
             close_context_tokens: close_baselines.context_tokens,
-            next_open_input_tokens: close_baselines.input_tokens,
-            next_open_context_tokens: close_baselines.context_tokens,
+            next_open_input_tokens: None,
+            next_open_context_tokens: None,
         };
         {
             let mut guard = spine_slot.lock().await;
