@@ -4729,6 +4729,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .features
             .enabled(Feature::SpineTaskTree)
             .then(|| TokioMutex::new(SpineSessionState::new())),
+        spine_pressure_prompt_state: Mutex::new(Default::default()),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -6591,6 +6592,7 @@ where
             .features
             .enabled(Feature::SpineTaskTree)
             .then(|| TokioMutex::new(SpineSessionState::new())),
+        spine_pressure_prompt_state: Mutex::new(Default::default()),
         next_internal_sub_id: AtomicU64::new(0),
     });
 
@@ -9151,6 +9153,66 @@ async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
 }
 
 #[tokio::test]
+async fn spine_root_compact_records_close_tokens_and_next_open_baseline() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    let prefix = user_message("prefix before root compact");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 229_136,
+                total_tokens: 230_871,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+
+    session
+        .install_spine_root_compact("root compact body".to_string())
+        .await
+        .expect("install root compact")
+        .expect("spine root compact should run");
+
+    let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
+    let close_tokens = store.mem_close_tokens_for_test().expect("mem close tokens");
+    assert_eq!(close_tokens, vec![(Some(229_136), Some(230_871))]);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(runtime.current_open_input_tokens(), Some(229_136));
+    assert_eq!(runtime.current_open_context_tokens(), Some(230_871));
+}
+
+#[tokio::test]
 async fn spine_context_matches_h_ps_across_operation_sequence() {
     let server = start_mock_server().await;
     let responses_mock = mount_sse_sequence(
@@ -10510,6 +10572,169 @@ async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
         accounting.current_node_context_unavailable,
         Some(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)
     );
+}
+
+#[tokio::test]
+async fn spine_pressure_prompt_emits_boundary_hint_once_per_band() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "pressure-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open("pressure-open".to_string(), "pressure scope".to_string())
+        .await
+        .expect("stage open");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 10_000,
+                total_tokens: 10_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }));
+    }
+    let open_output = function_output("pressure-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 60_000,
+                total_tokens: 60_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }));
+    }
+    let first = session
+        .spine_pressure_prompt_overlay(ModeKind::Default)
+        .await
+        .expect("first pressure overlay");
+    let first_text = pressure_overlay_text(&first.item);
+    assert!(first_text.contains("Spine boundary hint"), "{first_text}");
+    assert!(first_text.contains("spine.close"), "{first_text}");
+    let history_before = session.clone_history().await.raw_items().to_vec();
+    session.mark_spine_pressure_prompt_overlay_sent(first).await;
+    assert_eq!(session.clone_history().await.raw_items(), history_before);
+
+    assert!(
+        session
+            .spine_pressure_prompt_overlay(ModeKind::Default)
+            .await
+            .is_none(),
+        "same node and same 50k band must not duplicate"
+    );
+
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 85_000,
+                total_tokens: 85_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }));
+    }
+    let second = session
+        .spine_pressure_prompt_overlay(ModeKind::Default)
+        .await
+        .expect("next pressure band overlay");
+    let second_text = pressure_overlay_text(&second.item);
+    assert!(second_text.contains("Spine boundary hint"), "{second_text}");
+}
+
+#[tokio::test]
+async fn spine_pressure_prompt_context_warning_survives_missing_node_baseline() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "warning-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open("warning-open".to_string(), "warning scope".to_string())
+        .await
+        .expect("stage open");
+    let open_output = function_output("warning-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open without token baseline");
+
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 80_000,
+                total_tokens: 80_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(100_000),
+        }));
+    }
+    let overlay = session
+        .spine_pressure_prompt_overlay(ModeKind::Default)
+        .await
+        .expect("context warning overlay");
+    let text = pressure_overlay_text(&overlay.item);
+    assert!(text.contains("Spine context warning"), "{text}");
+    assert!(!text.contains("Spine boundary hint"), "{text}");
+}
+
+fn pressure_overlay_text(item: &ResponseItem) -> &str {
+    let ResponseItem::Message { role, content, .. } = item else {
+        panic!("expected pressure overlay message");
+    };
+    assert_eq!(role, "developer");
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected one text content item");
+    };
+    text
 }
 
 #[tokio::test]

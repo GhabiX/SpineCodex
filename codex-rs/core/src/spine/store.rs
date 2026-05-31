@@ -416,6 +416,17 @@ impl SpineStore {
         read_json_lines(&self.mem_path())
     }
 
+    #[cfg(test)]
+    pub(crate) fn mem_close_tokens_for_test(
+        &self,
+    ) -> Result<Vec<(Option<i64>, Option<i64>)>, SpineError> {
+        Ok(self
+            .mems()?
+            .into_iter()
+            .map(|mem| (mem.close_input_tokens, mem.close_context_tokens))
+            .collect())
+    }
+
     pub(super) fn compact_checkpoints(&self) -> Result<Vec<SpineCompactCheckpoint>, SpineError> {
         if !self.compact_checkpoint_path().exists() {
             return Ok(Vec::new());

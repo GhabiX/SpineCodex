@@ -132,6 +132,14 @@ pub(crate) struct SpineTokenBaselines {
     pub(crate) context_tokens: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SpineRootCompactTokenMetadata {
+    pub(crate) close_input_tokens: Option<i64>,
+    pub(crate) close_context_tokens: Option<i64>,
+    pub(crate) next_open_input_tokens: Option<i64>,
+    pub(crate) next_open_context_tokens: Option<i64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SpineOpenNodeContextProjection {
     pub(crate) node_id: NodeId,
@@ -963,8 +971,13 @@ impl SpineRuntime {
         body: String,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        self.root_compact_impl(body, raw_items, None, None, None)
-            .map(|result| result.materialized)
+        self.root_compact_impl(
+            body,
+            raw_items,
+            SpineRootCompactTokenMetadata::default(),
+            None,
+        )
+        .map(|result| result.materialized)
     }
 
     pub(crate) fn root_compact_with_checkpoint(
@@ -972,24 +985,16 @@ impl SpineRuntime {
         rollout_path: &Path,
         body: String,
         raw_items: &[Option<ResponseItem>],
-        next_open_input_tokens: Option<i64>,
-        next_open_context_tokens: Option<i64>,
+        token_metadata: SpineRootCompactTokenMetadata,
     ) -> Result<SpineRootCompactResult, SpineError> {
-        self.root_compact_impl(
-            body,
-            raw_items,
-            next_open_input_tokens,
-            next_open_context_tokens,
-            Some(rollout_path),
-        )
+        self.root_compact_impl(body, raw_items, token_metadata, Some(rollout_path))
     }
 
     fn root_compact_impl(
         &mut self,
         body: String,
         raw_items: &[Option<ResponseItem>],
-        next_open_input_tokens: Option<i64>,
-        next_open_context_tokens: Option<i64>,
+        token_metadata: SpineRootCompactTokenMetadata,
         checkpoint_rollout_path: Option<&Path>,
     ) -> Result<SpineRootCompactResult, SpineError> {
         if body.trim().is_empty() {
@@ -1012,9 +1017,9 @@ impl SpineRuntime {
             context_end: source_context_end,
             raw_live_hash: Some(raw_live_hash.clone()),
             open_input_tokens: None,
-            close_input_tokens: next_open_input_tokens,
+            close_input_tokens: token_metadata.close_input_tokens,
             open_context_tokens: None,
-            close_context_tokens: next_open_context_tokens,
+            close_context_tokens: token_metadata.close_context_tokens,
             open_context_source: None,
             memory_output_tokens: None,
             body_path,
@@ -1044,8 +1049,8 @@ impl SpineRuntime {
             SpineToken::Compact {
                 memory: memory.clone(),
                 next_open_index: 0,
-                next_open_input_tokens,
-                next_open_context_tokens,
+                next_open_input_tokens: token_metadata.next_open_input_tokens,
+                next_open_context_tokens: token_metadata.next_open_context_tokens,
             },
             &self.archive(),
         )?;
@@ -1056,8 +1061,8 @@ impl SpineRuntime {
             SpineToken::Compact {
                 memory,
                 next_open_index,
-                next_open_input_tokens,
-                next_open_context_tokens,
+                next_open_input_tokens: token_metadata.next_open_input_tokens,
+                next_open_context_tokens: token_metadata.next_open_context_tokens,
             },
             &self.archive(),
         )?;
@@ -1098,8 +1103,8 @@ impl SpineRuntime {
             mem: compact_id,
             next_open_index,
             raw_live_hash,
-            next_open_input_tokens,
-            next_open_context_tokens,
+            next_open_input_tokens: token_metadata.next_open_input_tokens,
+            next_open_context_tokens: token_metadata.next_open_context_tokens,
         })?;
         self.parse_stack = staged_parse_stack;
         self.pending = None;

@@ -486,12 +486,12 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let mut sampling_request_input: Vec<ResponseItem> = {
+        let sampling_request_input: Vec<ResponseItem> = {
             sess.clone_history()
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
-        sampling_request_input.extend(spine_control_overlay.take_for_next_prompt());
+        let spine_control_overlay_items = spine_control_overlay.take_for_next_prompt();
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -510,6 +510,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
+            spine_control_overlay_items,
             &explicitly_enabled_connectors,
             skills_outcome,
             cancellation_token.child_token(),
@@ -1079,6 +1080,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
+    spine_control_overlay_items: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
@@ -1114,13 +1116,20 @@ async fn run_sampling_request(
     let mut retries = 0;
     let mut initial_input = Some(input);
     loop {
-        let prompt_input = if let Some(input) = initial_input.take() {
+        let mut prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
             sess.clone_history()
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
+        let spine_pressure_overlay = sess
+            .spine_pressure_prompt_overlay(turn_context.collaboration_mode.mode)
+            .await;
+        if let Some(overlay) = spine_pressure_overlay.as_ref() {
+            prompt_input.push(overlay.item.clone());
+        }
+        prompt_input.extend(spine_control_overlay_items.clone());
         let prompt = build_prompt(
             prompt_input,
             router.as_ref(),
@@ -1141,6 +1150,9 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
+                if let Some(overlay) = spine_pressure_overlay {
+                    sess.mark_spine_pressure_prompt_overlay_sent(overlay).await;
+                }
                 return Ok(output);
             }
             Err(CodexErr::ContextWindowExceeded) => {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
+use crate::session::spine_pressure_prompt::SpinePressurePromptState;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineSessionState;
 use codex_protocol::SessionId;
@@ -36,6 +37,7 @@ pub(crate) struct Session {
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(crate) spine: Option<Mutex<SpineSessionState>>,
+    pub(super) spine_pressure_prompt_state: Mutex<SpinePressurePromptState>,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -969,6 +971,7 @@ impl Session {
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 spine,
+                spine_pressure_prompt_state: Mutex::new(SpinePressurePromptState::default()),
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {

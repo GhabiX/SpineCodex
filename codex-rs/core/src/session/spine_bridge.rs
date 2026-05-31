@@ -3,26 +3,22 @@ use crate::context_manager::ContextAppend;
 use crate::context_manager::ContextManager;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
-use crate::spine::NodeId;
+use crate::session::spine_tree_inside::build_spine_tree_inside_view;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCloseCompact;
 use crate::spine::SpineCommitKind;
-use crate::spine::SpineOpenNodeContextProjection;
 use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRootCompactResult;
+use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 use crate::spine::SpineTokenBaselines;
-use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::spine_tree::SpineNodeContextUnavailableReason;
-use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
-use std::collections::BTreeMap;
 
 pub(super) struct PreparedSpineReplay {
     raw_len: u64,
@@ -709,7 +705,13 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&history.get_rollout_items());
-        let next_open_baselines = token_baselines_from_info(self.token_usage_info().await.as_ref());
+        let close_baselines = token_baselines_from_info(self.token_usage_info().await.as_ref());
+        let token_metadata = SpineRootCompactTokenMetadata {
+            close_input_tokens: close_baselines.input_tokens,
+            close_context_tokens: close_baselines.context_tokens,
+            next_open_input_tokens: close_baselines.input_tokens,
+            next_open_context_tokens: close_baselines.context_tokens,
+        };
         {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
@@ -720,13 +722,8 @@ impl Session {
                         "spine runtime missing after initialization".to_string(),
                     )
                 })?
-                .root_compact_with_checkpoint(
-                    &rollout_path,
-                    body,
-                    &raw_items,
-                    next_open_baselines.input_tokens,
-                    next_open_baselines.context_tokens,
-                ) {
+                .root_compact_with_checkpoint(&rollout_path, body, &raw_items, token_metadata)
+            {
                 Ok(result) => result,
                 Err(err) => {
                     guard.invalidate(format!("failed to install Spine root compact: {err}"));
@@ -804,106 +801,14 @@ fn build_annotated_tree_snapshot(
     runtime: &SpineRuntime,
     token_info: Option<&TokenUsageInfo>,
 ) -> Result<SpineTreeUpdateEvent, SpineError> {
-    let mut snapshot = runtime.build_tree_snapshot()?;
-    let open_nodes = runtime.open_node_context_projections();
-    annotate_open_node_contexts(&mut snapshot, token_info, &open_nodes);
-    Ok(snapshot)
+    Ok(build_spine_tree_inside_view(runtime, token_info)?.snapshot)
 }
 
 fn render_spine_tree_for_model(
     runtime: &SpineRuntime,
     token_info: Option<TokenUsageInfo>,
 ) -> Result<String, SpineError> {
-    let open_nodes = runtime.open_node_context_projections();
-    let annotations = format_open_node_context_annotations(token_info.as_ref(), &open_nodes);
-    let mut tree = runtime.render_tree_with_context_annotations(&annotations)?;
-    if let Some(line) = format_context_window_pressure(token_info) {
-        tree.push_str("\n\n");
-        tree.push_str(&line);
-    }
-    Ok(tree)
-}
-
-fn format_open_node_context_annotations(
-    current: Option<&TokenUsageInfo>,
-    open_nodes: &[SpineOpenNodeContextProjection],
-) -> BTreeMap<NodeId, String> {
-    open_nodes
-        .iter()
-        .map(|open_node| {
-            let annotation = match node_context_tokens(current, open_node.baseline_tokens) {
-                Ok(Some(tokens)) => {
-                    format!("(~{} inclusive context)", format_si_suffix(tokens))
-                }
-                Ok(None) => "(context unavailable: non-positive delta)".to_string(),
-                Err(reason) => format!(
-                    "(context unavailable: {})",
-                    context_unavailable_reason_label(reason)
-                ),
-            };
-            (open_node.node_id.clone(), annotation)
-        })
-        .collect()
-}
-
-fn annotate_open_node_contexts(
-    snapshot: &mut SpineTreeUpdateEvent,
-    current: Option<&TokenUsageInfo>,
-    open_nodes: &[SpineOpenNodeContextProjection],
-) {
-    let open_nodes_by_id = open_nodes
-        .iter()
-        .map(|node| (node.node_id.to_string(), node))
-        .collect::<BTreeMap<_, _>>();
-    for node in &mut snapshot.nodes {
-        let Some(open_node) = open_nodes_by_id.get(node.node_id.as_str()) else {
-            continue;
-        };
-        let accounting = node
-            .accounting
-            .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default);
-        match node_context_tokens(current, open_node.baseline_tokens) {
-            Ok(Some(tokens)) => {
-                accounting.current_node_context_tokens = Some(tokens);
-                accounting.current_node_context_baseline_source = open_node.baseline_source;
-                accounting.current_node_context_unavailable = None;
-            }
-            Ok(None) => {
-                accounting.current_node_context_tokens = None;
-                accounting.current_node_context_baseline_source = open_node.baseline_source;
-                accounting.current_node_context_unavailable =
-                    Some(SpineNodeContextUnavailableReason::NonPositiveDelta);
-            }
-            Err(reason) => {
-                accounting.current_node_context_tokens = None;
-                accounting.current_node_context_baseline_source = open_node.baseline_source;
-                accounting.current_node_context_unavailable = Some(reason);
-            }
-        }
-    }
-}
-
-fn node_context_tokens(
-    current: Option<&TokenUsageInfo>,
-    open_context_tokens: Option<i64>,
-) -> Result<Option<i64>, SpineNodeContextUnavailableReason> {
-    let current = current
-        .ok_or(SpineNodeContextUnavailableReason::MissingCurrentUsage)?
-        .last_token_usage
-        .tokens_in_context_window();
-    let open_context_tokens =
-        open_context_tokens.ok_or(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)?;
-    let tokens = current.saturating_sub(open_context_tokens);
-    Ok((tokens > 0).then_some(tokens))
-}
-
-fn context_unavailable_reason_label(reason: SpineNodeContextUnavailableReason) -> &'static str {
-    match reason {
-        SpineNodeContextUnavailableReason::MissingCurrentUsage => "missing current usage",
-        SpineNodeContextUnavailableReason::MissingOpenContextBaseline => "missing open baseline",
-        SpineNodeContextUnavailableReason::NonPositiveDelta => "non-positive delta",
-        SpineNodeContextUnavailableReason::CorruptPressureMetadata => "corrupt pressure metadata",
-    }
+    Ok(build_spine_tree_inside_view(runtime, token_info.as_ref())?.rendered_tree)
 }
 
 fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {
@@ -925,27 +830,6 @@ fn estimate_history_suffix_tokens(history: &ContextManager, open_index: usize) -
         .map(estimate_response_item_model_visible_bytes)
         .fold(0i64, i64::saturating_add);
     approx_tokens_from_byte_count_i64(bytes)
-}
-
-fn format_context_window_pressure(info: Option<TokenUsageInfo>) -> Option<String> {
-    let info = info?;
-    let window = info.model_context_window?;
-    if window <= 0 {
-        return None;
-    }
-    let usage = info.last_token_usage;
-    let used = usage.tokens_in_context_window();
-    if used <= 0 {
-        return None;
-    }
-    let remaining = usage
-        .percent_of_context_window_remaining(window)
-        .clamp(0, 100);
-    Some(format!(
-        "Context window: {remaining}% left ({} used / {})",
-        format_si_suffix(used),
-        format_si_suffix(window)
-    ))
 }
 
 pub(super) fn assign_spine_raw_ordinals(
