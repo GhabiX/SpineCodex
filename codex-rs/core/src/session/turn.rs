@@ -1966,8 +1966,8 @@ async fn drain_in_flight(
         match res {
             Ok(response_input) => {
                 let mut response_item = response_input.into();
-                let is_pending_spine_close = sess
-                    .is_pending_spine_close_output(&response_item)
+                let is_pending_spine_close_like = sess
+                    .is_pending_spine_close_like_output(&response_item)
                     .await
                     .map_err(|err| {
                         CodexErr::Fatal(format!("failed to inspect Spine tool output: {err}"))
@@ -1982,7 +1982,7 @@ async fn drain_in_flight(
                     replace_function_output_text(&mut response_item, text);
                 }
                 spine_control_overlay.push_output_if_matching(&response_item);
-                if is_pending_spine_close {
+                if is_pending_spine_close_like {
                     sess.record_conversation_items_raw_only(
                         &turn_context,
                         std::slice::from_ref(&response_item),

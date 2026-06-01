@@ -32,6 +32,7 @@ pub(crate) struct SpineToolCommit {
 }
 
 type SpineCommitOutput = (Option<SpineTreeUpdateEvent>, Option<String>);
+const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
 
 enum SpineCommitAttempt {
     Done(SpineCommitOutput),
@@ -550,6 +551,7 @@ impl Session {
                 ));
             }
         }
+        let mut lock_retries = 0;
         let (snapshot, output_text) = loop {
             match self.try_commit_spine_tool_output_once(
                 spine_slot,
@@ -560,7 +562,15 @@ impl Session {
                 SpineCommitAttempt::RuntimeMissing => {
                     return Ok(SpineToolCommit { output_text: None });
                 }
-                SpineCommitAttempt::Retry => tokio::task::yield_now().await,
+                SpineCommitAttempt::Retry if lock_retries < SPINE_COMMIT_LOCK_RETRY_LIMIT => {
+                    lock_retries += 1;
+                    tokio::task::yield_now().await;
+                }
+                SpineCommitAttempt::Retry => {
+                    return Err(SpineError::InvalidEvent(format!(
+                        "spine tool output commit could not acquire session locks after {SPINE_COMMIT_LOCK_RETRY_LIMIT} retries"
+                    )));
+                }
             }
         };
         if let Some(snapshot) = snapshot {
@@ -691,7 +701,7 @@ impl Session {
         Ok(SpineCommitAttempt::Done((snapshot, output_text)))
     }
 
-    pub(crate) async fn is_pending_spine_close_output(
+    pub(crate) async fn is_pending_spine_close_like_output(
         &self,
         item: &ResponseItem,
     ) -> Result<bool, SpineError> {
