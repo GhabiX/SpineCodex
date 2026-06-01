@@ -12011,6 +12011,100 @@ async fn abort_regular_task_emits_turn_aborted_only() {
     assert!(rx.try_recv().is_err());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_log::test]
+async fn spine_interrupt_marker_is_sidecar_covered_without_raw_event() {
+    let (mut session, tc, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    let sess = session;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("timeout waiting for event")
+        .expect("event");
+    match evt.msg {
+        EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
+        other => panic!("unexpected event: {other:?}"),
+    }
+    assert!(rx.try_recv().is_err());
+
+    assert_session_history_matches_spine_materialization(&sess, &rollout_path).await;
+    let history = sess.clone_history().await;
+    assert!(
+        history.raw_items().iter().any(|item| {
+            let ResponseItem::Message { role, content, .. } = item else {
+                return false;
+            };
+            if role != "user" {
+                return false;
+            }
+            content.iter().any(|content_item| {
+                let ContentItem::InputText { text } = content_item else {
+                    return false;
+                };
+                TurnAborted::matches_text(text)
+            })
+        }),
+        "expected interrupted-turn marker in history"
+    );
+}
+
+#[tokio::test]
+async fn spine_user_prompt_append_creates_sidecar_coverage() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    let input = vec![UserInput::Text {
+        text: "continue".to_string(),
+        text_elements: Vec::new(),
+    }];
+
+    session
+        .record_user_prompt_and_emit_turn_item(&turn_context, &input, user_message("continue"))
+        .await
+        .expect("record user prompt");
+
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
 #[tokio::test]
 async fn abort_gracefully_emits_turn_aborted_only() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;

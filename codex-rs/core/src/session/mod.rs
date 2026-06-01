@@ -2587,6 +2587,33 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
+        self.record_conversation_items_with_event_policy(
+            turn_context,
+            items,
+            true, /* emit_raw_response_items */
+        )
+        .await
+    }
+
+    pub(crate) async fn record_conversation_items_without_raw_event(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) -> CodexResult<()> {
+        self.record_conversation_items_with_event_policy(
+            turn_context,
+            items,
+            false, /* emit_raw_response_items */
+        )
+        .await
+    }
+
+    async fn record_conversation_items_with_event_policy(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        emit_raw_response_items: bool,
+    ) -> CodexResult<()> {
         let (raw_ordinals, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
             let raw_start = spine_slot.lock().await.raw_len();
             match assign_spine_raw_ordinals(raw_start, items) {
@@ -2602,6 +2629,7 @@ impl Session {
         };
         let appends = self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
+        self.ensure_rollout_materialized_for_spine_append().await?;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
             return Err(self
                 .spine_append_fatal("initialize Spine runtime", err)
@@ -2622,7 +2650,9 @@ impl Session {
                     .await);
             }
         }
-        self.send_raw_response_items(turn_context, items).await;
+        if emit_raw_response_items {
+            self.send_raw_response_items(turn_context, items).await;
+        }
         Ok(())
     }
 
@@ -2645,6 +2675,7 @@ impl Session {
             (Vec::new(), 0)
         };
         self.persist_rollout_response_items(items).await;
+        self.ensure_rollout_materialized_for_spine_append().await?;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
             return Err(self
                 .spine_append_fatal("initialize Spine runtime", err)
@@ -2693,6 +2724,7 @@ impl Session {
             })
             .collect::<Vec<_>>();
         self.persist_rollout_response_items(items).await;
+        self.ensure_rollout_materialized_for_spine_append().await?;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
             return Err(self
                 .spine_append_fatal("initialize Spine runtime", err)
@@ -2714,6 +2746,21 @@ impl Session {
             }
         }
         self.send_raw_response_items(turn_context, items).await;
+        Ok(())
+    }
+
+    async fn ensure_rollout_materialized_for_spine_append(&self) -> CodexResult<()> {
+        if self.spine.is_none() {
+            return Ok(());
+        }
+        if let Err(err) = self.try_ensure_rollout_materialized().await {
+            return Err(self
+                .spine_append_fatal(
+                    "materialize rollout for Spine append",
+                    SpineError::InvalidStore(err.to_string()),
+                )
+                .await);
+        }
         Ok(())
     }
 

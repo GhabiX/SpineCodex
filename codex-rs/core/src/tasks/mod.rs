@@ -45,7 +45,6 @@ use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -909,10 +908,19 @@ impl Session {
                 InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),
             )
         {
-            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
+            if let Err(err) = self
+                .record_conversation_items_without_raw_event(
+                    task.turn_context.as_ref(),
+                    std::slice::from_ref(&marker),
+                )
+                .await
+            {
+                self.send_event(
+                    task.turn_context.as_ref(),
+                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                )
                 .await;
-            self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
-                .await;
+            }
             // Ensure the marker is durably visible before emitting TurnAborted: some clients
             // synchronously re-read the rollout on receipt of the abort event.
             if let Err(err) = self.flush_rollout().await {
