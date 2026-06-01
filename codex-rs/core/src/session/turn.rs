@@ -1123,6 +1123,10 @@ async fn run_sampling_request(
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
+        let spine_status_overlay = sess.spine_status_prompt_overlay().await;
+        if let Some(overlay) = spine_status_overlay.as_ref() {
+            prompt_input.push(overlay.item.clone());
+        }
         let spine_pressure_overlay = sess
             .spine_pressure_prompt_overlay(turn_context.collaboration_mode.mode)
             .await;
