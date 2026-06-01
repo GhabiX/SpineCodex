@@ -483,6 +483,23 @@ impl Session {
         runtime.stage_close(call_id, instruction)
     }
 
+    pub(crate) async fn stage_spine_next(
+        &self,
+        call_id: String,
+        summary: String,
+        instruction: Option<String>,
+    ) -> Result<(), SpineError> {
+        let spine = self.ensure_spine_runtime().await?;
+        let mut guard = spine.lock().await;
+        guard.ensure_valid()?;
+        let Some(runtime) = guard.runtime_mut() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing after initialization".to_string(),
+            ));
+        };
+        runtime.stage_next(call_id, summary, instruction)
+    }
+
     pub(crate) async fn maybe_commit_spine_tool_output(
         &self,
         turn_context: &TurnContext,
@@ -588,6 +605,7 @@ impl Session {
             let output_prefix = match commit_kind {
                 SpineCommitKind::Open { .. } => "Spine opened.",
                 SpineCommitKind::Close { .. } => "Spine closed.",
+                SpineCommitKind::CloseThenOpen { .. } => "Spine advanced to next sibling.",
             };
             match commit_kind {
                 SpineCommitKind::Open { open_request_index } => {
@@ -633,6 +651,26 @@ impl Session {
                     if *suffix_start > suffix_end {
                         return Err(SpineError::InvalidEvent(format!(
                             "spine.close suffix start {suffix_start} exceeds history length {suffix_end}"
+                        )));
+                    }
+                    let reference_context_item = state.reference_context_item();
+                    state
+                        .replace_history_suffix(
+                            *suffix_start..suffix_end,
+                            replacement.clone(),
+                            reference_context_item,
+                        )
+                        .map_err(SpineError::InvalidEvent)?;
+                }
+                SpineCommitKind::CloseThenOpen {
+                    suffix_start,
+                    replacement,
+                    ..
+                } => {
+                    let suffix_end = state.clone_history().raw_items().len();
+                    if *suffix_start > suffix_end {
+                        return Err(SpineError::InvalidEvent(format!(
+                            "spine.next suffix start {suffix_start} exceeds history length {suffix_end}"
                         )));
                     }
                     let reference_context_item = state.reference_context_item();

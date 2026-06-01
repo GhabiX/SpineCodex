@@ -274,6 +274,55 @@ fn close_task_with_token_baselines(
         .expect("commit close");
 }
 
+fn next_task(
+    runtime: &mut SpineRuntime,
+    raw: &mut Vec<Option<ResponseItem>>,
+    call_id: &str,
+    closing_node_id: &str,
+    next_summary: &str,
+) -> SpineCommitKind {
+    let request = spine_call(SPINE_TOOL_NEXT, call_id);
+    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    let request_context_index = current_context_len(runtime, raw);
+    raw.push(Some(request.clone()));
+    runtime.observe_raw_items(1).expect("record next request");
+    runtime
+        .observe_context_item(request_ordinal, request_context_index, &request)
+        .expect("observe next request");
+    runtime
+        .stage_next(call_id.to_string(), next_summary.to_string(), None)
+        .expect("stage next");
+    let suffix_start = match runtime
+        .pending_commit(call_id)
+        .expect("pending next should be readable")
+    {
+        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
+        other => panic!("expected pending close-like next, got {other:?}"),
+    };
+
+    let output = function_output(call_id);
+    let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    raw.push(Some(output.clone()));
+    runtime.observe_raw_items(1).expect("record next output");
+    runtime
+        .observe_context_item(
+            output_ordinal,
+            usize::try_from(output_ordinal).expect("context index fits usize"),
+            &output,
+        )
+        .expect("observe next output");
+    runtime
+        .maybe_commit_output(
+            call_id,
+            Some(compact_body_with_context_range(
+                closing_node_id,
+                suffix_start..raw.len(),
+            )),
+        )
+        .expect("commit next")
+        .expect("next should commit")
+}
+
 fn snapshot_nodes_by_id(snapshot: &SpineTreeUpdateEvent) -> BTreeMap<&str, &SpineTreeNodeSnapshot> {
     snapshot
         .nodes
@@ -839,6 +888,158 @@ fn root_depth_open_node_can_close_and_next_open_creates_sibling() {
         ] if open.id == NodeId::root_epoch(1).child(2)
             && open.summary == "task 1.2"
     ));
+}
+
+#[test]
+fn spine_next_macro_closes_and_opens_sibling_without_next_event() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "root child work");
+    open_task(&mut runtime, &mut raw, "open-child", "nested child");
+    append_msg(&mut runtime, &mut raw, "nested child work");
+
+    let commit = next_task(
+        &mut runtime,
+        &mut raw,
+        "next-child",
+        "1.1.1",
+        "next sibling",
+    );
+
+    assert!(matches!(
+        commit,
+        SpineCommitKind::CloseThenOpen {
+            suffix_start,
+            ref replacement,
+            open_index,
+        } if suffix_start == 1 && replacement.len() == 1 && open_index == 2
+    ));
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            Symbol::Control(ControlSymbol::Init(_)),
+            Symbol::Control(ControlSymbol::Open(root_child)),
+            Symbol::SpineTreeNodes(_),
+            Symbol::Control(ControlSymbol::Open(next_sibling)),
+        ] if root_child.id == NodeId::root_epoch(1).child(1)
+            && next_sibling.id == NodeId::root_epoch(1).child(1).child(2)
+            && next_sibling.summary == "next sibling"
+            && next_sibling.index == 2
+            && next_sibling.open_context_tokens.is_none()
+            && next_sibling.open_input_tokens.is_none()
+    ));
+
+    let events = event_log(&runtime);
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, KEvent::RootCompact { .. }))
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, KEvent::Close { .. }))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        events.as_slice(),
+        [
+            KEvent::Init { .. },
+            KEvent::Open { child: initial, .. },
+            KEvent::Msg { raw_ordinal: 0, .. },
+            KEvent::Open { child: nested, .. },
+            KEvent::Msg { raw_ordinal: 3, .. },
+            KEvent::Close { node: closed, .. },
+            KEvent::Open {
+                child: next,
+                index,
+                summary,
+                open_input_tokens: None,
+                open_context_tokens: None,
+                open_context_source: None,
+                ..
+            },
+        ] if *initial == NodeId::root_epoch(1).child(1)
+            && *nested == NodeId::root_epoch(1).child(1).child(1)
+            && *closed == NodeId::root_epoch(1).child(1).child(1)
+            && *next == NodeId::root_epoch(1).child(1).child(2)
+            && *index == 2
+            && summary == "next sibling"
+    ));
+
+    let materialized = runtime.materialize_history(&raw).expect("materialize");
+    assert_eq!(materialized.len(), 2);
+    assert!(matches!(
+        &materialized[1],
+        ResponseItem::Message { content, .. }
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }]
+                    if text.contains("Spine Memory 1.1.1")
+                        && text.contains("real compact body for 1.1.1")
+            )
+    ));
+}
+
+#[test]
+fn spine_next_macro_close_failure_does_not_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "root child work");
+    open_task(&mut runtime, &mut raw, "open-child", "nested child");
+    append_msg(&mut runtime, &mut raw, "nested child work");
+
+    let request = spine_call(SPINE_TOOL_NEXT, "bad-next");
+    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    let request_context_index = current_context_len(&runtime, &raw);
+    raw.push(Some(request.clone()));
+    runtime.observe_raw_items(1).expect("record next request");
+    runtime
+        .observe_context_item(request_ordinal, request_context_index, &request)
+        .expect("observe next request");
+    runtime
+        .stage_next("bad-next".to_string(), "next sibling".to_string(), None)
+        .expect("stage next");
+    let output = function_output("bad-next");
+    runtime.observe_raw_items(1).expect("record next output");
+    raw.push(Some(output.clone()));
+    runtime
+        .observe_context_item(5, 5, &output)
+        .expect("observe next output");
+
+    let err = runtime
+        .maybe_commit_output(
+            "bad-next",
+            Some(compact_body_with_context_range("1.1.1", 0..raw.len())),
+        )
+        .expect_err("bad compact range should fail next");
+    assert!(
+        err.to_string().contains("expected suffix start 1"),
+        "unexpected next failure: {err}"
+    );
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            Symbol::Control(ControlSymbol::Init(_)),
+            Symbol::Control(ControlSymbol::Open(root_child)),
+            Symbol::SpineTreeNodes(_),
+            Symbol::Control(ControlSymbol::Open(nested)),
+            Symbol::SpineTreeNodes(_),
+        ] if root_child.id == NodeId::root_epoch(1).child(1)
+            && nested.id == NodeId::root_epoch(1).child(1).child(1)
+    ));
+    assert!(
+        event_log(&runtime)
+            .iter()
+            .all(|event| !matches!(event, KEvent::Close { .. }))
+    );
 }
 
 #[test]

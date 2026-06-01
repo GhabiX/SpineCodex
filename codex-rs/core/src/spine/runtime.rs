@@ -46,6 +46,7 @@ pub(crate) const SPINE_NAMESPACE: &str = "spine";
 pub(crate) const SPINE_TOOL_TREE: &str = "tree";
 pub(crate) const SPINE_TOOL_OPEN: &str = "open";
 pub(crate) const SPINE_TOOL_CLOSE: &str = "close";
+pub(crate) const SPINE_TOOL_NEXT: &str = "next";
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineRuntime {
@@ -96,6 +97,7 @@ struct OpenContextBaseline {
 enum SpineOp {
     Open,
     Close,
+    Next,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,6 +108,11 @@ pub(crate) enum SpineCommitKind {
     Close {
         suffix_start: usize,
         replacement: Vec<ResponseItem>,
+    },
+    CloseThenOpen {
+        suffix_start: usize,
+        replacement: Vec<ResponseItem>,
+        open_index: usize,
     },
 }
 
@@ -633,10 +640,7 @@ impl SpineRuntime {
             ..
         } = item
             && namespace == SPINE_NAMESPACE
-            && matches!(
-                name.as_str(),
-                SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE
-            )
+            && is_spine_control_tool_name(name)
         {
             self.control_call_ids.insert(call_id.clone());
             if name == SPINE_TOOL_OPEN {
@@ -774,6 +778,28 @@ impl SpineRuntime {
         })
     }
 
+    pub(crate) fn stage_next(
+        &mut self,
+        call_id: String,
+        summary: String,
+        instruction: Option<String>,
+    ) -> Result<(), SpineError> {
+        let summary = summary.trim().to_string();
+        if summary.is_empty() {
+            return Err(SpineError::InvalidEvent(
+                "spine.next summary must not be empty".to_string(),
+            ));
+        }
+        self.stage(PendingTransition {
+            call_id,
+            op: SpineOp::Next,
+            summary: Some(summary),
+            boundary: None,
+            index: None,
+            instruction,
+        })
+    }
+
     fn stage(&mut self, pending: PendingTransition) -> Result<(), SpineError> {
         if self.pending.is_some() {
             return Err(SpineError::InvalidEvent(
@@ -867,7 +893,7 @@ impl SpineRuntime {
                 )?;
                 self.store.append_event(&event)?;
             }
-            SpineOp::Close => {
+            SpineOp::Close | SpineOp::Next => {
                 let open_meta = self.current_close_open_meta()?.clone();
                 let node = open_meta.id.clone();
                 if !self.parse_stack.current_open_has_nodes()? {
@@ -916,13 +942,68 @@ impl SpineRuntime {
                 );
                 let mut staged_parse_stack = self.parse_stack.clone();
                 staged_parse_stack.shift(SpineToken::Close { memory }, &self.archive())?;
+                let replacement = vec![memory_response_item(&body)];
+                if pending.op == SpineOp::Next {
+                    let summary = pending.summary.ok_or_else(|| {
+                        SpineError::InvalidEvent("missing spine.next summary".to_string())
+                    })?;
+                    let child = staged_parse_stack.next_child_id()?;
+                    let open_index =
+                        suffix_start.checked_add(replacement.len()).ok_or_else(|| {
+                            SpineError::InvalidEvent(
+                                "spine.next synthetic open index overflow".to_string(),
+                            )
+                        })?;
+                    let open_boundary = self.raw_len;
+                    let open_event = KEvent::Open {
+                        child: child.clone(),
+                        boundary: open_boundary,
+                        index: u64::try_from(open_index).map_err(|_| {
+                            SpineError::InvalidEvent(
+                                "spine.next synthetic open index overflow".to_string(),
+                            )
+                        })?,
+                        summary: summary.clone(),
+                        open_input_tokens: None,
+                        open_context_tokens: None,
+                        open_context_source: None,
+                    };
+                    staged_parse_stack.shift(
+                        SpineToken::Open {
+                            meta: tree_meta_with_token_baselines(
+                                &self.archive(),
+                                child,
+                                u64::try_from(open_index).map_err(|_| {
+                                    SpineError::InvalidEvent(
+                                        "spine.next synthetic open index overflow".to_string(),
+                                    )
+                                })?,
+                                summary,
+                                None,
+                                None,
+                                None,
+                            )?,
+                        },
+                        &self.archive(),
+                    )?;
+                    self.store.append_mem(&mem)?;
+                    self.store.append_event(&event)?;
+                    self.store.append_event(&open_event)?;
+                    self.parse_stack = staged_parse_stack;
+                    self.pending = None;
+                    return Ok(Some(SpineCommitKind::CloseThenOpen {
+                        suffix_start,
+                        replacement,
+                        open_index,
+                    }));
+                }
                 self.store.append_mem(&mem)?;
                 self.store.append_event(&event)?;
                 self.parse_stack = staged_parse_stack;
                 self.pending = None;
                 return Ok(Some(SpineCommitKind::Close {
                     suffix_start,
-                    replacement: vec![memory_response_item(&body)],
+                    replacement,
                 }));
             }
         }
@@ -939,6 +1020,7 @@ impl SpineRuntime {
                 }
             }
             SpineOp::Close => unreachable!("close returns early with suffix replacement"),
+            SpineOp::Next => unreachable!("next returns early with close/open replacement"),
         }))
     }
 
@@ -954,7 +1036,7 @@ impl SpineRuntime {
         }
         Ok(Some(match pending.op {
             SpineOp::Open => SpinePendingCommit::Open,
-            SpineOp::Close => {
+            SpineOp::Close | SpineOp::Next => {
                 let open_meta = self.current_close_open_meta()?;
                 SpinePendingCommit::Close {
                     node: open_meta.id.clone(),
@@ -1218,12 +1300,7 @@ impl SpineRuntime {
                     namespace: Some(namespace),
                     name,
                     ..
-                } if namespace == SPINE_NAMESPACE
-                    && matches!(
-                        name.as_str(),
-                        SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE
-                    ) =>
-                {
+                } if namespace == SPINE_NAMESPACE && is_spine_control_tool_name(name) => {
                     Some((call_id.clone(), true))
                 }
                 ResponseItem::FunctionCall { call_id, .. } => Some((call_id.clone(), false)),
@@ -1451,12 +1528,7 @@ fn raw_item_requires_spine_coverage(
             namespace: Some(namespace),
             name,
             ..
-        } if namespace == SPINE_NAMESPACE
-            && matches!(
-                name.as_str(),
-                SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE
-            ) =>
-        {
+        } if namespace == SPINE_NAMESPACE && is_spine_control_tool_name(name) => {
             !spine_control_call_ids.contains(call_id)
         }
         ResponseItem::FunctionCallOutput { call_id, .. } => {
@@ -1469,6 +1541,17 @@ fn raw_item_requires_spine_coverage(
 
 pub(crate) fn is_user_message(item: &ResponseItem) -> bool {
     matches!(item, ResponseItem::Message { role, .. } if role == "user")
+}
+
+pub(crate) fn is_spine_control_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT
+    )
+}
+
+pub(crate) fn is_spine_close_like_tool_name(name: &str) -> bool {
+    matches!(name, SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT)
 }
 
 #[derive(Debug, Error)]
