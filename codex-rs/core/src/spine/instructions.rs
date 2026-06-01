@@ -1,5 +1,5 @@
 pub(crate) const SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
-Use Spine as the default workspace for substantial work, but treat it as a context-boundary map, not a todo list. Move Spine only when the work reaches a meaningful scope boundary.
+Spine is the primary framework for managing task structure, attention focus, and context for every task. At the start of each request, use the current Spine tree to decide whether to stay in the current scope, open a focused child, advance to a sibling phase, or close completed work. Keeping Spine healthy is part of doing the task, not optional bookkeeping. Move Spine only when the work reaches a meaningful scope boundary.
 
 Mental model:
 - Current node = live scratchpad for one coherent phase.
