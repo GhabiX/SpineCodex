@@ -10896,7 +10896,10 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
         .await
         .expect("record open request");
     session
-        .stage_spine_open("status-open".to_string(), "status scope".to_string())
+        .stage_spine_open(
+            "status-open".to_string(),
+            "status \"scope\" <drift> & focus".to_string(),
+        )
         .await
         .expect("stage open");
     {
@@ -10941,6 +10944,10 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
     let text = pressure_overlay_text(&overlay.item);
     assert!(text.starts_with("<spine_status "), "{text}");
     assert!(text.contains(r#"cursor="1.1.1""#), "{text}");
+    assert!(
+        text.contains(r#"summary="status &quot;scope&quot; &lt;drift&gt; &amp; focus""#),
+        "{text}"
+    );
     assert!(text.contains(r#"parent="1.1""#), "{text}");
     assert!(text.contains(r#"live_node="32.0K""#), "{text}");
     assert!(text.contains(r#"window="21%""#), "{text}");

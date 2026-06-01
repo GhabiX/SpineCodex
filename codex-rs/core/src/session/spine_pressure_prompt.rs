@@ -41,6 +41,7 @@ pub(crate) struct SpineStatusPromptOverlay {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SpineStatusPromptSignal {
     cursor: String,
+    node_summary: Option<String>,
     parent: Option<String>,
     live_node_context_tokens: Option<i64>,
     live_node_context_unavailable: Option<SpineNodeContextUnavailableReason>,
@@ -149,6 +150,7 @@ fn status_prompt_signal(
         .iter()
         .find(|node| node.node_id == snapshot.active_node_id);
     let parent = active_node.and_then(|node| node.parent_id.clone());
+    let node_summary = active_node.and_then(|node| node.summary.clone());
     let active_open_node = open_nodes
         .iter()
         .find(|node| node.node_id.to_string() == snapshot.active_node_id);
@@ -165,6 +167,7 @@ fn status_prompt_signal(
     let model_context_window = token_info.and_then(|info| info.model_context_window);
     Ok(SpineStatusPromptSignal {
         cursor: snapshot.active_node_id,
+        node_summary,
         parent,
         live_node_context_tokens,
         live_node_context_unavailable,
@@ -180,9 +183,11 @@ fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> Strin
         .unwrap_or_else(|| "unavailable".to_string());
     let window = format_context_window_status(signal.context_tokens, signal.model_context_window)
         .unwrap_or_else(|| "unavailable".to_string());
+    let summary = format_spine_status_summary(signal.node_summary.as_deref());
     let mut text = format!(
-        r#"<spine_status cursor="{}" parent="{}" live_node="{}" window="{}""#,
+        r#"<spine_status cursor="{}" summary="{}" parent="{}" live_node="{}" window="{}""#,
         signal.cursor,
+        summary,
         signal.parent.as_deref().unwrap_or("none"),
         live_node,
         window,
@@ -194,6 +199,13 @@ fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> Strin
     }
     text.push_str(" />");
     text
+}
+
+fn format_spine_status_summary(summary: Option<&str>) -> String {
+    let Some(summary) = summary.map(str::trim).filter(|summary| !summary.is_empty()) else {
+        return "none".to_string();
+    };
+    escape_xml_attribute(summary)
 }
 
 fn format_context_window_status(
@@ -397,7 +409,15 @@ fn format_node_summary(summary: Option<&str>) -> String {
     let Some(summary) = summary.map(str::trim).filter(|summary| !summary.is_empty()) else {
         return String::new();
     };
-    format!(" \"{}\"", summary.replace('"', "\\\""))
+    format!(" \"{}\"", escape_xml_attribute(summary))
+}
+
+fn escape_xml_attribute(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn spine_pressure_overlay_message(text: String) -> ResponseItem {
