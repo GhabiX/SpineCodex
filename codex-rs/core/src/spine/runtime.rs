@@ -70,13 +70,32 @@ struct OpenRequestAnchor {
 }
 
 #[derive(Clone, Debug)]
-struct PendingTransition {
-    call_id: String,
-    op: SpineOp,
-    summary: Option<String>,
-    boundary: Option<u64>,
-    index: Option<u64>,
-    instruction: Option<String>,
+enum PendingTransition {
+    Open {
+        call_id: String,
+        summary: String,
+        boundary: u64,
+        index: u64,
+    },
+    Close {
+        call_id: String,
+        instruction: Option<String>,
+    },
+    NextSugar {
+        call_id: String,
+        summary: String,
+        instruction: Option<String>,
+    },
+}
+
+impl PendingTransition {
+    fn call_id(&self) -> &str {
+        match self {
+            Self::Open { call_id, .. }
+            | Self::Close { call_id, .. }
+            | Self::NextSugar { call_id, .. } => call_id,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -86,18 +105,19 @@ struct PendingMsg {
     from_user: bool,
 }
 
+struct PreparedCloseCommit {
+    suffix_start: usize,
+    replacement: Vec<ResponseItem>,
+    mem: MemRecord,
+    close_event: KEvent,
+    staged_parse_stack: ParseStack,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OpenContextBaseline {
     context_tokens: i64,
     input_tokens: Option<i64>,
     source: ContextBaselineSource,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SpineOp {
-    Open,
-    Close,
-    Next,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -664,7 +684,7 @@ impl SpineRuntime {
                 || self
                     .pending
                     .as_ref()
-                    .is_some_and(|pending| pending.call_id == *call_id))
+                    .is_some_and(|pending| pending.call_id() == call_id.as_str()))
         {
             return Ok(());
         }
@@ -753,13 +773,11 @@ impl SpineRuntime {
         let anchor = self.open_requests.remove(&call_id).ok_or_else(|| {
             SpineError::InvalidEvent(format!("missing spine.open request anchor for {call_id}"))
         })?;
-        self.stage(PendingTransition {
+        self.stage(PendingTransition::Open {
             call_id,
-            op: SpineOp::Open,
-            summary: Some(summary),
-            boundary: Some(anchor.raw_ordinal),
-            index: Some(anchor.context_index),
-            instruction: None,
+            summary,
+            boundary: anchor.raw_ordinal,
+            index: anchor.context_index,
         })
     }
 
@@ -768,12 +786,8 @@ impl SpineRuntime {
         call_id: String,
         instruction: Option<String>,
     ) -> Result<(), SpineError> {
-        self.stage(PendingTransition {
+        self.stage(PendingTransition::Close {
             call_id,
-            op: SpineOp::Close,
-            summary: None,
-            boundary: None,
-            index: None,
             instruction,
         })
     }
@@ -790,12 +804,9 @@ impl SpineRuntime {
                 "spine.next summary must not be empty".to_string(),
             ));
         }
-        self.stage(PendingTransition {
+        self.stage(PendingTransition::NextSugar {
             call_id,
-            op: SpineOp::Next,
-            summary: Some(summary),
-            boundary: None,
-            index: None,
+            summary,
             instruction,
         })
     }
@@ -846,182 +857,208 @@ impl SpineRuntime {
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
-        let Some(pending) = self.pending.clone() else {
+        let Some(pending) = self.pending.as_ref() else {
             return Ok(None);
         };
-        if pending.call_id != call_id {
+        if pending.call_id() != call_id {
             return Ok(None);
         }
-        match pending.op {
-            SpineOp::Open => {
-                let child = self.parse_stack.next_child_id()?;
-                let boundary = pending.boundary.ok_or_else(|| {
-                    SpineError::InvalidEvent("missing spine.open boundary".to_string())
-                })?;
-                let index = pending.index.ok_or_else(|| {
-                    SpineError::InvalidEvent("missing spine.open context index".to_string())
-                })?;
-                let summary = pending.summary.ok_or_else(|| {
-                    SpineError::InvalidEvent("missing spine.open summary".to_string())
-                })?;
-                let event = KEvent::Open {
-                    child: child.clone(),
-                    boundary,
-                    index,
-                    summary: summary.clone(),
-                    open_input_tokens: token_baselines.input_tokens,
-                    open_context_tokens: token_baselines.context_tokens,
-                    open_context_source: token_baselines
-                        .context_tokens
-                        .map(|_| ContextBaselineSource::ProviderAtOpen),
-                };
-                self.parse_stack.shift(
-                    SpineToken::Open {
-                        meta: tree_meta_with_token_baselines(
-                            &self.archive(),
-                            child,
-                            index,
-                            summary,
-                            token_baselines.input_tokens,
-                            token_baselines.context_tokens,
-                            token_baselines
-                                .context_tokens
-                                .map(|_| ContextBaselineSource::ProviderAtOpen),
-                        )?,
-                    },
-                    &self.archive(),
-                )?;
-                self.store.append_event(&event)?;
+        let pending = pending.clone();
+        let commit_kind = match pending {
+            PendingTransition::Open {
+                summary,
+                boundary,
+                index,
+                ..
+            } => self.commit_open_pending(summary, boundary, index, token_baselines)?,
+            PendingTransition::Close { instruction, .. } => {
+                self.commit_close_pending(instruction, close_compact, token_baselines)?
             }
-            SpineOp::Close | SpineOp::Next => {
-                let open_meta = self.current_close_open_meta()?.clone();
-                let node = open_meta.id.clone();
-                if !self.parse_stack.current_open_has_nodes()? {
-                    return Err(SpineError::InvalidEvent(
-                        "spine.close requires non-empty live suffix".to_string(),
-                    ));
-                }
-                let suffix_start = open_meta.index;
-                let summary = open_meta.summary.clone();
-                let event = KEvent::Close {
-                    node,
-                    boundary: self.raw_len,
-                    summary,
-                    instruction: pending.instruction,
-                    close_input_tokens: token_baselines.input_tokens,
-                    close_context_tokens: token_baselines.context_tokens,
-                };
-                let close_compact = close_compact.ok_or_else(|| {
-                    SpineError::InvalidEvent(
-                        "spine.close requires a completed suffix compact".to_string(),
-                    )
-                })?;
-                let seq = self.store.next_event_seq()?;
-                if close_compact.source_context_range.start != suffix_start {
-                    return Err(SpineError::InvalidEvent(format!(
-                        "spine.close compact context range starts at {}, expected suffix start {suffix_start}",
-                        close_compact.source_context_range.start
-                    )));
-                }
-                let mem = self.stage_close_mem(&open_meta, close_compact, token_baselines)?;
-                let body = self.store.read_memory_body(&mem)?;
-                let memory = memory_ref(
-                    &self.archive(),
-                    mem.compact_id.clone(),
-                    mem.node.clone(),
-                    mem.body_hash.clone(),
-                    mem.raw_start..mem.raw_end,
-                    mem.context_start..mem.context_end,
-                    seq..seq + 1,
-                    mem.open_input_tokens,
-                    mem.close_input_tokens,
-                    mem.open_context_tokens,
-                    mem.close_context_tokens,
-                    mem.open_context_source,
-                    mem.memory_output_tokens,
-                );
-                let mut staged_parse_stack = self.parse_stack.clone();
-                staged_parse_stack.shift(SpineToken::Close { memory }, &self.archive())?;
-                let replacement = vec![memory_response_item(&body)];
-                if pending.op == SpineOp::Next {
-                    let summary = pending.summary.ok_or_else(|| {
-                        SpineError::InvalidEvent("missing spine.next summary".to_string())
-                    })?;
-                    let child = staged_parse_stack.next_child_id()?;
-                    let open_index =
-                        suffix_start.checked_add(replacement.len()).ok_or_else(|| {
-                            SpineError::InvalidEvent(
-                                "spine.next synthetic open index overflow".to_string(),
-                            )
-                        })?;
-                    let open_boundary = self.raw_len;
-                    let open_event = KEvent::Open {
-                        child: child.clone(),
-                        boundary: open_boundary,
-                        index: u64::try_from(open_index).map_err(|_| {
-                            SpineError::InvalidEvent(
-                                "spine.next synthetic open index overflow".to_string(),
-                            )
-                        })?,
-                        summary: summary.clone(),
-                        open_input_tokens: None,
-                        open_context_tokens: None,
-                        open_context_source: None,
-                    };
-                    staged_parse_stack.shift(
-                        SpineToken::Open {
-                            meta: tree_meta_with_token_baselines(
-                                &self.archive(),
-                                child,
-                                u64::try_from(open_index).map_err(|_| {
-                                    SpineError::InvalidEvent(
-                                        "spine.next synthetic open index overflow".to_string(),
-                                    )
-                                })?,
-                                summary,
-                                None,
-                                None,
-                                None,
-                            )?,
-                        },
-                        &self.archive(),
-                    )?;
-                    self.store.append_mem(&mem)?;
-                    self.store.append_event(&event)?;
-                    self.store.append_event(&open_event)?;
-                    self.parse_stack = staged_parse_stack;
-                    self.pending = None;
-                    return Ok(Some(SpineCommitKind::CloseThenOpen {
-                        suffix_start,
-                        replacement,
-                        open_index,
-                    }));
-                }
-                self.store.append_mem(&mem)?;
-                self.store.append_event(&event)?;
-                self.parse_stack = staged_parse_stack;
-                self.pending = None;
-                return Ok(Some(SpineCommitKind::Close {
-                    suffix_start,
-                    replacement,
-                }));
-            }
-        }
+            PendingTransition::NextSugar {
+                summary,
+                instruction,
+                ..
+            } => self.commit_next_sugar_pending(
+                summary,
+                instruction,
+                close_compact,
+                token_baselines,
+            )?,
+        };
         self.pending = None;
-        Ok(Some(match pending.op {
-            SpineOp::Open => {
-                let open_request_index = pending.index.ok_or_else(|| {
-                    SpineError::InvalidEvent("missing spine.open context index".to_string())
-                })?;
-                SpineCommitKind::Open {
-                    open_request_index: usize::try_from(open_request_index).map_err(|_| {
-                        SpineError::InvalidEvent("spine.open context index overflow".to_string())
-                    })?,
-                }
-            }
-            SpineOp::Close => unreachable!("close returns early with suffix replacement"),
-            SpineOp::Next => unreachable!("next returns early with close/open replacement"),
-        }))
+        Ok(Some(commit_kind))
+    }
+
+    fn commit_open_pending(
+        &mut self,
+        summary: String,
+        boundary: u64,
+        index: u64,
+        token_baselines: SpineTokenBaselines,
+    ) -> Result<SpineCommitKind, SpineError> {
+        let child = self.parse_stack.next_child_id()?;
+        let open_context_source = token_baselines
+            .context_tokens
+            .map(|_| ContextBaselineSource::ProviderAtOpen);
+        let event = KEvent::Open {
+            child: child.clone(),
+            boundary,
+            index,
+            summary: summary.clone(),
+            open_input_tokens: token_baselines.input_tokens,
+            open_context_tokens: token_baselines.context_tokens,
+            open_context_source,
+        };
+        self.parse_stack.shift(
+            SpineToken::Open {
+                meta: tree_meta_with_token_baselines(
+                    &self.archive(),
+                    child,
+                    index,
+                    summary,
+                    token_baselines.input_tokens,
+                    token_baselines.context_tokens,
+                    open_context_source,
+                )?,
+            },
+            &self.archive(),
+        )?;
+        self.store.append_event(&event)?;
+        Ok(SpineCommitKind::Open {
+            open_request_index: usize::try_from(index).map_err(|_| {
+                SpineError::InvalidEvent("spine.open context index overflow".to_string())
+            })?,
+        })
+    }
+
+    fn commit_close_pending(
+        &mut self,
+        instruction: Option<String>,
+        close_compact: Option<SpineCloseCompact>,
+        token_baselines: SpineTokenBaselines,
+    ) -> Result<SpineCommitKind, SpineError> {
+        let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
+        self.store.append_mem(&prepared.mem)?;
+        self.store.append_event(&prepared.close_event)?;
+        self.parse_stack = prepared.staged_parse_stack;
+        Ok(SpineCommitKind::Close {
+            suffix_start: prepared.suffix_start,
+            replacement: prepared.replacement,
+        })
+    }
+
+    fn commit_next_sugar_pending(
+        &mut self,
+        summary: String,
+        instruction: Option<String>,
+        close_compact: Option<SpineCloseCompact>,
+        token_baselines: SpineTokenBaselines,
+    ) -> Result<SpineCommitKind, SpineError> {
+        let mut prepared =
+            self.prepare_close_commit(instruction, close_compact, token_baselines)?;
+        let child = prepared.staged_parse_stack.next_child_id()?;
+        let open_index = prepared
+            .suffix_start
+            .checked_add(prepared.replacement.len())
+            .ok_or_else(|| {
+                SpineError::InvalidEvent("spine.next synthetic open index overflow".to_string())
+            })?;
+        let open_index_u64 = u64::try_from(open_index).map_err(|_| {
+            SpineError::InvalidEvent("spine.next synthetic open index overflow".to_string())
+        })?;
+        let open_event = KEvent::Open {
+            child: child.clone(),
+            boundary: self.raw_len,
+            index: open_index_u64,
+            summary: summary.clone(),
+            open_input_tokens: None,
+            open_context_tokens: None,
+            open_context_source: None,
+        };
+        prepared.staged_parse_stack.shift(
+            SpineToken::Open {
+                meta: tree_meta_with_token_baselines(
+                    &self.archive(),
+                    child,
+                    open_index_u64,
+                    summary,
+                    None,
+                    None,
+                    None,
+                )?,
+            },
+            &self.archive(),
+        )?;
+        self.store.append_mem(&prepared.mem)?;
+        self.store.append_event(&prepared.close_event)?;
+        self.store.append_event(&open_event)?;
+        self.parse_stack = prepared.staged_parse_stack;
+        Ok(SpineCommitKind::CloseThenOpen {
+            suffix_start: prepared.suffix_start,
+            replacement: prepared.replacement,
+            open_index,
+        })
+    }
+
+    fn prepare_close_commit(
+        &self,
+        instruction: Option<String>,
+        close_compact: Option<SpineCloseCompact>,
+        token_baselines: SpineTokenBaselines,
+    ) -> Result<PreparedCloseCommit, SpineError> {
+        let open_meta = self.current_close_open_meta()?.clone();
+        let node = open_meta.id.clone();
+        if !self.parse_stack.current_open_has_nodes()? {
+            return Err(SpineError::InvalidEvent(
+                "spine.close requires non-empty live suffix".to_string(),
+            ));
+        }
+        let suffix_start = open_meta.index;
+        let close_event = KEvent::Close {
+            node,
+            boundary: self.raw_len,
+            summary: open_meta.summary.clone(),
+            instruction,
+            close_input_tokens: token_baselines.input_tokens,
+            close_context_tokens: token_baselines.context_tokens,
+        };
+        let close_compact = close_compact.ok_or_else(|| {
+            SpineError::InvalidEvent("spine.close requires a completed suffix compact".to_string())
+        })?;
+        let seq = self.store.next_event_seq()?;
+        if close_compact.source_context_range.start != suffix_start {
+            return Err(SpineError::InvalidEvent(format!(
+                "spine.close compact context range starts at {}, expected suffix start {suffix_start}",
+                close_compact.source_context_range.start
+            )));
+        }
+        let mem = self.stage_close_mem(&open_meta, close_compact, token_baselines)?;
+        let body = self.store.read_memory_body(&mem)?;
+        let memory = memory_ref(
+            &self.archive(),
+            mem.compact_id.clone(),
+            mem.node.clone(),
+            mem.body_hash.clone(),
+            mem.raw_start..mem.raw_end,
+            mem.context_start..mem.context_end,
+            seq..seq + 1,
+            mem.open_input_tokens,
+            mem.close_input_tokens,
+            mem.open_context_tokens,
+            mem.close_context_tokens,
+            mem.open_context_source,
+            mem.memory_output_tokens,
+        );
+        let mut staged_parse_stack = self.parse_stack.clone();
+        staged_parse_stack.shift(SpineToken::Close { memory }, &self.archive())?;
+        let replacement = vec![memory_response_item(&body)];
+        Ok(PreparedCloseCommit {
+            suffix_start,
+            replacement,
+            mem,
+            close_event,
+            staged_parse_stack,
+        })
     }
 
     pub(crate) fn pending_commit(
@@ -1031,17 +1068,18 @@ impl SpineRuntime {
         let Some(pending) = self.pending.as_ref() else {
             return Ok(None);
         };
-        if pending.call_id != call_id {
+        if pending.call_id() != call_id {
             return Ok(None);
         }
-        Ok(Some(match pending.op {
-            SpineOp::Open => SpinePendingCommit::Open,
-            SpineOp::Close | SpineOp::Next => {
+        Ok(Some(match pending {
+            PendingTransition::Open { .. } => SpinePendingCommit::Open,
+            PendingTransition::Close { instruction, .. }
+            | PendingTransition::NextSugar { instruction, .. } => {
                 let open_meta = self.current_close_open_meta()?;
                 SpinePendingCommit::Close {
                     node: open_meta.id.clone(),
                     suffix_start: open_meta.index,
-                    instruction: pending.instruction.clone(),
+                    instruction: instruction.clone(),
                 }
             }
         }))
