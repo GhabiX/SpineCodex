@@ -342,6 +342,36 @@ impl Session {
         spine_slot.lock().await.invalidate(reason);
     }
 
+    pub(crate) async fn abort_spine_pending_tool(&self, call_id: &str, reason: &str) -> bool {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return false;
+        };
+        let mut guard = spine_slot.lock().await;
+        if guard.ensure_valid().is_err() {
+            return false;
+        }
+        let aborted = guard.abort_pending_tool(call_id);
+        if aborted {
+            tracing::debug!(call_id, reason, "aborted pending Spine transition");
+        }
+        aborted
+    }
+
+    pub(crate) async fn abort_stale_spine_pending(&self, reason: &str) -> Option<String> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return None;
+        };
+        let mut guard = spine_slot.lock().await;
+        if guard.ensure_valid().is_err() {
+            return None;
+        }
+        let aborted = guard.abort_any_pending();
+        if let Some(call_id) = aborted.as_deref() {
+            tracing::debug!(call_id, reason, "aborted stale pending Spine transition");
+        }
+        aborted
+    }
+
     pub(super) async fn observe_spine_context_items(
         &self,
         raw_ordinals: &[Option<u64>],
@@ -528,8 +558,8 @@ impl Session {
             }) => {
                 let history = self.clone_history().await;
                 let expected_history = history.raw_items().to_vec();
-                Some((
-                    self.spine_compact_close(
+                let compact = match self
+                    .spine_compact_close(
                         turn_context,
                         &history,
                         node.to_string(),
@@ -537,15 +567,27 @@ impl Session {
                         item,
                         instruction,
                     )
-                    .await?,
-                    expected_history,
-                ))
+                    .await
+                {
+                    Ok(compact) => compact,
+                    Err(err) => {
+                        self.abort_spine_pending_tool(
+                            call_id,
+                            "spine close compact failed before commit",
+                        )
+                        .await;
+                        return Err(err);
+                    }
+                };
+                Some((compact, expected_history))
             }
             Some(SpinePendingCommit::Open) | None => None,
         };
         if let Some((_, expected_history)) = close_compact.as_ref() {
             let history = self.clone_history().await;
             if history.raw_items() != expected_history.as_slice() {
+                self.abort_spine_pending_tool(call_id, "spine close history changed before commit")
+                    .await;
                 return Err(SpineError::InvalidEvent(
                     "spine.close history changed while compacting suffix".to_string(),
                 ));
@@ -567,6 +609,11 @@ impl Session {
                     tokio::task::yield_now().await;
                 }
                 SpineCommitAttempt::Retry => {
+                    self.abort_spine_pending_tool(
+                        call_id,
+                        "spine tool output commit lock retry limit exceeded before commit",
+                    )
+                    .await;
                     return Err(SpineError::InvalidEvent(format!(
                         "spine tool output commit could not acquire session locks after {SPINE_COMMIT_LOCK_RETRY_LIMIT} retries"
                     )));
@@ -598,6 +645,13 @@ impl Session {
         if let Some((_, expected_history)) = close_compact.as_ref()
             && state.clone_history().raw_items() != expected_history.as_slice()
         {
+            if spine.abort_pending(call_id) {
+                tracing::debug!(
+                    call_id,
+                    reason = "spine close history changed before suffix replacement",
+                    "aborted pending Spine transition"
+                );
+            }
             return Err(SpineError::InvalidEvent(
                 "spine.close history changed before suffix replacement".to_string(),
             ));

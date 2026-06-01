@@ -51,6 +51,7 @@ pub(crate) const SPINE_TOOL_NEXT: &str = "next";
 #[derive(Clone, Debug)]
 pub(crate) struct SpineRuntime {
     store: SpineStore,
+    ledger: SpineLedgerCache,
     parse_stack: ParseStack,
     raw_len: u64,
     raw_live: Vec<bool>,
@@ -61,6 +62,30 @@ pub(crate) struct SpineRuntime {
     control_call_ids: BTreeSet<String>,
     pending: Option<PendingTransition>,
     pressure_baselines: BTreeMap<NodeId, OpenContextBaseline>,
+}
+
+#[derive(Clone, Debug)]
+struct SpineLedgerCache {
+    events: Vec<LoggedKEvent>,
+    pressure_events: Vec<LoggedPressureEvent>,
+    next_event_seq: u64,
+    next_pressure_seq: u64,
+}
+
+impl SpineLedgerCache {
+    fn new(
+        events: Vec<LoggedKEvent>,
+        pressure_events: Vec<LoggedPressureEvent>,
+    ) -> Result<Self, SpineError> {
+        let next_event_seq = next_event_seq_from(&events)?;
+        let next_pressure_seq = next_pressure_seq_from(&pressure_events)?;
+        Ok(Self {
+            events,
+            pressure_events,
+            next_event_seq,
+            next_pressure_seq,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -233,6 +258,18 @@ impl SpineSessionState {
         self.invalid = Some(reason.into());
     }
 
+    pub(crate) fn abort_pending_tool(&mut self, call_id: &str) -> bool {
+        let Some(runtime) = self.runtime_mut() else {
+            return false;
+        };
+        runtime.abort_pending(call_id)
+    }
+
+    pub(crate) fn abort_any_pending(&mut self) -> Option<String> {
+        let runtime = self.runtime_mut()?;
+        runtime.abort_any_pending()
+    }
+
     fn invalid_error(&self) -> Option<SpineError> {
         self.invalid
             .as_ref()
@@ -374,28 +411,32 @@ impl SpineRuntime {
         raw_live: Vec<bool>,
         event_limit: Option<u64>,
     ) -> Result<Self, SpineError> {
-        let events = store.events()?;
+        let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
         let mems = store.mems()?;
         let events = if let Some(limit) = event_limit {
-            events
-                .into_iter()
+            ledger
+                .events
+                .iter()
                 .filter(|event| event.seq < limit)
+                .cloned()
                 .collect::<Vec<_>>()
         } else {
-            events
+            ledger.events.clone()
         };
+        let replay_structural_seq = event_limit.unwrap_or(ledger.next_event_seq);
         let archive = SpineArchive::new(store.root.clone());
         let parse_stack = replay_from_events(&archive, &events, &mems, &raw_live, None, None)?;
         let pressure_baselines = replay_pressure_baselines(
             &parse_stack,
-            &store.pressure_events()?,
+            &ledger.pressure_events,
             &raw_live,
-            store.next_event_seq()?,
+            replay_structural_seq,
             None,
             false,
         );
         Ok(Self {
             store,
+            ledger,
             parse_stack,
             raw_len: u64::try_from(raw_live.len())
                 .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
@@ -412,14 +453,15 @@ impl SpineRuntime {
         raw_live: Vec<bool>,
         checkpoint: &SpineCheckpoint,
     ) -> Result<Self, SpineError> {
-        let events = store.events()?;
+        let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
         let mems = store.mems()?;
         let archive = SpineArchive::new(store.root.clone());
         let raw_ordinal = usize::try_from(checkpoint.raw_ordinal)
             .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
         let prefix_live = &raw_live[..raw_ordinal.min(raw_live.len())];
         let prefix_mask = RawMask::new(prefix_live);
-        let prefix_events = events
+        let prefix_events = ledger
+            .events
             .iter()
             .filter(|event| event.seq < checkpoint.token_seq)
             .cloned()
@@ -434,7 +476,7 @@ impl SpineRuntime {
 
         let parse_stack = replay_from_events(
             &archive,
-            &events,
+            &ledger.events,
             &mems,
             &raw_live,
             Some(&checkpoint.parse_stack),
@@ -442,14 +484,15 @@ impl SpineRuntime {
         )?;
         let pressure_baselines = replay_pressure_baselines(
             &parse_stack,
-            &store.pressure_events()?,
+            &ledger.pressure_events,
             &raw_live,
-            store.next_event_seq()?,
+            ledger.next_event_seq,
             checkpoint.pressure_seq_watermark,
             true,
         );
         Ok(Self {
             store,
+            ledger,
             parse_stack,
             raw_len: u64::try_from(raw_live.len())
                 .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
@@ -478,7 +521,7 @@ impl SpineRuntime {
         let nodes = self.parse_stack.tree_snapshot_nodes()?;
         let active_node_id = self.parse_stack.current_cursor_id()?.as_path();
         Ok(SpineTreeUpdateEvent {
-            snapshot_seq: self.store.next_event_seq()?,
+            snapshot_seq: self.ledger.next_event_seq,
             active_node_id,
             nodes,
         })
@@ -616,10 +659,11 @@ impl SpineRuntime {
 
         let estimated_live_suffix_tokens = estimated_live_suffix_tokens.unwrap_or(0).max(0);
         let context_tokens = current_context_tokens.saturating_sub(estimated_live_suffix_tokens);
+        let node = open_meta.id.clone();
         let event = PressureEvent::OpenContextBaseline {
-            node: open_meta.id.clone(),
-            open_structural_seq: open_structural_seq_for(&self.store.events()?, &open_meta.id),
-            observed_structural_seq: self.store.next_event_seq()?,
+            node: node.clone(),
+            open_structural_seq: open_structural_seq_for(&self.ledger.events, &node),
+            observed_structural_seq: self.ledger.next_event_seq,
             observed_raw_ordinal: self.raw_len,
             observed_raw_live_hash: Some(hash_raw_live(&self.raw_live)),
             observed_context_index,
@@ -628,9 +672,9 @@ impl SpineRuntime {
             source: ContextBaselineSource::EstimatedFromLiveSuffix,
             estimated_live_suffix_tokens: Some(estimated_live_suffix_tokens),
         };
-        self.store.append_pressure_event(&event)?;
+        self.append_cached_pressure_event(event)?;
         self.pressure_baselines.insert(
-            open_meta.id.clone(),
+            node,
             OpenContextBaseline {
                 context_tokens,
                 input_tokens: current_input_tokens,
@@ -700,7 +744,7 @@ impl SpineRuntime {
         let checkpoint = build_checkpoint(
             rollout_path,
             raw_ordinal,
-            self.store.next_event_seq()?,
+            self.ledger.next_event_seq,
             self.pressure_seq_watermark()?,
             &self.raw_live,
             &self.parse_stack,
@@ -717,7 +761,7 @@ impl SpineRuntime {
         let mut checkpoint = build_checkpoint(
             rollout_path,
             0,
-            self.store.next_event_seq()?,
+            self.ledger.next_event_seq,
             self.pressure_seq_watermark()?,
             &self.raw_live,
             &self.parse_stack,
@@ -728,11 +772,38 @@ impl SpineRuntime {
     }
 
     fn pressure_seq_watermark(&self) -> Result<Option<u64>, SpineError> {
-        Ok(self.store.next_pressure_seq()?.checked_sub(1))
+        Ok(self.ledger.next_pressure_seq.checked_sub(1))
     }
 
-    fn append_msg_event(&self, msg: &PendingMsg) -> Result<u64, SpineError> {
-        self.store.append_event(&KEvent::Msg {
+    fn append_cached_event(&mut self, event: KEvent) -> Result<u64, SpineError> {
+        let seq = self.ledger.next_event_seq;
+        let next_event_seq = seq
+            .checked_add(1)
+            .ok_or_else(|| SpineError::InvalidEvent("spine event seq overflow".to_string()))?;
+        let logged = LoggedKEvent { seq, event };
+        self.store.append_logged_event(&logged)?;
+        self.ledger.events.push(logged);
+        self.ledger.next_event_seq = next_event_seq;
+        Ok(seq)
+    }
+
+    fn append_cached_pressure_event(&mut self, event: PressureEvent) -> Result<u64, SpineError> {
+        let pressure_seq = self.ledger.next_pressure_seq;
+        let next_pressure_seq = pressure_seq
+            .checked_add(1)
+            .ok_or_else(|| SpineError::InvalidEvent("spine pressure seq overflow".to_string()))?;
+        let logged = LoggedPressureEvent {
+            pressure_seq,
+            event,
+        };
+        self.store.append_logged_pressure_event(&logged)?;
+        self.ledger.pressure_events.push(logged);
+        self.ledger.next_pressure_seq = next_pressure_seq;
+        Ok(pressure_seq)
+    }
+
+    fn append_msg_event(&mut self, msg: &PendingMsg) -> Result<u64, SpineError> {
+        self.append_cached_event(KEvent::Msg {
             raw_ordinal: msg.raw_ordinal,
             context_index: msg.context_index,
             from_user: msg.from_user,
@@ -819,6 +890,28 @@ impl SpineRuntime {
         }
         self.pending = Some(pending);
         Ok(())
+    }
+
+    pub(crate) fn abort_pending(&mut self, call_id: &str) -> bool {
+        if self
+            .pending
+            .as_ref()
+            .is_none_or(|pending| pending.call_id() != call_id)
+        {
+            return false;
+        }
+        let Some(pending) = self.pending.take() else {
+            return false;
+        };
+        self.control_call_ids.remove(pending.call_id());
+        true
+    }
+
+    pub(crate) fn abort_any_pending(&mut self) -> Option<String> {
+        let pending = self.pending.take()?;
+        let call_id = pending.call_id().to_string();
+        self.control_call_ids.remove(&call_id);
+        Some(call_id)
     }
 
     #[cfg(test)]
@@ -909,7 +1002,8 @@ impl SpineRuntime {
             open_context_tokens: token_baselines.context_tokens,
             open_context_source,
         };
-        self.parse_stack.shift(
+        let mut staged_parse_stack = self.parse_stack.clone();
+        staged_parse_stack.shift(
             SpineToken::Open {
                 meta: tree_meta_with_token_baselines(
                     &self.archive(),
@@ -923,7 +1017,8 @@ impl SpineRuntime {
             },
             &self.archive(),
         )?;
-        self.store.append_event(&event)?;
+        self.append_cached_event(event)?;
+        self.parse_stack = staged_parse_stack;
         Ok(SpineCommitKind::Open {
             open_request_index: usize::try_from(index).map_err(|_| {
                 SpineError::InvalidEvent("spine.open context index overflow".to_string())
@@ -939,7 +1034,7 @@ impl SpineRuntime {
     ) -> Result<SpineCommitKind, SpineError> {
         let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
         self.store.append_mem(&prepared.mem)?;
-        self.store.append_event(&prepared.close_event)?;
+        self.append_cached_event(prepared.close_event)?;
         self.parse_stack = prepared.staged_parse_stack;
         Ok(SpineCommitKind::Close {
             suffix_start: prepared.suffix_start,
@@ -990,8 +1085,8 @@ impl SpineRuntime {
             &self.archive(),
         )?;
         self.store.append_mem(&prepared.mem)?;
-        self.store.append_event(&prepared.close_event)?;
-        self.store.append_event(&open_event)?;
+        self.append_cached_event(prepared.close_event)?;
+        self.append_cached_event(open_event)?;
         self.parse_stack = prepared.staged_parse_stack;
         Ok(SpineCommitKind::CloseThenOpen {
             suffix_start: prepared.suffix_start,
@@ -1025,7 +1120,7 @@ impl SpineRuntime {
         let close_compact = close_compact.ok_or_else(|| {
             SpineError::InvalidEvent("spine.close requires a completed suffix compact".to_string())
         })?;
-        let seq = self.store.next_event_seq()?;
+        let seq = self.ledger.next_event_seq;
         if close_compact.source_context_range.start != suffix_start {
             return Err(SpineError::InvalidEvent(format!(
                 "spine.close compact context range starts at {}, expected suffix start {suffix_start}",
@@ -1145,7 +1240,7 @@ impl SpineRuntime {
             body_path,
             body_hash: sha1_hex(body.as_bytes()),
         };
-        let seq = self.store.next_event_seq()?;
+        let seq = self.ledger.next_event_seq;
         let memory = memory_ref(
             &self.archive(),
             mem.compact_id.clone(),
@@ -1217,7 +1312,7 @@ impl SpineRuntime {
             )?;
             self.store.append_compact_checkpoint(&checkpoint)?;
         }
-        self.store.append_event(&KEvent::RootCompact {
+        self.append_cached_event(KEvent::RootCompact {
             node,
             boundary: self.raw_len,
             mem: compact_id,
@@ -1274,7 +1369,7 @@ impl SpineRuntime {
     }
 
     fn open_raw_start(&self, node_id: &NodeId) -> Result<u64, SpineError> {
-        let events = self.store.events()?;
+        let events = &self.ledger.events;
         if let Some(boundary) = events.iter().rev().find_map(|event| match &event.event {
             KEvent::Open {
                 child, boundary, ..
@@ -1300,13 +1395,13 @@ impl SpineRuntime {
             };
             let compacted_parent = NodeId::root_epoch(previous_root_epoch);
             return events
-                .into_iter()
+                .iter()
                 .rev()
-                .find_map(|event| match event.event {
+                .find_map(|event| match &event.event {
                     KEvent::RootCompact { node, boundary, .. }
-                        if node == compacted_parent && parent.child(1) == *node_id =>
+                        if *node == compacted_parent && parent.child(1) == *node_id =>
                     {
-                        Some(boundary)
+                        Some(*boundary)
                     }
                     _ => None,
                 })
@@ -1355,13 +1450,13 @@ impl SpineRuntime {
                 },
             );
         let mut covered = vec![false; raw_items.len()];
-        for event in self.store.events()? {
+        for event in &self.ledger.events {
             if !event.allowed_by(RawMask::new(&self.raw_live))? {
                 continue;
             }
-            match event.event {
+            match &event.event {
                 KEvent::Msg { raw_ordinal, .. } => {
-                    mark_raw_covered(&mut covered, raw_ordinal)?;
+                    mark_raw_covered(&mut covered, *raw_ordinal)?;
                 }
                 KEvent::Open {
                     child,
@@ -1372,11 +1467,11 @@ impl SpineRuntime {
                     if !(summary == "root"
                         && child.parent().is_some_and(|parent| parent.is_root_epoch()))
                     {
-                        mark_raw_covered(&mut covered, boundary)?;
+                        mark_raw_covered(&mut covered, *boundary)?;
                     }
                 }
                 KEvent::Close { boundary, .. } | KEvent::RootCompact { boundary, .. } => {
-                    mark_raw_prefix_covered(&mut covered, boundary)?;
+                    mark_raw_prefix_covered(&mut covered, *boundary)?;
                 }
                 KEvent::Init { .. } => {}
             }
@@ -1396,7 +1491,7 @@ impl SpineRuntime {
 
     pub(crate) fn has_live_root_compact_event(&self) -> Result<bool, SpineError> {
         let raw_mask = RawMask::new(&self.raw_live);
-        for event in self.store.events()? {
+        for event in &self.ledger.events {
             if event.allowed_by(raw_mask)? && matches!(event.event, KEvent::RootCompact { .. }) {
                 return Ok(true);
             }
@@ -1422,6 +1517,32 @@ fn protocol_context_baseline_source(
             codex_protocol::spine_tree::SpineNodeContextBaselineSource::CheckpointReplay
         }
     }
+}
+
+fn next_event_seq_from(events: &[LoggedKEvent]) -> Result<u64, SpineError> {
+    events
+        .iter()
+        .map(|event| event.seq)
+        .max()
+        .map(|seq| {
+            seq.checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("spine event seq overflow".to_string()))
+        })
+        .transpose()
+        .map(|seq| seq.unwrap_or(0))
+}
+
+fn next_pressure_seq_from(events: &[LoggedPressureEvent]) -> Result<u64, SpineError> {
+    events
+        .iter()
+        .map(|event| event.pressure_seq)
+        .max()
+        .map(|seq| {
+            seq.checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("spine pressure seq overflow".to_string()))
+        })
+        .transpose()
+        .map(|seq| seq.unwrap_or(0))
 }
 
 fn replay_pressure_baselines(

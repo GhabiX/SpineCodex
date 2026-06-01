@@ -251,6 +251,34 @@ fn function_output(call_id: &str) -> ResponseItem {
     }
 }
 
+async fn assert_no_pending_spine_commit(session: &Session, call_id: &str) {
+    let spine_slot = session.spine.as_ref().expect("spine enabled");
+    let guard = spine_slot.lock().await;
+    guard.ensure_valid().expect("spine runtime valid");
+    let runtime = guard.runtime().expect("spine runtime present");
+    assert!(
+        runtime
+            .pending_commit(call_id)
+            .expect("pending lookup")
+            .is_none(),
+        "expected no pending Spine transition for {call_id}"
+    );
+}
+
+async fn assert_pending_spine_commit(session: &Session, call_id: &str) {
+    let spine_slot = session.spine.as_ref().expect("spine enabled");
+    let guard = spine_slot.lock().await;
+    guard.ensure_valid().expect("spine runtime valid");
+    let runtime = guard.runtime().expect("spine runtime present");
+    assert!(
+        runtime
+            .pending_commit(call_id)
+            .expect("pending lookup")
+            .is_some(),
+        "expected pending Spine transition for {call_id}"
+    );
+}
+
 async fn assert_session_history_matches_spine_materialization(
     session: &Session,
     rollout_path: &Path,
@@ -8412,6 +8440,7 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
             .contains("spine.close history changed while compacting suffix"),
         "unexpected close error: {err}"
     );
+    assert_no_pending_spine_commit(&session, "close").await;
     assert_eq!(delayed_compact.requests().len(), 1);
 
     let history = session.clone_history().await;
@@ -8535,6 +8564,7 @@ async fn spine_close_rejects_empty_live_suffix_before_compact_request() {
             .contains("spine.close requires non-empty live suffix"),
         "unexpected empty close error: {err}"
     );
+    assert_no_pending_spine_commit(&session, "empty-close").await;
     assert_eq!(
         compact_mock.requests().len(),
         0,
@@ -8644,6 +8674,7 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
             .contains("spine.close compact produced no readable memory body"),
         "unexpected error: {err}"
     );
+    assert_no_pending_spine_commit(&session, "encrypted-close").await;
     assert_eq!(compact_mock.requests().len(), 1);
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -8781,6 +8812,7 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
             .contains("spine.close history changed while compacting suffix"),
         "unexpected partial-success close error: {err}"
     );
+    assert_no_pending_spine_commit(&session, "partial-close").await;
     assert_eq!(delayed_close_compact.requests().len(), 1);
     assert_eq!(native_compact_mock.requests().len(), 1);
 
@@ -12074,6 +12106,76 @@ async fn spine_interrupt_marker_is_sidecar_covered_without_raw_event() {
         }),
         "expected interrupted-turn marker in history"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_log::test]
+async fn turn_abort_clears_stale_spine_pending_transition() {
+    let (mut session, tc, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let _rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize spine");
+    let work = user_message("work before interrupted close");
+    session
+        .record_conversation_items(&tc, std::slice::from_ref(&work))
+        .await
+        .expect("record work");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "abort-close");
+    session
+        .record_conversation_items(&tc, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .stage_spine_close("abort-close".to_string(), None)
+        .await
+        .expect("stage close");
+    assert_pending_spine_commit(&session, "abort-close").await;
+
+    let sess = session;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let mut observed = Vec::new();
+    let aborted = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let EventMsg::TurnAborted(event) = &event.msg {
+                let event = event.clone();
+                observed.push(EventMsg::TurnAborted(event.clone()));
+                break event;
+            }
+            observed.push(event.msg);
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("turn abort should emit TurnAborted; observed events: {observed:?}")
+    });
+    assert_eq!(TurnAbortReason::Interrupted, aborted.reason);
+    assert_no_pending_spine_commit(&sess, "abort-close").await;
 }
 
 #[tokio::test]

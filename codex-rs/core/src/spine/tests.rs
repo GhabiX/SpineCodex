@@ -569,6 +569,7 @@ fn pressure_repair_records_overlay_without_structural_seq_change() {
         .build_tree_snapshot()
         .expect("snapshot")
         .snapshot_seq;
+    let pressure_seq_before = runtime.ledger.next_pressure_seq;
     let repaired = runtime
         .ensure_current_open_context_baseline(9_000, Some(9_000), Some(1_250), raw.len())
         .expect("repair pressure baseline");
@@ -577,6 +578,7 @@ fn pressure_repair_records_overlay_without_structural_seq_change() {
     let snapshot = runtime.build_tree_snapshot().expect("snapshot");
     assert_eq!(snapshot.snapshot_seq, structural_seq_after_msg);
     assert_eq!(runtime.store.event_count_for_test().expect("events"), 3);
+    assert_eq!(runtime.ledger.next_pressure_seq, pressure_seq_before + 1);
     assert_eq!(runtime.store.pressure_events().expect("pressure").len(), 1);
     assert_eq!(runtime.current_open_context_tokens(), Some(7_750));
     assert_eq!(
@@ -584,6 +586,72 @@ fn pressure_repair_records_overlay_without_structural_seq_change() {
         Some(SpineNodeContextBaselineSource::EstimatedFromLiveSuffix)
     );
     assert_eq!(snapshot_seq_before, 2);
+}
+
+#[test]
+fn event_limit_pressure_replay_uses_limited_structural_seq_without_truncating_cache() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+    store
+        .append_logged_event(&LoggedKEvent {
+            seq: 0,
+            event: KEvent::Init { raw_start: 0 },
+        })
+        .expect("append init");
+    store
+        .append_logged_event(&LoggedKEvent {
+            seq: 1,
+            event: KEvent::Open {
+                child: NodeId::root_epoch(1).child(1),
+                boundary: 0,
+                index: 0,
+                summary: "root".to_string(),
+                open_input_tokens: None,
+                open_context_tokens: None,
+                open_context_source: None,
+            },
+        })
+        .expect("append open");
+    store
+        .append_logged_event(&LoggedKEvent {
+            seq: 2,
+            event: KEvent::Msg {
+                raw_ordinal: 0,
+                context_index: 0,
+                from_user: true,
+            },
+        })
+        .expect("append future msg");
+    store
+        .append_logged_pressure_event(&LoggedPressureEvent {
+            pressure_seq: 0,
+            event: PressureEvent::OpenContextBaseline {
+                node: NodeId::root_epoch(1).child(1),
+                open_structural_seq: Some(1),
+                observed_structural_seq: 3,
+                observed_raw_ordinal: 1,
+                observed_raw_live_hash: Some(hash_raw_live(&[true])),
+                observed_context_index: 1,
+                context_tokens: 7_000,
+                input_tokens: Some(8_000),
+                source: ContextBaselineSource::EstimatedFromLiveSuffix,
+                estimated_live_suffix_tokens: Some(1_000),
+            },
+        })
+        .expect("append future pressure");
+
+    let mut replayed = SpineRuntime::load_with_raw_live_and_event_limit(store, vec![true], Some(2))
+        .expect("load limited replay");
+
+    assert_eq!(replayed.ledger.next_event_seq, 3);
+    assert_eq!(replayed.ledger.next_pressure_seq, 1);
+    assert_eq!(replayed.current_open_context_tokens(), None);
+
+    replayed
+        .ensure_current_open_context_baseline(9_000, Some(9_000), Some(1_000), 1)
+        .expect("append pressure after limited replay");
+    assert_eq!(replayed.ledger.next_pressure_seq, 2);
 }
 
 #[test]
@@ -933,6 +1001,7 @@ fn spine_next_macro_closes_and_opens_sibling_without_next_event() {
     ));
 
     let events = event_log(&runtime);
+    assert_eq!(runtime.ledger.next_event_seq, 7);
     assert!(
         events
             .iter()
@@ -1332,6 +1401,243 @@ fn duplicate_open_call_id_does_not_create_second_child() {
     assert!(tree.contains("Spine Task Tree:"), "{tree}");
     assert!(tree.contains("- [1.1] Open"), "{tree}");
     assert!(tree.contains("- [1.1.1] Current only child"), "{tree}");
+}
+
+#[test]
+fn ledger_cache_uses_sparse_max_seq_on_load_and_append() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+    store
+        .append_logged_event(&LoggedKEvent {
+            seq: 0,
+            event: KEvent::Init { raw_start: 0 },
+        })
+        .expect("append sparse init");
+    store
+        .append_logged_event(&LoggedKEvent {
+            seq: 7,
+            event: KEvent::Open {
+                child: NodeId::root_epoch(1).child(1),
+                boundary: 0,
+                index: 0,
+                summary: "root".to_string(),
+                open_input_tokens: None,
+                open_context_tokens: None,
+                open_context_source: None,
+            },
+        })
+        .expect("append sparse root open");
+
+    let mut runtime = SpineRuntime::load_for_rollout(&rollout, 0)
+        .expect("load spine")
+        .expect("sidecar exists");
+    assert_eq!(runtime.ledger.next_event_seq, 8);
+    assert_eq!(
+        runtime
+            .build_tree_snapshot()
+            .expect("snapshot")
+            .snapshot_seq,
+        8
+    );
+
+    runtime.observe_raw_items(1).expect("observe raw");
+    runtime
+        .observe_context_item(0, 0, &text_item("after sparse ledger"))
+        .expect("append msg");
+
+    assert_eq!(runtime.ledger.next_event_seq, 9);
+    let events = logged_events(&runtime);
+    assert!(matches!(
+        events.last(),
+        Some(LoggedKEvent {
+            seq: 8,
+            event: KEvent::Msg { raw_ordinal: 0, .. }
+        })
+    ));
+}
+
+#[test]
+fn open_append_failure_does_not_publish_parse_stack_or_cache() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let parse_stack_before = runtime.parse_stack().clone();
+    let ledger_events_before = runtime
+        .ledger
+        .events
+        .iter()
+        .map(|event| format!("{event:?}"))
+        .collect::<Vec<_>>();
+    let next_event_seq_before = runtime.ledger.next_event_seq;
+
+    let request = spine_call(SPINE_TOOL_OPEN, "open-fails");
+    runtime.observe_raw_items(1).expect("record open request");
+    runtime
+        .observe_context_item(0, 0, &request)
+        .expect("observe open request");
+    runtime
+        .stage_open("open-fails".to_string(), "unpublished child".to_string())
+        .expect("stage open");
+
+    let blocked_root = dir.path().join("not-a-dir");
+    std::fs::write(&blocked_root, "file blocks sidecar dir").expect("write blocker file");
+    runtime.store.root = blocked_root;
+
+    runtime
+        .maybe_commit_output("open-fails", None)
+        .expect_err("open append should fail");
+    assert_eq!(runtime.parse_stack(), &parse_stack_before);
+    assert_eq!(
+        runtime
+            .ledger
+            .events
+            .iter()
+            .map(|event| format!("{event:?}"))
+            .collect::<Vec<_>>(),
+        ledger_events_before
+    );
+    assert_eq!(runtime.ledger.next_event_seq, next_event_seq_before);
+}
+
+#[test]
+fn abort_matching_pending_clears_control_call_without_durable_mutation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "work before interrupted next");
+    let request = spine_call(SPINE_TOOL_NEXT, "stale-next");
+    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    let request_context_index = current_context_len(&runtime, &raw);
+    raw.push(Some(request.clone()));
+    runtime.observe_raw_items(1).expect("record next request");
+    runtime
+        .observe_context_item(request_ordinal, request_context_index, &request)
+        .expect("observe next request");
+    runtime
+        .stage_next(
+            "stale-next".to_string(),
+            "interrupted sibling".to_string(),
+            None,
+        )
+        .expect("stage next");
+
+    let parse_stack_before = runtime.parse_stack().clone();
+    let events_before = event_log_debug(&runtime);
+    assert!(runtime.control_call_ids.contains("stale-next"));
+    assert!(matches!(
+        runtime
+            .pending_commit("stale-next")
+            .expect("pending commit"),
+        Some(SpinePendingCommit::Close { .. })
+    ));
+
+    assert!(runtime.abort_pending("stale-next"));
+    assert!(
+        runtime
+            .pending_commit("stale-next")
+            .expect("pending should be cleared")
+            .is_none()
+    );
+    assert!(!runtime.control_call_ids.contains("stale-next"));
+    assert_eq!(runtime.parse_stack(), &parse_stack_before);
+    assert_eq!(event_log_debug(&runtime), events_before);
+
+    let next_request = spine_call(SPINE_TOOL_NEXT, "fresh-next");
+    let next_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    let next_context_index = current_context_len(&runtime, &raw);
+    raw.push(Some(next_request.clone()));
+    runtime
+        .observe_raw_items(1)
+        .expect("record fresh next request");
+    runtime
+        .observe_context_item(next_ordinal, next_context_index, &next_request)
+        .expect("observe fresh next request");
+    runtime
+        .stage_next("fresh-next".to_string(), "fresh sibling".to_string(), None)
+        .expect("fresh transition should stage after abort");
+}
+
+#[test]
+fn abort_non_matching_pending_keeps_transition_until_stale_abort() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "work before close");
+    let request = spine_call(SPINE_TOOL_CLOSE, "close");
+    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    let request_context_index = current_context_len(&runtime, &raw);
+    raw.push(Some(request.clone()));
+    runtime.observe_raw_items(1).expect("record close request");
+    runtime
+        .observe_context_item(request_ordinal, request_context_index, &request)
+        .expect("observe close request");
+    runtime
+        .stage_close("close".to_string(), None)
+        .expect("stage close");
+
+    assert!(!runtime.abort_pending("other-call"));
+    assert!(runtime.control_call_ids.contains("close"));
+    assert!(matches!(
+        runtime.pending_commit("close").expect("pending close"),
+        Some(SpinePendingCommit::Close { .. })
+    ));
+
+    assert_eq!(runtime.abort_any_pending().as_deref(), Some("close"));
+    assert!(!runtime.control_call_ids.contains("close"));
+    assert!(runtime.pending_commit("close").expect("cleared").is_none());
+}
+
+#[test]
+fn try_commit_internal_failure_does_not_silently_abort_pending() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "work to compact");
+    runtime
+        .stage_close("close".to_string(), None)
+        .expect("stage close");
+    let suffix_start = match runtime.pending_commit("close").expect("pending close") {
+        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
+        other => panic!("expected pending close, got {other:?}"),
+    };
+    let parse_stack_before = runtime.parse_stack().clone();
+    let events_before = event_log_debug(&runtime);
+    let mem_path = runtime.store.mem_path();
+    std::fs::create_dir_all(&mem_path).expect("block mem ledger append with directory");
+
+    let err = runtime
+        .maybe_commit_output(
+            "close",
+            Some(compact_body_with_context_range(
+                "1.1",
+                suffix_start..raw.len(),
+            )),
+        )
+        .expect_err("append_mem failure should fail commit");
+    assert!(
+        !err.to_string().is_empty(),
+        "expected append_mem failure to surface"
+    );
+    assert!(matches!(
+        runtime.pending_commit("close").expect("pending retained"),
+        Some(SpinePendingCommit::Close { .. })
+    ));
+    assert!(
+        runtime
+            .stage_next("new-next".to_string(), "blocked sibling".to_string(), None)
+            .expect_err("pending must still block new transition")
+            .to_string()
+            .contains("another spine transition is already pending")
+    );
+    assert_eq!(runtime.parse_stack(), &parse_stack_before);
+    assert_eq!(event_log_debug(&runtime), events_before);
 }
 
 #[test]
@@ -3718,6 +4024,56 @@ fn rollback_checkpoint_replays_new_live_append_after_cut() {
                 ..
             },
         ]
+    ));
+}
+
+#[test]
+fn rollback_checkpoint_rebuilds_cache_from_full_sidecar_before_new_append() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw_after_rollback = vec![Some(text_item("kept")), None];
+
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    runtime.observe_raw_items(1).expect("observe kept raw");
+    runtime
+        .observe_context_item(0, 0, &text_item("kept"))
+        .expect("observe kept");
+    runtime
+        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .expect("write checkpoint");
+    runtime
+        .observe_raw_items(1)
+        .expect("observe rolled-back raw");
+    runtime
+        .observe_context_item(1, 1, &text_item("rolled back"))
+        .expect("observe rolled-back user");
+    let full_sidecar_next_seq = runtime.ledger.next_event_seq;
+
+    let mut replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw_after_rollback, &[1])
+        .expect("load spine")
+        .expect("sidecar exists");
+    assert_eq!(replayed.ledger.next_event_seq, full_sidecar_next_seq);
+    assert_eq!(
+        replayed
+            .materialize_history(&raw_after_rollback)
+            .expect("materialize before append"),
+        vec![text_item("kept")]
+    );
+
+    raw_after_rollback.push(Some(text_item("after rollback")));
+    replayed.observe_raw_items(1).expect("observe new raw");
+    replayed
+        .observe_context_item(2, 1, &text_item("after rollback"))
+        .expect("append new raw after rollback replay");
+
+    assert_eq!(replayed.ledger.next_event_seq, full_sidecar_next_seq + 1);
+    let events = logged_events(&replayed);
+    assert!(matches!(
+        events.last(),
+        Some(LoggedKEvent {
+            seq,
+            event: KEvent::Msg { raw_ordinal: 2, .. },
+        }) if *seq == full_sidecar_next_seq
     ));
 }
 

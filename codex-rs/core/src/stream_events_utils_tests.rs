@@ -5,10 +5,16 @@ use super::finalize_non_tool_response_item;
 use super::handle_non_tool_response_item;
 use super::handle_output_item_done;
 use super::image_generation_artifact_path;
+use super::is_spine_control_function_call;
 use super::last_assistant_message_from_item;
 use super::response_item_may_include_external_context;
 use super::save_image_generation_result;
 use crate::session::tests::make_session_and_context;
+use crate::spine::SPINE_NAMESPACE;
+use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_NEXT;
+use crate::spine::SPINE_TOOL_OPEN;
+use crate::spine::SPINE_TOOL_TREE;
 use crate::tools::ToolRouter;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -44,6 +50,40 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> 
         }],
         phase,
     }
+}
+
+fn function_call(namespace: Option<&str>, name: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: Some(format!("call-item-{name}")),
+        name: name.to_string(),
+        namespace: namespace.map(ToString::to_string),
+        arguments: "{}".to_string(),
+        call_id: format!("call-{name}"),
+    }
+}
+
+#[test]
+fn is_spine_control_function_call_includes_next() {
+    for name in [
+        SPINE_TOOL_TREE,
+        SPINE_TOOL_OPEN,
+        SPINE_TOOL_CLOSE,
+        SPINE_TOOL_NEXT,
+    ] {
+        assert!(is_spine_control_function_call(&function_call(
+            Some(SPINE_NAMESPACE),
+            name
+        )));
+    }
+
+    assert!(!is_spine_control_function_call(&function_call(
+        Some("other"),
+        SPINE_TOOL_NEXT
+    )));
+    assert!(!is_spine_control_function_call(&function_call(
+        None,
+        SPINE_TOOL_NEXT
+    )));
 }
 
 #[test]

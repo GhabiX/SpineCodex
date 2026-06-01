@@ -17,6 +17,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::tools::parallel::ToolCallRuntime;
@@ -201,7 +202,10 @@ pub(crate) fn is_spine_control_function_call(item: &ResponseItem) -> bool {
             name,
             ..
         } if namespace == SPINE_NAMESPACE
-            && matches!(name.as_str(), SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE)
+            && matches!(
+                name.as_str(),
+                SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT
+            )
     )
 }
 

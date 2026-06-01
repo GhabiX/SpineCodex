@@ -18,6 +18,7 @@ use crate::spine::model::KEvent;
 use crate::spine::model::LoggedKEvent;
 use crate::spine::model::LoggedPressureEvent;
 use crate::spine::model::MemRecord;
+#[cfg(test)]
 use crate::spine::model::PressureEvent;
 use crate::spine::model::RawMask;
 use serde::Deserialize;
@@ -281,10 +282,11 @@ impl SpineStore {
         Ok(seq)
     }
 
-    fn append_logged_event(&self, event: &LoggedKEvent) -> Result<(), SpineError> {
+    pub(super) fn append_logged_event(&self, event: &LoggedKEvent) -> Result<(), SpineError> {
         append_json_line(&self.tree_path(), event)
     }
 
+    #[cfg(test)]
     pub(super) fn append_pressure_event(&self, event: &PressureEvent) -> Result<u64, SpineError> {
         let pressure_seq = self.next_pressure_seq()?;
         self.append_logged_pressure_event(&LoggedPressureEvent {
@@ -294,7 +296,10 @@ impl SpineStore {
         Ok(pressure_seq)
     }
 
-    fn append_logged_pressure_event(&self, event: &LoggedPressureEvent) -> Result<(), SpineError> {
+    pub(super) fn append_logged_pressure_event(
+        &self,
+        event: &LoggedPressureEvent,
+    ) -> Result<(), SpineError> {
         append_pressure_json_line(&self.pressure_path(), event)
     }
 
