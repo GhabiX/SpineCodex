@@ -1,12 +1,14 @@
 use super::session::Session;
 use super::spine_tree_inside::SpineTreeInsideView;
 use super::spine_tree_inside::build_spine_tree_inside_view;
+use super::spine_tree_inside::node_context_tokens;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::spine_tree::SpineNodeContextUnavailableReason;
 
 const SPINE_BOUNDARY_HINT_FIRST_TOKENS: i64 = 50_000;
 const SPINE_BOUNDARY_HINT_STEP_TOKENS: i64 = 25_000;
@@ -31,6 +33,21 @@ pub(crate) struct SpinePressurePromptOverlay {
     emission: SpinePressurePromptEmission,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SpineStatusPromptOverlay {
+    pub(crate) item: ResponseItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SpineStatusPromptSignal {
+    cursor: String,
+    parent: Option<String>,
+    live_node_context_tokens: Option<i64>,
+    live_node_context_unavailable: Option<SpineNodeContextUnavailableReason>,
+    context_tokens: Option<i64>,
+    model_context_window: Option<i64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SpinePressurePromptSignal {
     node_id: String,
@@ -44,6 +61,34 @@ pub(crate) struct SpinePressurePromptSignal {
 }
 
 impl Session {
+    pub(crate) async fn spine_status_prompt_overlay(&self) -> Option<SpineStatusPromptOverlay> {
+        if !self.features.enabled(Feature::SpineTaskTree) {
+            return None;
+        }
+
+        let token_info = self.token_usage_info().await;
+        let spine_slot = self.spine.as_ref()?;
+        let signal = {
+            let guard = spine_slot.lock().await;
+            if let Err(err) = guard.ensure_valid() {
+                tracing::debug!("skipping Spine status prompt signal: {err}");
+                return None;
+            }
+            let runtime = guard.runtime()?;
+            match status_prompt_signal(runtime, token_info.as_ref()) {
+                Ok(signal) => signal,
+                Err(err) => {
+                    tracing::debug!("failed to build Spine status prompt signal: {err}");
+                    return None;
+                }
+            }
+        };
+
+        Some(SpineStatusPromptOverlay {
+            item: spine_pressure_overlay_message(format_spine_status_prompt_overlay(&signal)),
+        })
+    }
+
     pub(crate) async fn spine_pressure_prompt_overlay(
         &self,
         mode: ModeKind,
@@ -60,9 +105,7 @@ impl Session {
                 tracing::debug!("skipping Spine pressure prompt signal: {err}");
                 return None;
             }
-            let Some(runtime) = guard.runtime() else {
-                return None;
-            };
+            let runtime = guard.runtime()?;
             match build_spine_tree_inside_view(runtime, Some(&token_info)) {
                 Ok(view) => view,
                 Err(err) => {
@@ -93,6 +136,79 @@ impl Session {
         let mut pressure_prompt_state = self.spine_pressure_prompt_state.lock().await;
         pressure_prompt_state.mark_sent(overlay.emission);
     }
+}
+
+fn status_prompt_signal(
+    runtime: &crate::spine::SpineRuntime,
+    token_info: Option<&TokenUsageInfo>,
+) -> Result<SpineStatusPromptSignal, crate::spine::SpineError> {
+    let snapshot = runtime.build_tree_snapshot()?;
+    let open_nodes = runtime.open_node_context_projections();
+    let active_node = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == snapshot.active_node_id);
+    let parent = active_node.and_then(|node| node.parent_id.clone());
+    let active_open_node = open_nodes
+        .iter()
+        .find(|node| node.node_id.to_string() == snapshot.active_node_id);
+    let (live_node_context_tokens, live_node_context_unavailable) = match active_open_node {
+        Some(node) => match node_context_tokens(token_info, node.baseline_tokens) {
+            Ok(tokens) => (tokens, None),
+            Err(reason) => (None, Some(reason)),
+        },
+        None => (None, None),
+    };
+    let context_tokens = token_info
+        .map(|info| info.last_token_usage.tokens_in_context_window())
+        .filter(|tokens| *tokens > 0);
+    let model_context_window = token_info.and_then(|info| info.model_context_window);
+    Ok(SpineStatusPromptSignal {
+        cursor: snapshot.active_node_id,
+        parent,
+        live_node_context_tokens,
+        live_node_context_unavailable,
+        context_tokens,
+        model_context_window,
+    })
+}
+
+fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> String {
+    let live_node = signal
+        .live_node_context_tokens
+        .map(format_si_suffix)
+        .unwrap_or_else(|| "unavailable".to_string());
+    let window = format_context_window_status(signal.context_tokens, signal.model_context_window)
+        .unwrap_or_else(|| "unavailable".to_string());
+    let mut text = format!(
+        r#"<spine_status cursor="{}" parent="{}" live_node="{}" window="{}""#,
+        signal.cursor,
+        signal.parent.as_deref().unwrap_or("none"),
+        live_node,
+        window,
+    );
+    if signal.live_node_context_unavailable
+        == Some(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)
+    {
+        text.push_str(r#" baseline="missing""#);
+    }
+    text.push_str(" />");
+    text
+}
+
+fn format_context_window_status(
+    context_tokens: Option<i64>,
+    model_context_window: Option<i64>,
+) -> Option<String> {
+    let context_tokens = context_tokens?;
+    let window = model_context_window?;
+    (window > 0).then(|| {
+        let percent = context_tokens
+            .saturating_mul(100)
+            .saturating_div(window)
+            .clamp(0, 100);
+        format!("{percent}%")
+    })
 }
 
 fn pressure_prompt_signal(

@@ -9872,6 +9872,55 @@ async fn spine_control_carriers_are_not_durable_context_history() {
     assert_eq!(materialized, vec![prefix.clone()]);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_status_overlay_is_injected_into_sampling_prompt_only() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineTaskTree)
+            .expect("enable spine feature");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("spine-status-response", "ok"),
+            ev_completed("spine-status-response"),
+        ]),
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "check status overlay".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(_) => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let request = responses.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    let status = developer_texts
+        .iter()
+        .find(|text| text.contains("<spine_status"))
+        .expect("status overlay should be present");
+    assert!(status.contains(r#"cursor="1.1""#), "{status}");
+    assert!(status.contains(r#"parent="1""#), "{status}");
+    assert!(status.contains(r#"live_node="unavailable""#), "{status}");
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn spine_close_overlay_control_carriers_are_not_required_in_durable_history() {
     let server = start_mock_server().await;
@@ -10669,6 +10718,78 @@ async fn spine_pressure_prompt_emits_boundary_hint_once_per_band() {
         .expect("next pressure band overlay");
     let second_text = pressure_overlay_text(&second.item);
     assert!(second_text.contains("Spine boundary hint"), "{second_text}");
+}
+
+#[tokio::test]
+async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisting() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "status-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open("status-open".to_string(), "status scope".to_string())
+        .await
+        .expect("stage open");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 10_000,
+                total_tokens: 10_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }));
+    }
+    let open_output = function_output("status-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 42_000,
+                total_tokens: 42_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }));
+    }
+    let history_before = session.clone_history().await.raw_items().to_vec();
+    let overlay = session
+        .spine_status_prompt_overlay()
+        .await
+        .expect("status overlay");
+    let text = pressure_overlay_text(&overlay.item);
+    assert!(text.starts_with("<spine_status "), "{text}");
+    assert!(text.contains(r#"cursor="1.1.1""#), "{text}");
+    assert!(text.contains(r#"parent="1.1""#), "{text}");
+    assert!(text.contains(r#"live_node="32.0K""#), "{text}");
+    assert!(text.contains(r#"window="21%""#), "{text}");
+    assert_eq!(session.clone_history().await.raw_items(), history_before);
 }
 
 #[tokio::test]
