@@ -4,9 +4,9 @@ use crate::context_manager::ContextManager;
 use crate::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::spine::SPINE_NAMESPACE;
-use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SpineCloseCompact;
 use crate::spine::SpineError;
+use crate::spine::is_spine_close_like_tool_name;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::util::backoff;
 use codex_protocol::error::CodexErr;
@@ -53,7 +53,7 @@ impl Session {
                     ..
                 } if call_id == close_call_id
                     && namespace.as_deref() == Some(SPINE_NAMESPACE)
-                    && name == SPINE_TOOL_CLOSE
+                    && is_spine_close_like_tool_name(name)
             )
         });
         let close_context_end = close_request_index.unwrap_or(raw_items.len());
@@ -70,7 +70,7 @@ impl Session {
             ));
         }
         let original_prompt_len = prompt_input.len();
-        prompt_input.retain(|item| !is_current_spine_close_carrier(item, close_call_id));
+        prompt_input.retain(|item| !is_current_spine_close_like_carrier(item, close_call_id));
         if close_request_index.is_some() && prompt_input.len() == original_prompt_len {
             return Err(SpineError::InvalidEvent(format!(
                 "spine.close compact prompt missing carrier for call {close_call_id}"
@@ -219,22 +219,25 @@ impl Session {
 fn spine_close_compact_instruction_text(node_id: &str, instruction: Option<&str>) -> String {
     let mut text = format!(
         "---------- Spine Compact Directive ----------\n\n\
-Write a compact continuation memory for Spine node {node_id}. Write a Markdown memory, not a conversation reply.\n\
-This memory will replace this node's raw trajs in future context.\n\n\
-Write enough concrete continuity detail for the agent to continue naturally after this node's raw trajs are replaced by memory, and to trust the compressed history without replaying the full raw trace segment. Preserve decisions, constraints, exact identifiers, file paths, commands, test results, failures, approvals, and unresolved risks when they affect future work. Use the sections as guide rails: write concise, concrete prose, and prefer high-signal specifics over a chronological transcript.\n\n\
-Use four sections:\n\n\
-Motivation:\n\
-Explain why this node existed, what the user was trying to accomplish, what constraints or authorization boundaries mattered, and what problem context is needed to understand the node.\n\n\
-Judgment:\n\
-Record the conclusions, decisions, accepted plan, or current technical understanding produced by this node. Include the main alternatives rejected only when they matter for future reasoning.\n\n\
-Evidence:\n\
-Preserve decisive facts that support the judgment or are needed to continue: important file paths, code locations, changed artifacts, key commands with outcomes, failed commands with reasons, review or user approval, task/worklog paths, and unresolved risks. Keep command output to the meaningful result, not full logs.\n\n\
-Continuation:\n\
-Explain how the parent conversation should naturally proceed from this memory. State the immediate next parent action. If this node closes because a subproblem finished, state the compact result returned to the parent. If the suffix ends with a direct user question, correction, or redirect, that latest user intent is the next parent action unless the user explicitly asked otherwise. State whether the parent work should continue, wait for the user, report status, or treat later questions as review of completed work. Do not imply the overall user goal is complete unless the raw trace clearly establishes that.\n\n\
-Hard requirement: preserve exact critical identifiers, sentinel strings, file paths, commands, and test names from the suffix and from the optional close instruction. If the instruction says to preserve a value exactly, copy that value verbatim into the memory.\n\n\
-Lines containing `_CRITICAL_ID=`, `_FILE=`, sentinel values, or source paths are mandatory evidence and must appear in the memory. User-facing final-answer markers such as `TEST_WITH_LLM_*` are evidence only; never let such a marker be the whole memory.\n\n\
-Use prefix context only to interpret names and constraints. Use the optional close instruction as a hint about what to preserve.\n\
-Do not write a chronological report. Do not include routine progress updates, tool-call noise, or implementation minutiae unless they are needed as evidence. The goal is to preserve enough concrete continuation context after replacing raw trajs with memory, not to archive every event."
+Write a compact handoff memory for Spine node {node_id}. Write Markdown memory, not a conversation reply.\n\n\
+This memory will replace only this node's raw trajs in future context. Its job is to let the parent conversation continue correctly without replaying this node's raw trace.\n\n\
+Write concise, concrete prose that preserves:\n\n\
+1. User Intent\n\
+Explain what the user wanted in this node, including explicit instructions, corrections, approvals, constraints, authorization boundaries, and any change of direction. If the latest user message changes the task, make that current intent clear.\n\n\
+2. Work Done\n\
+State what this node actually did or decided. Include the current state, conclusions, partial results, and what remains unresolved. Do not imply the overall task is complete unless the raw trace clearly proves it.\n\n\
+3. Critical Details\n\
+Preserve exact details needed for continuation: file paths, identifiers, commands, important command outputs, test names/results, errors, task/worklog paths, approvals, risks, and any values the close instruction says to preserve exactly. Lines containing `_CRITICAL_ID=`, `_FILE=`, sentinel values, source paths, or explicit exact-preservation instructions are mandatory evidence and must appear in the memory.\n\n\
+4. Next Step\n\
+State how the parent should continue after this memory. Be specific: continue implementation, review a decision, answer the user, wait for approval, run tests, switch back to a corrected user request, or return a subproblem result to the parent.\n\n\
+Rules:\n\
+- Prefer high-signal facts over chronology.\n\
+- Do not archive routine progress updates, tool-call noise, or irrelevant implementation minutiae.\n\
+- Use prefix context only to understand names, parent goal, and constraints; do not summarize unrelated prefix.\n\
+- Use the optional close instruction as a preservation hint, not as a user message.\n\
+- If there is conflict between an old plan and a later user correction, preserve the correction as the active intent.\n\
+- If information is uncertain, say what is known and what still needs confirmation.\n\
+- User-facing final-answer markers such as `TEST_WITH_LLM_*` are evidence only; never let such a marker be the whole memory."
     );
     if let Some(instruction) = instruction
         .map(str::trim)
@@ -271,7 +274,7 @@ Messages below this boundary are the suffix for Spine node {node_id}. Messages a
     }
 }
 
-fn is_current_spine_close_carrier(item: &ResponseItem, close_call_id: &str) -> bool {
+fn is_current_spine_close_like_carrier(item: &ResponseItem, close_call_id: &str) -> bool {
     matches!(
         item,
         ResponseItem::FunctionCall {
@@ -281,7 +284,7 @@ fn is_current_spine_close_carrier(item: &ResponseItem, close_call_id: &str) -> b
             ..
         } if call_id == close_call_id
             && namespace.as_deref() == Some(SPINE_NAMESPACE)
-            && name == SPINE_TOOL_CLOSE
+            && is_spine_close_like_tool_name(name)
     ) || matches!(
         item,
         ResponseItem::FunctionCallOutput { call_id, .. } if call_id == close_call_id
@@ -343,6 +346,11 @@ fn spine_close_compact_body(node_id: &str, output: &[ResponseItem]) -> Result<St
 #[cfg(test)]
 mod spine_close_compact_body_tests {
     use super::*;
+    use crate::spine::SPINE_TOOL_CLOSE;
+    use crate::spine::SPINE_TOOL_NEXT;
+    use crate::spine::SPINE_TOOL_OPEN;
+    use crate::spine::SPINE_TOOL_TREE;
+    use codex_protocol::models::FunctionCallOutputPayload;
 
     fn assistant_message(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -352,6 +360,16 @@ mod spine_close_compact_body_tests {
                 text: text.to_string(),
             }],
             phase: None,
+        }
+    }
+
+    fn spine_call(name: &str, call_id: &str) -> ResponseItem {
+        ResponseItem::FunctionCall {
+            id: None,
+            name: name.to_string(),
+            namespace: Some(SPINE_NAMESPACE.to_string()),
+            arguments: "{}".to_string(),
+            call_id: call_id.to_string(),
         }
     }
 
@@ -430,5 +448,36 @@ mod spine_close_compact_body_tests {
         assert!(body.contains("summary omitted the required sentinel"));
         assert!(!body.contains("## Required Evidence"));
         assert!(!body.contains("NEXT_SUFFIX_CRITICAL_ID=SPINE_NEXT_CACHE_SENTINEL_77"));
+    }
+
+    #[test]
+    fn spine_close_like_carrier_filters_only_close_like_tools() {
+        assert!(is_current_spine_close_like_carrier(
+            &spine_call(SPINE_TOOL_CLOSE, "call-1"),
+            "call-1"
+        ));
+        assert!(is_current_spine_close_like_carrier(
+            &spine_call(SPINE_TOOL_NEXT, "call-1"),
+            "call-1"
+        ));
+        assert!(!is_current_spine_close_like_carrier(
+            &spine_call(SPINE_TOOL_OPEN, "call-1"),
+            "call-1"
+        ));
+        assert!(!is_current_spine_close_like_carrier(
+            &spine_call(SPINE_TOOL_TREE, "call-1"),
+            "call-1"
+        ));
+        assert!(!is_current_spine_close_like_carrier(
+            &spine_call(SPINE_TOOL_CLOSE, "other"),
+            "call-1"
+        ));
+        assert!(is_current_spine_close_like_carrier(
+            &ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            },
+            "call-1"
+        ));
     }
 }

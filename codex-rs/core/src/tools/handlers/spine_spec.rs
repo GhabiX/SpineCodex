@@ -1,5 +1,6 @@
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use codex_tools::JsonSchema;
@@ -45,6 +46,7 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
                 output_schema: None,
             }),
             ResponsesApiNamespaceTool::Function(spine_close_tool()),
+            ResponsesApiNamespaceTool::Function(spine_next_tool()),
         ],
     })
 }
@@ -62,6 +64,32 @@ fn spine_close_tool() -> ResponsesApiTool {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(Vec::new()), Some(false.into())),
+        output_schema: None,
+    }
+}
+
+fn spine_next_tool() -> ResponsesApiTool {
+    let properties = BTreeMap::from([
+        (
+            "summary".to_string(),
+            JsonSchema::string(Some(
+                "Short label for the next sibling Spine task node.".to_string(),
+            )),
+        ),
+        (
+            "instruction".to_string(),
+            JsonSchema::string(Some(
+                "Optional compact guidance for closing the current node before opening the sibling."
+                    .to_string(),
+            )),
+        ),
+    ]);
+    ResponsesApiTool {
+        name: SPINE_TOOL_NEXT.to_string(),
+        description: "Close the current node, preserve compact guidance as memory, then continue in a new sibling under the resumed parent.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, Some(vec!["summary".to_string()]), Some(false.into())),
         output_schema: None,
     }
 }

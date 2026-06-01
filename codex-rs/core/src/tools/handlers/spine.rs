@@ -1,6 +1,7 @@
 use crate::function_tool::FunctionCallError;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::tools::context::FunctionToolOutput;
@@ -25,6 +26,7 @@ enum SpineTool {
     Tree,
     Open,
     Close,
+    Next,
 }
 
 impl SpineHandler {
@@ -39,6 +41,9 @@ impl SpineHandler {
             Self {
                 tool: SpineTool::Close,
             },
+            Self {
+                tool: SpineTool::Next,
+            },
         ]
     }
 }
@@ -49,6 +54,7 @@ impl SpineTool {
             SpineTool::Tree => SPINE_TOOL_TREE,
             SpineTool::Open => SPINE_TOOL_OPEN,
             SpineTool::Close => SPINE_TOOL_CLOSE,
+            SpineTool::Next => SPINE_TOOL_NEXT,
         }
     }
 }
@@ -66,6 +72,14 @@ struct OpenArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CloseArgs {
+    #[serde(default)]
+    instruction: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NextArgs {
+    summary: String,
     #[serde(default)]
     instruction: Option<String>,
 }
@@ -107,7 +121,7 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
         }
         if self.tool != SpineTool::Tree && turn.collaboration_mode.mode == ModeKind::Plan {
             return Err(FunctionCallError::RespondToModel(
-                "spine.open and spine.close are not allowed in Plan mode".to_string(),
+                "spine.open, spine.close, and spine.next are not allowed in Plan mode".to_string(),
             ));
         }
         match self.tool {
@@ -145,6 +159,18 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
                     "Spine closed.".to_string(),
+                    Some(true),
+                )))
+            }
+            SpineTool::Next => {
+                let args: NextArgs = parse_arguments(&arguments)?;
+                session
+                    .stage_spine_next(call_id, args.summary, args.instruction)
+                    .await
+                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                    "Spine will close the current node, then continue in a new sibling after this tool output is recorded."
+                        .to_string(),
                     Some(true),
                 )))
             }
