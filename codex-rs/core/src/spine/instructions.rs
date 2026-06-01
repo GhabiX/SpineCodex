@@ -18,6 +18,8 @@ Tools:
 
 At the start of a task, assume its shape may grow as evidence appears. Orient from the current tree, keep the tree ready to absorb new phases, and let structure emerge at natural boundaries. After every spine.open/close/next result, use the returned tree as the source of truth for cursor, parent, siblings, and the next boundary.
 
+Scope discipline: keep umbrella/parent nodes for coordination, not as long work buffers. Before substantive research, implementation, verification, or long task-specific discussion, open a focused child; keep only routing, approvals, cross-phase decisions, and final synthesis in the parent.
+
 Move Spine by matching the next work to the tree:
 - Same scope: continue in the current node.
 - Narrower blocker or dependency: open a child whose result helps the parent continue.
