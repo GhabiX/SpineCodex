@@ -12,7 +12,7 @@ Context savings happen only when a live node is closed: `spine.close` and the cl
 
 Tools:
 - spine.tree: inspect the tree, cursor, and context pressure without moving the cursor.
-- spine.open(summary): open a focused child under the current node; make summary a distinct, narrower boundary label relative to its parent and siblings.
+- spine.open(summary): open a focused child under the current node; make summary a boundary label; child labels should be distinct and narrower than their parent and siblings.
 - spine.close(instruction?): close the current node, compact its raw history into memory, and resume the parent.
 - spine.next(summary, instruction?): close the current node, preserve compact guidance as memory, then continue in a new sibling under the resumed parent.
 
