@@ -2024,9 +2024,12 @@ async fn drain_in_flight(
                     .is_pending_spine_close_like_output(&response_item)
                     .await
                     .map_err(|err| {
-                        SamplingRequestError::FailedNoTurnComplete(CodexErr::Fatal(format!(
-                            "failed to inspect Spine tool output: {err}"
-                        )))
+                        SamplingRequestError::FailedNoTurnComplete(
+                            CodexErr::SpineTerminalFailure {
+                                operation: "inspect Spine tool output".to_string(),
+                                reason: err.to_string(),
+                            },
+                        )
                     })?;
                 let commit = sess
                     .maybe_commit_spine_tool_output_with_client_session(
@@ -2036,9 +2039,12 @@ async fn drain_in_flight(
                     )
                     .await
                     .map_err(|err| {
-                        SamplingRequestError::FailedNoTurnComplete(CodexErr::Fatal(format!(
-                            "failed to commit Spine tool output: {err}"
-                        )))
+                        SamplingRequestError::FailedNoTurnComplete(
+                            CodexErr::SpineTerminalFailure {
+                                operation: "commit Spine tool output".to_string(),
+                                reason: err.to_string(),
+                            },
+                        )
                     })?;
                 if !commit.record_output {
                     continue;
