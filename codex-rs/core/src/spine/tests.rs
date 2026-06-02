@@ -100,6 +100,46 @@ fn compact_body_with_context_range(
     }
 }
 
+fn observe_spine_request(
+    runtime: &mut SpineRuntime,
+    raw: &mut Vec<Option<ResponseItem>>,
+    tool_name: &str,
+    call_id: &str,
+) -> ResponseItem {
+    let request = spine_call(tool_name, call_id);
+    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    let request_context_index = current_context_len(runtime, raw);
+    raw.push(Some(request.clone()));
+    runtime
+        .observe_raw_items(1)
+        .expect("record spine request");
+    runtime
+        .observe_context_item(request_ordinal, request_context_index, &request)
+        .expect("observe spine request");
+    request
+}
+
+fn observe_function_output(
+    runtime: &mut SpineRuntime,
+    raw: &mut Vec<Option<ResponseItem>>,
+    call_id: &str,
+) -> ResponseItem {
+    let output = function_output(call_id);
+    let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+    raw.push(Some(output.clone()));
+    runtime
+        .observe_raw_items(1)
+        .expect("record function output");
+    runtime
+        .observe_context_item(
+            output_ordinal,
+            usize::try_from(output_ordinal).expect("context index fits usize"),
+            &output,
+        )
+        .expect("observe function output");
+    output
+}
+
 // Error classification and fail-closed boundaries.
 
 #[test]
@@ -195,29 +235,12 @@ fn open_task(
     call_id: &str,
     summary: &str,
 ) {
-    let request = spine_call(SPINE_TOOL_OPEN, call_id);
-    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    let request_context_index = current_context_len(runtime, raw);
-    raw.push(Some(request.clone()));
-    runtime.observe_raw_items(1).expect("record open request");
-    runtime
-        .observe_context_item(request_ordinal, request_context_index, &request)
-        .expect("observe open request");
+    observe_spine_request(runtime, raw, SPINE_TOOL_OPEN, call_id);
     runtime
         .stage_open(call_id.to_string(), summary.to_string())
         .expect("stage open");
 
-    let output = function_output(call_id);
-    let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    raw.push(Some(output.clone()));
-    runtime.observe_raw_items(1).expect("record open output");
-    runtime
-        .observe_context_item(
-            output_ordinal,
-            usize::try_from(output_ordinal).expect("context index fits usize"),
-            &output,
-        )
-        .expect("observe open output");
+    observe_function_output(runtime, raw, call_id);
     runtime
         .maybe_commit_output(call_id, None)
         .expect("commit open");
@@ -230,29 +253,12 @@ fn open_task_with_token_baselines(
     summary: &str,
     token_baselines: SpineTokenBaselines,
 ) {
-    let request = spine_call(SPINE_TOOL_OPEN, call_id);
-    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    let request_context_index = current_context_len(runtime, raw);
-    raw.push(Some(request.clone()));
-    runtime.observe_raw_items(1).expect("record open request");
-    runtime
-        .observe_context_item(request_ordinal, request_context_index, &request)
-        .expect("observe open request");
+    observe_spine_request(runtime, raw, SPINE_TOOL_OPEN, call_id);
     runtime
         .stage_open(call_id.to_string(), summary.to_string())
         .expect("stage open");
 
-    let output = function_output(call_id);
-    let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    raw.push(Some(output.clone()));
-    runtime.observe_raw_items(1).expect("record open output");
-    runtime
-        .observe_context_item(
-            output_ordinal,
-            usize::try_from(output_ordinal).expect("context index fits usize"),
-            &output,
-        )
-        .expect("observe open output");
+    observe_function_output(runtime, raw, call_id);
     runtime
         .maybe_commit_output_with_token_baselines(call_id, None, token_baselines)
         .expect("commit open");
@@ -285,30 +291,13 @@ fn close_task(
     call_id: &str,
     node_id: &str,
 ) {
-    let request = spine_call(SPINE_TOOL_CLOSE, call_id);
-    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    let request_context_index = current_context_len(runtime, raw);
-    raw.push(Some(request.clone()));
-    runtime.observe_raw_items(1).expect("record close request");
-    runtime
-        .observe_context_item(request_ordinal, request_context_index, &request)
-        .expect("observe close request");
+    observe_spine_request(runtime, raw, SPINE_TOOL_CLOSE, call_id);
     runtime
         .stage_close(call_id.to_string(), None)
         .expect("stage close");
     let suffix_start = pending_close_suffix_start(runtime, call_id, "pending close");
 
-    let output = function_output(call_id);
-    let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    raw.push(Some(output.clone()));
-    runtime.observe_raw_items(1).expect("record close output");
-    runtime
-        .observe_context_item(
-            output_ordinal,
-            usize::try_from(output_ordinal).expect("context index fits usize"),
-            &output,
-        )
-        .expect("observe close output");
+    observe_function_output(runtime, raw, call_id);
     runtime
         .maybe_commit_output(
             call_id,
@@ -327,30 +316,13 @@ fn close_task_with_token_baselines(
     node_id: &str,
     token_baselines: SpineTokenBaselines,
 ) {
-    let request = spine_call(SPINE_TOOL_CLOSE, call_id);
-    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    let request_context_index = current_context_len(runtime, raw);
-    raw.push(Some(request.clone()));
-    runtime.observe_raw_items(1).expect("record close request");
-    runtime
-        .observe_context_item(request_ordinal, request_context_index, &request)
-        .expect("observe close request");
+    observe_spine_request(runtime, raw, SPINE_TOOL_CLOSE, call_id);
     runtime
         .stage_close(call_id.to_string(), None)
         .expect("stage close");
     let suffix_start = pending_close_suffix_start(runtime, call_id, "pending close");
 
-    let output = function_output(call_id);
-    let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    raw.push(Some(output.clone()));
-    runtime.observe_raw_items(1).expect("record close output");
-    runtime
-        .observe_context_item(
-            output_ordinal,
-            usize::try_from(output_ordinal).expect("context index fits usize"),
-            &output,
-        )
-        .expect("observe close output");
+    observe_function_output(runtime, raw, call_id);
     runtime
         .maybe_commit_output_with_token_baselines(
             call_id,
@@ -370,30 +342,13 @@ fn next_task(
     closing_node_id: &str,
     next_summary: &str,
 ) -> SpineCommitKind {
-    let request = spine_call(SPINE_TOOL_NEXT, call_id);
-    let request_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    let request_context_index = current_context_len(runtime, raw);
-    raw.push(Some(request.clone()));
-    runtime.observe_raw_items(1).expect("record next request");
-    runtime
-        .observe_context_item(request_ordinal, request_context_index, &request)
-        .expect("observe next request");
+    observe_spine_request(runtime, raw, SPINE_TOOL_NEXT, call_id);
     runtime
         .stage_next(call_id.to_string(), next_summary.to_string(), None)
         .expect("stage next");
     let suffix_start = pending_close_suffix_start(runtime, call_id, "pending close-like next");
 
-    let output = function_output(call_id);
-    let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    raw.push(Some(output.clone()));
-    runtime.observe_raw_items(1).expect("record next output");
-    runtime
-        .observe_context_item(
-            output_ordinal,
-            usize::try_from(output_ordinal).expect("context index fits usize"),
-            &output,
-        )
-        .expect("observe next output");
+    observe_function_output(runtime, raw, call_id);
     runtime
         .maybe_commit_output(
             call_id,
