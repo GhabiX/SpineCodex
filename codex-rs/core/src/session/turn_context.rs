@@ -98,6 +98,7 @@ pub struct TurnContext {
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
     pub(crate) server_model_warning_emitted: AtomicBool,
     pub(crate) model_verification_emitted: AtomicBool,
+    pub(crate) terminal_error_recorded: AtomicBool,
 }
 impl TurnContext {
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
@@ -146,6 +147,14 @@ impl TurnContext {
             .map(|context_window| {
                 context_window.saturating_mul(effective_context_window_percent) / 100
             })
+    }
+
+    pub(crate) fn mark_terminal_error_recorded(&self) {
+        self.terminal_error_recorded.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn terminal_error_recorded(&self) -> bool {
+        self.terminal_error_recorded.load(Ordering::Relaxed)
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {
@@ -299,6 +308,9 @@ impl TurnContext {
             ),
             model_verification_emitted: AtomicBool::new(
                 self.model_verification_emitted.load(Ordering::Relaxed),
+            ),
+            terminal_error_recorded: AtomicBool::new(
+                self.terminal_error_recorded.load(Ordering::Relaxed),
             ),
         }
     }
@@ -633,6 +645,7 @@ impl Session {
             turn_timing_state: Arc::new(TurnTimingState::default()),
             server_model_warning_emitted: AtomicBool::new(false),
             model_verification_emitted: AtomicBool::new(false),
+            terminal_error_recorded: AtomicBool::new(false),
         }
     }
 

@@ -1,4 +1,5 @@
 use crate::Prompt;
+use crate::client::ResponsesToolChoice;
 use crate::client_common::ResponseEvent;
 use crate::context_manager::ContextManager;
 use crate::session::Session;
@@ -29,8 +30,8 @@ impl Session {
     ) -> Result<SpineCloseCompact, SpineError> {
         let raw_items = history.raw_items();
         if suffix_start >= raw_items.len() {
-            return Err(SpineError::InvalidEvent(format!(
-                "spine.close suffix start {suffix_start} is outside history length {}",
+            return Err(SpineError::Operation(format!(
+                "spine.close suffix start {suffix_start} is outside history length {} for node {node_id}",
                 raw_items.len()
             )));
         }
@@ -38,7 +39,7 @@ impl Session {
             .clone()
             .for_prompt(&turn_context.model_info.input_modalities);
         let ResponseItem::FunctionCallOutput { call_id, .. } = close_output else {
-            return Err(SpineError::InvalidEvent(
+            return Err(SpineError::Operation(
                 "spine.close output missing call_id".to_string(),
             ));
         };
@@ -60,25 +61,25 @@ impl Session {
         if let Some(close_request_index) = close_request_index
             && close_request_index < suffix_start
         {
-            return Err(SpineError::InvalidEvent(format!(
-                "spine.close request index {close_request_index} precedes suffix start {suffix_start}"
+            return Err(SpineError::Operation(format!(
+                "spine.close request index {close_request_index} precedes suffix start {suffix_start} for node {node_id} call_id={close_call_id}"
             )));
         }
         if close_context_end == suffix_start {
-            return Err(SpineError::InvalidEvent(
-                "spine.close requires non-empty live suffix".to_string(),
-            ));
+            return Err(SpineError::Operation(format!(
+                "spine.close requires non-empty live suffix for node {node_id} call_id={close_call_id}"
+            )));
         }
         let original_prompt_len = prompt_input.len();
         prompt_input.retain(|item| !is_current_spine_close_like_carrier(item, close_call_id));
         if close_request_index.is_some() && prompt_input.len() == original_prompt_len {
-            return Err(SpineError::InvalidEvent(format!(
-                "spine.close compact prompt missing carrier for call {close_call_id}"
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close compact prompt missing carrier for call {close_call_id} node {node_id}"
             )));
         }
         if suffix_start > prompt_input.len() {
-            return Err(SpineError::InvalidEvent(format!(
-                "spine.close compact suffix start {suffix_start} exceeds prompt length {}",
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close compact suffix start {suffix_start} exceeds prompt length {} for node {node_id} call_id={close_call_id}",
                 prompt_input.len()
             )));
         }
@@ -119,7 +120,7 @@ impl Session {
             {
                 Ok(output) => return Ok(output),
                 Err(CodexErr::Interrupted) => {
-                    return Err(SpineError::InvalidEvent(
+                    return Err(SpineError::CompactFailure(
                         "spine.close compact interrupted".to_string(),
                     ));
                 }
@@ -136,7 +137,7 @@ impl Session {
                     self.set_total_tokens_full(turn_context).await;
                     self.send_event(turn_context, EventMsg::Error(e.to_error_event(None)))
                         .await;
-                    return Err(SpineError::InvalidEvent(format!(
+                    return Err(SpineError::CompactFailure(format!(
                         "spine.close compact failed: {e}"
                     )));
                 }
@@ -154,7 +155,7 @@ impl Session {
                     }
                     self.send_event(turn_context, EventMsg::Error(e.to_error_event(None)))
                         .await;
-                    return Err(SpineError::InvalidEvent(format!(
+                    return Err(SpineError::CompactFailure(format!(
                         "spine.close compact failed: {e}"
                     )));
                 }
@@ -179,6 +180,7 @@ impl Session {
                 turn_context.config.service_tier.clone(),
                 turn_metadata_header.as_deref(),
                 &InferenceTraceContext::disabled(),
+                ResponsesToolChoice::None,
             )
             .await?;
 
@@ -308,7 +310,7 @@ fn spine_close_compact_body(node_id: &str, output: &[ResponseItem]) -> Result<St
                 | ResponseItem::ImageGenerationCall { .. }
         )
     }) {
-        return Err(SpineError::InvalidEvent(format!(
+        return Err(SpineError::CompactFailure(format!(
             "spine.close compact produced unexpected tool call: {item:?}"
         )));
     }
@@ -329,7 +331,7 @@ fn spine_close_compact_body(node_id: &str, output: &[ResponseItem]) -> Result<St
                 ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
             )
         });
-        return Err(SpineError::InvalidEvent(if encrypted_only {
+        return Err(SpineError::CompactFailure(if encrypted_only {
             "spine.close compact produced no readable memory body".to_string()
         } else {
             "spine.close compact produced no memory body".to_string()

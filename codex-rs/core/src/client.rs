@@ -151,6 +151,21 @@ const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResponsesToolChoice {
+    Auto,
+    None,
+}
+
+impl ResponsesToolChoice {
+    fn as_wire_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
+        }
+    }
+}
+
 pub(crate) struct CompactConversationRequestSettings {
     pub(crate) effort: Option<ReasoningEffortConfig>,
     pub(crate) summary: ReasoningSummaryConfig,
@@ -460,6 +475,7 @@ impl ModelClient {
             settings.effort,
             settings.summary,
             settings.service_tier,
+            ResponsesToolChoice::Auto,
         )?;
         let ResponsesApiRequest {
             model,
@@ -714,6 +730,7 @@ impl ModelClient {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
+        tool_choice: ResponsesToolChoice,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
@@ -748,7 +765,7 @@ impl ModelClient {
             instructions: instructions.clone(),
             input,
             tools,
-            tool_choice: "auto".to_string(),
+            tool_choice: tool_choice.as_wire_value().to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             store: provider.is_azure_responses_endpoint(),
@@ -1217,6 +1234,7 @@ impl ModelClientSession {
         service_tier: Option<String>,
         turn_metadata_header: Option<&str>,
         inference_trace: &InferenceTraceContext,
+        tool_choice: ResponsesToolChoice,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
         let mut auth_recovery = auth_manager
@@ -1249,6 +1267,7 @@ impl ModelClientSession {
                 effort,
                 summary,
                 service_tier.clone(),
+                tool_choice,
             )?;
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
@@ -1358,6 +1377,7 @@ impl ModelClientSession {
                 effort,
                 summary,
                 service_tier.clone(),
+                ResponsesToolChoice::Auto,
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
@@ -1591,6 +1611,7 @@ impl ModelClientSession {
                     service_tier,
                     turn_metadata_header,
                     inference_trace,
+                    ResponsesToolChoice::Auto,
                 )
                 .await
             }

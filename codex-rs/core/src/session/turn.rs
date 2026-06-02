@@ -718,8 +718,12 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(e) => {
+                let terminal_error = suppress_turn_complete_after_error(&e);
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                if terminal_error {
+                    turn_context.mark_terminal_error_recorded();
+                }
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
@@ -731,9 +735,23 @@ pub(crate) async fn run_turn(
 }
 
 async fn send_turn_error(sess: &Session, turn_context: &TurnContext, err: CodexErr) {
+    let terminal_error = suppress_turn_complete_after_error(&err);
     info!("Turn error: {err:#}");
     let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
+    if terminal_error {
+        turn_context.mark_terminal_error_recorded();
+    }
     sess.send_event(turn_context, event).await;
+}
+
+fn suppress_turn_complete_after_error(err: &CodexErr) -> bool {
+    match err {
+        CodexErr::Fatal(message) => {
+            message.starts_with("failed to inspect Spine tool output:")
+                || message.starts_with("failed to commit Spine tool output:")
+        }
+        _ => false,
+    }
 }
 
 async fn track_turn_resolved_config_analytics(

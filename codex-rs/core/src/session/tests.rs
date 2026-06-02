@@ -7886,8 +7886,8 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     assert_eq!(
         compact_request.body_json()["tool_choice"].as_str(),
-        Some("auto"),
-        "spine.close compact should use the normal Responses request envelope"
+        Some("none"),
+        "spine.close compact should hard-disable tool output"
     );
     assert!(
         compact_request.body_json()["tools"]
@@ -8167,6 +8167,11 @@ async fn spine_next_bridge_replaces_suffix_and_opens_sibling() {
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
+    assert_eq!(
+        compact_request.body_json()["tool_choice"].as_str(),
+        Some("none"),
+        "spine.next close compact should hard-disable tool output"
+    );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
     assert!(!compact_request.has_function_call("next"));
@@ -8222,6 +8227,234 @@ async fn spine_next_bridge_replaces_suffix_and_opens_sibling() {
         items
     );
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
+async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "image_generation_call",
+                    "id": "ig-spine-next-compact",
+                    "status": "completed",
+                    "revised_prompt": "spine.next\nsummary: bad sibling\ninstruction: preserve the failed compact payload",
+                    "result": "Zm9v"
+                }
+            }),
+            ev_completed("spine-next-image-generation-response"),
+        ]),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTaskTree)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before image-generation next failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "image-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "image-next-open".to_string(),
+            "image next child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("image-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let child_body = user_message("child body before image-generation next failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record child body");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "image-next");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_request))
+        .await
+        .expect("record next request");
+    session
+        .stage_spine_next(
+            "image-next".to_string(),
+            "bad sibling".to_string(),
+            Some("image-generation compact must fail closed".to_string()),
+        )
+        .await
+        .expect("stage next");
+    let next_output = function_output("image-next");
+
+    let err = session
+        .maybe_commit_spine_tool_output(&turn_context, &next_output)
+        .await
+        .expect_err("image-generation compact output should fail");
+    assert!(
+        err.to_string().contains("unexpected tool call")
+            && err.to_string().contains("ImageGenerationCall"),
+        "unexpected error: {err}"
+    );
+    assert_no_pending_spine_commit(&session, "image-next").await;
+    assert_eq!(compact_mock.requests().len(), 1);
+    let compact_request = compact_mock.single_request();
+    assert_eq!(
+        compact_request.body_json()["tool_choice"].as_str(),
+        Some("none"),
+        "failed compact request should still be hard no-tool"
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        &[prefix.clone(), child_body.clone(), next_request]
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    {
+        InitialHistory::Resumed(resumed) => spine_raw_items_after_rollback(&resumed.history),
+        _ => panic!("expected resumed rollout history"),
+    };
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1.1.1"), "{tree}");
+    assert!(tree.contains("[1.1.1] Current image next child"), "{tree}");
+    assert!(!tree.contains("bad sibling"), "{tree}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineTaskTree)
+            .expect("enable spine feature");
+        config.model_provider.supports_websockets = false;
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "call-spine-next-image-failure",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_NEXT,
+                    r#"{"summary":"bad sibling","instruction":"compact failure should stop the turn"}"#,
+                ),
+                ev_completed("spine-next-tool-response"),
+            ]),
+            sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "image_generation_call",
+                        "id": "ig-spine-next-turn-failure",
+                        "status": "completed",
+                        "revised_prompt": "spine.next\nsummary: bad sibling\ninstruction: compact failure should stop the turn",
+                        "result": "Zm9v"
+                    }
+                }),
+                ev_completed("spine-next-compact-image-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "start a spine task and advance".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    let error_message = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Error(error)
+            if error.message.contains("failed to commit Spine tool output")
+                && error.message.contains("ImageGenerationCall") =>
+        {
+            Some(error.message.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert!(
+        error_message.contains("unexpected tool call"),
+        "unexpected error message: {error_message}"
+    );
+
+    let blank_completion = tokio::time::timeout(Duration::from_millis(500), async {
+        loop {
+            let event = test.codex.next_event().await?;
+            if let EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message: None,
+                ..
+            }) = event.msg
+            {
+                return anyhow::Ok(());
+            }
+        }
+    })
+    .await;
+    assert!(
+        blank_completion.is_err(),
+        "fatal Spine compact failure must not emit blank TurnComplete"
+    );
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected sampling request and close compact request"
+    );
+    assert_eq!(
+        requests[0].body_json()["tool_choice"].as_str(),
+        Some("auto")
+    );
+    assert_eq!(
+        requests[1].body_json()["tool_choice"].as_str(),
+        Some("none")
+    );
+
+    Ok(())
 }
 
 #[tokio::test]

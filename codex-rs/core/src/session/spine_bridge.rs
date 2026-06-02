@@ -588,9 +588,9 @@ impl Session {
             if history.raw_items() != expected_history.as_slice() {
                 self.abort_spine_pending_tool(call_id, "spine close history changed before commit")
                     .await;
-                return Err(SpineError::InvalidEvent(
-                    "spine.close history changed while compacting suffix".to_string(),
-                ));
+                return Err(SpineError::Operation(format!(
+                    "spine.close history changed while compacting suffix for call_id={call_id}"
+                )));
             }
         }
         let mut lock_retries = 0;
@@ -614,8 +614,8 @@ impl Session {
                         "spine tool output commit lock retry limit exceeded before commit",
                     )
                     .await;
-                    return Err(SpineError::InvalidEvent(format!(
-                        "spine tool output commit could not acquire session locks after {SPINE_COMMIT_LOCK_RETRY_LIMIT} retries"
+                    return Err(SpineError::Operation(format!(
+                        "spine tool output commit could not acquire session locks after {SPINE_COMMIT_LOCK_RETRY_LIMIT} retries for call_id={call_id}"
                     )));
                 }
             }
@@ -652,9 +652,9 @@ impl Session {
                     "aborted pending Spine transition"
                 );
             }
-            return Err(SpineError::InvalidEvent(
-                "spine.close history changed before suffix replacement".to_string(),
-            ));
+            return Err(SpineError::Operation(format!(
+                "spine.close history changed before suffix replacement for call_id={call_id}"
+            )));
         }
         let close_compact = close_compact.map(|(compact, _)| compact);
         let token_baselines = token_baselines_from_info(state.token_info().as_ref());
@@ -676,8 +676,8 @@ impl Session {
                     let history = state.clone_history();
                     let history_items = history.raw_items();
                     if *open_request_index > history_items.len() {
-                        return Err(SpineError::InvalidEvent(format!(
-                            "spine.open request index {open_request_index} exceeds history length {}",
+                        return Err(SpineError::Invariant(format!(
+                            "spine.open request index {open_request_index} exceeds history length {} for call_id={call_id}",
                             history_items.len()
                         )));
                     }
@@ -713,8 +713,8 @@ impl Session {
                 } => {
                     let suffix_end = state.clone_history().raw_items().len();
                     if *suffix_start > suffix_end {
-                        return Err(SpineError::InvalidEvent(format!(
-                            "spine.close suffix start {suffix_start} exceeds history length {suffix_end}"
+                        return Err(SpineError::Invariant(format!(
+                            "spine.close suffix start {suffix_start} exceeds history length {suffix_end} for call_id={call_id}"
                         )));
                     }
                     let reference_context_item = state.reference_context_item();
@@ -724,7 +724,7 @@ impl Session {
                             replacement.clone(),
                             reference_context_item,
                         )
-                        .map_err(SpineError::InvalidEvent)?;
+                        .map_err(SpineError::Invariant)?;
                 }
                 SpineCommitKind::CloseThenOpen {
                     suffix_start,
@@ -733,8 +733,8 @@ impl Session {
                 } => {
                     let suffix_end = state.clone_history().raw_items().len();
                     if *suffix_start > suffix_end {
-                        return Err(SpineError::InvalidEvent(format!(
-                            "spine.next suffix start {suffix_start} exceeds history length {suffix_end}"
+                        return Err(SpineError::Invariant(format!(
+                            "spine.next suffix start {suffix_start} exceeds history length {suffix_end} for call_id={call_id}"
                         )));
                     }
                     let reference_context_item = state.reference_context_item();
@@ -744,7 +744,7 @@ impl Session {
                             replacement.clone(),
                             reference_context_item,
                         )
-                        .map_err(SpineError::InvalidEvent)?;
+                        .map_err(SpineError::Invariant)?;
                 }
             }
             let token_info = state.token_info();
@@ -828,7 +828,16 @@ impl Session {
             {
                 Ok(result) => result,
                 Err(err) => {
-                    guard.invalidate(format!("failed to install Spine root compact: {err}"));
+                    if !err.should_invalidate_runtime() {
+                        tracing::debug!(
+                            error_class = ?err.class(),
+                            "invalidating Spine runtime after root compact failure to preserve existing fail-closed behavior"
+                        );
+                    }
+                    guard.invalidate(format!(
+                        "failed to install Spine root compact [{:?}]: {err}",
+                        err.class()
+                    ));
                     return Err(err);
                 }
             };
@@ -837,7 +846,7 @@ impl Session {
             };
             let current_open_index = spine.current_open_index()?;
             if current_open_index != result.materialized.len() {
-                return Err(SpineError::InvalidEvent(format!(
+                return Err(SpineError::Invariant(format!(
                     "spine root compact open index {current_open_index} does not match materialized history length {}",
                     result.materialized.len()
                 )));

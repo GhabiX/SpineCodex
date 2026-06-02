@@ -813,17 +813,38 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
+        let terminal_error_recorded = turn_context.terminal_error_recorded();
         if should_clear_active_turn {
             self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref());
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
                 turn_context: turn_context.as_ref(),
-                turn_completed: should_clear_active_turn,
+                turn_completed: should_clear_active_turn && !terminal_error_recorded,
             })
             .await
         {
             warn!("failed to apply goal runtime turn-finished event: {err}");
+        }
+        if terminal_error_recorded {
+            self.services
+                .guardian_rejection_circuit_breaker
+                .lock()
+                .await
+                .clear_turn(&turn_context.sub_id);
+
+            if should_clear_active_turn {
+                let mut active = self.active_turn.lock().await;
+                if let Some(active_turn) = active.as_ref()
+                    && active_turn.tasks.is_empty()
+                    && turn_state
+                        .as_ref()
+                        .is_some_and(|turn_state| Arc::ptr_eq(&active_turn.turn_state, turn_state))
+                {
+                    *active = None;
+                }
+            }
+            return;
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),

@@ -98,6 +98,91 @@ fn compact_body_with_context_range(
     }
 }
 
+#[test]
+fn spine_error_classifies_fail_closed_boundaries() {
+    let tool_use = SpineError::ToolUse("bad tool args".to_string());
+    assert_eq!(tool_use.class(), SpineErrorClass::ToolUse);
+    assert!(!tool_use.should_invalidate_runtime());
+
+    let operation = SpineError::Operation("bad operation order".to_string());
+    assert_eq!(operation.class(), SpineErrorClass::Operation);
+    assert!(!operation.should_invalidate_runtime());
+
+    let compact = SpineError::CompactFailure("compact failed before commit".to_string());
+    assert_eq!(compact.class(), SpineErrorClass::CompactFailure);
+    assert!(!compact.should_invalidate_runtime());
+
+    let invariant = SpineError::Invariant("committed state mismatch".to_string());
+    assert_eq!(invariant.class(), SpineErrorClass::Invariant);
+    assert!(invariant.should_invalidate_runtime());
+
+    let corruption = SpineError::SidecarCorruption("missing sidecar evidence".to_string());
+    assert_eq!(corruption.class(), SpineErrorClass::SidecarCorruption);
+    assert!(corruption.should_invalidate_runtime());
+}
+
+#[test]
+fn spine_error_classifies_tool_use_operation_and_compact_failures() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    let err = runtime
+        .stage_open("empty-open".to_string(), "   ".to_string())
+        .expect_err("empty open summary must fail");
+    assert_eq!(err.class(), SpineErrorClass::ToolUse);
+    assert!(
+        err.to_string()
+            .contains("spine.open summary must not be empty")
+    );
+
+    let err = runtime
+        .stage_open("missing-anchor".to_string(), "child".to_string())
+        .expect_err("open without observed request anchor must fail");
+    assert_eq!(err.class(), SpineErrorClass::Operation);
+    assert!(
+        err.to_string()
+            .contains("missing spine.open request anchor")
+    );
+
+    runtime.observe_raw_items(1).expect("record user raw item");
+    runtime
+        .observe_context_item(0, 0, &text_item("live suffix"))
+        .expect("observe user msg");
+    runtime
+        .stage_close("close".to_string(), None)
+        .expect("stage close");
+    let err = runtime
+        .maybe_commit_output("close", None)
+        .expect_err("close without compact result must fail");
+    assert_eq!(err.class(), SpineErrorClass::CompactFailure);
+    assert!(
+        err.to_string()
+            .contains("spine.close requires a completed suffix compact")
+    );
+    assert!(!err.should_invalidate_runtime());
+}
+
+#[test]
+fn spine_error_classifies_missing_raw_coverage_as_sidecar_corruption() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let runtime = SpineRuntime::load_or_create(&rollout, 1).expect("create spine");
+    let raw = vec![Some(text_item("uncovered durable item"))];
+
+    let err = runtime
+        .validate_raw_coverage(&raw)
+        .expect_err("missing durable raw coverage must fail closed");
+    assert_eq!(err.class(), SpineErrorClass::SidecarCorruption);
+    assert!(err.should_invalidate_runtime());
+    assert!(
+        err.to_string()
+            .contains("spine sidecar is missing token coverage for raw ordinal 0"),
+        "unexpected coverage error: {err}"
+    );
+    assert!(err.to_string().contains("token_seq="));
+}
+
 fn open_task(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,

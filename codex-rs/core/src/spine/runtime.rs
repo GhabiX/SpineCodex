@@ -273,7 +273,7 @@ impl SpineSessionState {
     fn invalid_error(&self) -> Option<SpineError> {
         self.invalid
             .as_ref()
-            .map(|reason| SpineError::InvalidStore(format!("spine runtime is invalid: {reason}")))
+            .map(|reason| SpineError::Invariant(format!("spine runtime is invalid: {reason}")))
     }
 
     pub(crate) fn ensure_valid(&self) -> Result<(), SpineError> {
@@ -468,9 +468,9 @@ impl SpineRuntime {
             .collect::<Vec<_>>();
         let prefix_ps = parse_stack_from_events(&prefix_events, &archive, &mems, prefix_mask)?;
         if prefix_ps != checkpoint.parse_stack {
-            return Err(SpineError::InvalidStore(format!(
-                "spine checkpoint ParseStack mismatch for {}",
-                checkpoint.checkpoint_id
+            return Err(SpineError::Invariant(format!(
+                "spine checkpoint ParseStack mismatch for {} at raw_ordinal={} token_seq={}",
+                checkpoint.checkpoint_id, checkpoint.raw_ordinal, checkpoint.token_seq
             )));
         }
 
@@ -593,18 +593,16 @@ impl SpineRuntime {
         let Some(open_meta) = self.parse_stack.current_open_meta_opt() else {
             let cursor = self.parse_stack.current_cursor_id()?;
             if cursor.is_root_epoch() {
-                return Err(SpineError::InvalidEvent(format!(
+                return Err(SpineError::Operation(format!(
                     "cannot close root epoch cursor {cursor}"
                 )));
             }
-            return Err(SpineError::InvalidEvent(
+            return Err(SpineError::Operation(
                 "spine.close requires a live open task".to_string(),
             ));
         };
         if open_meta.id.is_root_epoch() {
-            return Err(SpineError::InvalidEvent(
-                "cannot close root epoch".to_string(),
-            ));
+            return Err(SpineError::Operation("cannot close root epoch".to_string()));
         }
         Ok(open_meta)
     }
@@ -837,12 +835,14 @@ impl SpineRuntime {
     ) -> Result<(), SpineError> {
         let summary = summary.trim().to_string();
         if summary.is_empty() {
-            return Err(SpineError::InvalidEvent(
+            return Err(SpineError::ToolUse(
                 "spine.open summary must not be empty".to_string(),
             ));
         }
         let anchor = self.open_requests.remove(&call_id).ok_or_else(|| {
-            SpineError::InvalidEvent(format!("missing spine.open request anchor for {call_id}"))
+            SpineError::Operation(format!(
+                "missing spine.open request anchor for call_id={call_id}"
+            ))
         })?;
         self.stage(PendingTransition::Open {
             call_id,
@@ -871,7 +871,7 @@ impl SpineRuntime {
     ) -> Result<(), SpineError> {
         let summary = summary.trim().to_string();
         if summary.is_empty() {
-            return Err(SpineError::InvalidEvent(
+            return Err(SpineError::ToolUse(
                 "spine.next summary must not be empty".to_string(),
             ));
         }
@@ -884,9 +884,14 @@ impl SpineRuntime {
 
     fn stage(&mut self, pending: PendingTransition) -> Result<(), SpineError> {
         if self.pending.is_some() {
-            return Err(SpineError::InvalidEvent(
-                "another spine transition is already pending".to_string(),
-            ));
+            let pending_call_id = self
+                .pending
+                .as_ref()
+                .map(PendingTransition::call_id)
+                .unwrap_or("<unknown>");
+            return Err(SpineError::Operation(format!(
+                "another spine transition is already pending: call_id={pending_call_id}"
+            )));
         }
         self.pending = Some(pending);
         Ok(())
@@ -1104,9 +1109,9 @@ impl SpineRuntime {
         let open_meta = self.current_close_open_meta()?.clone();
         let node = open_meta.id.clone();
         if !self.parse_stack.current_open_has_nodes()? {
-            return Err(SpineError::InvalidEvent(
-                "spine.close requires non-empty live suffix".to_string(),
-            ));
+            return Err(SpineError::Operation(format!(
+                "spine.close requires non-empty live suffix for node {node}"
+            )));
         }
         let suffix_start = open_meta.index;
         let close_event = KEvent::Close {
@@ -1118,13 +1123,16 @@ impl SpineRuntime {
             close_context_tokens: token_baselines.context_tokens,
         };
         let close_compact = close_compact.ok_or_else(|| {
-            SpineError::InvalidEvent("spine.close requires a completed suffix compact".to_string())
+            SpineError::CompactFailure(format!(
+                "spine.close requires a completed suffix compact for node {}",
+                open_meta.id
+            ))
         })?;
         let seq = self.ledger.next_event_seq;
         if close_compact.source_context_range.start != suffix_start {
-            return Err(SpineError::InvalidEvent(format!(
-                "spine.close compact context range starts at {}, expected suffix start {suffix_start}",
-                close_compact.source_context_range.start
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close compact context range starts at {}, expected suffix start {suffix_start} for node {}",
+                close_compact.source_context_range.start, open_meta.id
             )));
         }
         let mem = self.stage_close_mem(&open_meta, close_compact, token_baselines)?;
@@ -1213,7 +1221,7 @@ impl SpineRuntime {
         checkpoint_rollout_path: Option<&Path>,
     ) -> Result<SpineRootCompactResult, SpineError> {
         if body.trim().is_empty() {
-            return Err(SpineError::InvalidEvent(
+            return Err(SpineError::CompactFailure(
                 "spine root compact memory body must not be empty".to_string(),
             ));
         }
@@ -1284,7 +1292,7 @@ impl SpineRuntime {
         let materialized = render_parse_stack_to_context(&staged_parse_stack, raw_items)?;
         let current_open_index = staged_parse_stack.current_open_meta()?.index;
         if current_open_index != materialized.len() {
-            return Err(SpineError::InvalidEvent(format!(
+            return Err(SpineError::Invariant(format!(
                 "spine root compact open index {current_open_index} does not match materialized history length {}",
                 materialized.len()
             )));
@@ -1379,8 +1387,8 @@ impl SpineRuntime {
             return Ok(boundary);
         }
         let Some(parent) = node_id.parent() else {
-            return Err(SpineError::InvalidEvent(format!(
-                "missing open event for {node_id}"
+            return Err(SpineError::SidecarCorruption(format!(
+                "missing open event for {node_id}; node has no parent"
             )));
         };
         if parent.is_root_epoch() && node_id.0.last() == Some(&1) {
@@ -1389,8 +1397,8 @@ impl SpineRuntime {
                     SpineError::InvalidEvent("root epoch id is empty".to_string())
                 })?;
             let Some(previous_root_epoch) = root_epoch.checked_sub(1) else {
-                return Err(SpineError::InvalidEvent(format!(
-                    "missing open event for {node_id}"
+                return Err(SpineError::SidecarCorruption(format!(
+                    "missing open event for {node_id}; root epoch {root_epoch} has no previous compact boundary"
                 )));
             };
             let compacted_parent = NodeId::root_epoch(previous_root_epoch);
@@ -1406,11 +1414,13 @@ impl SpineRuntime {
                     _ => None,
                 })
                 .ok_or_else(|| {
-                    SpineError::InvalidEvent(format!("missing open event for {node_id}"))
+                    SpineError::SidecarCorruption(format!(
+                        "missing open event for {node_id}; no root compact boundary for parent {parent}"
+                    ))
                 });
         }
-        Err(SpineError::InvalidEvent(format!(
-            "missing open event for {node_id}"
+        Err(SpineError::SidecarCorruption(format!(
+            "missing open event for {node_id}; no matching open/root compact event in sidecar"
         )))
     }
 
@@ -1481,8 +1491,10 @@ impl SpineRuntime {
                 raw_item_requires_spine_coverage(item, &spine_control_call_ids, &function_call_ids)
             }) && !covered[index]
             {
-                return Err(SpineError::InvalidStore(format!(
-                    "spine sidecar is missing token coverage for raw ordinal {index}"
+                return Err(SpineError::SidecarCorruption(format!(
+                    "spine sidecar is missing token coverage for raw ordinal {index}; raw_len={} token_seq={}",
+                    raw_items.len(),
+                    self.ledger.next_event_seq
                 )));
             }
         }
@@ -1713,8 +1725,28 @@ pub(crate) fn is_spine_close_like_tool_name(name: &str) -> bool {
     matches!(name, SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpineErrorClass {
+    ToolUse,
+    Operation,
+    CompactFailure,
+    Invariant,
+    SidecarCorruption,
+    Persistence,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum SpineError {
+    #[error("spine tool-use error: {0}")]
+    ToolUse(String),
+    #[error("spine operation error: {0}")]
+    Operation(String),
+    #[error("spine compact error: {0}")]
+    CompactFailure(String),
+    #[error("spine invariant violation: {0}")]
+    Invariant(String),
+    #[error("spine sidecar corruption: {0}")]
+    SidecarCorruption(String),
     #[error("spine store error: {0}")]
     InvalidStore(String),
     #[error("spine event error: {0}")]
@@ -1723,6 +1755,30 @@ pub(crate) enum SpineError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+impl SpineError {
+    pub(crate) fn class(&self) -> SpineErrorClass {
+        match self {
+            Self::ToolUse(_) => SpineErrorClass::ToolUse,
+            Self::Operation(_) | Self::InvalidEvent(_) => SpineErrorClass::Operation,
+            Self::CompactFailure(_) => SpineErrorClass::CompactFailure,
+            Self::Invariant(_) => SpineErrorClass::Invariant,
+            Self::SidecarCorruption(_) | Self::InvalidStore(_) | Self::Json(_) => {
+                SpineErrorClass::SidecarCorruption
+            }
+            Self::Io(_) => SpineErrorClass::Persistence,
+        }
+    }
+
+    pub(crate) fn should_invalidate_runtime(&self) -> bool {
+        matches!(
+            self.class(),
+            SpineErrorClass::Invariant
+                | SpineErrorClass::SidecarCorruption
+                | SpineErrorClass::Persistence
+        )
+    }
 }
 
 #[cfg(test)]
