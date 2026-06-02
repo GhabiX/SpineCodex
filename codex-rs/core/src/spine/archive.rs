@@ -1,4 +1,5 @@
 use crate::spine::SpineError;
+use crate::spine::io::sha1_hex;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::SegRef;
@@ -7,22 +8,90 @@ use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::render::read_memory_ref_body;
 use crate::spine::store::BODY_DIR;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 #[derive(Clone, Debug)]
 pub(super) struct SpineArchive {
     pub(super) root: PathBuf,
+    staging: Option<Rc<RefCell<ArchiveStaging>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct StagedArchiveWrite {
+    pub(super) path: PathBuf,
+    pub(super) content: String,
+}
+
+#[derive(Debug, Default)]
+struct ArchiveStaging {
+    memory_bodies: BTreeMap<String, String>,
+    writes: Vec<StagedArchiveWrite>,
 }
 
 impl SpineArchive {
     pub(super) fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            staging: None,
+        }
+    }
+
+    pub(super) fn staged_with_memory_body(root: PathBuf, memory_id: String, body: String) -> Self {
+        let mut memory_bodies = BTreeMap::new();
+        memory_bodies.insert(memory_id, body);
+        Self {
+            root,
+            staging: Some(Rc::new(RefCell::new(ArchiveStaging {
+                memory_bodies,
+                writes: Vec::new(),
+            }))),
+        }
     }
 
     pub(super) fn node_dir(&self, id: &NodeId) -> PathBuf {
         self.root.join("nodes").join(id.as_path().replace('.', "/"))
+    }
+
+    pub(super) fn staged_writes(&self) -> Vec<StagedArchiveWrite> {
+        self.staging
+            .as_ref()
+            .map(|staging| staging.borrow().writes.clone())
+            .unwrap_or_default()
+    }
+
+    fn staged_memory_body(&self, memory_id: &str) -> Option<String> {
+        self.staging.as_ref().and_then(|staging| {
+            staging
+                .borrow()
+                .memory_bodies
+                .get(memory_id)
+                .map(ToString::to_string)
+        })
+    }
+
+    fn stage_archive_file(&self, path: PathBuf, content: String) -> Result<(), SpineError> {
+        let Some(staging) = self.staging.as_ref() else {
+            return Err(SpineError::Invariant(
+                "cannot stage archive file on non-staged archive".to_string(),
+            ));
+        };
+        let mut staging = staging.borrow_mut();
+        if let Some(existing) = staging.writes.iter().find(|write| write.path == path) {
+            if existing.content == content {
+                return Ok(());
+            }
+            return Err(SpineError::InvalidStore(format!(
+                "staged archive file {} already exists with different content",
+                path.display()
+            )));
+        }
+        staging.writes.push(StagedArchiveWrite { path, content });
+        Ok(())
     }
 }
 
@@ -32,15 +101,30 @@ pub(super) fn archive_task_tree(
     children: &[SpineTreeNode],
     memory: &MemoryRef,
 ) -> Result<(PathBuf, PathBuf), SpineError> {
-    std::fs::create_dir_all(&meta.node_dir)?;
     let memory_path = meta.node_dir.join("Memory.md");
     let trajs_path = meta.node_dir.join("Trajs.md");
-    write_archive_file(&memory_path, &render_memory_archive(memory)?)?;
-    write_archive_file(&trajs_path, &render_trajs_archive(children)?)?;
+    let memory_body = archive.staged_memory_body(&memory.compact_id);
+    let memory_content = render_memory_archive(memory, memory_body.as_deref())?;
+    let trajs_content = render_trajs_archive(children)?;
+    if archive.staging.is_some() {
+        archive.stage_archive_file(memory_path.clone(), memory_content)?;
+        archive.stage_archive_file(trajs_path.clone(), trajs_content)?;
+    } else {
+        std::fs::create_dir_all(&meta.node_dir)?;
+        write_archive_file(&memory_path, &memory_content)?;
+        write_archive_file(&trajs_path, &trajs_content)?;
+    }
     Ok((
         archive_relative_path(archive, &memory_path),
         archive_relative_path(archive, &trajs_path),
     ))
+}
+
+pub(super) fn flush_archive_writes(writes: &[StagedArchiveWrite]) -> Result<(), SpineError> {
+    for write in writes {
+        write_archive_file(&write.path, &write.content)?;
+    }
+    Ok(())
 }
 
 fn archive_relative_path(archive: &SpineArchive, path: &Path) -> PathBuf {
@@ -94,8 +178,23 @@ fn write_archive_file(path: &Path, content: &str) -> Result<(), SpineError> {
     Ok(())
 }
 
-fn render_memory_archive(memory: &MemoryRef) -> Result<String, SpineError> {
-    let body = read_memory_ref_body(memory)?;
+fn render_memory_archive(
+    memory: &MemoryRef,
+    staged_body: Option<&str>,
+) -> Result<String, SpineError> {
+    let body = match staged_body {
+        Some(body) => {
+            let actual_hash = sha1_hex(body.as_bytes());
+            if actual_hash != memory.body_hash {
+                return Err(SpineError::InvalidStore(format!(
+                    "staged memory body hash mismatch for {}",
+                    memory.compact_id
+                )));
+            }
+            body.to_string()
+        }
+        None => read_memory_ref_body(memory)?,
+    };
 
     let mut out = String::new();
     out.push_str("# Spine Memory Archive\n\n");

@@ -7,6 +7,8 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::spine::archive::SpineArchive;
+use crate::spine::archive::StagedArchiveWrite;
+use crate::spine::archive::flush_archive_writes;
 use crate::spine::archive::memory_ref;
 use crate::spine::archive::tree_meta_with_token_baselines;
 use crate::spine::checkpoint::SpineCheckpoint;
@@ -40,6 +42,7 @@ use crate::spine::parse_stack::parse_stack_from_events;
 use crate::spine::parse_stack::parse_stack_msg_leaf_count;
 use crate::spine::render::memory_response_item;
 use crate::spine::render::render_parse_stack_to_context;
+use crate::spine::store::BODY_DIR;
 use crate::spine::store::SpineStore;
 
 pub(crate) const SPINE_NAMESPACE: &str = "spine";
@@ -134,6 +137,8 @@ struct PreparedCloseCommit {
     suffix_start: usize,
     replacement: Vec<ResponseItem>,
     mem: MemRecord,
+    memory_body: String,
+    archive_writes: Vec<StagedArchiveWrite>,
     close_event: SpineLedgerEvent,
     staged_parse_stack: ParseStack,
 }
@@ -1038,6 +1043,9 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
     ) -> Result<SpineCommitKind, SpineError> {
         let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
+        self.store
+            .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
+        flush_archive_writes(&prepared.archive_writes)?;
         self.store.append_mem(&prepared.mem)?;
         self.append_cached_event(prepared.close_event)?;
         self.parse_stack = prepared.staged_parse_stack;
@@ -1089,6 +1097,9 @@ impl SpineRuntime {
             },
             &self.archive(),
         )?;
+        self.store
+            .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
+        flush_archive_writes(&prepared.archive_writes)?;
         self.store.append_mem(&prepared.mem)?;
         self.append_cached_event(prepared.close_event)?;
         self.append_cached_event(open_event)?;
@@ -1135,8 +1146,8 @@ impl SpineRuntime {
                 close_compact.source_context_range.start, open_meta.id
             )));
         }
-        let mem = self.stage_close_mem(&open_meta, close_compact, token_baselines)?;
-        let body = self.store.read_memory_body(&mem)?;
+        let body = close_compact.body.clone();
+        let mem = self.stage_close_mem(&open_meta, &close_compact, token_baselines)?;
         let memory = memory_ref(
             &self.archive(),
             mem.compact_id.clone(),
@@ -1152,13 +1163,21 @@ impl SpineRuntime {
             mem.open_context_source,
             mem.memory_output_tokens,
         );
+        let staged_archive = SpineArchive::staged_with_memory_body(
+            self.store.root.clone(),
+            mem.compact_id.clone(),
+            body.clone(),
+        );
         let mut staged_parse_stack = self.parse_stack.clone();
-        staged_parse_stack.shift(SpineToken::Close { memory }, &self.archive())?;
+        staged_parse_stack.shift(SpineToken::Close { memory }, &staged_archive)?;
+        let archive_writes = staged_archive.staged_writes();
         let replacement = vec![memory_response_item(&body)];
         Ok(PreparedCloseCommit {
             suffix_start,
             replacement,
             mem,
+            memory_body: body,
+            archive_writes,
             close_event,
             staged_parse_stack,
         })
@@ -1337,7 +1356,7 @@ impl SpineRuntime {
     fn stage_close_mem(
         &self,
         open_meta: &TreeMeta,
-        close_compact: SpineCloseCompact,
+        close_compact: &SpineCloseCompact,
         token_baselines: SpineTokenBaselines,
     ) -> Result<MemRecord, SpineError> {
         let node_id = open_meta.id.clone();
@@ -1349,9 +1368,7 @@ impl SpineRuntime {
             raw_start,
             end
         );
-        let body_path = self
-            .store
-            .write_memory_body(&compact_id, &close_compact.body)?;
+        let body_path = format!("{BODY_DIR}/{compact_id}.md");
         let open_context_baseline = self.open_context_baseline_for(open_meta);
         let mem = MemRecord {
             compact_id,
