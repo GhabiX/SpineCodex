@@ -390,7 +390,7 @@ fn collect_tool_executors(
     }
 
     executors.push(Arc::new(PlanHandler));
-    if config.spine_task_tree {
+    if config.spine_jit {
         executors.extend(
             SpineHandler::all()
                 .into_iter()

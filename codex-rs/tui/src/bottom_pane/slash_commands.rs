@@ -60,7 +60,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) plugins_command_enabled: bool,
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
-    pub(crate) spine_task_tree_enabled: bool,
+    pub(crate) spine_jit_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
@@ -77,7 +77,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
         .filter(|(_, cmd)| flags.goal_command_enabled || *cmd != SlashCommand::Goal)
-        .filter(|(_, cmd)| flags.spine_task_tree_enabled || !is_spine_task_tree_command(*cmd))
+        .filter(|(_, cmd)| flags.spine_jit_enabled || !is_spine_jit_command(*cmd))
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
@@ -85,7 +85,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .collect()
 }
 
-fn is_spine_task_tree_command(cmd: SlashCommand) -> bool {
+fn is_spine_jit_command(cmd: SlashCommand) -> bool {
     match cmd {
         SlashCommand::Spinetree => true,
         #[cfg(debug_assertions)]
@@ -176,7 +176,7 @@ mod tests {
             plugins_command_enabled: true,
             service_tier_commands_enabled: true,
             goal_command_enabled: true,
-            spine_task_tree_enabled: true,
+            spine_jit_enabled: true,
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: true,
@@ -229,16 +229,16 @@ mod tests {
     }
 
     #[test]
-    fn spinetree_command_is_hidden_when_spine_task_tree_is_disabled() {
+    fn spinetree_command_is_hidden_when_spine_jit_is_disabled() {
         let mut flags = all_enabled_flags();
-        flags.spine_task_tree_enabled = false;
+        flags.spine_jit_enabled = false;
         assert_eq!(find_builtin_command("spinetree", flags), None);
         #[cfg(debug_assertions)]
         assert_eq!(find_builtin_command("debugspine", flags), None);
     }
 
     #[test]
-    fn spinetree_command_resolves_when_spine_task_tree_is_enabled() {
+    fn spinetree_command_resolves_when_spine_jit_is_enabled() {
         assert_eq!(
             find_builtin_command("spinetree", all_enabled_flags()),
             Some(SlashCommand::Spinetree)

@@ -320,7 +320,7 @@ async fn make_spine_session_with_closed_child(
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -1897,7 +1897,7 @@ async fn record_initial_history_new_seeds_initial_spine_tree_snapshot() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -2385,7 +2385,7 @@ async fn clone_spine_sidecar_for_fork_replays_interrupted_child_suffix() {
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -2426,7 +2426,7 @@ async fn clone_spine_sidecar_for_fork_replays_interrupted_child_suffix() {
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -4756,7 +4756,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         spine: config
             .features
-            .enabled(Feature::SpineTaskTree)
+            .enabled(Feature::SpineJit)
             .then(|| TokioMutex::new(SpineSessionState::new())),
         spine_pressure_prompt_state: Mutex::new(Default::default()),
         next_internal_sub_id: AtomicU64::new(0),
@@ -6619,7 +6619,7 @@ where
         services,
         spine: config
             .features
-            .enabled(Feature::SpineTaskTree)
+            .enabled(Feature::SpineJit)
             .then(|| TokioMutex::new(SpineSessionState::new())),
         spine_pressure_prompt_state: Mutex::new(Default::default()),
         next_internal_sub_id: AtomicU64::new(0),
@@ -7811,7 +7811,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -8100,7 +8100,7 @@ async fn spine_next_bridge_replaces_suffix_and_opens_sibling() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -8256,7 +8256,7 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -8360,7 +8360,7 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .enable(Feature::SpineTaskTree)
+            .enable(Feature::SpineJit)
             .expect("enable spine feature");
         config.model_provider.supports_websockets = false;
     });
@@ -8475,7 +8475,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -8592,7 +8592,7 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -8743,7 +8743,7 @@ async fn spine_close_rejects_empty_live_suffix_before_compact_request() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -8848,7 +8848,7 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -8959,7 +8959,7 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -9098,7 +9098,7 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
         },
@@ -9256,7 +9256,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -9419,7 +9419,7 @@ async fn spine_native_compact_checkpoint_failure_invalidates_without_replacing_h
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -9500,7 +9500,7 @@ async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -9547,7 +9547,7 @@ async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -9581,7 +9581,7 @@ async fn spine_root_compact_records_close_tokens_without_next_open_baseline() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -9654,7 +9654,7 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -9757,7 +9757,7 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -9807,7 +9807,7 @@ async fn spine_native_compact_new_root_open_index_matches_installed_history_befo
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -9966,7 +9966,7 @@ async fn spine_native_compact_new_root_open_index_matches_installed_history_befo
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -10003,7 +10003,7 @@ async fn spine_feature_off_records_spine_shaped_items_as_plain_history_without_s
         |config| {
             config
                 .features
-                .disable(Feature::SpineTaskTree)
+                .disable(Feature::SpineJit)
                 .expect("disable spine feature");
         },
     )
@@ -10082,7 +10082,7 @@ async fn spine_feature_off_does_not_overlay_spine_shaped_streaming_followup() ->
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .disable(Feature::SpineTaskTree)
+            .disable(Feature::SpineJit)
             .expect("disable spine feature");
     });
     let test = builder.build(&server).await?;
@@ -10168,7 +10168,7 @@ async fn spine_new_session_initializes_sidecar_before_tree() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -10220,7 +10220,7 @@ async fn spine_control_carriers_are_not_durable_context_history() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -10299,7 +10299,7 @@ async fn spine_status_overlay_is_injected_into_sampling_prompt_only() -> anyhow:
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .enable(Feature::SpineTaskTree)
+            .enable(Feature::SpineJit)
             .expect("enable spine feature");
     });
     let test = builder.build(&server).await?;
@@ -10360,7 +10360,7 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.model_provider.base_url = Some(base_url.clone());
             config.model_provider.supports_websockets = false;
@@ -10502,7 +10502,7 @@ async fn spine_tree_tool_appends_context_pressure_from_last_usage() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -10545,7 +10545,7 @@ async fn spine_tree_tool_omits_context_pressure_when_window_unknown() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -10582,7 +10582,7 @@ async fn spine_tree_tool_node_context_uses_provider_context_delta() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -10708,7 +10708,7 @@ async fn spine_tree_tool_node_context_uses_provider_context_delta() {
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -10758,7 +10758,7 @@ async fn spine_tree_tool_appends_inclusive_context_for_open_ancestors() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -10897,7 +10897,7 @@ async fn record_token_usage_refreshes_spine_tree_cache_only_snapshot() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -10976,7 +10976,7 @@ async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -11052,7 +11052,7 @@ async fn spine_pressure_prompt_emits_boundary_hint_once_per_band() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -11148,7 +11148,7 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -11227,7 +11227,7 @@ async fn spine_pressure_prompt_context_warning_survives_missing_node_baseline() 
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -11293,7 +11293,7 @@ async fn spine_sidecar_write_failure_invalidates_runtime_and_resume_fails_closed
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -11382,7 +11382,7 @@ async fn spine_feature_off_prompt_history_is_byte_identical_to_base_codex() {
             |config| {
                 config
                     .features
-                    .disable(Feature::SpineTaskTree)
+                    .disable(Feature::SpineJit)
                     .expect("disable spine feature");
             },
         )
@@ -11492,7 +11492,7 @@ async fn spine_feature_off_replacement_history_resume_is_host_verbatim() {
         |config| {
             config
                 .features
-                .disable(Feature::SpineTaskTree)
+                .disable(Feature::SpineJit)
                 .expect("disable spine feature");
         },
     )
@@ -11540,7 +11540,7 @@ async fn spine_fixed_query_is_not_shifted_as_msg() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config.developer_instructions = Some("fixed developer instruction".to_string());
         },
@@ -11595,7 +11595,7 @@ async fn spine_raw_ordinals_follow_persisted_rollout_items_not_input_width() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -11676,7 +11676,7 @@ async fn spine_resume_rejects_replacement_history_mismatch() {
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -11714,7 +11714,7 @@ async fn failed_spine_replay_does_not_mutate_live_session_history() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -11769,7 +11769,7 @@ async fn replacement_history_not_used_as_spine_replay_source() {
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -11796,7 +11796,7 @@ async fn replacement_history_not_used_as_spine_replay_source() {
         .expect_err("missing sidecar should fail closed");
     assert!(
         err.to_string()
-            .contains("spine_task_tree resume requires Spine sidecar"),
+            .contains("spine_jit resume requires Spine sidecar"),
         "unexpected resume error: {err}"
     );
 }
@@ -11826,7 +11826,7 @@ async fn spine_resume_rejects_unproved_matching_replacement_history_checkpoint()
             |config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             },
         )
@@ -11870,7 +11870,7 @@ async fn spine_resume_non_spine_session_fails_closed() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -11892,7 +11892,7 @@ async fn spine_resume_non_spine_session_fails_closed() {
         .expect_err("missing sidecar should fail closed");
     assert!(
         err.to_string()
-            .contains("spine_task_tree resume requires Spine sidecar"),
+            .contains("spine_jit resume requires Spine sidecar"),
         "unexpected resume error: {err}"
     );
 }
@@ -12285,7 +12285,7 @@ async fn spine_interrupt_marker_is_sidecar_covered_without_raw_event() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -12350,7 +12350,7 @@ async fn turn_abort_clears_stale_spine_pending_transition() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -12419,7 +12419,7 @@ async fn spine_user_prompt_append_creates_sidecar_coverage() {
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )
@@ -12595,7 +12595,7 @@ async fn task_finish_pending_input_append_failure_does_not_emit_turn_complete() 
         |config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         },
     )

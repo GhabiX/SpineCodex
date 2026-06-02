@@ -14,13 +14,13 @@ use crate::spine::io::rollout_stem;
 use crate::spine::io::sha1_hex;
 use crate::spine::io::write_json_file;
 use crate::spine::io::write_json_file_if_unchanged;
-use crate::spine::model::KEvent;
-use crate::spine::model::LoggedKEvent;
 use crate::spine::model::LoggedPressureEvent;
+use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
 #[cfg(test)]
 use crate::spine::model::PressureEvent;
 use crate::spine::model::RawMask;
+use crate::spine::model::SpineLedgerEvent;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -273,16 +273,19 @@ impl SpineStore {
         self.checkpoint_dir().join(INITIAL_CHECKPOINT_FILE)
     }
 
-    pub(super) fn append_event(&self, event: &KEvent) -> Result<u64, SpineError> {
+    pub(super) fn append_event(&self, event: &SpineLedgerEvent) -> Result<u64, SpineError> {
         let seq = self.next_event_seq()?;
-        self.append_logged_event(&LoggedKEvent {
+        self.append_logged_event(&LoggedSpineLedgerEvent {
             seq,
             event: event.clone(),
         })?;
         Ok(seq)
     }
 
-    pub(super) fn append_logged_event(&self, event: &LoggedKEvent) -> Result<(), SpineError> {
+    pub(super) fn append_logged_event(
+        &self,
+        event: &LoggedSpineLedgerEvent,
+    ) -> Result<(), SpineError> {
         append_json_line(&self.tree_path(), event)
     }
 
@@ -314,7 +317,7 @@ impl SpineStore {
         append_json_line(&self.compact_checkpoint_path(), checkpoint)
     }
 
-    pub(super) fn events(&self) -> Result<Vec<LoggedKEvent>, SpineError> {
+    pub(super) fn events(&self) -> Result<Vec<LoggedSpineLedgerEvent>, SpineError> {
         read_json_lines(&self.tree_path())
     }
 
@@ -326,7 +329,7 @@ impl SpineStore {
     }
 
     #[cfg(test)]
-    pub(super) fn events_for_test(&self) -> Result<Vec<LoggedKEvent>, SpineError> {
+    pub(super) fn events_for_test(&self) -> Result<Vec<LoggedSpineLedgerEvent>, SpineError> {
         self.events()
     }
 
@@ -467,7 +470,7 @@ impl SpineStore {
             .collect::<Vec<_>>();
         if checkpoints.is_empty() {
             return Err(SpineError::InvalidStore(format!(
-                "spine_task_tree replacement_history does not match sidecar h(PS) compact checkpoint at raw boundary {raw_boundary}"
+                "spine_jit replacement_history does not match sidecar h(PS) compact checkpoint at raw boundary {raw_boundary}"
             )));
         }
         checkpoints.sort_by_key(|checkpoint| checkpoint.token_seq);
@@ -642,14 +645,14 @@ fn read_pressure_json_lines(path: &Path) -> Result<Vec<LoggedPressureEvent>, Spi
 }
 
 fn required_memory_ids_for_cloned_events(
-    events: &[LoggedKEvent],
+    events: &[LoggedSpineLedgerEvent],
     mems: &[MemRecord],
     raw_mask: RawMask<'_>,
 ) -> Result<BTreeSet<String>, SpineError> {
     let mut ids = BTreeSet::new();
     for event in events {
         match &event.event {
-            KEvent::Close { node, .. } => {
+            SpineLedgerEvent::Close { node, .. } => {
                 let mut candidates = mems
                     .iter()
                     .filter(|mem| &mem.node == node)
@@ -667,7 +670,7 @@ fn required_memory_ids_for_cloned_events(
                 })?;
                 ids.insert(mem.compact_id.clone());
             }
-            KEvent::RootCompact { mem, .. } => {
+            SpineLedgerEvent::RootCompact { mem, .. } => {
                 let mem_record = mems
                     .iter()
                     .find(|record| record.compact_id == *mem)
@@ -682,7 +685,9 @@ fn required_memory_ids_for_cloned_events(
                 }
                 ids.insert(mem.clone());
             }
-            KEvent::Init { .. } | KEvent::Msg { .. } | KEvent::Open { .. } => {}
+            SpineLedgerEvent::Init { .. }
+            | SpineLedgerEvent::Msg { .. }
+            | SpineLedgerEvent::Open { .. } => {}
         }
     }
     Ok(ids)

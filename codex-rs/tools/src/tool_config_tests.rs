@@ -280,7 +280,7 @@ fn provider_capability_methods_disable_provider_bound_tool_surfaces() {
     tools_config.tool_suggest = true;
     tools_config.image_gen_tool = true;
     tools_config.namespace_tools = true;
-    tools_config.spine_task_tree = true;
+    tools_config.spine_jit = true;
 
     let tools_config = tools_config
         .with_namespace_tools_capability(/*namespace_tools*/ false)
@@ -291,18 +291,18 @@ fn provider_capability_methods_disable_provider_bound_tool_surfaces() {
     assert!(tools_config.tool_suggest);
     assert!(!tools_config.image_gen_tool);
     assert!(!tools_config.namespace_tools);
-    assert!(!tools_config.spine_task_tree);
+    assert!(!tools_config.spine_jit);
     assert_eq!(tools_config.web_search_mode, None);
 }
 
 #[test]
-fn spine_task_tree_requires_feature_flag() {
+fn spine_jit_requires_feature_flag() {
     let model_info = model_info();
     let available_models = Vec::new();
     let mut disabled_features = Features::with_defaults();
-    disabled_features.disable(Feature::SpineTaskTree);
+    disabled_features.disable(Feature::SpineJit);
     let mut enabled_features = Features::with_defaults();
-    enabled_features.enable(Feature::SpineTaskTree);
+    enabled_features.enable(Feature::SpineJit);
 
     let disabled = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -325,6 +325,6 @@ fn spine_task_tree_requires_feature_flag() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
-    assert!(!disabled.spine_task_tree);
-    assert!(enabled.spine_task_tree);
+    assert!(!disabled.spine_jit);
+    assert!(enabled.spine_jit);
 }

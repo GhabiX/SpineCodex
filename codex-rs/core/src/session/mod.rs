@@ -566,7 +566,7 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
-        let base_instructions = if config.features.enabled(Feature::SpineTaskTree) {
+        let base_instructions = if config.features.enabled(Feature::SpineJit) {
             let provider_capabilities = create_model_provider(
                 config.model_provider.clone(),
                 Some(Arc::clone(&auth_manager)),

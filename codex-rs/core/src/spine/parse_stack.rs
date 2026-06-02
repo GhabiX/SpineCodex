@@ -6,8 +6,7 @@ use crate::spine::archive::next_root_open_symbol;
 use crate::spine::archive::tree_meta;
 use crate::spine::archive::tree_meta_with_token_baselines;
 use crate::spine::model::ControlSymbol;
-use crate::spine::model::KEvent;
-use crate::spine::model::LoggedKEvent;
+use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
@@ -15,6 +14,7 @@ use crate::spine::model::NodeStatus;
 use crate::spine::model::RawMask;
 use crate::spine::model::RootEpoch;
 use crate::spine::model::SegRef;
+use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
@@ -697,13 +697,13 @@ fn visible_summary(row: &TreeRenderRow) -> Option<&str> {
 }
 
 pub(super) fn event_to_token(
-    event: &LoggedKEvent,
+    event: &LoggedSpineLedgerEvent,
     archive: &SpineArchive,
     mems: &BTreeMap<String, MemRecord>,
     raw_mask: RawMask<'_>,
 ) -> Result<SpineToken, SpineError> {
     match &event.event {
-        KEvent::Init { raw_start } => Ok(SpineToken::Init {
+        SpineLedgerEvent::Init { raw_start } => Ok(SpineToken::Init {
             meta: tree_meta(
                 archive,
                 NodeId::root_epoch(1),
@@ -711,7 +711,7 @@ pub(super) fn event_to_token(
                 "root".to_string(),
             )?,
         }),
-        KEvent::Msg {
+        SpineLedgerEvent::Msg {
             raw_ordinal,
             context_index,
             from_user,
@@ -723,7 +723,7 @@ pub(super) fn event_to_token(
             },
             from_user: *from_user,
         }),
-        KEvent::Open {
+        SpineLedgerEvent::Open {
             child,
             index,
             summary,
@@ -742,7 +742,7 @@ pub(super) fn event_to_token(
                 *open_context_source,
             )?,
         }),
-        KEvent::Close { node, .. } => {
+        SpineLedgerEvent::Close { node, .. } => {
             let mem = mems.values().find(|mem| &mem.node == node).ok_or_else(|| {
                 SpineError::InvalidEvent(format!("missing memory for close node {node}"))
             })?;
@@ -770,7 +770,7 @@ pub(super) fn event_to_token(
                 ),
             })
         }
-        KEvent::RootCompact {
+        SpineLedgerEvent::RootCompact {
             mem,
             next_open_index,
             next_open_input_tokens,
@@ -813,7 +813,7 @@ pub(super) fn event_to_token(
 }
 
 pub(super) fn parse_stack_from_events(
-    events: &[LoggedKEvent],
+    events: &[LoggedSpineLedgerEvent],
     archive: &SpineArchive,
     mems: &[MemRecord],
     raw_mask: RawMask<'_>,

@@ -124,8 +124,11 @@ pub enum Feature {
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
-    /// Enable the experimental Spine task tree context manager.
-    SpineTaskTree,
+    /// Enable the Spine JIT context manager.
+    ///
+    /// SpineJit incrementally parses Codex events into a durable sidecar ledger
+    /// and materializes the live parse stack into ContextManager items.
+    SpineJit,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
     /// Enable apps.
@@ -531,6 +534,14 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
                     .to_string();
             (summary, Some(details))
         }
+        Feature::SpineJit if alias == "spine_task_tree" => {
+            let summary =
+                "`[features].spine_task_tree` is deprecated. Use `[features].spine_jit` instead."
+                    .to_string();
+            let details = "The feature is a JIT context manager, not a tree UI feature. Enable it with `--enable spine_jit` or `[features].spine_jit` in config.toml."
+                .to_string();
+            (summary, Some(details))
+        }
         _ => {
             let label = if alias.contains('.') || alias.starts_with('[') {
                 alias.to_string()
@@ -919,8 +930,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::SpineTaskTree,
-        key: "spine_task_tree",
+        id: Feature::SpineJit,
+        key: "spine_jit",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

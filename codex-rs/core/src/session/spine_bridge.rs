@@ -190,7 +190,7 @@ impl Session {
         if runtime.is_none() && (used_replacement_history || raw_items.iter().any(Option::is_some))
         {
             return Err(SpineError::InvalidStore(
-                "spine_task_tree resume requires Spine sidecar".to_string(),
+                "spine_jit resume requires Spine sidecar".to_string(),
             ));
         }
         if !used_replacement_history
@@ -198,8 +198,7 @@ impl Session {
             && runtime.has_live_root_compact_event()?
         {
             return Err(SpineError::InvalidStore(
-                "spine_task_tree root compact sidecar is missing rollout compact boundary"
-                    .to_string(),
+                "spine_jit root compact sidecar is missing rollout compact boundary".to_string(),
             ));
         }
         let materialized = runtime
@@ -387,9 +386,7 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?
             .ok_or_else(|| {
-                SpineError::InvalidStore(
-                    "spine_task_tree checkpoint requires rollout path".to_string(),
-                )
+                SpineError::InvalidStore("spine_jit checkpoint requires rollout path".to_string())
             })?;
         let history = self.clone_history().await;
         let raw_history = history.raw_items().to_vec();
@@ -430,7 +427,7 @@ impl Session {
     async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineSessionState>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Err(SpineError::InvalidStore(
-                "spine_task_tree is disabled or this session has no persisted rollout".to_string(),
+                "spine_jit is disabled or this session has no persisted rollout".to_string(),
             ));
         };
         let Some(rollout_path) = self
@@ -439,7 +436,7 @@ impl Session {
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?
         else {
             return Err(SpineError::InvalidStore(
-                "spine_task_tree requires a persisted rollout".to_string(),
+                "spine_jit requires a persisted rollout".to_string(),
             ));
         };
         let mut guard = spine_slot.lock().await;
@@ -799,9 +796,7 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?
             .ok_or_else(|| {
-                SpineError::InvalidStore(
-                    "spine_task_tree root compact requires rollout path".to_string(),
-                )
+                SpineError::InvalidStore("spine_jit root compact requires rollout path".to_string())
             })?;
         let history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
             .await

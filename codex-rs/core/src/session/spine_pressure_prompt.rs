@@ -63,7 +63,7 @@ pub(crate) struct SpinePressurePromptSignal {
 
 impl Session {
     pub(crate) async fn spine_status_prompt_overlay(&self) -> Option<SpineStatusPromptOverlay> {
-        if !self.features.enabled(Feature::SpineTaskTree) {
+        if !self.features.enabled(Feature::SpineJit) {
             return None;
         }
 
@@ -94,7 +94,7 @@ impl Session {
         &self,
         mode: ModeKind,
     ) -> Option<SpinePressurePromptOverlay> {
-        if !self.features.enabled(Feature::SpineTaskTree) {
+        if !self.features.enabled(Feature::SpineJit) {
             return None;
         }
 

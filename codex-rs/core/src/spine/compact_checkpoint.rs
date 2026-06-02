@@ -96,7 +96,7 @@ pub(super) fn validate_compact_checkpoint(
     let replacement_history_hash = hash_response_items(replacement_history)?;
     if checkpoint.replacement_history_hash != replacement_history_hash {
         return Err(SpineError::InvalidStore(format!(
-            "spine_task_tree replacement_history does not match sidecar compact checkpoint at raw boundary {}",
+            "spine_jit replacement_history does not match sidecar compact checkpoint at raw boundary {}",
             checkpoint.raw_boundary
         )));
     }

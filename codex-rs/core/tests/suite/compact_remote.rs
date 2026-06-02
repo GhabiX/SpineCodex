@@ -488,6 +488,36 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     Ok(())
 }
 
+fn assert_remote_spine_root_compact_followup(
+    compact_request: &responses::ResponsesRequest,
+    follow_up_request: &responses::ResponsesRequest,
+    rollout_path: &std::path::Path,
+    expected_summary: &str,
+    pre_compact_marker_to_drop: Option<&str>,
+    compact_request_context: &str,
+) -> Result<()> {
+    let compact_body = compact_request.body_json();
+    assert!(
+        namespace_child_tool_names(&compact_body, "spine").is_empty(),
+        "{compact_request_context} must not expose Spine tools before the post-success hook: {compact_body}"
+    );
+    assert!(
+        follow_up_request.body_contains_text("<spine_memory runtime_generated=\"true\">"),
+        "expected remote compact to hydrate Spine root memory for follow-up turns"
+    );
+    assert!(
+        follow_up_request.body_contains_text(expected_summary),
+        "expected Spine root memory to include readable remote compact summary {expected_summary:?}"
+    );
+    if let Some(pre_compact_marker) = pre_compact_marker_to_drop {
+        assert!(
+            !follow_up_request.body_contains_text(pre_compact_marker),
+            "expected remote compact memory to replace pre-compaction raw assistant history marker {pre_compact_marker:?}"
+        );
+    }
+    assert_spine_root_replacement_history_in_rollout(rollout_path, expected_summary)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -498,7 +528,7 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
             .with_config(|config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             }),
     )
@@ -573,7 +603,7 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
         .with_config(|config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
         });
     let resumed = resume_builder
@@ -595,28 +625,15 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
     wait_for_turn_complete(&resumed.codex).await;
 
     assert_eq!(compact_mock.requests().len(), 1);
-    let compact_body = compact_mock.single_request().body_json();
-    assert!(
-        namespace_child_tool_names(&compact_body, "spine").is_empty(),
-        "remote native compact must not expose Spine tools before the post-success hook: {compact_body}"
-    );
     let response_requests = responses_mock.requests();
     let follow_up_request = response_requests.last().expect("follow-up request missing");
-    assert!(
-        follow_up_request.body_contains_text("<spine_memory runtime_generated=\"true\">"),
-        "expected remote compact to hydrate Spine root memory for follow-up turns"
-    );
-    assert!(
-        follow_up_request.body_contains_text("REMOTE_SPINE_ROOT_COMPACT_SUMMARY"),
-        "expected Spine root memory to include readable remote compact summary"
-    );
-    assert!(
-        !follow_up_request.body_contains_text("SPINE_READY"),
-        "expected remote compact memory to replace pre-compaction raw assistant history"
-    );
-    assert_spine_root_replacement_history_in_rollout(
+    assert_remote_spine_root_compact_followup(
+        &compact_mock.single_request(),
+        follow_up_request,
         &rollout_path,
         "REMOTE_SPINE_ROOT_COMPACT_SUMMARY",
+        Some("SPINE_READY"),
+        "remote native compact",
     )?;
 
     Ok(())
@@ -1001,7 +1018,7 @@ async fn remote_compact_v2_installs_spine_root_compact_for_followups() -> Result
             .with_config(|config| {
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
                 config
                     .features
@@ -1076,7 +1093,7 @@ async fn remote_compact_v2_installs_spine_root_compact_for_followups() -> Result
         .with_config(|config| {
             config
                 .features
-                .enable(Feature::SpineTaskTree)
+                .enable(Feature::SpineJit)
                 .expect("enable spine feature");
             config
                 .features
@@ -1115,23 +1132,14 @@ async fn remote_compact_v2_installs_spine_root_compact_for_followups() -> Result
             .contains("\"type\":\"compaction_trigger\""),
         "expected v2 compact request to include the compaction trigger"
     );
-    let compact_body = compact_request.body_json();
-    assert!(
-        namespace_child_tool_names(&compact_body, "spine").is_empty(),
-        "remote native compact v2 must not expose Spine tools before the post-success hook: {compact_body}"
-    );
     let follow_up_request = response_requests.last().expect("follow-up request missing");
-    assert!(
-        follow_up_request.body_contains_text("<spine_memory runtime_generated=\"true\">"),
-        "expected remote compact v2 to hydrate Spine root memory for follow-up turns"
-    );
-    assert!(
-        follow_up_request.body_contains_text("REMOTE_SPINE_ROOT_COMPACT_V2_SUMMARY"),
-        "expected Spine root memory to include remote compact v2 payload"
-    );
-    assert_spine_root_replacement_history_in_rollout(
+    assert_remote_spine_root_compact_followup(
+        compact_request,
+        follow_up_request,
         &rollout_path,
         "REMOTE_SPINE_ROOT_COMPACT_V2_SUMMARY",
+        None,
+        "remote native compact v2",
     )?;
 
     Ok(())

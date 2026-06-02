@@ -243,7 +243,7 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
-        widget.sync_spine_task_tree_enabled();
+        widget.sync_spine_jit_enabled();
         widget.sync_mentions_v2_enabled();
         widget
             .bottom_pane

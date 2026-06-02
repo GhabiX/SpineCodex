@@ -946,7 +946,7 @@ impl Session {
                 .set_window_generation(window_generation);
             let spine = config
                 .features
-                .enabled(Feature::SpineTaskTree)
+                .enabled(Feature::SpineJit)
                 .then(|| Mutex::new(SpineSessionState::new()));
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
@@ -1015,7 +1015,7 @@ impl Session {
             }
 
             if let Some(boundary) = spine_fork_source_boundary.as_ref()
-                && config.features.enabled(Feature::SpineTaskTree)
+                && config.features.enabled(Feature::SpineJit)
                 && matches!(initial_history, InitialHistory::Forked(_))
             {
                 let raw_items =

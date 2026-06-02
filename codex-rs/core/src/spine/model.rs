@@ -62,9 +62,10 @@ pub(super) enum ContextBaselineSource {
     CheckpointReplay,
 }
 
+/// Durable sidecar event ledger, replayed into SpineToken for ParseStack.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(super) enum KEvent {
+pub(super) enum SpineLedgerEvent {
     Init {
         raw_start: u64,
     },
@@ -108,15 +109,16 @@ pub(super) enum KEvent {
     },
 }
 
+/// Append-only Spine ledger event with a monotonic sidecar sequence number.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(super) struct LoggedKEvent {
+pub(super) struct LoggedSpineLedgerEvent {
     pub(super) seq: u64,
     #[serde(flatten)]
-    pub(super) event: KEvent,
+    pub(super) event: SpineLedgerEvent,
 }
 
-impl std::ops::Deref for LoggedKEvent {
-    type Target = KEvent;
+impl std::ops::Deref for LoggedSpineLedgerEvent {
+    type Target = SpineLedgerEvent;
 
     fn deref(&self) -> &Self::Target {
         &self.event
@@ -385,18 +387,18 @@ impl<'a> RawMask<'a> {
     }
 }
 
-impl LoggedKEvent {
+impl LoggedSpineLedgerEvent {
     pub(super) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         self.event.allowed_by(raw_mask)
     }
 }
 
-impl KEvent {
+impl SpineLedgerEvent {
     pub(super) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         match self {
-            KEvent::Init { .. } => Ok(true),
-            KEvent::Msg { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
-            KEvent::Open {
+            SpineLedgerEvent::Init { .. } => Ok(true),
+            SpineLedgerEvent::Msg { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
+            SpineLedgerEvent::Open {
                 child,
                 summary,
                 boundary,
@@ -408,8 +410,8 @@ impl KEvent {
                 }
                 raw_mask.raw_index_live(*boundary)
             }
-            KEvent::Close { boundary, .. } => raw_mask.boundary_live(*boundary),
-            KEvent::RootCompact {
+            SpineLedgerEvent::Close { boundary, .. } => raw_mask.boundary_live(*boundary),
+            SpineLedgerEvent::RootCompact {
                 boundary,
                 raw_live_hash,
                 ..

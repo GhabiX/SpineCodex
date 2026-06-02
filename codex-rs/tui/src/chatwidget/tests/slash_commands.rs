@@ -1986,7 +1986,7 @@ async fn slash_rollout_handles_missing_path() {
 #[tokio::test]
 async fn slash_spinetree_reports_when_snapshot_is_not_available() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::SpineTaskTree, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::SpineJit, /*enabled*/ true);
 
     chat.dispatch_command(SlashCommand::Spinetree);
 
@@ -2001,7 +2001,7 @@ async fn slash_spinetree_reports_when_snapshot_is_not_available() {
 #[tokio::test]
 async fn slash_spinetree_renders_cached_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::SpineTaskTree, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::SpineJit, /*enabled*/ true);
     chat.last_spine_tree_snapshot = Some(SpineTreeUpdatedNotification {
         thread_id: "thread".to_string(),
         turn_id: "turn".to_string(),
@@ -2055,7 +2055,7 @@ async fn slash_spinetree_renders_cached_snapshot() {
 #[tokio::test]
 async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::SpineTaskTree, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::SpineJit, /*enabled*/ true);
     chat.last_spine_tree_snapshot = Some(SpineTreeUpdatedNotification {
         thread_id: "thread".to_string(),
         turn_id: "turn".to_string(),
@@ -2138,7 +2138,7 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
 #[tokio::test]
 async fn slash_spinetree_uses_startup_seeded_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::SpineTaskTree, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::SpineJit, /*enabled*/ true);
 
     chat.on_spine_tree_update(SpineTreeUpdatedNotification {
         thread_id: "thread".to_string(),

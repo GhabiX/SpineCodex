@@ -1458,7 +1458,7 @@ fn spine_namespace_is_registered_only_when_feature_enabled() {
         permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
-    config.spine_task_tree = false;
+    config.spine_jit = false;
     let (specs, registry) = build_specs(&config, None, None, &[]);
     assert!(!specs.iter().any(|spec| spec.name() == "spine"));
     assert!(
@@ -1467,7 +1467,7 @@ fn spine_namespace_is_registered_only_when_feature_enabled() {
             .is_none()
     );
 
-    config.spine_task_tree = true;
+    config.spine_jit = true;
     let (specs, registry) = build_specs(&config, None, None, &[]);
     assert!(specs.iter().any(|spec| spec.name() == "spine"));
     assert!(
@@ -1486,6 +1486,12 @@ fn spine_namespace_is_registered_only_when_feature_enabled() {
     assert_eq!(close_required, Some(&Vec::new()));
     assert!(!close_properties.contains_key("summary"));
     assert!(close_properties.contains_key("instruction"));
+
+    let next_tool = find_namespace_function_tool(&specs, "spine", "next");
+    let (next_properties, next_required) = expect_object_schema(&next_tool.parameters);
+    assert_eq!(next_required, Some(&vec!["summary".to_string()]));
+    assert!(next_properties.contains_key("summary"));
+    assert!(next_properties.contains_key("instruction"));
 }
 
 #[test]

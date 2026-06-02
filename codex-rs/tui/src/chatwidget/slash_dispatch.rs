@@ -399,14 +399,14 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Spinetree => {
-                if !self.config.features.enabled(Feature::SpineTaskTree) {
+                if !self.config.features.enabled(Feature::SpineJit) {
                     return;
                 }
                 self.add_spine_tree_output();
             }
             #[cfg(debug_assertions)]
             SlashCommand::DebugSpine => {
-                if !self.config.features.enabled(Feature::SpineTaskTree) {
+                if !self.config.features.enabled(Feature::SpineJit) {
                     return;
                 }
                 self.add_debug_spine_tree_output();
@@ -941,7 +941,7 @@ impl ChatWidget {
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
-            spine_task_tree_enabled: self.config.features.enabled(Feature::SpineTaskTree),
+            spine_jit_enabled: self.config.features.enabled(Feature::SpineJit),
             service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),

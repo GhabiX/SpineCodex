@@ -550,6 +550,9 @@
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
+            "spine_jit": {
+              "type": "boolean"
+            },
             "spine_task_tree": {
               "type": "boolean"
             },
@@ -4331,6 +4334,9 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "spine_jit": {
           "type": "boolean"
         },
         "spine_task_tree": {

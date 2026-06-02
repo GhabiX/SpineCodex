@@ -1035,7 +1035,7 @@ async fn start_spine_test_conversation(
                 config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
                 config
                     .features
-                    .enable(Feature::SpineTaskTree)
+                    .enable(Feature::SpineJit)
                     .expect("enable spine feature");
             })
             .build(server),

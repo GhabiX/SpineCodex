@@ -18,15 +18,15 @@ use crate::spine::io::sha1_hex;
 use crate::spine::model::ContextBaselineSource;
 #[cfg(test)]
 use crate::spine::model::ControlSymbol;
-use crate::spine::model::KEvent;
-use crate::spine::model::LoggedKEvent;
 use crate::spine::model::LoggedPressureEvent;
+use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::NodeId;
 use crate::spine::model::PressureEvent;
 use crate::spine::model::RawMask;
 use crate::spine::model::SegRef;
+use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 #[cfg(test)]
 use crate::spine::model::SpineTreeNode;
@@ -56,8 +56,8 @@ pub(crate) struct SpineRuntime {
     raw_len: u64,
     raw_live: Vec<bool>,
     // Turn-local Spine control transaction state. Committed open/close effects
-    // are represented by KEvents and ParseStack tokens; these maps are empty on
-    // resume/rollback by design and are not part of h(PS).
+    // are represented by SpineLedgerEvents and ParseStack tokens; these maps
+    // are empty on resume/rollback by design and are not part of h(PS).
     open_requests: BTreeMap<String, OpenRequestAnchor>,
     control_call_ids: BTreeSet<String>,
     pending: Option<PendingTransition>,
@@ -66,7 +66,7 @@ pub(crate) struct SpineRuntime {
 
 #[derive(Clone, Debug)]
 struct SpineLedgerCache {
-    events: Vec<LoggedKEvent>,
+    events: Vec<LoggedSpineLedgerEvent>,
     pressure_events: Vec<LoggedPressureEvent>,
     next_event_seq: u64,
     next_pressure_seq: u64,
@@ -74,7 +74,7 @@ struct SpineLedgerCache {
 
 impl SpineLedgerCache {
     fn new(
-        events: Vec<LoggedKEvent>,
+        events: Vec<LoggedSpineLedgerEvent>,
         pressure_events: Vec<LoggedPressureEvent>,
     ) -> Result<Self, SpineError> {
         let next_event_seq = next_event_seq_from(&events)?;
@@ -134,7 +134,7 @@ struct PreparedCloseCommit {
     suffix_start: usize,
     replacement: Vec<ResponseItem>,
     mem: MemRecord,
-    close_event: KEvent,
+    close_event: SpineLedgerEvent,
     staged_parse_stack: ParseStack,
 }
 
@@ -337,8 +337,8 @@ impl SpineRuntime {
             SpineStore::create_for_rollout(rollout_path)?
         };
         if !store.tree_path().exists() {
-            store.append_event(&KEvent::Init { raw_start: 0 })?;
-            store.append_event(&KEvent::Open {
+            store.append_event(&SpineLedgerEvent::Init { raw_start: 0 })?;
+            store.append_event(&SpineLedgerEvent::Open {
                 child: NodeId::root_epoch(1).child(1),
                 boundary: raw_len,
                 index: raw_len,
@@ -773,12 +773,12 @@ impl SpineRuntime {
         Ok(self.ledger.next_pressure_seq.checked_sub(1))
     }
 
-    fn append_cached_event(&mut self, event: KEvent) -> Result<u64, SpineError> {
+    fn append_cached_event(&mut self, event: SpineLedgerEvent) -> Result<u64, SpineError> {
         let seq = self.ledger.next_event_seq;
         let next_event_seq = seq
             .checked_add(1)
             .ok_or_else(|| SpineError::InvalidEvent("spine event seq overflow".to_string()))?;
-        let logged = LoggedKEvent { seq, event };
+        let logged = LoggedSpineLedgerEvent { seq, event };
         self.store.append_logged_event(&logged)?;
         self.ledger.events.push(logged);
         self.ledger.next_event_seq = next_event_seq;
@@ -801,7 +801,7 @@ impl SpineRuntime {
     }
 
     fn append_msg_event(&mut self, msg: &PendingMsg) -> Result<u64, SpineError> {
-        self.append_cached_event(KEvent::Msg {
+        self.append_cached_event(SpineLedgerEvent::Msg {
             raw_ordinal: msg.raw_ordinal,
             context_index: msg.context_index,
             from_user: msg.from_user,
@@ -998,7 +998,7 @@ impl SpineRuntime {
         let open_context_source = token_baselines
             .context_tokens
             .map(|_| ContextBaselineSource::ProviderAtOpen);
-        let event = KEvent::Open {
+        let event = SpineLedgerEvent::Open {
             child: child.clone(),
             boundary,
             index,
@@ -1066,7 +1066,7 @@ impl SpineRuntime {
         let open_index_u64 = u64::try_from(open_index).map_err(|_| {
             SpineError::InvalidEvent("spine.next synthetic open index overflow".to_string())
         })?;
-        let open_event = KEvent::Open {
+        let open_event = SpineLedgerEvent::Open {
             child: child.clone(),
             boundary: self.raw_len,
             index: open_index_u64,
@@ -1114,7 +1114,7 @@ impl SpineRuntime {
             )));
         }
         let suffix_start = open_meta.index;
-        let close_event = KEvent::Close {
+        let close_event = SpineLedgerEvent::Close {
             node,
             boundary: self.raw_len,
             summary: open_meta.summary.clone(),
@@ -1320,7 +1320,7 @@ impl SpineRuntime {
             )?;
             self.store.append_compact_checkpoint(&checkpoint)?;
         }
-        self.append_cached_event(KEvent::RootCompact {
+        self.append_cached_event(SpineLedgerEvent::RootCompact {
             node,
             boundary: self.raw_len,
             mem: compact_id,
@@ -1379,7 +1379,7 @@ impl SpineRuntime {
     fn open_raw_start(&self, node_id: &NodeId) -> Result<u64, SpineError> {
         let events = &self.ledger.events;
         if let Some(boundary) = events.iter().rev().find_map(|event| match &event.event {
-            KEvent::Open {
+            SpineLedgerEvent::Open {
                 child, boundary, ..
             } if child == node_id => Some(*boundary),
             _ => None,
@@ -1406,7 +1406,7 @@ impl SpineRuntime {
                 .iter()
                 .rev()
                 .find_map(|event| match &event.event {
-                    KEvent::RootCompact { node, boundary, .. }
+                    SpineLedgerEvent::RootCompact { node, boundary, .. }
                         if *node == compacted_parent && parent.child(1) == *node_id =>
                     {
                         Some(*boundary)
@@ -1465,10 +1465,10 @@ impl SpineRuntime {
                 continue;
             }
             match &event.event {
-                KEvent::Msg { raw_ordinal, .. } => {
+                SpineLedgerEvent::Msg { raw_ordinal, .. } => {
                     mark_raw_covered(&mut covered, *raw_ordinal)?;
                 }
-                KEvent::Open {
+                SpineLedgerEvent::Open {
                     child,
                     boundary,
                     summary,
@@ -1480,10 +1480,11 @@ impl SpineRuntime {
                         mark_raw_covered(&mut covered, *boundary)?;
                     }
                 }
-                KEvent::Close { boundary, .. } | KEvent::RootCompact { boundary, .. } => {
+                SpineLedgerEvent::Close { boundary, .. }
+                | SpineLedgerEvent::RootCompact { boundary, .. } => {
                     mark_raw_prefix_covered(&mut covered, *boundary)?;
                 }
-                KEvent::Init { .. } => {}
+                SpineLedgerEvent::Init { .. } => {}
             }
         }
         for (index, item) in raw_items.iter().enumerate() {
@@ -1504,7 +1505,9 @@ impl SpineRuntime {
     pub(crate) fn has_live_root_compact_event(&self) -> Result<bool, SpineError> {
         let raw_mask = RawMask::new(&self.raw_live);
         for event in &self.ledger.events {
-            if event.allowed_by(raw_mask)? && matches!(event.event, KEvent::RootCompact { .. }) {
+            if event.allowed_by(raw_mask)?
+                && matches!(event.event, SpineLedgerEvent::RootCompact { .. })
+            {
                 return Ok(true);
             }
         }
@@ -1531,7 +1534,7 @@ fn protocol_context_baseline_source(
     }
 }
 
-fn next_event_seq_from(events: &[LoggedKEvent]) -> Result<u64, SpineError> {
+fn next_event_seq_from(events: &[LoggedSpineLedgerEvent]) -> Result<u64, SpineError> {
     events
         .iter()
         .map(|event| event.seq)
@@ -1617,10 +1620,10 @@ fn replay_pressure_baselines(
     baselines
 }
 
-fn open_structural_seq_for(events: &[LoggedKEvent], node_id: &NodeId) -> Option<u64> {
+fn open_structural_seq_for(events: &[LoggedSpineLedgerEvent], node_id: &NodeId) -> Option<u64> {
     events.iter().find_map(|event| match &event.event {
-        KEvent::Open { child, .. } if child == node_id => Some(event.seq),
-        KEvent::RootCompact { node, .. }
+        SpineLedgerEvent::Open { child, .. } if child == node_id => Some(event.seq),
+        SpineLedgerEvent::RootCompact { node, .. }
             if node
                 .0
                 .first()
@@ -1637,7 +1640,7 @@ fn open_structural_seq_for(events: &[LoggedKEvent], node_id: &NodeId) -> Option<
 
 fn replay_from_events(
     archive: &SpineArchive,
-    events: &[LoggedKEvent],
+    events: &[LoggedSpineLedgerEvent],
     mems: &[MemRecord],
     raw_live: &[bool],
     initial: Option<&ParseStack>,

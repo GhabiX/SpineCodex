@@ -415,8 +415,8 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
-    let spine_task_tree_enabled = sess.features.enabled(Feature::SpineTaskTree);
-    let mut spine_control_overlay = SpineControlOverlay::new(spine_task_tree_enabled);
+    let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
+    let mut spine_control_overlay = SpineControlOverlay::new(spine_jit_enabled);
 
     loop {
         match run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -2085,7 +2085,7 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut spine_control_overlay =
-        SpineControlOverlay::new(sess.features.enabled(Feature::SpineTaskTree));
+        SpineControlOverlay::new(sess.features.enabled(Feature::SpineJit));
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
         String,
@@ -2240,7 +2240,7 @@ async fn try_run_sampling_request(
                         needs_follow_up: true,
                         last_agent_message,
                         spine_control_overlay: SpineControlOverlay::new(
-                            sess.features.enabled(Feature::SpineTaskTree),
+                            sess.features.enabled(Feature::SpineJit),
                         ),
                     });
                 }
@@ -2376,7 +2376,7 @@ async fn try_run_sampling_request(
                     needs_follow_up,
                     last_agent_message,
                     spine_control_overlay: SpineControlOverlay::new(
-                        sess.features.enabled(Feature::SpineTaskTree),
+                        sess.features.enabled(Feature::SpineJit),
                     ),
                 });
             }

@@ -108,7 +108,7 @@ pub struct ToolsConfig {
     pub image_gen_tool: bool,
     pub search_tool: bool,
     pub namespace_tools: bool,
-    pub spine_task_tree: bool,
+    pub spine_jit: bool,
     pub tool_suggest: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
@@ -180,7 +180,7 @@ impl ToolsConfig {
         let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
         let include_goal_tools = features.enabled(Feature::Goals);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
-        let include_spine_task_tree = features.enabled(Feature::SpineTaskTree);
+        let include_spine_jit = features.enabled(Feature::SpineJit);
         let include_collab_tools = include_multi_agent_v2 || features.enabled(Feature::Collab);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_search_tool =
@@ -249,7 +249,7 @@ impl ToolsConfig {
             image_gen_tool: include_image_gen_tool,
             search_tool: include_search_tool,
             namespace_tools: true,
-            spine_task_tree: include_spine_task_tree,
+            spine_jit: include_spine_jit,
             tool_suggest: include_tool_suggest,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
@@ -283,7 +283,7 @@ impl ToolsConfig {
     pub fn with_namespace_tools_capability(mut self, namespace_tools: bool) -> Self {
         if !namespace_tools {
             self.namespace_tools = false;
-            self.spine_task_tree = false;
+            self.spine_jit = false;
         }
         self
     }

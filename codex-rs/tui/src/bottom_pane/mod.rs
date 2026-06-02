@@ -416,8 +416,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_spine_task_tree_enabled(&mut self, enabled: bool) {
-        self.composer.set_spine_task_tree_enabled(enabled);
+    pub fn set_spine_jit_enabled(&mut self, enabled: bool) {
+        self.composer.set_spine_jit_enabled(enabled);
         self.request_redraw();
     }
 

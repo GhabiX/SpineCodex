@@ -30,7 +30,7 @@ fn text_item(text: &str) -> ResponseItem {
     }
 }
 
-fn logged_events(runtime: &SpineRuntime) -> Vec<LoggedKEvent> {
+fn logged_events(runtime: &SpineRuntime) -> Vec<LoggedSpineLedgerEvent> {
     runtime.store.events_for_test().expect("events")
 }
 
@@ -49,7 +49,7 @@ fn clone_for_rollout_with_raw_live(
         .expect("clone sidecar");
 }
 
-fn event_log(runtime: &SpineRuntime) -> Vec<KEvent> {
+fn event_log(runtime: &SpineRuntime) -> Vec<SpineLedgerEvent> {
     logged_events(runtime)
         .into_iter()
         .map(|event| event.event)
@@ -679,15 +679,15 @@ fn event_limit_pressure_replay_uses_limited_structural_seq_without_truncating_ca
     let rollout = rollout_path(&dir);
     let store = SpineStore::create_for_rollout(&rollout).expect("create store");
     store
-        .append_logged_event(&LoggedKEvent {
+        .append_logged_event(&LoggedSpineLedgerEvent {
             seq: 0,
-            event: KEvent::Init { raw_start: 0 },
+            event: SpineLedgerEvent::Init { raw_start: 0 },
         })
         .expect("append init");
     store
-        .append_logged_event(&LoggedKEvent {
+        .append_logged_event(&LoggedSpineLedgerEvent {
             seq: 1,
-            event: KEvent::Open {
+            event: SpineLedgerEvent::Open {
                 child: NodeId::root_epoch(1).child(1),
                 boundary: 0,
                 index: 0,
@@ -699,9 +699,9 @@ fn event_limit_pressure_replay_uses_limited_structural_seq_without_truncating_ca
         })
         .expect("append open");
     store
-        .append_logged_event(&LoggedKEvent {
+        .append_logged_event(&LoggedSpineLedgerEvent {
             seq: 2,
-            event: KEvent::Msg {
+            event: SpineLedgerEvent::Msg {
                 raw_ordinal: 0,
                 context_index: 0,
                 from_user: true,
@@ -1090,25 +1090,25 @@ fn spine_next_macro_closes_and_opens_sibling_without_next_event() {
     assert!(
         events
             .iter()
-            .all(|event| !matches!(event, KEvent::RootCompact { .. }))
+            .all(|event| !matches!(event, SpineLedgerEvent::RootCompact { .. }))
     );
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, KEvent::Close { .. }))
+            .filter(|event| matches!(event, SpineLedgerEvent::Close { .. }))
             .count(),
         1
     );
     assert!(matches!(
         events.as_slice(),
         [
-            KEvent::Init { .. },
-            KEvent::Open { child: initial, .. },
-            KEvent::Msg { raw_ordinal: 0, .. },
-            KEvent::Open { child: nested, .. },
-            KEvent::Msg { raw_ordinal: 3, .. },
-            KEvent::Close { node: closed, .. },
-            KEvent::Open {
+            SpineLedgerEvent::Init { .. },
+            SpineLedgerEvent::Open { child: initial, .. },
+            SpineLedgerEvent::Msg { raw_ordinal: 0, .. },
+            SpineLedgerEvent::Open { child: nested, .. },
+            SpineLedgerEvent::Msg { raw_ordinal: 3, .. },
+            SpineLedgerEvent::Close { node: closed, .. },
+            SpineLedgerEvent::Open {
                 child: next,
                 index,
                 summary,
@@ -1192,7 +1192,7 @@ fn spine_next_macro_close_failure_does_not_open() {
     assert!(
         event_log(&runtime)
             .iter()
-            .all(|event| !matches!(event, KEvent::Close { .. }))
+            .all(|event| !matches!(event, SpineLedgerEvent::Close { .. }))
     );
 }
 
@@ -1272,9 +1272,9 @@ fn ordinary_response_item_shifts_msg() {
     assert!(matches!(
         events.as_slice(),
         [
-            KEvent::Init { raw_start: 0 },
-            KEvent::Open { summary, .. },
-            KEvent::Msg {
+            SpineLedgerEvent::Init { raw_start: 0 },
+            SpineLedgerEvent::Open { summary, .. },
+            SpineLedgerEvent::Msg {
                 raw_ordinal: 0,
                 context_index: 0,
                 from_user: true,
@@ -1391,10 +1391,10 @@ fn spine_open_request_and_output_are_control_carriers_not_persistent_msg() {
 
     let events = event_log(&runtime);
     assert_eq!(events.len(), 3);
-    assert!(matches!(events[0], KEvent::Init { raw_start: 0 }));
+    assert!(matches!(events[0], SpineLedgerEvent::Init { raw_start: 0 }));
     assert!(matches!(
         &events[1],
-        KEvent::Open {
+        SpineLedgerEvent::Open {
             boundary: 0,
             summary,
             ..
@@ -1402,7 +1402,7 @@ fn spine_open_request_and_output_are_control_carriers_not_persistent_msg() {
     ));
     assert!(matches!(
         &events[2],
-        KEvent::Open {
+        SpineLedgerEvent::Open {
             boundary: 0,
             summary,
             ..
@@ -1469,7 +1469,7 @@ fn duplicate_open_call_id_does_not_create_second_child() {
         events_after_first_commit
             .iter()
             .filter(
-                |event| matches!(event, KEvent::Open { summary, .. } if summary == "only child")
+                |event| matches!(event, SpineLedgerEvent::Open { summary, .. } if summary == "only child")
             )
             .count(),
         1
@@ -1494,15 +1494,15 @@ fn ledger_cache_uses_sparse_max_seq_on_load_and_append() {
     let rollout = rollout_path(&dir);
     let store = SpineStore::create_for_rollout(&rollout).expect("create store");
     store
-        .append_logged_event(&LoggedKEvent {
+        .append_logged_event(&LoggedSpineLedgerEvent {
             seq: 0,
-            event: KEvent::Init { raw_start: 0 },
+            event: SpineLedgerEvent::Init { raw_start: 0 },
         })
         .expect("append sparse init");
     store
-        .append_logged_event(&LoggedKEvent {
+        .append_logged_event(&LoggedSpineLedgerEvent {
             seq: 7,
-            event: KEvent::Open {
+            event: SpineLedgerEvent::Open {
                 child: NodeId::root_epoch(1).child(1),
                 boundary: 0,
                 index: 0,
@@ -1535,9 +1535,9 @@ fn ledger_cache_uses_sparse_max_seq_on_load_and_append() {
     let events = logged_events(&runtime);
     assert!(matches!(
         events.last(),
-        Some(LoggedKEvent {
+        Some(LoggedSpineLedgerEvent {
             seq: 8,
-            event: KEvent::Msg { raw_ordinal: 0, .. }
+            event: SpineLedgerEvent::Msg { raw_ordinal: 0, .. }
         })
     ));
 }
@@ -1732,7 +1732,7 @@ fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
     let target_rollout = dir.path().join("target.jsonl");
     let source = SpineStore::create_for_rollout(&source_rollout).expect("create source store");
     source
-        .append_event(&KEvent::Init { raw_start: 0 })
+        .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     let mem = MemRecord {
         compact_id: "mem-missing".to_string(),
@@ -1772,7 +1772,7 @@ fn clone_for_rollout_rewrites_compact_checkpoint_memory_refs() {
     let target_rollout = dir.path().join("target.jsonl");
     let source = SpineStore::create_for_rollout(&source_rollout).expect("create source store");
     source
-        .append_event(&KEvent::Init { raw_start: 0 })
+        .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     let body = "root compact body";
     let body_path = source
@@ -1859,10 +1859,10 @@ fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
     let target_rollout = dir.path().join("target.jsonl");
     let source = SpineStore::create_for_rollout(&source_rollout).expect("create source store");
     source
-        .append_event(&KEvent::Init { raw_start: 0 })
+        .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     source
-        .append_event(&KEvent::Open {
+        .append_event(&SpineLedgerEvent::Open {
             child: NodeId::root_epoch(1).child(1),
             boundary: 0,
             index: 0,
@@ -1898,7 +1898,7 @@ fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
     };
     source.append_mem(&mem).expect("append mem");
     source
-        .append_event(&KEvent::RootCompact {
+        .append_event(&SpineLedgerEvent::RootCompact {
             node: NodeId::root_epoch(1).child(1),
             boundary: 2,
             mem: "root-1-2".to_string(),
@@ -2013,10 +2013,10 @@ fn clone_preserves_structural_seq_gaps_and_appends_after_max() {
     let target_rollout = dir.path().join("target.jsonl");
     let source = SpineStore::create_for_rollout(&source_rollout).expect("create source store");
     source
-        .append_event(&KEvent::Init { raw_start: 0 })
+        .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     source
-        .append_event(&KEvent::Open {
+        .append_event(&SpineLedgerEvent::Open {
             child: NodeId::root_epoch(1).child(1),
             boundary: 0,
             index: 0,
@@ -2027,14 +2027,14 @@ fn clone_preserves_structural_seq_gaps_and_appends_after_max() {
         })
         .expect("append root open");
     source
-        .append_event(&KEvent::Msg {
+        .append_event(&SpineLedgerEvent::Msg {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
         })
         .expect("append dropped msg");
     source
-        .append_event(&KEvent::Msg {
+        .append_event(&SpineLedgerEvent::Msg {
             raw_ordinal: 1,
             context_index: 1,
             from_user: true,
@@ -2053,7 +2053,7 @@ fn clone_preserves_structural_seq_gaps_and_appends_after_max() {
     );
 
     let next_seq = target
-        .append_event(&KEvent::Msg {
+        .append_event(&SpineLedgerEvent::Msg {
             raw_ordinal: 2,
             context_index: 2,
             from_user: true,
@@ -2069,10 +2069,10 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
     let target_rollout = dir.path().join("target.jsonl");
     let source = SpineStore::create_for_rollout(&source_rollout).expect("create source store");
     source
-        .append_event(&KEvent::Init { raw_start: 0 })
+        .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     source
-        .append_event(&KEvent::Open {
+        .append_event(&SpineLedgerEvent::Open {
             child: NodeId::root_epoch(1).child(1),
             boundary: 0,
             index: 0,
@@ -2083,14 +2083,14 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
         })
         .expect("append root open");
     source
-        .append_event(&KEvent::Msg {
+        .append_event(&SpineLedgerEvent::Msg {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
         })
         .expect("append dropped msg");
     source
-        .append_event(&KEvent::Msg {
+        .append_event(&SpineLedgerEvent::Msg {
             raw_ordinal: 1,
             context_index: 1,
             from_user: true,
@@ -2162,10 +2162,10 @@ fn clone_boundary_excludes_future_structural_and_pressure_records() {
     let target_rollout = dir.path().join("target.jsonl");
     let source = SpineStore::create_for_rollout(&source_rollout).expect("create source store");
     source
-        .append_event(&KEvent::Init { raw_start: 0 })
+        .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     source
-        .append_event(&KEvent::Open {
+        .append_event(&SpineLedgerEvent::Open {
             child: NodeId::root_epoch(1).child(1),
             boundary: 0,
             index: 0,
@@ -2176,7 +2176,7 @@ fn clone_boundary_excludes_future_structural_and_pressure_records() {
         })
         .expect("append root open");
     source
-        .append_event(&KEvent::Msg {
+        .append_event(&SpineLedgerEvent::Msg {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
@@ -2207,7 +2207,7 @@ fn clone_boundary_excludes_future_structural_and_pressure_records() {
     };
 
     source
-        .append_event(&KEvent::Msg {
+        .append_event(&SpineLedgerEvent::Msg {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
@@ -2308,7 +2308,7 @@ fn spine_close_output_does_not_shift_msg() {
         events
             .iter()
             .filter_map(|event| match event {
-                KEvent::Msg { raw_ordinal, .. } => Some(*raw_ordinal),
+                SpineLedgerEvent::Msg { raw_ordinal, .. } => Some(*raw_ordinal),
                 _ => None,
             })
             .collect::<Vec<_>>(),
@@ -2318,7 +2318,7 @@ fn spine_close_output_does_not_shift_msg() {
     assert!(
         !events.iter().any(|event| matches!(
             event,
-            KEvent::Msg {
+            SpineLedgerEvent::Msg {
                 raw_ordinal: 3 | 4,
                 ..
             }
@@ -2328,11 +2328,14 @@ fn spine_close_output_does_not_shift_msg() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, KEvent::Close { .. }))
+            .filter(|event| matches!(event, SpineLedgerEvent::Close { .. }))
             .count(),
         1
     );
-    assert!(matches!(events.last(), Some(KEvent::Close { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(SpineLedgerEvent::Close { .. })
+    ));
     let Some(Symbol::SpineTreeNodes(nodes)) = runtime.parse_stack().symbols.last() else {
         panic!("close should reduce task tree into a tree node inside Nodes")
     };
@@ -3466,11 +3469,11 @@ fn native_compact_shifts_compact_and_new_root_open() {
     assert!(matches!(
         events.as_slice(),
         [
-            KEvent::Init { .. },
-            KEvent::Open { summary, .. },
-            KEvent::Msg { raw_ordinal: 0, .. },
-            KEvent::Msg { raw_ordinal: 1, .. },
-            KEvent::RootCompact {
+            SpineLedgerEvent::Init { .. },
+            SpineLedgerEvent::Open { summary, .. },
+            SpineLedgerEvent::Msg { raw_ordinal: 0, .. },
+            SpineLedgerEvent::Msg { raw_ordinal: 1, .. },
+            SpineLedgerEvent::RootCompact {
                 boundary: 2,
                 next_open_index: 1,
                 ..
@@ -3560,11 +3563,11 @@ fn root_compact_from_root_cursor_after_closing_first_child_opens_next_epoch() {
     assert!(matches!(
         events.as_slice(),
         [
-            KEvent::Init { .. },
-            KEvent::Open { child: first_child, .. },
-            KEvent::Msg { .. },
-            KEvent::Close { node: closed_node, .. },
-            KEvent::RootCompact {
+            SpineLedgerEvent::Init { .. },
+            SpineLedgerEvent::Open { child: first_child, .. },
+            SpineLedgerEvent::Msg { .. },
+            SpineLedgerEvent::Close { node: closed_node, .. },
+            SpineLedgerEvent::RootCompact {
                 node: compacted_epoch,
                 next_open_index: 1,
                 ..
@@ -3634,12 +3637,12 @@ fn root_compact_separates_source_context_range_from_next_open_index() {
     assert!(matches!(
         events.as_slice(),
         [
-            KEvent::Init { .. },
-            KEvent::Open { .. },
-            KEvent::Msg { .. },
-            KEvent::Msg { .. },
-            KEvent::Msg { .. },
-            KEvent::RootCompact {
+            SpineLedgerEvent::Init { .. },
+            SpineLedgerEvent::Open { .. },
+            SpineLedgerEvent::Msg { .. },
+            SpineLedgerEvent::Msg { .. },
+            SpineLedgerEvent::Msg { .. },
+            SpineLedgerEvent::RootCompact {
                 next_open_index: 1,
                 ..
             },
@@ -3690,10 +3693,10 @@ fn root_compact_keeps_close_tokens_without_next_open_baseline() {
     assert!(matches!(
         events.as_slice(),
         [
-            KEvent::Init { .. },
-            KEvent::Open { .. },
-            KEvent::Msg { .. },
-            KEvent::RootCompact {
+            SpineLedgerEvent::Init { .. },
+            SpineLedgerEvent::Open { .. },
+            SpineLedgerEvent::Msg { .. },
+            SpineLedgerEvent::RootCompact {
                 next_open_input_tokens: None,
                 next_open_context_tokens: None,
                 ..
@@ -4155,9 +4158,9 @@ fn rollback_checkpoint_rebuilds_cache_from_full_sidecar_before_new_append() {
     let events = logged_events(&replayed);
     assert!(matches!(
         events.last(),
-        Some(LoggedKEvent {
+        Some(LoggedSpineLedgerEvent {
             seq,
-            event: KEvent::Msg { raw_ordinal: 2, .. },
+            event: SpineLedgerEvent::Msg { raw_ordinal: 2, .. },
         }) if *seq == full_sidecar_next_seq
     ));
 }
