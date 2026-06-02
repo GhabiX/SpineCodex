@@ -139,6 +139,8 @@ pub enum CodexErr {
     UnsupportedOperation(String),
     #[error("{0}")]
     RefreshTokenFailed(RefreshTokenFailedError),
+    #[error("failed to record Spine sidecar append: {reason}")]
+    SpineAppendFailure { reason: String },
     #[error("Fatal error: {0}")]
     Fatal(String),
     // -----------------------------------------------------------------
@@ -172,6 +174,7 @@ impl CodexErr {
             CodexErr::TurnAborted
             | CodexErr::Interrupted
             | CodexErr::EnvVar(_)
+            | CodexErr::SpineAppendFailure { .. }
             | CodexErr::Fatal(_)
             | CodexErr::UsageNotIncluded
             | CodexErr::QuotaExceeded

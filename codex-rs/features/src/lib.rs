@@ -534,15 +534,6 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
                     .to_string();
             (summary, Some(details))
         }
-        Feature::SpineJit if alias == "spine_task_tree" => {
-            let summary =
-                "`[features].spine_task_tree` is deprecated. Use `[features].spine_jit` instead."
-                    .to_string();
-            let details =
-                "Enable it with `--enable spine_jit` or `[features].spine_jit` in config.toml."
-                    .to_string();
-            (summary, Some(details))
-        }
         _ => {
             let label = if alias.contains('.') || alias.starts_with('[') {
                 alias.to_string()

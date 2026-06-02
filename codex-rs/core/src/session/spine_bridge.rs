@@ -1,8 +1,10 @@
 use super::*;
+use crate::client::ModelClientSession;
 use crate::context_manager::ContextAppend;
 use crate::context_manager::ContextManager;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
+use crate::session::spine_compact::SpineCloseCompactOutcome;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCloneBoundary;
@@ -29,6 +31,7 @@ pub(super) struct PreparedSpineReplay {
 #[derive(Debug)]
 pub(crate) struct SpineToolCommit {
     pub(crate) output_text: Option<String>,
+    pub(crate) record_output: bool,
 }
 
 type SpineCommitOutput = (Option<SpineTreeUpdateEvent>, Option<String>);
@@ -41,6 +44,20 @@ enum SpineCommitAttempt {
 }
 
 impl Session {
+    fn no_spine_tool_commit() -> SpineToolCommit {
+        SpineToolCommit {
+            output_text: None,
+            record_output: true,
+        }
+    }
+
+    fn skip_spine_tool_output_commit() -> SpineToolCommit {
+        SpineToolCommit {
+            output_text: None,
+            record_output: false,
+        }
+    }
+
     pub(crate) async fn send_spine_tree_update(
         &self,
         turn_context: &TurnContext,
@@ -528,22 +545,38 @@ impl Session {
         runtime.stage_next(call_id, summary, instruction)
     }
 
+    #[cfg(test)]
     pub(crate) async fn maybe_commit_spine_tool_output(
-        &self,
-        turn_context: &TurnContext,
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        item: &ResponseItem,
+    ) -> Result<SpineToolCommit, SpineError> {
+        let mut client_session = self.services.model_client.new_session();
+        self.maybe_commit_spine_tool_output_with_client_session(
+            turn_context,
+            &mut client_session,
+            item,
+        )
+        .await
+    }
+
+    pub(crate) async fn maybe_commit_spine_tool_output_with_client_session(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        client_session: &mut ModelClientSession,
         item: &ResponseItem,
     ) -> Result<SpineToolCommit, SpineError> {
         let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
-            return Ok(SpineToolCommit { output_text: None });
+            return Ok(Self::no_spine_tool_commit());
         };
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(SpineToolCommit { output_text: None });
+            return Ok(Self::no_spine_tool_commit());
         };
         let pending_commit = {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
             let Some(spine) = guard.runtime() else {
-                return Ok(SpineToolCommit { output_text: None });
+                return Ok(Self::no_spine_tool_commit());
             };
             spine.pending_commit(call_id)?
         };
@@ -555,18 +588,31 @@ impl Session {
             }) => {
                 let history = self.clone_history().await;
                 let expected_history = history.raw_items().to_vec();
-                let compact = match self
-                    .spine_compact_close(
-                        turn_context,
-                        &history,
-                        node.to_string(),
-                        suffix_start,
-                        item,
-                        instruction,
-                    )
-                    .await
+                let compact = match Box::pin(self.spine_compact_close(
+                    turn_context,
+                    client_session,
+                    &history,
+                    node.to_string(),
+                    suffix_start,
+                    item,
+                    instruction,
+                ))
+                .await
                 {
-                    Ok(compact) => compact,
+                    Ok(SpineCloseCompactOutcome::Compact(compact)) => compact,
+                    Ok(SpineCloseCompactOutcome::NativeCompacted {
+                        reset_client_session,
+                    }) => {
+                        if reset_client_session {
+                            client_session.reset_websocket_session();
+                        }
+                        self.abort_spine_pending_tool(
+                            call_id,
+                            "spine close invalidated by native compact",
+                        )
+                        .await;
+                        return Ok(Self::skip_spine_tool_output_commit());
+                    }
                     Err(err) => {
                         self.abort_spine_pending_tool(
                             call_id,
@@ -599,7 +645,7 @@ impl Session {
             )? {
                 SpineCommitAttempt::Done(output) => break output,
                 SpineCommitAttempt::RuntimeMissing => {
-                    return Ok(SpineToolCommit { output_text: None });
+                    return Ok(Self::no_spine_tool_commit());
                 }
                 SpineCommitAttempt::Retry if lock_retries < SPINE_COMMIT_LOCK_RETRY_LIMIT => {
                     lock_retries += 1;
@@ -620,7 +666,10 @@ impl Session {
         if let Some(snapshot) = snapshot {
             self.send_spine_tree_update(turn_context, snapshot).await;
         }
-        Ok(SpineToolCommit { output_text })
+        Ok(SpineToolCommit {
+            output_text,
+            record_output: true,
+        })
     }
 
     fn try_commit_spine_tool_output_once(

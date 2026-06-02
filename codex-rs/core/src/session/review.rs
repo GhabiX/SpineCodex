@@ -167,7 +167,6 @@ pub(super) async fn spawn_review_thread(
         turn_timing_state: Arc::new(TurnTimingState::default()),
         server_model_warning_emitted: AtomicBool::new(false),
         model_verification_emitted: AtomicBool::new(false),
-        terminal_error_recorded: AtomicBool::new(false),
     };
 
     // Seed the child task with the review prompt as the initial user message.

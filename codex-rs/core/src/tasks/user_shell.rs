@@ -17,6 +17,7 @@ use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecRequest;
+use crate::session::turn::TurnOutput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
@@ -79,7 +80,7 @@ impl SessionTask for UserShellCommandTask {
         turn_context: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TurnOutput {
         execute_user_shell_command(
             session.clone_session(),
             turn_context,
@@ -88,7 +89,7 @@ impl SessionTask for UserShellCommandTask {
             UserShellCommandMode::StandaloneTurn,
         )
         .await;
-        None
+        TurnOutput::complete(None)
     }
 }
 

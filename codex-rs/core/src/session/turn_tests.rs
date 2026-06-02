@@ -4,7 +4,6 @@ use crate::spine::SPINE_TOOL_TREE;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributionFuture;
 use codex_extension_api::TurnItemContributor;
-use codex_protocol::error::CodexErr;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::models::FunctionCallOutputPayload;
 use pretty_assertions::assert_eq;
@@ -87,22 +86,6 @@ fn spine_control_overlay_detects_matching_output_before_push() {
     assert!(!overlay.contains_matching_request(&unrelated));
     overlay.push_output_if_matching(&matching);
     assert_eq!(overlay.take_for_next_prompt(), vec![request, matching]);
-}
-
-#[test]
-fn suppress_turn_complete_is_limited_to_spine_terminal_errors() {
-    assert!(suppress_turn_complete_after_error(&CodexErr::Fatal(
-        "failed to commit Spine tool output: compact failed".to_string(),
-    )));
-    assert!(suppress_turn_complete_after_error(&CodexErr::Fatal(
-        "failed to inspect Spine tool output: runtime failed".to_string(),
-    )));
-    assert!(!suppress_turn_complete_after_error(&CodexErr::Fatal(
-        "unrelated base codex fatal error".to_string(),
-    )));
-    assert!(!suppress_turn_complete_after_error(
-        &CodexErr::ContextWindowExceeded
-    ));
 }
 
 #[tokio::test]

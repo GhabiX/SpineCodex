@@ -149,9 +149,12 @@ use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_failed;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
@@ -183,6 +186,45 @@ fn spine_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
         .enumerate()
         .map(|(index, text)| spine_summary_sse(&format!("spine-summary-{index}"), text))
         .collect()
+}
+
+async fn prime_model_client_turn_state(
+    client_session: &mut crate::client::ModelClientSession,
+    turn_context: &TurnContext,
+) {
+    use crate::client::ResponsesToolChoice;
+    use crate::client_common::ResponseEvent;
+    use codex_rollout_trace::InferenceTraceContext;
+    use futures::StreamExt as _;
+
+    let prompt = crate::Prompt {
+        input: vec![user_message("prime turn state")],
+        base_instructions: BaseInstructions::default(),
+        ..Default::default()
+    };
+    let mut stream = client_session
+        .stream_responses_api(
+            &prompt,
+            &turn_context.model_info,
+            &turn_context.session_telemetry,
+            turn_context.reasoning_effort,
+            turn_context.reasoning_summary,
+            turn_context.config.service_tier.clone(),
+            turn_context
+                .turn_metadata_state
+                .current_header_value()
+                .as_deref(),
+            &InferenceTraceContext::disabled(),
+            ResponsesToolChoice::None,
+        )
+        .await
+        .expect("prime request should start");
+    while let Some(event) = stream.next().await {
+        match event.expect("prime stream event should decode") {
+            ResponseEvent::Completed { .. } => break,
+            _ => {}
+        }
+    }
 }
 use wiremock::ResponseTemplate;
 
@@ -5893,13 +5935,13 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
             _ctx: Arc<TurnContext>,
             _input: Vec<UserInput>,
             _cancellation_token: CancellationToken,
-        ) -> Option<String> {
+        ) -> crate::session::turn::TurnOutput {
             let mut trace = self
                 .captured_trace
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *trace = current_span_w3c_trace_context();
-            None
+            crate::session::turn::TurnOutput::complete(None)
         }
     }
 
@@ -7799,9 +7841,18 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
 #[tokio::test]
 async fn spine_close_bridge_replaces_only_suffix_history() {
     let server = start_mock_server().await;
-    let compact_mock = mount_sse_once(
+    let responses_mock = mount_response_sequence(
         &server,
-        spine_summary_sse("spine-close-summary", "real compact summary"),
+        vec![
+            sse_response(spine_summary_sse("prime-turn-state", "primed")).insert_header(
+                crate::client::X_CODEX_TURN_STATE_HEADER,
+                "spine-close-turn-state",
+            ),
+            sse_response(spine_summary_sse(
+                "spine-close-summary",
+                "real compact summary",
+            )),
+        ],
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -7853,6 +7904,8 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
         .await
         .expect("record conversation items");
+    let mut client_session = session.services.model_client.new_session();
+    prime_model_client_turn_state(&mut client_session, &turn_context).await;
 
     let close_request = spine_call(SPINE_TOOL_CLOSE, "close");
     session
@@ -7868,7 +7921,11 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .expect("stage close");
     let close_output = function_output("close");
     session
-        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .maybe_commit_spine_tool_output_with_client_session(
+            &turn_context,
+            &mut client_session,
+            &close_output,
+        )
         .await
         .expect("commit close output");
     session
@@ -7876,8 +7933,19 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .await
         .expect("record conversation items");
 
-    assert_eq!(compact_mock.requests().len(), 1);
-    let compact_request = compact_mock.single_request();
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].header(crate::client::X_CODEX_TURN_STATE_HEADER),
+        None,
+        "first request in a fresh model client session should not send turn state"
+    );
+    let compact_request = &requests[1];
+    assert_eq!(
+        compact_request.header(crate::client::X_CODEX_TURN_STATE_HEADER),
+        Some("spine-close-turn-state".to_string()),
+        "spine.close compact should reuse the caller's turn-scoped model client session"
+    );
     assert_eq!(compact_request.path(), "/v1/responses");
     assert_eq!(
         compact_request.body_json()["prompt_cache_key"].as_str(),
@@ -9080,6 +9148,160 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
                 )
         )),
         "native compact memory should be the visible h(PS)"
+    );
+}
+
+#[tokio::test]
+async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close() {
+    let server = start_mock_server().await;
+    let responses_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse_failed(
+                "spine-close-overflow",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            sse(vec![
+                ev_assistant_message(
+                    "native-after-close-overflow",
+                    "native compact after close overflow",
+                ),
+                ev_completed("native-after-close-overflow-response"),
+            ]),
+        ],
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.name = "non-openai test provider".to_string();
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before close overflow");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "overflow-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open("overflow-open".to_string(), "overflow child".to_string())
+        .await
+        .expect("stage open");
+    let open_output = function_output("overflow-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let child_body = user_message("child work before close overflow");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record child body");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "overflow-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .stage_spine_close("overflow-close".to_string(), None)
+        .await
+        .expect("stage close");
+    let close_output = function_output("overflow-close");
+
+    let commit = session
+        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .await
+        .expect("close overflow should run native compact instead of failing close");
+    assert!(
+        !commit.record_output,
+        "invalidated close output must not be appended after native compact"
+    );
+    assert_no_pending_spine_commit(&session, "overflow-close").await;
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].body_json()["tool_choice"].as_str(),
+        Some("none")
+    );
+    assert_eq!(
+        requests[1].body_json()["tool_choice"].as_str(),
+        Some("auto")
+    );
+    assert!(
+        requests[0].body_contains_text("Write a compact handoff memory for Spine node"),
+        "first request should be the original spine.close suffix compact"
+    );
+    assert!(
+        !requests[1].body_contains_text("Write a compact handoff memory for Spine node"),
+        "native auto compact must not reuse the spine.close compact directive"
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    assert!(
+        raw_items.iter().flatten().all(|item| {
+            !matches!(
+                item,
+                ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "overflow-close"
+            )
+        }),
+        "invalidated close output should not be persisted"
+    );
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    assert_eq!(session.clone_history().await.raw_items(), materialized);
+    let tree = runtime.render_tree().expect("render spine tree");
+    assert!(tree.contains("[1] Done"), "{tree}");
+    assert!(
+        !tree.contains("[1.1.1] Done"),
+        "close should not be shifted as a completed child after native compact: {tree}"
+    );
+    assert!(
+        materialized.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("native compact after close overflow")
+                )
+        )),
+        "native compact memory should replace visible context"
     );
 }
 
@@ -11323,8 +11545,7 @@ async fn spine_sidecar_write_failure_invalidates_runtime_and_resume_fails_closed
         .await
         .expect_err("sidecar append failure should be fatal");
     assert!(
-        err.to_string()
-            .contains("failed to record Spine sidecar append"),
+        matches!(err, CodexErr::SpineAppendFailure { .. }),
         "unexpected append error: {err}"
     );
 
@@ -12112,10 +12333,10 @@ impl SessionTask for NeverEndingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> crate::session::turn::TurnOutput {
         if self.listen_to_cancellation_token {
             cancellation_token.cancelled().await;
-            return None;
+            return crate::session::turn::TurnOutput::complete(None);
         }
         loop {
             sleep(Duration::from_secs(60)).await;
@@ -12141,14 +12362,14 @@ impl SessionTask for GuardianDeniedApprovalTask {
         ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> crate::session::turn::TurnOutput {
         let session = session.clone_session();
         for _ in 0..3 {
             crate::guardian::record_guardian_denial_for_test(&session, &ctx, &ctx.sub_id).await;
         }
 
         cancellation_token.cancelled().await;
-        None
+        crate::session::turn::TurnOutput::complete(None)
     }
 }
 
@@ -12502,8 +12723,11 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     .await
     .expect("inject pending input into active turn");
 
-    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
-        .await;
+    sess.on_task_finished(
+        Arc::clone(&tc),
+        crate::session::turn::TurnOutput::complete(/*last_agent_message*/ None),
+    )
+    .await;
 
     let history = sess.clone_history().await;
     let expected = ResponseItem::Message {
@@ -12641,8 +12865,11 @@ async fn task_finish_pending_input_append_failure_does_not_emit_turn_complete() 
     std::fs::set_permissions(&broken_tree_path, tree_permissions)
         .expect("make tree ledger readonly");
 
-    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
-        .await;
+    sess.on_task_finished(
+        Arc::clone(&tc),
+        crate::session::turn::TurnOutput::complete(/*last_agent_message*/ None),
+    )
+    .await;
 
     let mut tree_permissions = std::fs::metadata(&broken_tree_path)
         .expect("tree metadata")

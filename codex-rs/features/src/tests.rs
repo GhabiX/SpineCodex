@@ -354,33 +354,10 @@ fn codex_hooks_is_legacy_alias_for_hooks() {
 }
 
 #[test]
-fn spine_jit_accepts_legacy_spine_task_tree_alias() {
+fn spine_jit_does_not_accept_legacy_spine_task_tree_alias() {
     assert_eq!(Feature::SpineJit.key(), "spine_jit");
     assert_eq!(feature_for_key("spine_jit"), Some(Feature::SpineJit));
-    assert_eq!(feature_for_key("spine_task_tree"), Some(Feature::SpineJit));
-}
-
-#[test]
-fn spine_task_tree_config_records_deprecation_notice() {
-    let mut entries = BTreeMap::new();
-    entries.insert("spine_task_tree".to_string(), true);
-
-    let mut features = Features::with_defaults();
-    features.apply_map(&entries);
-
-    assert_eq!(features.enabled(Feature::SpineJit), true);
-    let usages = features.legacy_feature_usages().collect::<Vec<_>>();
-    assert_eq!(usages.len(), 1);
-    assert_eq!(usages[0].alias, "spine_task_tree");
-    assert_eq!(usages[0].feature, Feature::SpineJit);
-    assert_eq!(
-        usages[0].summary,
-        "`[features].spine_task_tree` is deprecated. Use `[features].spine_jit` instead."
-    );
-    assert_eq!(
-        usages[0].details.as_deref(),
-        Some("Enable it with `--enable spine_jit` or `[features].spine_jit` in config.toml.")
-    );
+    assert_eq!(feature_for_key("spine_task_tree"), None);
 }
 
 #[test]

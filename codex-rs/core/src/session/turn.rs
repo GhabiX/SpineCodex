@@ -137,6 +137,47 @@ use tracing::warn;
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the turn complete.
 ///
+#[derive(Debug)]
+pub(crate) struct TurnOutput {
+    pub(crate) last_agent_message: Option<String>,
+    pub(crate) completion: TurnCompletion,
+}
+
+impl TurnOutput {
+    pub(crate) fn complete(last_agent_message: Option<String>) -> Self {
+        Self {
+            last_agent_message,
+            completion: TurnCompletion::Complete,
+        }
+    }
+
+    fn failed_no_turn_complete() -> Self {
+        Self {
+            last_agent_message: None,
+            completion: TurnCompletion::FailedNoTurnComplete,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnCompletion {
+    Complete,
+    FailedNoTurnComplete,
+}
+
+enum SamplingRequestError {
+    Codex(CodexErr),
+    FailedNoTurnComplete(CodexErr),
+}
+
+impl From<CodexErr> for SamplingRequestError {
+    fn from(err: CodexErr) -> Self {
+        Self::Codex(err)
+    }
+}
+
+impl SamplingRequestError {}
+
 #[expect(
     clippy::await_holding_invalid_type,
     reason = "turn execution must keep active-turn state transitions atomic"
@@ -148,9 +189,9 @@ pub(crate) async fn run_turn(
     input: Vec<UserInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
-) -> Option<String> {
+) -> TurnOutput {
     if input.is_empty() && !sess.has_pending_input().await {
-        return None;
+        return TurnOutput::complete(None);
     }
 
     let model_info = turn_context.model_info.clone();
@@ -166,7 +207,7 @@ pub(crate) async fn run_turn(
             Ok(pre_sampling_compact) => pre_sampling_compact,
             Err(_) => {
                 error!("Failed to run pre-sampling compact");
-                return None;
+                return TurnOutput::complete(None);
             }
         };
     if pre_sampling_compact.reset_client_session {
@@ -180,7 +221,7 @@ pub(crate) async fn run_turn(
         .await
     {
         send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-        return None;
+        return TurnOutput::complete(None);
     }
 
     let loaded_plugins = sess
@@ -206,7 +247,7 @@ pub(crate) async fn run_turn(
             .await
         {
             Ok(mcp_tools) => mcp_tools,
-            Err(_) if turn_context.apps_enabled() => return None,
+            Err(_) if turn_context.apps_enabled() => return TurnOutput::complete(None),
             Err(_) => Vec::new(),
         }
     } else {
@@ -314,11 +355,11 @@ pub(crate) async fn run_turn(
         .collect::<Vec<_>>();
 
     match run_pending_session_start_hooks(&sess, &turn_context).await {
-        Ok(true) => return None,
+        Ok(true) => return TurnOutput::complete(None),
         Ok(false) => {}
         Err(err) => {
             send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-            return None;
+            return TurnOutput::complete(None);
         }
     }
     let additional_contexts = if input.is_empty() {
@@ -342,14 +383,14 @@ pub(crate) async fn run_turn(
             {
                 send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
             }
-            return None;
+            return TurnOutput::complete(None);
         }
         if let Err(err) = sess
             .record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await
         {
             send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-            return None;
+            return TurnOutput::complete(None);
         }
         user_prompt_submit_outcome.additional_contexts
     };
@@ -365,7 +406,7 @@ pub(crate) async fn run_turn(
         .await;
     if let Err(err) = record_additional_contexts(&sess, &turn_context, additional_contexts).await {
         send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-        return None;
+        return TurnOutput::complete(None);
     }
     if !input.is_empty() {
         // Track the previous-turn baseline from the regular user-turn path only so
@@ -383,7 +424,7 @@ pub(crate) async fn run_turn(
             .await
     {
         send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-        return None;
+        return TurnOutput::complete(None);
     }
     if !plugin_items.is_empty()
         && let Err(err) = sess
@@ -391,7 +432,7 @@ pub(crate) async fn run_turn(
             .await
     {
         send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-        return None;
+        return TurnOutput::complete(None);
     }
 
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
@@ -468,14 +509,14 @@ pub(crate) async fn run_turn(
         for pending_input in accepted_pending_input {
             if let Err(err) = record_pending_input(&sess, &turn_context, pending_input).await {
                 send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-                return None;
+                return TurnOutput::complete(None);
             }
         }
         if let Err(err) =
             record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await
         {
             send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-            return None;
+            return TurnOutput::complete(None);
         }
 
         if blocked_pending_input && !has_accepted_pending_input {
@@ -558,7 +599,7 @@ pub(crate) async fn run_turn(
                     .await
                     {
                         Ok(reset_client_session) => reset_client_session,
-                        Err(_) => return None,
+                        Err(_) => return TurnOutput::complete(None),
                     };
                     if reset_client_session {
                         client_session.reset_websocket_session();
@@ -614,7 +655,7 @@ pub(crate) async fn run_turn(
                                 .await
                             {
                                 send_turn_error(sess.as_ref(), turn_context.as_ref(), err).await;
-                                return None;
+                                return TurnOutput::complete(None);
                             }
                             stop_hook_active = true;
                             continue;
@@ -688,17 +729,23 @@ pub(crate) async fn run_turn(
                             }),
                         )
                         .await;
-                        return None;
+                        return TurnOutput::complete(None);
                     }
                     break;
                 }
                 continue;
             }
-            Err(CodexErr::TurnAborted) => {
+            Err(SamplingRequestError::FailedNoTurnComplete(err)) => {
+                info!("Turn error: {err:#}");
+                let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
+                sess.send_event(&turn_context, event).await;
+                return TurnOutput::failed_no_turn_complete();
+            }
+            Err(SamplingRequestError::Codex(CodexErr::TurnAborted)) => {
                 // Aborted turn is reported via a different event.
                 break;
             }
-            Err(CodexErr::InvalidImageRequest()) => {
+            Err(SamplingRequestError::Codex(CodexErr::InvalidImageRequest())) => {
                 {
                     let mut state = sess.state.lock().await;
                     error_or_panic(
@@ -717,13 +764,9 @@ pub(crate) async fn run_turn(
                 sess.send_event(&turn_context, event).await;
                 break;
             }
-            Err(e) => {
-                let terminal_error = suppress_turn_complete_after_error(&e);
+            Err(SamplingRequestError::Codex(e)) => {
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
-                if terminal_error {
-                    turn_context.mark_terminal_error_recorded();
-                }
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
@@ -731,27 +774,13 @@ pub(crate) async fn run_turn(
         }
     }
 
-    last_agent_message
+    TurnOutput::complete(last_agent_message)
 }
 
 async fn send_turn_error(sess: &Session, turn_context: &TurnContext, err: CodexErr) {
-    let terminal_error = suppress_turn_complete_after_error(&err);
     info!("Turn error: {err:#}");
     let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
-    if terminal_error {
-        turn_context.mark_terminal_error_recorded();
-    }
     sess.send_event(turn_context, event).await;
-}
-
-fn suppress_turn_complete_after_error(err: &CodexErr) -> bool {
-    match err {
-        CodexErr::Fatal(message) => {
-            message.starts_with("failed to inspect Spine tool output:")
-                || message.starts_with("failed to commit Spine tool output:")
-        }
-        _ => false,
-    }
 }
 
 async fn track_turn_resolved_config_analytics(
@@ -892,7 +921,7 @@ async fn maybe_run_previous_model_inline_compact(
     Ok(false)
 }
 
-async fn run_auto_compact(
+pub(super) async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
@@ -1102,7 +1131,7 @@ async fn run_sampling_request(
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
-) -> CodexResult<SamplingRequestResult> {
+) -> Result<SamplingRequestResult, SamplingRequestError> {
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1111,7 +1140,8 @@ async fn run_sampling_request(
         skills_outcome,
         &cancellation_token,
     )
-    .await?;
+    .await
+    .map_err(SamplingRequestError::Codex)?;
 
     let base_instructions = sess.get_base_instructions().await;
 
@@ -1177,22 +1207,26 @@ async fn run_sampling_request(
                 }
                 return Ok(output);
             }
-            Err(CodexErr::ContextWindowExceeded) => {
+            Err(SamplingRequestError::Codex(CodexErr::ContextWindowExceeded)) => {
                 sess.set_total_tokens_full(&turn_context).await;
-                return Err(CodexErr::ContextWindowExceeded);
+                return Err(SamplingRequestError::Codex(CodexErr::ContextWindowExceeded));
             }
-            Err(CodexErr::UsageLimitReached(e)) => {
+            Err(SamplingRequestError::Codex(CodexErr::UsageLimitReached(e))) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
                     sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
-                return Err(CodexErr::UsageLimitReached(e));
+                return Err(SamplingRequestError::Codex(CodexErr::UsageLimitReached(e)));
             }
             Err(err) => err,
         };
 
-        if !err.is_retryable() {
+        let SamplingRequestError::Codex(err) = err else {
             return Err(err);
+        };
+
+        if !err.is_retryable() {
+            return Err(SamplingRequestError::Codex(err));
         }
 
         // Use the configured provider-specific stream retry budget.
@@ -1242,8 +1276,9 @@ async fn run_sampling_request(
                 .await;
             }
             tokio::time::sleep(delay).await;
+            continue;
         } else {
-            return Err(err);
+            return Err(SamplingRequestError::Codex(err));
         }
     }
 }
@@ -1978,8 +2013,9 @@ async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    client_session: &mut ModelClientSession,
     spine_control_overlay: &mut SpineControlOverlay,
-) -> CodexResult<()> {
+) -> Result<(), SamplingRequestError> {
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
@@ -1988,14 +2024,25 @@ async fn drain_in_flight(
                     .is_pending_spine_close_like_output(&response_item)
                     .await
                     .map_err(|err| {
-                        CodexErr::Fatal(format!("failed to inspect Spine tool output: {err}"))
+                        SamplingRequestError::FailedNoTurnComplete(CodexErr::Fatal(format!(
+                            "failed to inspect Spine tool output: {err}"
+                        )))
                     })?;
                 let commit = sess
-                    .maybe_commit_spine_tool_output(&turn_context, &response_item)
+                    .maybe_commit_spine_tool_output_with_client_session(
+                        &turn_context,
+                        client_session,
+                        &response_item,
+                    )
                     .await
                     .map_err(|err| {
-                        CodexErr::Fatal(format!("failed to commit Spine tool output: {err}"))
+                        SamplingRequestError::FailedNoTurnComplete(CodexErr::Fatal(format!(
+                            "failed to commit Spine tool output: {err}"
+                        )))
                     })?;
+                if !commit.record_output {
+                    continue;
+                }
                 if let Some(text) = commit.output_text {
                     replace_function_output_text(&mut response_item, text);
                 }
@@ -2005,19 +2052,22 @@ async fn drain_in_flight(
                         &turn_context,
                         std::slice::from_ref(&response_item),
                     )
-                    .await?;
+                    .await
+                    .map_err(SamplingRequestError::Codex)?;
                 } else if spine_control_overlay.contains_matching_request(&response_item) {
                     sess.record_conversation_items_spine_control_overlay_only(
                         &turn_context,
                         std::slice::from_ref(&response_item),
                     )
-                    .await?;
+                    .await
+                    .map_err(SamplingRequestError::Codex)?;
                 } else {
                     sess.record_conversation_items(
                         &turn_context,
                         std::slice::from_ref(&response_item),
                     )
-                    .await?;
+                    .await
+                    .map_err(SamplingRequestError::Codex)?;
                 }
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
@@ -2052,7 +2102,7 @@ async fn try_run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
-) -> CodexResult<SamplingRequestResult> {
+) -> Result<SamplingRequestResult, SamplingRequestError> {
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),
@@ -2079,7 +2129,10 @@ async fn try_run_sampling_request(
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await??;
+        .await
+        .map_err(CodexErr::from)
+        .map_err(SamplingRequestError::Codex)?
+        .map_err(SamplingRequestError::Codex)?;
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
@@ -2102,7 +2155,7 @@ async fn try_run_sampling_request(
     let mut active_item_is_streaming_to_client = false;
     let receiving_span = trace_span!("receiving_stream");
     let mut completed_response_id: Option<String> = None;
-    let outcome: CodexResult<SamplingRequestResult> = loop {
+    let outcome: Result<SamplingRequestResult, SamplingRequestError> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
             "handle_responses",
@@ -2124,17 +2177,19 @@ async fn try_run_sampling_request(
             .await
         {
             Ok(event) => event,
-            Err(codex_async_utils::CancelErr::Cancelled) => break Err(CodexErr::TurnAborted),
+            Err(codex_async_utils::CancelErr::Cancelled) => {
+                break Err(SamplingRequestError::Codex(CodexErr::TurnAborted));
+            }
         };
 
         let event = match event {
             Some(Ok(event)) => event,
-            Some(Err(err)) => break Err(err),
+            Some(Err(err)) => break Err(SamplingRequestError::Codex(err)),
             None => {
-                break Err(CodexErr::Stream(
+                break Err(SamplingRequestError::Codex(CodexErr::Stream(
                     "stream closed before response.completed".into(),
                     None,
-                ));
+                )));
             }
         };
 
@@ -2181,7 +2236,8 @@ async fn try_run_sampling_request(
                         previously_streamed_item.as_ref(),
                         &mut last_agent_message,
                     )
-                    .await?
+                    .await
+                    .map_err(SamplingRequestError::Codex)?
                 {
                     continue;
                 }
@@ -2222,7 +2278,7 @@ async fn try_run_sampling_request(
                         .await
                     {
                         Ok(output_result) => output_result,
-                        Err(err) => break Err(err),
+                        Err(err) => break Err(SamplingRequestError::Codex(err)),
                     };
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
@@ -2261,7 +2317,8 @@ async fn try_run_sampling_request(
                     &item,
                     plan_mode,
                 )
-                .await?
+                .await
+                .map_err(SamplingRequestError::Codex)?
                 {
                     let mut turn_item = turn_item;
                     let stream_item_to_client = !defer_streamed_turn_items_for_contributors;
@@ -2511,6 +2568,7 @@ async fn try_run_sampling_request(
         &mut in_flight,
         sess.clone(),
         turn_context.clone(),
+        client_session,
         &mut spine_control_overlay,
     )
     .await?;
@@ -2524,7 +2582,7 @@ async fn try_run_sampling_request(
     }
 
     if cancellation_token.is_cancelled() {
-        return Err(CodexErr::TurnAborted);
+        return Err(SamplingRequestError::Codex(CodexErr::TurnAborted));
     }
 
     if should_emit_turn_diff {

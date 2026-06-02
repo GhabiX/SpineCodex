@@ -1,8 +1,11 @@
 use crate::Prompt;
+use crate::client::ModelClientSession;
 use crate::client::ResponsesToolChoice;
 use crate::client_common::ResponseEvent;
+use crate::compact::InitialContextInjection;
 use crate::context_manager::ContextManager;
 use crate::session::Session;
+use crate::session::turn::run_auto_compact;
 use crate::session::turn_context::TurnContext;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCloseCompact;
@@ -10,6 +13,8 @@ use crate::spine::SpineError;
 use crate::spine::is_spine_close_like_tool_name;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::util::backoff;
+use codex_analytics::CompactionPhase;
+use codex_analytics::CompactionReason;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -17,17 +22,19 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
+use std::sync::Arc;
 
 impl Session {
     pub(crate) async fn spine_compact_close(
-        &self,
-        turn_context: &TurnContext,
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        native_compact_client_session: &mut ModelClientSession,
         history: &ContextManager,
         node_id: String,
         suffix_start: usize,
         close_output: &ResponseItem,
         instruction: Option<String>,
-    ) -> Result<SpineCloseCompact, SpineError> {
+    ) -> Result<SpineCloseCompactOutcome, SpineError> {
         let raw_items = history.raw_items();
         if suffix_start >= raw_items.len() {
             return Err(SpineError::Operation(format!(
@@ -95,51 +102,78 @@ impl Session {
             personality: turn_context.personality,
             ..Default::default()
         };
-        let (output, token_usage) = self.spine_close_summary_items(turn_context, prompt).await?;
+        let (output, token_usage) = match self
+            .spine_close_summary_items(turn_context, native_compact_client_session, prompt)
+            .await?
+        {
+            SpineCloseSummaryOutcome::Output {
+                output,
+                token_usage,
+            } => (output, token_usage),
+            SpineCloseSummaryOutcome::NativeCompacted {
+                reset_client_session,
+            } => {
+                return Ok(SpineCloseCompactOutcome::NativeCompacted {
+                    reset_client_session,
+                });
+            }
+        };
         let body = spine_close_compact_body(&node_id, &output)?;
-        Ok(SpineCloseCompact {
+        Ok(SpineCloseCompactOutcome::Compact(SpineCloseCompact {
             body,
             source_context_range: suffix_start..close_context_end,
             memory_output_tokens: token_usage.map(|usage| usage.output_tokens),
-        })
+        }))
     }
 
     async fn spine_close_summary_items(
-        &self,
-        turn_context: &TurnContext,
-        mut prompt: Prompt,
-    ) -> Result<(Vec<ResponseItem>, Option<TokenUsage>), SpineError> {
-        let client_session = self.services.model_client.new_session();
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        native_compact_client_session: &mut ModelClientSession,
+        prompt: Prompt,
+    ) -> Result<SpineCloseSummaryOutcome, SpineError> {
         let max_retries = turn_context.provider.info().stream_max_retries();
         let mut retries = 0;
 
         loop {
             match self
-                .spine_close_summary_items_once(turn_context, &client_session, &prompt)
+                .spine_close_summary_items_once(
+                    turn_context,
+                    native_compact_client_session,
+                    &prompt,
+                )
                 .await
             {
-                Ok(output) => return Ok(output),
+                Ok(output) => {
+                    return Ok(SpineCloseSummaryOutcome::Output {
+                        output: output.0,
+                        token_usage: output.1,
+                    });
+                }
                 Err(CodexErr::Interrupted) => {
                     return Err(SpineError::CompactFailure(
                         "spine.close compact interrupted".to_string(),
                     ));
                 }
-                Err(e @ CodexErr::ContextWindowExceeded) => {
-                    if prompt.input.len() > 1 {
-                        // Keep the close path moving under window pressure. This is a
-                        // last-resort recovery path: trim the oldest item first so the
-                        // live suffix and compact directive stay intact, even if some
-                        // prefix reuse has to be sacrificed.
-                        prompt.input.remove(0);
-                        retries = 0;
-                        continue;
-                    }
+                Err(CodexErr::ContextWindowExceeded) => {
                     self.set_total_tokens_full(turn_context).await;
-                    self.send_event(turn_context, EventMsg::Error(e.to_error_event(None)))
-                        .await;
-                    return Err(SpineError::CompactFailure(format!(
-                        "spine.close compact failed: {e}"
-                    )));
+                    let reset_client_session = Box::pin(run_auto_compact(
+                        self,
+                        turn_context,
+                        native_compact_client_session,
+                        InitialContextInjection::BeforeLastUserMessage,
+                        CompactionReason::ContextLimit,
+                        CompactionPhase::MidTurn,
+                    ))
+                    .await
+                    .map_err(|err| {
+                        SpineError::CompactFailure(format!(
+                            "spine.close compact triggered native compact, but native compact failed: {err}"
+                        ))
+                    })?;
+                    return Ok(SpineCloseSummaryOutcome::NativeCompacted {
+                        reset_client_session,
+                    });
                 }
                 Err(e) => {
                     if retries < max_retries {
@@ -210,6 +244,21 @@ impl Session {
             }
         }
     }
+}
+
+pub(crate) enum SpineCloseCompactOutcome {
+    Compact(SpineCloseCompact),
+    NativeCompacted { reset_client_session: bool },
+}
+
+enum SpineCloseSummaryOutcome {
+    Output {
+        output: Vec<ResponseItem>,
+        token_usage: Option<TokenUsage>,
+    },
+    NativeCompacted {
+        reset_client_session: bool,
+    },
 }
 
 /// Builds the system directive that turns a closed Spine node into durable memory.

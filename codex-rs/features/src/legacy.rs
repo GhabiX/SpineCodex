@@ -45,10 +45,6 @@ const ALIASES: &[Alias] = &[
         legacy_key: "codex_hooks",
         feature: Feature::CodexHooks,
     },
-    Alias {
-        legacy_key: "spine_task_tree",
-        feature: Feature::SpineJit,
-    },
 ];
 
 pub fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {

@@ -2772,7 +2772,7 @@ impl Session {
         let reason = format!("failed to {operation}: {err}");
         error!("{reason}");
         self.invalidate_spine_runtime(reason.clone()).await;
-        CodexErr::Fatal(format!("failed to record Spine sidecar append: {reason}"))
+        CodexErr::SpineAppendFailure { reason }
     }
 
     /// Append ResponseItems to the in-memory conversation history only.

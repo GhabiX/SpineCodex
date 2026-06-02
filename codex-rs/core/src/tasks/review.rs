@@ -21,6 +21,7 @@ use crate::config::Constrained;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::session::session::Session;
+use crate::session::turn::TurnOutput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use codex_features::Feature;
@@ -61,7 +62,7 @@ impl SessionTask for ReviewTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TurnOutput {
         session.session.services.session_telemetry.counter(
             "codex.task.review",
             /*inc*/ 1,
@@ -83,7 +84,7 @@ impl SessionTask for ReviewTask {
         if !cancellation_token.is_cancelled() {
             exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
         }
-        None
+        TurnOutput::complete(None)
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {

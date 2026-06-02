@@ -29,6 +29,8 @@ use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::session::session::Session;
+use crate::session::turn::TurnCompletion;
+use crate::session::turn::TurnOutput;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
@@ -205,18 +207,18 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
-    /// `ctx`, returning an optional final agent message when finished. The
+    /// `ctx`, returning the final turn output when finished. The
     /// provided `cancellation_token` is cancelled when the session requests an
     /// abort; implementers should watch for it and terminate quickly once it
-    /// fires. Returning [`Some`] yields a final message that
-    /// [`Session::on_task_finished`] will emit to the client.
+    /// fires. Returning an output with a final message lets
+    /// [`Session::on_task_finished`] emit that message to the client.
     fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Option<String>> + Send;
+    ) -> impl std::future::Future<Output = TurnOutput> + Send;
 
     /// Gives the task a chance to perform cleanup after an abort.
     ///
@@ -247,7 +249,7 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> BoxFuture<'static, Option<String>>;
+    ) -> BoxFuture<'static, TurnOutput>;
 
     fn abort<'a>(
         &'a self,
@@ -278,7 +280,7 @@ where
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> BoxFuture<'static, Option<String>> {
+    ) -> BoxFuture<'static, TurnOutput> {
         Box::pin(SessionTask::run(
             self,
             session,
@@ -398,7 +400,7 @@ impl Session {
         let handle = tokio::spawn(
             async move {
                 let ctx_for_finish = Arc::clone(&ctx);
-                let last_agent_message = task_for_run
+                let turn_output = task_for_run
                     .run(
                         Arc::clone(&session_ctx),
                         ctx,
@@ -421,7 +423,7 @@ impl Session {
                 }
                 if !task_cancellation_token.is_cancelled() {
                     // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                    sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
+                    sess.on_task_finished(Arc::clone(&ctx_for_finish), turn_output)
                         .await;
                 }
                 done_clone.notify_waiters();
@@ -583,8 +585,12 @@ impl Session {
     pub async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-        last_agent_message: Option<String>,
+        turn_output: TurnOutput,
     ) {
+        let TurnOutput {
+            last_agent_message,
+            completion,
+        } = turn_output;
         turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
@@ -813,20 +819,20 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
-        let terminal_error_recorded = turn_context.terminal_error_recorded();
+        let failed_no_turn_complete = completion == TurnCompletion::FailedNoTurnComplete;
         if should_clear_active_turn {
             self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref());
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
                 turn_context: turn_context.as_ref(),
-                turn_completed: should_clear_active_turn && !terminal_error_recorded,
+                turn_completed: should_clear_active_turn && !failed_no_turn_complete,
             })
             .await
         {
             warn!("failed to apply goal runtime turn-finished event: {err}");
         }
-        if terminal_error_recorded {
+        if failed_no_turn_complete {
             self.services
                 .guardian_rejection_circuit_breaker
                 .lock()

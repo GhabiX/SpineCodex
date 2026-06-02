@@ -553,9 +553,6 @@
             "spine_jit": {
               "type": "boolean"
             },
-            "spine_task_tree": {
-              "type": "boolean"
-            },
             "sqlite": {
               "type": "boolean"
             },
@@ -4337,9 +4334,6 @@
           "type": "boolean"
         },
         "spine_jit": {
-          "type": "boolean"
-        },
-        "spine_task_tree": {
           "type": "boolean"
         },
         "sqlite": {

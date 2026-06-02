@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::session::turn::TurnOutput;
 use crate::session::turn::run_turn;
 use crate::session::turn_context::TurnContext;
 use crate::session_startup_prewarm::SessionStartupPrewarmResolution;
@@ -43,7 +44,7 @@ impl SessionTask for RegularTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TurnOutput {
         let sess = session.clone_session();
         let turn_extension_data = session.turn_extension_data();
         let run_turn_span = trace_span!("run_turn");
@@ -67,7 +68,7 @@ impl SessionTask for RegularTask {
             .consume_startup_prewarm_for_regular_turn(&cancellation_token)
             .await
         {
-            SessionStartupPrewarmResolution::Cancelled => return None,
+            SessionStartupPrewarmResolution::Cancelled => return TurnOutput::complete(None),
             SessionStartupPrewarmResolution::Unavailable { .. } => None,
             SessionStartupPrewarmResolution::Ready(prewarmed_client_session) => {
                 Some(*prewarmed_client_session)
@@ -76,7 +77,7 @@ impl SessionTask for RegularTask {
         let mut next_input = input;
         let mut prewarmed_client_session = prewarmed_client_session;
         loop {
-            let last_agent_message = run_turn(
+            let turn_output = run_turn(
                 Arc::clone(&sess),
                 Arc::clone(&ctx),
                 Arc::clone(&turn_extension_data),
@@ -87,7 +88,7 @@ impl SessionTask for RegularTask {
             .instrument(run_turn_span.clone())
             .await;
             if !sess.has_pending_input().await {
-                return last_agent_message;
+                return turn_output;
             }
             next_input = Vec::new();
         }
