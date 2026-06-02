@@ -911,20 +911,28 @@ impl Session {
         {
             let guard = spine_slot.lock().await;
             guard.ensure_valid().map_err(|err| {
-                CodexErr::Fatal(format!("failed to install Spine root compact: {err}"))
+                CodexErr::SpineTerminalFailure {
+                    operation: "install Spine root compact".to_string(),
+                    reason: err.to_string(),
+                }
             })?;
             if guard.runtime().is_none() {
                 return Ok(None);
             }
         }
         let body = spine_root_compact_body(items, compacted_item).ok_or_else(|| {
-            CodexErr::Fatal(
-                "native compact produced no model-visible Spine root memory body".to_string(),
-            )
+            CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: "native compact produced no model-visible Spine root memory body"
+                    .to_string(),
+            }
         })?;
         let Some((root_compact, snapshot)) =
             self.install_spine_root_compact(body).await.map_err(|err| {
-                CodexErr::Fatal(format!("failed to install Spine root compact: {err}"))
+                CodexErr::SpineTerminalFailure {
+                    operation: "install Spine root compact".to_string(),
+                    reason: err.to_string(),
+                }
             })?
         else {
             return Ok(None);
