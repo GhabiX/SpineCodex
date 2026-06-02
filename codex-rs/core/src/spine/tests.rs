@@ -65,6 +65,20 @@ fn event_log_debug(runtime: &SpineRuntime) -> Vec<String> {
         .collect()
 }
 
+fn assert_parse_stack_tree_and_events_unchanged(
+    runtime: &SpineRuntime,
+    parse_stack_before: &ParseStack,
+    tree_before: &str,
+    events_before: &[String],
+) {
+    assert_eq!(runtime.parse_stack(), parse_stack_before);
+    assert_eq!(
+        runtime.render_tree().expect("render tree after failure"),
+        tree_before
+    );
+    assert_eq!(event_log_debug(runtime), events_before);
+}
+
 fn current_context_len(runtime: &SpineRuntime, raw: &[Option<ResponseItem>]) -> usize {
     runtime
         .materialize_history(raw)
@@ -2562,12 +2576,12 @@ fn close_failure_does_not_mutate_parse_stack() {
         "unexpected close failure: {err}"
     );
 
-    assert_eq!(runtime.parse_stack(), &parse_stack_before);
-    assert_eq!(
-        runtime.render_tree().expect("render tree after failure"),
-        tree_before
+    assert_parse_stack_tree_and_events_unchanged(
+        &runtime,
+        &parse_stack_before,
+        &tree_before,
+        &events_before,
     );
-    assert_eq!(event_log_debug(&runtime), events_before);
     assert_eq!(
         runtime.store.mems().expect("read mems after failure").len(),
         mem_count_before
@@ -2638,12 +2652,12 @@ fn close_persistence_failure_does_not_mutate_parse_stack() {
         "unexpected close persistence failure: {err}"
     );
 
-    assert_eq!(runtime.parse_stack(), &parse_stack_before);
-    assert_eq!(
-        runtime.render_tree().expect("render tree after failure"),
-        tree_before
+    assert_parse_stack_tree_and_events_unchanged(
+        &runtime,
+        &parse_stack_before,
+        &tree_before,
+        &events_before,
     );
-    assert_eq!(event_log_debug(&runtime), events_before);
     assert!(
         runtime
             .pending_commit("close")
@@ -3742,12 +3756,12 @@ fn native_compact_failure_leaves_parse_stack_unchanged() {
         "unexpected empty compact error: {err}"
     );
 
-    assert_eq!(runtime.parse_stack(), &parse_stack_before);
-    assert_eq!(
-        runtime.render_tree().expect("render tree after failure"),
-        tree_before
+    assert_parse_stack_tree_and_events_unchanged(
+        &runtime,
+        &parse_stack_before,
+        &tree_before,
+        &events_before,
     );
-    assert_eq!(event_log_debug(&runtime), events_before);
     assert_eq!(
         runtime.store.mems().expect("read mems after failure").len(),
         mem_count_before
