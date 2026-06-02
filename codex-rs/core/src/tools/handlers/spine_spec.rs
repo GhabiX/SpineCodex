@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
     ToolSpec::Namespace(ResponsesApiNamespace {
         name: SPINE_NAMESPACE.to_string(),
-        description: "Inspect and move the feature-gated Spine task tree.".to_string(),
+        description: "Inspect and move the Spine task tree.".to_string(),
         tools: vec![
             ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                 name: SPINE_TOOL_TREE.to_string(),

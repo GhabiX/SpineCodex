@@ -379,9 +379,7 @@ fn spine_task_tree_config_records_deprecation_notice() {
     );
     assert_eq!(
         usages[0].details.as_deref(),
-        Some(
-            "The feature is a JIT context manager, not a tree UI feature. Enable it with `--enable spine_jit` or `[features].spine_jit` in config.toml."
-        )
+        Some("Enable it with `--enable spine_jit` or `[features].spine_jit` in config.toml.")
     );
 }
 

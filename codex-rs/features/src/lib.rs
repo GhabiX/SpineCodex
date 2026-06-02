@@ -538,8 +538,9 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
             let summary =
                 "`[features].spine_task_tree` is deprecated. Use `[features].spine_jit` instead."
                     .to_string();
-            let details = "The feature is a JIT context manager, not a tree UI feature. Enable it with `--enable spine_jit` or `[features].spine_jit` in config.toml."
-                .to_string();
+            let details =
+                "Enable it with `--enable spine_jit` or `[features].spine_jit` in config.toml."
+                    .to_string();
             (summary, Some(details))
         }
         _ => {
