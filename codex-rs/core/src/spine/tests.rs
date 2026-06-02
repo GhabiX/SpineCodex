@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+// Shared raw/context fixtures.
+
 fn rollout_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("rollout.jsonl")
 }
@@ -97,6 +99,8 @@ fn compact_body_with_context_range(
         memory_output_tokens: Some(1_250),
     }
 }
+
+// Error classification and fail-closed boundaries.
 
 #[test]
 fn spine_error_classifies_fail_closed_boundaries() {
@@ -183,6 +187,8 @@ fn spine_error_classifies_missing_raw_coverage_as_sidecar_corruption() {
     assert!(err.to_string().contains("token_seq="));
 }
 
+// Shared lifecycle and tree projection fixtures.
+
 fn open_task(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
@@ -263,6 +269,16 @@ fn append_msg(runtime: &mut SpineRuntime, raw: &mut Vec<Option<ResponseItem>>, t
         .expect("observe msg");
 }
 
+fn pending_close_suffix_start(runtime: &SpineRuntime, call_id: &str, expectation: &str) -> usize {
+    match runtime
+        .pending_commit(call_id)
+        .expect("pending close should be readable")
+    {
+        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
+        other => panic!("expected {expectation}, got {other:?}"),
+    }
+}
+
 fn close_task(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
@@ -280,13 +296,7 @@ fn close_task(
     runtime
         .stage_close(call_id.to_string(), None)
         .expect("stage close");
-    let suffix_start = match runtime
-        .pending_commit(call_id)
-        .expect("pending close should be readable")
-    {
-        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
-        other => panic!("expected pending close, got {other:?}"),
-    };
+    let suffix_start = pending_close_suffix_start(runtime, call_id, "pending close");
 
     let output = function_output(call_id);
     let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
@@ -328,13 +338,7 @@ fn close_task_with_token_baselines(
     runtime
         .stage_close(call_id.to_string(), None)
         .expect("stage close");
-    let suffix_start = match runtime
-        .pending_commit(call_id)
-        .expect("pending close should be readable")
-    {
-        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
-        other => panic!("expected pending close, got {other:?}"),
-    };
+    let suffix_start = pending_close_suffix_start(runtime, call_id, "pending close");
 
     let output = function_output(call_id);
     let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
@@ -377,13 +381,7 @@ fn next_task(
     runtime
         .stage_next(call_id.to_string(), next_summary.to_string(), None)
         .expect("stage next");
-    let suffix_start = match runtime
-        .pending_commit(call_id)
-        .expect("pending next should be readable")
-    {
-        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
-        other => panic!("expected pending close-like next, got {other:?}"),
-    };
+    let suffix_start = pending_close_suffix_start(runtime, call_id, "pending close-like next");
 
     let output = function_output(call_id);
     let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
@@ -431,6 +429,8 @@ fn assert_snapshot_is_self_contained_forest(snapshot: &SpineTreeUpdateEvent) {
         }
     }
 }
+
+// Tree projection and context accounting.
 
 #[test]
 fn initial_tree_snapshot_projects_root_epoch_with_live_first_child() {
@@ -637,6 +637,8 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
     let materialized = replayed.materialize_history(&raw).expect("materialize");
     assert_eq!(materialized.len(), 1);
 }
+
+// Pressure overlay repair and replay.
 
 #[test]
 fn pressure_repair_records_overlay_without_structural_seq_change() {
@@ -994,6 +996,8 @@ fn corrupt_pressure_records_do_not_fail_structural_replay() {
     assert_eq!(rereplayed.current_open_context_tokens(), Some(12_000));
 }
 
+// Root-depth lifecycle and spine.next transactions.
+
 #[test]
 fn root_depth_open_node_can_close_and_next_open_creates_sibling() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1255,6 +1259,8 @@ fn close_at_root_cursor_fails_without_mutating_parse_stack() {
     );
     assert_eq!(runtime.parse_stack(), &before);
 }
+
+// Control carriers, parser shifts, and pending commits.
 
 #[test]
 fn ordinary_response_item_shifts_msg() {
@@ -1724,6 +1730,8 @@ fn try_commit_internal_failure_does_not_silently_abort_pending() {
     assert_eq!(runtime.parse_stack(), &parse_stack_before);
     assert_eq!(event_log_debug(&runtime), events_before);
 }
+
+// Clone and fork sidecar behavior.
 
 #[test]
 fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
@@ -2255,6 +2263,8 @@ fn clone_boundary_excludes_future_structural_and_pressure_records() {
             .expect("target sidecar exists");
     assert_eq!(replayed.current_open_context_tokens(), Some(7_000));
 }
+
+// Close, reduce, and materialized history.
 
 #[test]
 fn spine_close_output_does_not_shift_msg() {
@@ -2926,6 +2936,8 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
     assert_eq!(materialized[1], text_item("2.1 work"));
 }
 
+// Fork isolation and replayed materialization.
+
 #[test]
 fn fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -3271,6 +3283,8 @@ fn materialize_history_renders_from_parse_stack_memory_segments() {
     ));
 }
 
+// Rollback replay over sparse raw history.
+
 #[test]
 fn materialization_skips_rolled_back_raw_items_without_shifting_ordinals() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -3442,6 +3456,8 @@ fn rollback_hole_rejects_suffix_memory_span() {
         "unexpected materialization error: {err}"
     );
 }
+
+// Native root compact and root epoch behavior.
 
 #[test]
 fn native_compact_shifts_compact_and_new_root_open() {
@@ -3816,6 +3832,8 @@ fn root_compact_survives_rollback_without_new_raw_items() {
             )
     ));
 }
+
+// Rollback checkpoints and recovery.
 
 #[test]
 fn checkpoint_before_user_msg_records_recoverable_fields() {
