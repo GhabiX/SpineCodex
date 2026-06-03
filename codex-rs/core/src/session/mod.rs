@@ -3156,7 +3156,7 @@ impl Session {
         let Some(live_thread) = self.live_thread() else {
             return Ok(());
         };
-        live_thread.append_items(items).await
+        live_thread.append_items_raw_durable(items).await
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {

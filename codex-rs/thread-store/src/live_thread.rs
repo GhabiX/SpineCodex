@@ -137,6 +137,18 @@ impl LiveThread {
     }
 
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
+        self.append_items_inner(items, true).await
+    }
+
+    pub async fn append_items_raw_durable(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
+        self.append_items_inner(items, false).await
+    }
+
+    async fn append_items_inner(
+        &self,
+        items: &[RolloutItem],
+        require_metadata_update: bool,
+    ) -> ThreadStoreResult<()> {
         let canonical_items = persisted_rollout_items(items, self.event_persistence_mode);
         if canonical_items.is_empty() {
             return Ok(());
@@ -153,17 +165,26 @@ impl LiveThread {
             .await
             .observe_appended_items(canonical_items.as_slice());
         if let Some(update) = update {
-            self.thread_store
+            let result = self
+                .thread_store
                 .update_thread_metadata(UpdateThreadMetadataParams {
                     thread_id: self.thread_id,
                     patch: update.patch.clone(),
                     include_archived: true,
                 })
-                .await?;
-            self.metadata_sync
-                .lock()
-                .await
-                .mark_pending_update_applied(&update);
+                .await;
+            match result {
+                Ok(_) => {
+                    self.metadata_sync
+                        .lock()
+                        .await
+                        .mark_pending_update_applied(&update);
+                }
+                Err(err) if require_metadata_update => return Err(err),
+                Err(err) => {
+                    warn!("failed to update thread metadata after raw-durable append: {err}");
+                }
+            }
         }
         Ok(())
     }

@@ -835,7 +835,8 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
 }
 
 #[tokio::test]
-async fn reconstruct_history_records_all_replacement_history_boundaries_for_spine_proofs() {
+async fn reconstruct_history_records_all_surviving_replacement_history_boundaries_for_spine_proofs()
+{
     let (session, turn_context) = make_session_and_context().await;
     let first_replacement = vec![user_message("first replacement history")];
     let second_replacement = vec![user_message("second replacement history")];
@@ -879,6 +880,104 @@ async fn reconstruct_history_records_all_replacement_history_boundaries_for_spin
     );
     assert_eq!(
         reconstructed.replacement_history_boundaries[1].replacement_history,
+        reconstructed.history
+    );
+}
+
+#[tokio::test]
+async fn reconstruct_history_excludes_rolled_back_replacement_history_boundaries_from_spine_proofs()
+{
+    let (session, turn_context) = make_session_and_context().await;
+    let first_replacement = vec![user_message("first replacement history")];
+    let second_replacement = vec![
+        user_message("first replacement history"),
+        user_message("rolled back replacement history"),
+    ];
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: "first-turn".to_string(),
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "first turn".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::ResponseItem(user_message("first raw")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "first compact".to_string(),
+            replacement_history: Some(first_replacement.clone()),
+        }),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: "first-turn".to_string(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: "rolled-back-turn".to_string(),
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "rolled back turn".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::ResponseItem(user_message("rolled back raw")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "rolled back compact".to_string(),
+            replacement_history: Some(second_replacement),
+        }),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: "rolled-back-turn".to_string(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        )),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.history, first_replacement);
+    assert_eq!(
+        reconstructed
+            .base_replacement_history_boundary
+            .as_ref()
+            .map(|boundary| boundary.raw_boundary),
+        Some(1)
+    );
+    assert_eq!(reconstructed.replacement_history_boundaries.len(), 1);
+    assert_eq!(
+        reconstructed.replacement_history_boundaries[0].raw_boundary,
+        1
+    );
+    assert_eq!(
+        reconstructed.replacement_history_boundaries[0].replacement_history,
         reconstructed.history
     );
 }

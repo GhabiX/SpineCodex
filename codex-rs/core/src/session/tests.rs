@@ -251,6 +251,8 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration as StdDuration;
 
 mod guardian_tests;
@@ -3718,12 +3720,19 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
         .expect("thread should have rollout path")
 }
 
-struct CompactAppendFailingThreadStore {
+enum CompactThreadStoreFailureMode {
+    Append,
+    Metadata,
+}
+
+struct CompactFailingThreadStore {
     inner: Arc<dyn codex_thread_store::ThreadStore>,
+    mode: CompactThreadStoreFailureMode,
+    fail_next_metadata_update: AtomicBool,
 }
 
 #[async_trait::async_trait]
-impl codex_thread_store::ThreadStore for CompactAppendFailingThreadStore {
+impl codex_thread_store::ThreadStore for CompactFailingThreadStore {
     fn as_any(&self) -> &dyn std::any::Any {
         self.inner.as_any()
     }
@@ -3742,9 +3751,16 @@ impl codex_thread_store::ThreadStore for CompactAppendFailingThreadStore {
             .iter()
             .any(|item| matches!(item, RolloutItem::Compacted(_)))
         {
-            return Err(ThreadStoreError::Internal {
-                message: "injected compact append failure".to_string(),
-            });
+            match self.mode {
+                CompactThreadStoreFailureMode::Append => {
+                    return Err(ThreadStoreError::Internal {
+                        message: "injected compact append failure".to_string(),
+                    });
+                }
+                CompactThreadStoreFailureMode::Metadata => {
+                    self.fail_next_metadata_update.store(true, Ordering::SeqCst);
+                }
+            }
         }
         self.inner.append_items(params).await
     }
@@ -3799,6 +3815,13 @@ impl codex_thread_store::ThreadStore for CompactAppendFailingThreadStore {
         &self,
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreResult<StoredThread> {
+        if matches!(self.mode, CompactThreadStoreFailureMode::Metadata)
+            && self.fail_next_metadata_update.swap(false, Ordering::SeqCst)
+        {
+            return Err(ThreadStoreError::Internal {
+                message: "injected compact metadata failure".to_string(),
+            });
+        }
         self.inner.update_thread_metadata(params).await
     }
 
@@ -3815,9 +3838,26 @@ impl codex_thread_store::ThreadStore for CompactAppendFailingThreadStore {
 }
 
 async fn attach_thread_persistence_with_compact_append_failure(session: &mut Session) -> PathBuf {
+    attach_thread_persistence_with_compact_failure(session, CompactThreadStoreFailureMode::Append)
+        .await
+}
+
+async fn attach_thread_persistence_with_compact_metadata_failure(session: &mut Session) -> PathBuf {
+    attach_thread_persistence_with_compact_failure(session, CompactThreadStoreFailureMode::Metadata)
+        .await
+}
+
+async fn attach_thread_persistence_with_compact_failure(
+    session: &mut Session,
+    mode: CompactThreadStoreFailureMode,
+) -> PathBuf {
     let base_store = Arc::clone(&session.services.thread_store);
     let failing_store: Arc<dyn codex_thread_store::ThreadStore> =
-        Arc::new(CompactAppendFailingThreadStore { inner: base_store });
+        Arc::new(CompactFailingThreadStore {
+            inner: base_store,
+            mode,
+            fail_next_metadata_update: AtomicBool::new(false),
+        });
     session.services.thread_store = Arc::clone(&failing_store);
     let config = session.get_config().await;
     let live_thread = LiveThread::create(
@@ -9948,6 +9988,118 @@ async fn native_compact_rollout_append_failure_does_not_replace_host_history() {
             .iter()
             .any(|item| matches!(item, RolloutItem::Compacted(_))),
         "failed compact boundary append must not persist Compacted"
+    );
+}
+
+#[tokio::test]
+async fn native_compact_metadata_failure_after_raw_append_still_replaces_host_history() {
+    let server = start_mock_server().await;
+    let _responses_mock = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_assistant_message("native-metadata-failure", "native metadata failure summary"),
+            ev_completed("native-metadata-failure-response"),
+        ])],
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path = attach_thread_persistence_with_compact_metadata_failure(
+        Arc::get_mut(&mut session).expect("session should be unique"),
+    )
+    .await;
+
+    let prefix = user_message("history before metadata failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record conversation items");
+
+    crate::compact::run_compact_task(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        vec![UserInput::Text {
+            text: "compact should succeed after raw append despite metadata failure".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await
+    .expect("native compact should succeed after raw rollout append is durable");
+
+    let compacted_history = session.clone_history().await.raw_items().to_vec();
+    assert_ne!(
+        compacted_history,
+        vec![prefix],
+        "successful native compact must replace host history"
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let compacted = resumed
+        .history
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::Compacted(compacted) => Some(compacted),
+            _ => None,
+        })
+        .expect("raw-durable native compact must persist Compacted");
+    assert_eq!(
+        compacted.replacement_history.as_ref(),
+        Some(&compacted_history),
+        "persisted compact boundary must prove the replaced host history"
+    );
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = spine_raw_items_after_rollback(&resumed.history)
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&rollout_path, &resumed_rollout_path, &raw_live);
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: resumed.history,
+            rollout_path: Some(rollout_path),
+        }))
+        .await
+        .expect("resuming raw-durable compact should validate Spine proof");
+    assert_eq!(
+        resumed_session.clone_history().await.raw_items(),
+        compacted_history.as_slice()
     );
 }
 
