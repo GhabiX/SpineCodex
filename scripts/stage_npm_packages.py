@@ -48,6 +48,14 @@ def parse_args() -> argparse.Namespace:
         help="Optional workflow URL to reuse for native artifacts.",
     )
     parser.add_argument(
+        "--github-repo",
+        default=os.environ.get("GITHUB_REPOSITORY", GITHUB_REPO),
+        help=(
+            "GitHub repository containing native workflow artifacts, in owner/name form. "
+            "Defaults to GITHUB_REPOSITORY, then openai/codex."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -122,15 +130,19 @@ def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str |
 
 def install_native_components(
     workflow_url: str,
+    github_repo: str,
     components: set[str],
+    targets: set[str],
     vendor_root: Path,
 ) -> None:
     if not components:
         return
 
-    cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url]
+    cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url, "--repo", github_repo]
     for component in sorted(components):
         cmd.extend(["--component", component])
+    for target in sorted(targets):
+        cmd.extend(["--target", target])
     cmd.append(str(vendor_root))
     run_command(cmd)
 
@@ -144,6 +156,8 @@ def tarball_name_for_package(package: str, version: str) -> str:
     if package in CODEX_PLATFORM_PACKAGES:
         platform = package.removeprefix("codex-")
         return f"codex-npm-{platform}-{version}.tgz"
+    if package == "codex-root":
+        return f"codex-npm-{version}.tgz"
     return f"{package}-npm-{version}.tgz"
 
 
@@ -156,6 +170,16 @@ def main() -> int:
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
 
     packages = expand_packages(list(args.packages))
+    optional_platform_packages = [
+        package for package in packages if package in CODEX_PLATFORM_PACKAGES
+    ]
+    selected_targets = {
+        CODEX_PLATFORM_PACKAGES[package]["target_triple"]
+        for package in optional_platform_packages
+    } or {
+        package_config["target_triple"]
+        for package_config in CODEX_PLATFORM_PACKAGES.values()
+    }
     native_components = collect_native_components(packages)
     allow_missing_native_components = set(args.allow_missing_native_components)
     native_components_to_install = native_components - allow_missing_native_components
@@ -172,11 +196,25 @@ def main() -> int:
                 args.release_version, args.workflow_url
             )
             vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
-            install_native_components(workflow_url, native_components_to_install, vendor_temp_root)
+            install_native_components(
+                workflow_url,
+                args.github_repo,
+                native_components_to_install,
+                selected_targets,
+                vendor_temp_root,
+            )
             vendor_src = vendor_temp_root / "vendor"
 
         if resolved_head_sha:
             print(f"should `git checkout {resolved_head_sha}`")
+
+        if "codex" in packages and not optional_platform_packages:
+            raise RuntimeError(
+                "Staging the Codex root npm package requires at least one platform "
+                "package so optionalDependencies only reference staged artifacts. "
+                "Use --package codex for a full release, or include codex-root plus "
+                "one or more codex-<platform> packages for a rehearsal."
+            )
 
         for package in packages:
             staging_dir = Path(tempfile.mkdtemp(prefix=f"npm-stage-{package}-", dir=runner_temp))
@@ -196,6 +234,10 @@ def main() -> int:
 
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
+
+            if package == "codex":
+                for platform_package in optional_platform_packages:
+                    cmd.extend(["--optional-platform-package", platform_package])
 
             for component in sorted(allow_missing_native_components):
                 cmd.extend(["--allow-missing-native-component", component])

@@ -1,0 +1,160 @@
+name: spine-npm-rehearsal
+
+on:
+  push:
+    branches:
+      - "spine-npm-rehearsal-*"
+    paths:
+      - ".github/workflows/spine-npm-rehearsal.yml"
+      - "codex-cli/**"
+      - "codex-rs/**"
+      - "scripts/stage_npm_packages.py"
+  pull_request:
+    paths:
+      - ".github/workflows/spine-npm-rehearsal.yml"
+      - "codex-cli/**"
+      - "codex-rs/**"
+      - "scripts/stage_npm_packages.py"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to write into staged npm packages."
+        required: true
+        type: string
+        default: "0.1.0-rehearsal.0"
+
+concurrency:
+  group: spine-npm-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Stub native artifacts - ${{ matrix.target }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runs_on: ubuntu-24.04
+            artifact_name: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Create package-only native stubs
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          dest="dist/${target}"
+          mkdir -p "$dest"
+
+          cat > "$dest/codex-${target}" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "${1:-}" in
+            --version)
+              echo "spine-codex-rehearsal 0.0.0"
+              ;;
+            --help|-h|"")
+              echo "spine-codex rehearsal stub"
+              ;;
+            *)
+              echo "spine-codex rehearsal stub: unsupported argument $1" >&2
+              exit 2
+              ;;
+          esac
+          EOF
+
+          cat > "$dest/bwrap-${target}" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exit 0
+          EOF
+
+          chmod 0755 "$dest/codex-${target}" "$dest/bwrap-${target}"
+
+      - name: Compress artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="dist/${{ matrix.target }}"
+          for f in "$dest"/*; do
+            base="$(basename "$f")"
+            if [[ "$base" == *.zst ]]; then
+              continue
+            fi
+            zstd -T0 -19 -f -o "$f.zst" "$f"
+          done
+
+      - name: Upload native artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: codex-rs/dist/${{ matrix.target }}/*.zst
+          if-no-files-found: error
+
+  package:
+    name: Stage npm tarballs
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - name: Stage npm packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version || '0.1.0-rehearsal.0' }}
+        run: |
+          set -euo pipefail
+          workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          packages=(codex-root codex-linux-x64)
+
+          cmd=(
+            ./scripts/stage_npm_packages.py
+            --release-version "$RELEASE_VERSION"
+            --workflow-url "$workflow_url"
+            --github-repo "$GITHUB_REPOSITORY"
+            --output-dir dist/npm
+          )
+          for package in "${packages[@]}"; do
+            cmd+=(--package "$package")
+          done
+          "${cmd[@]}"
+      - name: List staged npm tarballs
+        run: ls -lh dist/npm
+
+      - name: Upload npm tarballs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: spine-codex-npm-tarballs
+          path: dist/npm/*.tgz
+          if-no-files-found: error
