@@ -42,6 +42,7 @@ use crate::spine::parse_stack::parse_stack_from_events;
 use crate::spine::parse_stack::parse_stack_msg_leaf_count;
 use crate::spine::render::memory_response_item;
 use crate::spine::render::render_parse_stack_to_context;
+use crate::spine::render::render_parse_stack_to_context_with_memory_body;
 use crate::spine::store::BODY_DIR;
 use crate::spine::store::SpineStore;
 
@@ -140,6 +141,15 @@ struct PreparedCloseCommit {
     memory_body: String,
     archive_writes: Vec<StagedArchiveWrite>,
     close_event: SpineLedgerEvent,
+    staged_parse_stack: ParseStack,
+}
+
+struct PreparedRootCompactCommit {
+    result: SpineRootCompactResult,
+    mem: MemRecord,
+    memory_body: String,
+    compact_checkpoint: Option<crate::spine::compact_checkpoint::SpineCompactCheckpoint>,
+    root_compact_event: SpineLedgerEvent,
     staged_parse_stack: ParseStack,
 }
 
@@ -1239,6 +1249,63 @@ impl SpineRuntime {
         token_metadata: SpineRootCompactTokenMetadata,
         checkpoint_rollout_path: Option<&Path>,
     ) -> Result<SpineRootCompactResult, SpineError> {
+        let prepared = self.prepare_root_compact_commit(
+            body,
+            raw_items,
+            token_metadata,
+            checkpoint_rollout_path,
+        )?;
+        self.commit_root_compact_memory(&prepared.mem, &prepared.memory_body)?;
+        if let Some(checkpoint) = prepared.compact_checkpoint.as_ref() {
+            self.store.append_compact_checkpoint(checkpoint)?;
+        }
+        self.append_cached_event(prepared.root_compact_event)?;
+        self.parse_stack = prepared.staged_parse_stack;
+        self.pending = None;
+        Ok(prepared.result)
+    }
+
+    fn commit_root_compact_memory(&self, mem: &MemRecord, body: &str) -> Result<(), SpineError> {
+        let existing_mems = self.store.mems()?;
+        let matching_mems = existing_mems
+            .iter()
+            .filter(|existing| existing.compact_id == mem.compact_id)
+            .collect::<Vec<_>>();
+        match matching_mems.as_slice() {
+            [] => {
+                self.store.write_memory_body(&mem.compact_id, body)?;
+                self.store.append_mem(mem)
+            }
+            [existing] if root_compact_mem_matches(existing, mem) => {
+                let existing_body = self.store.read_memory_body(existing)?;
+                let existing_body_hash = sha1_hex(existing_body.as_bytes());
+                let body_hash = sha1_hex(body.as_bytes());
+                if existing_body_hash != body_hash || existing_body_hash != mem.body_hash {
+                    return Err(SpineError::InvalidStore(format!(
+                        "existing root compact memory body mismatch for {}",
+                        mem.compact_id
+                    )));
+                }
+                Ok(())
+            }
+            [_] => Err(SpineError::InvalidStore(format!(
+                "existing root compact memory record mismatch for {}",
+                mem.compact_id
+            ))),
+            _ => Err(SpineError::InvalidStore(format!(
+                "ambiguous existing root compact memory record for {}",
+                mem.compact_id
+            ))),
+        }
+    }
+
+    fn prepare_root_compact_commit(
+        &self,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        token_metadata: SpineRootCompactTokenMetadata,
+        checkpoint_rollout_path: Option<&Path>,
+    ) -> Result<PreparedRootCompactCommit, SpineError> {
         if body.trim().is_empty() {
             return Err(SpineError::CompactFailure(
                 "spine root compact memory body must not be empty".to_string(),
@@ -1247,8 +1314,8 @@ impl SpineRuntime {
         let source_context_end = self.materialize_history(raw_items)?.len();
         let node = self.parse_stack.current_root_epoch_id()?;
         let compact_id = format!("root-{}-{}", node.as_path().replace('.', "-"), self.raw_len);
-        let body_path = self.store.write_memory_body(&compact_id, &body)?;
         let raw_live_hash = hash_raw_live(&self.raw_live);
+        let body_hash = sha1_hex(body.as_bytes());
         let mem = MemRecord {
             compact_id: compact_id.clone(),
             kind: MemKind::RootEpoch,
@@ -1264,8 +1331,8 @@ impl SpineRuntime {
             close_context_tokens: token_metadata.close_context_tokens,
             open_context_source: None,
             memory_output_tokens: None,
-            body_path,
-            body_hash: sha1_hex(body.as_bytes()),
+            body_path: format!("{BODY_DIR}/{compact_id}.md"),
+            body_hash,
         };
         let seq = self.ledger.next_event_seq;
         let memory = memory_ref(
@@ -1296,7 +1363,13 @@ impl SpineRuntime {
             },
             &self.archive(),
         )?;
-        let next_open_index = render_parse_stack_to_context(&probe_parse_stack, raw_items)?.len();
+        let staged_memory_body = Some((compact_id.as_str(), body.as_str()));
+        let next_open_index = render_parse_stack_to_context_with_memory_body(
+            &probe_parse_stack,
+            raw_items,
+            staged_memory_body,
+        )?
+        .len();
 
         let mut staged_parse_stack = self.parse_stack.clone();
         staged_parse_stack.shift(
@@ -1308,7 +1381,11 @@ impl SpineRuntime {
             },
             &self.archive(),
         )?;
-        let materialized = render_parse_stack_to_context(&staged_parse_stack, raw_items)?;
+        let materialized = render_parse_stack_to_context_with_memory_body(
+            &staged_parse_stack,
+            raw_items,
+            staged_memory_body,
+        )?;
         let current_open_index = staged_parse_stack.current_open_meta()?.index;
         if current_open_index != materialized.len() {
             return Err(SpineError::Invariant(format!(
@@ -1326,20 +1403,20 @@ impl SpineRuntime {
             raw_boundary: self.raw_len,
             token_seq_after,
         };
-        self.store.append_mem(&mem)?;
-        if let Some(rollout_path) = checkpoint_rollout_path {
-            let checkpoint = build_compact_checkpoint(
-                rollout_path,
-                result.raw_boundary,
-                result.token_seq_after,
-                &self.raw_live,
-                &staged_parse_stack,
-                &result.materialized,
-                &result.materialized,
-            )?;
-            self.store.append_compact_checkpoint(&checkpoint)?;
-        }
-        self.append_cached_event(SpineLedgerEvent::RootCompact {
+        let compact_checkpoint = checkpoint_rollout_path
+            .map(|rollout_path| {
+                build_compact_checkpoint(
+                    rollout_path,
+                    result.raw_boundary,
+                    result.token_seq_after,
+                    &self.raw_live,
+                    &staged_parse_stack,
+                    &result.materialized,
+                    &result.materialized,
+                )
+            })
+            .transpose()?;
+        let root_compact_event = SpineLedgerEvent::RootCompact {
             node,
             boundary: self.raw_len,
             mem: compact_id,
@@ -1347,10 +1424,15 @@ impl SpineRuntime {
             raw_live_hash,
             next_open_input_tokens: token_metadata.next_open_input_tokens,
             next_open_context_tokens: token_metadata.next_open_context_tokens,
-        })?;
-        self.parse_stack = staged_parse_stack;
-        self.pending = None;
-        Ok(result)
+        };
+        Ok(PreparedRootCompactCommit {
+            result,
+            mem,
+            memory_body: body,
+            compact_checkpoint,
+            root_compact_event,
+            staged_parse_stack,
+        })
     }
 
     fn stage_close_mem(
@@ -1728,6 +1810,26 @@ fn raw_item_requires_spine_coverage(
         ResponseItem::Other | ResponseItem::CompactionTrigger => false,
         _ => true,
     }
+}
+
+fn root_compact_mem_matches(existing: &MemRecord, expected: &MemRecord) -> bool {
+    existing.compact_id == expected.compact_id
+        && matches!(existing.kind, MemKind::RootEpoch)
+        && matches!(expected.kind, MemKind::RootEpoch)
+        && existing.node == expected.node
+        && existing.raw_start == expected.raw_start
+        && existing.raw_end == expected.raw_end
+        && existing.context_start == expected.context_start
+        && existing.context_end == expected.context_end
+        && existing.raw_live_hash == expected.raw_live_hash
+        && existing.open_input_tokens == expected.open_input_tokens
+        && existing.close_input_tokens == expected.close_input_tokens
+        && existing.open_context_tokens == expected.open_context_tokens
+        && existing.close_context_tokens == expected.close_context_tokens
+        && existing.open_context_source == expected.open_context_source
+        && existing.memory_output_tokens == expected.memory_output_tokens
+        && existing.body_path == expected.body_path
+        && existing.body_hash == expected.body_hash
 }
 
 pub(crate) fn is_user_message(item: &ResponseItem) -> bool {

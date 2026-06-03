@@ -12,14 +12,23 @@ pub(super) fn render_parse_stack_to_context(
     ps: &ParseStack,
     raw_items: &[Option<ResponseItem>],
 ) -> Result<Vec<ResponseItem>, SpineError> {
+    render_parse_stack_to_context_with_memory_body(ps, raw_items, None)
+}
+
+pub(super) fn render_parse_stack_to_context_with_memory_body(
+    ps: &ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    staged_memory_body: Option<(&str, &str)>,
+) -> Result<Vec<ResponseItem>, SpineError> {
     let mut out = Vec::new();
-    render_symbols_to_context(&ps.symbols, raw_items, &mut out)?;
+    render_symbols_to_context(&ps.symbols, raw_items, staged_memory_body, &mut out)?;
     Ok(out)
 }
 
 fn render_symbols_to_context(
     symbols: &[Symbol],
     raw_items: &[Option<ResponseItem>],
+    staged_memory_body: Option<(&str, &str)>,
     out: &mut Vec<ResponseItem>,
 ) -> Result<(), SpineError> {
     for symbol in symbols {
@@ -29,17 +38,19 @@ fn render_symbols_to_context(
             | Symbol::Control(ControlSymbol::Open(_))
             | Symbol::Control(ControlSymbol::Close(_))
             | Symbol::Control(ControlSymbol::Compact(_, _, _, _)) => {}
-            Symbol::SpineTreeNode(node) => render_node_to_context(node, raw_items, out)?,
+            Symbol::SpineTreeNode(node) => {
+                render_node_to_context(node, raw_items, staged_memory_body, out)?
+            }
             Symbol::SpineTreeNodes(nodes) => {
                 for node in nodes {
-                    render_node_to_context(node, raw_items, out)?;
+                    render_node_to_context(node, raw_items, staged_memory_body, out)?;
                 }
             }
             Symbol::RootEpoches(root_epochs) => {
                 if let Some(root_epoch) = root_epochs.last() {
-                    out.push(memory_response_item(&read_memory_ref_body(
-                        &root_epoch.memory,
-                    )?));
+                    let body =
+                        read_memory_ref_body_with_staged(&root_epoch.memory, staged_memory_body)?;
+                    out.push(memory_response_item(&body));
                 }
             }
         }
@@ -50,6 +61,7 @@ fn render_symbols_to_context(
 fn render_node_to_context(
     node: &SpineTreeNode,
     raw_items: &[Option<ResponseItem>],
+    staged_memory_body: Option<(&str, &str)>,
     out: &mut Vec<ResponseItem>,
 ) -> Result<(), SpineError> {
     match node {
@@ -89,6 +101,7 @@ fn render_node_to_context(
                         from_user: true,
                     },
                     raw_items,
+                    staged_memory_body,
                     out,
                 )
             } else {
@@ -102,6 +115,24 @@ fn render_node_to_context(
 }
 
 pub(super) fn read_memory_ref_body(memory: &MemoryRef) -> Result<String, SpineError> {
+    read_memory_ref_body_with_staged(memory, None)
+}
+
+fn read_memory_ref_body_with_staged(
+    memory: &MemoryRef,
+    staged_memory_body: Option<(&str, &str)>,
+) -> Result<String, SpineError> {
+    if let Some((memory_id, body)) = staged_memory_body {
+        if memory_id == memory.compact_id {
+            let actual_hash = sha1_hex(body.as_bytes());
+            if actual_hash != memory.body_hash {
+                return Err(SpineError::InvalidStore(format!(
+                    "staged memory body hash mismatch for {memory_id}"
+                )));
+            }
+            return Ok(body.to_string());
+        }
+    }
     read_memory_body(
         &memory.compact_id,
         &memory.body_path,
