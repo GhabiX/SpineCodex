@@ -12,9 +12,9 @@ Context savings happen only when a live node is closed: `spine.close` and the cl
 
 Tools:
 - spine.tree: inspect the tree, cursor, and context pressure without moving the cursor.
-- spine.open(summary): open a focused child under the current node; make summary a boundary label; child labels should be distinct and narrower than their parent and siblings.
+- spine.open(summary): open a focused child under the current node; write summary as a short motivation/boundary label for the Spine tree. It is visible progress context for you and the user, so make it clear, concrete, and specific about why this narrower node exists now. Avoid generic phase names or repeating the parent.
 - spine.close(instruction?): close the current node, compact its raw history into memory, and resume the parent.
-- spine.next(summary, instruction?): close the current node, preserve compact guidance as memory, then continue in a new sibling under the resumed parent.
+- spine.next(summary, instruction?): close the current node, preserve compact guidance as memory, then continue in a new sibling under the resumed parent. Write summary with the same rule as spine.open: label why the next sibling phase exists now, not a recap of the node being closed.
 
 At the start of a task, assume its shape may grow as evidence appears. Orient from the current tree, keep the tree ready to absorb new phases, and let structure emerge at natural boundaries. After every spine.open/close/next result, use the returned tree as the source of truth for cursor, parent, siblings, and the next boundary.
 
