@@ -176,7 +176,7 @@ pub(super) fn memory_response_item(body: &str) -> ResponseItem {
         id: None,
         role: "user".to_string(),
         content: vec![codex_protocol::models::ContentItem::InputText {
-            text: format!("<spine_memory runtime_generated=\"true\">\n{body}\n</spine_memory>"),
+            text: format!("<spine_memory>\n{body}\n</spine_memory>"),
         }],
         phase: None,
     }

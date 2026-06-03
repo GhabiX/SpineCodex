@@ -191,7 +191,7 @@ fn assert_spine_root_replacement_history_in_rollout(
             })
             .expect("Spine root memory should contain input text");
         assert!(
-            text.contains("<spine_memory runtime_generated=\"true\">"),
+            text.contains("<spine_memory>"),
             "replacement_history must contain runtime-generated Spine memory: {text}"
         );
         assert!(
@@ -502,7 +502,7 @@ fn assert_remote_spine_root_compact_followup(
         "{compact_request_context} must not expose Spine tools before the post-success hook: {compact_body}"
     );
     assert!(
-        follow_up_request.body_contains_text("<spine_memory runtime_generated=\"true\">"),
+        follow_up_request.body_contains_text("<spine_memory>"),
         "expected remote compact to hydrate Spine root memory for follow-up turns"
     );
     assert!(

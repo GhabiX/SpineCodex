@@ -788,7 +788,7 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
         Some(FINAL_AFTER_COMPACT_RESUME)
     );
     assert!(
-        final_request.body_contains_text("<spine_memory runtime_generated=\"true\">"),
+        final_request.body_contains_text("<spine_memory>"),
         "final request should hydrate Spine root memory after compact resume"
     );
     assert!(

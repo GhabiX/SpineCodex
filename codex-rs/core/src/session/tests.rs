@@ -9721,7 +9721,7 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     assert!(inner_compact_request.body_contains_text("inner assistant traj should be folded away"));
     let outer_compact_request = &requests[1];
     assert!(
-        outer_compact_request.body_contains_text("<spine_memory runtime_generated="),
+        outer_compact_request.body_contains_text("<spine_memory>"),
         "outer close suffix evidence should include the rendered child memory item"
     );
     assert!(outer_compact_request.body_contains_text("Spine Memory 1.1.1.1"));
@@ -9894,7 +9894,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
                 content.as_slice(),
                 [ContentItem::InputText { text }]
                     if text.contains("native root compact summary")
-                        && text.contains("<spine_memory runtime_generated=\"true\">")
+                        && text.contains("<spine_memory>")
             )
     ));
 }
@@ -12284,7 +12284,7 @@ async fn spine_feature_off_prompt_history_is_byte_identical_to_base_codex() {
         user_message("feature off byte prefix"),
         spine_call(SPINE_TOOL_OPEN, "byte-open"),
         function_output("byte-open"),
-        user_message("<spine_memory runtime_generated=\"true\">plain text</spine_memory>"),
+        user_message("<spine_memory>plain text</spine_memory>"),
         spine_call(SPINE_TOOL_CLOSE, "byte-close"),
         function_output("byte-close"),
         assistant_message("feature off assistant"),
@@ -12392,8 +12392,7 @@ async fn spine_feature_off_replacement_history_resume_is_host_verbatim() {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
-                text: "<spine_memory runtime_generated=\"true\">not parsed</spine_memory>"
-                    .to_string(),
+                text: "<spine_memory>not parsed</spine_memory>".to_string(),
             }],
             phase: None,
         },
@@ -12667,7 +12666,7 @@ async fn replacement_history_not_used_as_spine_replay_source() {
     .await;
     assert!(!SpineStore::has_for_rollout(&rollout_path).expect("check sidecar"));
     let replacement_history = vec![user_message(
-        "<spine_memory runtime_generated=\"true\">rendered snapshot only</spine_memory>",
+        "<spine_memory>rendered snapshot only</spine_memory>",
     )];
 
     let err = resumed_session
