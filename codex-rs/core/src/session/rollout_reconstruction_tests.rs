@@ -835,6 +835,55 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
 }
 
 #[tokio::test]
+async fn reconstruct_history_records_all_replacement_history_boundaries_for_spine_proofs() {
+    let (session, turn_context) = make_session_and_context().await;
+    let first_replacement = vec![user_message("first replacement history")];
+    let second_replacement = vec![user_message("second replacement history")];
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("first raw")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "first compact".to_string(),
+            replacement_history: Some(first_replacement.clone()),
+        }),
+        RolloutItem::ResponseItem(user_message("second raw")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "second compact".to_string(),
+            replacement_history: Some(second_replacement.clone()),
+        }),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.history, second_replacement);
+    assert_eq!(
+        reconstructed
+            .base_replacement_history_boundary
+            .as_ref()
+            .map(|boundary| boundary.raw_boundary),
+        Some(2)
+    );
+    assert_eq!(reconstructed.replacement_history_boundaries.len(), 2);
+    assert_eq!(
+        reconstructed.replacement_history_boundaries[0].raw_boundary,
+        1
+    );
+    assert_eq!(
+        reconstructed.replacement_history_boundaries[0].replacement_history,
+        first_replacement
+    );
+    assert_eq!(
+        reconstructed.replacement_history_boundaries[1].raw_boundary,
+        2
+    );
+    assert_eq!(
+        reconstructed.replacement_history_boundaries[1].replacement_history,
+        reconstructed.history
+    );
+}
+
+#[tokio::test]
 async fn reconstruct_history_legacy_compaction_without_replacement_history_does_not_inject_current_initial_context()
  {
     let (session, turn_context) = make_session_and_context().await;

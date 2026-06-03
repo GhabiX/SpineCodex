@@ -221,6 +221,12 @@ pub(crate) struct SpineRootCompactResult {
     pub(crate) token_seq_after: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct LiveRootCompact {
+    pub(crate) raw_boundary: u64,
+    pub(crate) token_seq: u64,
+}
+
 #[derive(Debug)]
 pub(crate) struct SpineSessionState {
     raw_len: u64,
@@ -1601,16 +1607,20 @@ impl SpineRuntime {
         Ok(())
     }
 
-    pub(crate) fn has_live_root_compact_event(&self) -> Result<bool, SpineError> {
+    pub(crate) fn live_root_compacts(&self) -> Result<Vec<LiveRootCompact>, SpineError> {
         let raw_mask = RawMask::new(&self.raw_live);
+        let mut compacts = Vec::new();
         for event in &self.ledger.events {
             if event.allowed_by(raw_mask)?
-                && matches!(event.event, SpineLedgerEvent::RootCompact { .. })
+                && let SpineLedgerEvent::RootCompact { boundary, .. } = event.event
             {
-                return Ok(true);
+                compacts.push(LiveRootCompact {
+                    raw_boundary: boundary,
+                    token_seq: event.seq,
+                });
             }
         }
-        Ok(false)
+        Ok(compacts)
     }
 }
 

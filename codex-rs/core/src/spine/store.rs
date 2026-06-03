@@ -449,7 +449,7 @@ impl SpineStore {
         raw_live: &[bool],
         raw_boundary: u64,
         replacement_history: &[codex_protocol::models::ResponseItem],
-    ) -> Result<(), SpineError> {
+    ) -> Result<u64, SpineError> {
         let replacement_history_hash =
             compact_checkpoint_replacement_history_hash(replacement_history)?;
         let checkpoints = self
@@ -512,7 +512,7 @@ impl SpineStore {
                             )));
                         }
                     }
-                    return Ok(());
+                    return Ok(checkpoint.token_seq);
                 }
                 Err(err) => {
                     last_err = Some(err);

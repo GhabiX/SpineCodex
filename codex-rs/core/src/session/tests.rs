@@ -138,6 +138,23 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
 use codex_protocol::spine_tree::SpineNodeContextUnavailableReason;
 use codex_rmcp_client::ElicitationAction;
+use codex_thread_store::AppendThreadItemsParams;
+use codex_thread_store::ArchiveThreadParams;
+use codex_thread_store::ItemPage;
+use codex_thread_store::ListItemsParams;
+use codex_thread_store::ListThreadsParams;
+use codex_thread_store::ListTurnsParams;
+use codex_thread_store::LoadThreadHistoryParams;
+use codex_thread_store::ReadThreadByRolloutPathParams;
+use codex_thread_store::ReadThreadParams;
+use codex_thread_store::ResumeThreadParams;
+use codex_thread_store::StoredThread;
+use codex_thread_store::StoredThreadHistory;
+use codex_thread_store::ThreadPage;
+use codex_thread_store::ThreadStoreError;
+use codex_thread_store::ThreadStoreResult;
+use codex_thread_store::TurnPage;
+use codex_thread_store::UpdateThreadMetadataParams;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
@@ -3667,6 +3684,144 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
     let config = session.get_config().await;
     let live_thread = LiveThread::create(
         Arc::clone(&session.services.thread_store),
+        CreateThreadParams {
+            thread_id: session.conversation_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(config.cwd.to_path_buf()),
+                model_provider: config.model_provider_id.clone(),
+                memory_mode: if config.memories.generate_memories {
+                    ThreadMemoryMode::Enabled
+                } else {
+                    ThreadMemoryMode::Disabled
+                },
+            },
+            event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        },
+    )
+    .await
+    .expect("create thread persistence");
+    session.services.live_thread = Some(live_thread);
+    session.ensure_rollout_materialized().await;
+    session
+        .flush_rollout()
+        .await
+        .expect("attached rollout should flush");
+    session
+        .current_rollout_path()
+        .await
+        .expect("load rollout path")
+        .expect("thread should have rollout path")
+}
+
+struct CompactAppendFailingThreadStore {
+    inner: Arc<dyn codex_thread_store::ThreadStore>,
+}
+
+#[async_trait::async_trait]
+impl codex_thread_store::ThreadStore for CompactAppendFailingThreadStore {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self.inner.as_any()
+    }
+
+    async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
+        self.inner.create_thread(params).await
+    }
+
+    async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
+        self.inner.resume_thread(params).await
+    }
+
+    async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
+        if params
+            .items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::Compacted(_)))
+        {
+            return Err(ThreadStoreError::Internal {
+                message: "injected compact append failure".to_string(),
+            });
+        }
+        self.inner.append_items(params).await
+    }
+
+    async fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
+        self.inner.persist_thread(thread_id).await
+    }
+
+    async fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
+        self.inner.flush_thread(thread_id).await
+    }
+
+    async fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
+        self.inner.shutdown_thread(thread_id).await
+    }
+
+    async fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
+        self.inner.discard_thread(thread_id).await
+    }
+
+    async fn load_history(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreResult<StoredThreadHistory> {
+        self.inner.load_history(params).await
+    }
+
+    async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
+        self.inner.read_thread(params).await
+    }
+
+    async fn read_thread_by_rollout_path(
+        &self,
+        params: ReadThreadByRolloutPathParams,
+    ) -> ThreadStoreResult<StoredThread> {
+        self.inner.read_thread_by_rollout_path(params).await
+    }
+
+    async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {
+        self.inner.list_threads(params).await
+    }
+
+    async fn list_turns(&self, params: ListTurnsParams) -> ThreadStoreResult<TurnPage> {
+        self.inner.list_turns(params).await
+    }
+
+    async fn list_items(&self, params: ListItemsParams) -> ThreadStoreResult<ItemPage> {
+        self.inner.list_items(params).await
+    }
+
+    async fn update_thread_metadata(
+        &self,
+        params: UpdateThreadMetadataParams,
+    ) -> ThreadStoreResult<StoredThread> {
+        self.inner.update_thread_metadata(params).await
+    }
+
+    async fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreResult<()> {
+        self.inner.archive_thread(params).await
+    }
+
+    async fn unarchive_thread(
+        &self,
+        params: ArchiveThreadParams,
+    ) -> ThreadStoreResult<StoredThread> {
+        self.inner.unarchive_thread(params).await
+    }
+}
+
+async fn attach_thread_persistence_with_compact_append_failure(session: &mut Session) -> PathBuf {
+    let base_store = Arc::clone(&session.services.thread_store);
+    let failing_store: Arc<dyn codex_thread_store::ThreadStore> =
+        Arc::new(CompactAppendFailingThreadStore { inner: base_store });
+    session.services.thread_store = Arc::clone(&failing_store);
+    let config = session.get_config().await;
+    let live_thread = LiveThread::create(
+        failing_store,
         CreateThreadParams {
             thread_id: session.conversation_id,
             forked_from_id: None,
@@ -9714,6 +9869,89 @@ async fn spine_native_compact_checkpoint_failure_invalidates_without_replacing_h
 }
 
 #[tokio::test]
+async fn native_compact_rollout_append_failure_does_not_replace_host_history() {
+    let server = start_mock_server().await;
+    let _responses_mock = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_assistant_message("native-append-failure", "native append failure summary"),
+            ev_completed("native-append-failure-response"),
+        ])],
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path = attach_thread_persistence_with_compact_append_failure(
+        Arc::get_mut(&mut session).expect("session should be unique"),
+    )
+    .await;
+
+    let prefix = user_message("history before rollout append failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record conversation items");
+    let original_history = session.clone_history().await.raw_items().to_vec();
+
+    let err = crate::compact::run_compact_task(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        vec![UserInput::Text {
+            text: "compact should fail while appending rollout boundary".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await
+    .expect_err("native compact rollout append failure should fail closed");
+    assert!(
+        err.to_string()
+            .contains("failed to persist native compact rollout boundary"),
+        "unexpected compact error: {err}"
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        original_history.as_slice(),
+        "failed rollout append must not replace host history"
+    );
+    let err = session
+        .spine_tree()
+        .await
+        .expect_err("rollout append failure should invalidate Spine runtime");
+    assert!(
+        err.to_string().contains("spine runtime is invalid"),
+        "unexpected runtime error: {err}"
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert!(
+        !resumed
+            .history
+            .iter()
+            .any(|item| matches!(item, RolloutItem::Compacted(_))),
+        "failed compact boundary append must not persist Compacted"
+    );
+}
+
+#[tokio::test]
 async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
     let (mut source_session, turn_context, _rx) =
         make_session_and_context_with_auth_and_config_and_rx(
@@ -9791,6 +10029,125 @@ async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
     assert!(
         err.to_string()
             .contains("root compact sidecar is missing rollout compact boundary"),
+        "unexpected resume error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn resume_rejects_second_orphan_root_compact_after_prior_successful_compact() {
+    let server = start_mock_server().await;
+    let _responses_mock = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_assistant_message("first-native-compact", "first native compact summary"),
+            ev_completed("first-native-compact-response"),
+        ])],
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut source_session, turn_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+                config.model_provider.base_url = Some(base_url.clone());
+                config.model_provider.supports_websockets = false;
+            },
+        )
+        .await;
+    let source_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut source_session).expect("session should be unique"),
+    )
+    .await;
+
+    let prefix = user_message("prefix before first native compact");
+    source_session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    crate::compact::run_compact_task(
+        Arc::clone(&source_session),
+        Arc::clone(&turn_context),
+        vec![UserInput::Text {
+            text: "first native compact".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await
+    .expect("first native compact succeeds");
+    let post_first = user_message("post first compact raw item");
+    source_session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&post_first))
+        .await
+        .expect("record post first item");
+    let (orphan, _) = source_session
+        .install_spine_root_compact("second orphan root compact body".to_string())
+        .await
+        .expect("install second sidecar root compact")
+        .expect("spine root compact should run");
+
+    source_session.ensure_rollout_materialized().await;
+    source_session
+        .flush_rollout()
+        .await
+        .expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) =
+        RolloutRecorder::get_rollout_history(&source_rollout_path)
+            .await
+            .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert_eq!(
+        resumed
+            .history
+            .iter()
+            .filter(|item| matches!(item, RolloutItem::Compacted(_)))
+            .count(),
+        1,
+        "test setup should have exactly one persisted compact boundary"
+    );
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = spine_raw_items_after_rollback(&resumed.history)
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&source_rollout_path, &resumed_rollout_path, &raw_live);
+
+    let err = resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: resumed.history,
+            rollout_path: Some(source_rollout_path),
+        }))
+        .await
+        .expect_err("second orphan sidecar root compact must fail closed");
+    assert!(
+        err.to_string().contains(&format!(
+            "root compact sidecar is missing rollout compact boundary at raw boundary {} token_seq {}",
+            orphan.raw_boundary,
+            orphan.token_seq_after - 1
+        )),
         "unexpected resume error: {err}"
     );
 }

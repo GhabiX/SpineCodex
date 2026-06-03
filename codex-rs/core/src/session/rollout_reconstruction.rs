@@ -8,6 +8,7 @@ pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
     pub(super) raw_response_items: Vec<Option<ResponseItem>>,
     pub(super) spine_rollback_cuts: Vec<usize>,
+    pub(super) base_replacement_history_boundary: Option<ReplacementHistoryBoundary>,
     pub(super) replacement_history_boundaries: Vec<ReplacementHistoryBoundary>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
@@ -64,7 +65,7 @@ fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&s
 fn finalize_active_segment<'a>(
     active_segment: ActiveReplaySegment<'a>,
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
-    replacement_history_boundaries: &mut Vec<ReplacementHistoryBoundary>,
+    base_replacement_history_boundary: &mut Option<ReplacementHistoryBoundary>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
     pending_rollback_turns: &mut usize,
@@ -85,7 +86,7 @@ fn finalize_active_segment<'a>(
         && let Some(segment_base_replacement_history) = active_segment.base_replacement_history
     {
         *base_replacement_history = Some(segment_base_replacement_history.replacement_history);
-        replacement_history_boundaries.push(ReplacementHistoryBoundary {
+        *base_replacement_history_boundary = Some(ReplacementHistoryBoundary {
             raw_boundary: segment_base_replacement_history.raw_boundary,
             replacement_history: segment_base_replacement_history
                 .replacement_history
@@ -123,7 +124,7 @@ impl Session {
         // are both known; then replay only the buffered surviving tail forward to preserve exact
         // history semantics.
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
-        let mut replacement_history_boundaries = Vec::<ReplacementHistoryBoundary>::new();
+        let mut base_replacement_history_boundary = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
@@ -136,6 +137,21 @@ impl Session {
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
         let mut active_segment: Option<ActiveReplaySegment<'_>> = None;
         let raw_boundaries = raw_boundaries_before_rollout_items(rollout_items);
+        let replacement_history_boundaries =
+            rollout_items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| match item {
+                    RolloutItem::Compacted(compacted) => compacted
+                        .replacement_history
+                        .as_ref()
+                        .map(|replacement_history| ReplacementHistoryBoundary {
+                            raw_boundary: raw_boundaries[index],
+                            replacement_history: replacement_history.clone(),
+                        }),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
 
         for (index, item) in rollout_items.iter().enumerate().rev() {
             match item {
@@ -229,7 +245,7 @@ impl Session {
                         finalize_active_segment(
                             active_segment,
                             &mut base_replacement_history,
-                            &mut replacement_history_boundaries,
+                            &mut base_replacement_history_boundary,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
                             &mut pending_rollback_turns,
@@ -259,7 +275,7 @@ impl Session {
             finalize_active_segment(
                 active_segment,
                 &mut base_replacement_history,
-                &mut replacement_history_boundaries,
+                &mut base_replacement_history_boundary,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
                 &mut pending_rollback_turns,
@@ -334,6 +350,7 @@ impl Session {
             history: history.raw_items().to_vec(),
             raw_response_items: spine_raw_items.raw_items,
             spine_rollback_cuts: spine_raw_items.rollback_cuts,
+            base_replacement_history_boundary,
             replacement_history_boundaries,
             previous_turn_settings,
             reference_context_item,

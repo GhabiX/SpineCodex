@@ -142,6 +142,7 @@ use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
+use codex_thread_store::ThreadStoreError;
 use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
 use futures::future::Shared;
@@ -1310,6 +1311,9 @@ impl Session {
                 &reconstructed_rollout.raw_response_items,
                 &reconstructed_rollout.spine_rollback_cuts,
                 reconstructed_rollout.used_replacement_history,
+                reconstructed_rollout
+                    .base_replacement_history_boundary
+                    .as_ref(),
                 &reconstructed_rollout.replacement_history_boundaries,
             )
             .await
@@ -2854,15 +2858,21 @@ impl Session {
         let spine_tree_snapshot = self
             .install_spine_root_compact_after_native_compact(&mut items, &mut compacted_item)
             .await?;
+        let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
+        if let Some(turn_context_item) = reference_context_item.clone() {
+            rollout_items.push(RolloutItem::TurnContext(turn_context_item));
+        }
+        if let Err(err) = self.try_persist_rollout_items(&rollout_items).await {
+            self.invalidate_spine_runtime(format!(
+                "failed to persist native compact rollout boundary after sidecar commit: {err}"
+            ))
+            .await;
+            return Err(CodexErr::Fatal(format!(
+                "failed to persist native compact rollout boundary: {err}"
+            )));
+        }
         self.replace_history(items, reference_context_item.clone())
             .await;
-
-        self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
-            .await;
-        if let Some(turn_context_item) = reference_context_item {
-            self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
-                .await;
-        }
         self.services.model_client.advance_window_generation();
         Ok(spine_tree_snapshot)
     }
@@ -3137,6 +3147,16 @@ impl Session {
         {
             error!("failed to record rollout items: {e:#}");
         }
+    }
+
+    async fn try_persist_rollout_items(
+        &self,
+        items: &[RolloutItem],
+    ) -> Result<(), ThreadStoreError> {
+        let Some(live_thread) = self.live_thread() else {
+            return Ok(());
+        };
+        live_thread.append_items(items).await
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {

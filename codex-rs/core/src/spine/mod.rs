@@ -10,6 +10,7 @@ mod runtime;
 mod store;
 
 pub(crate) use model::NodeId;
+pub(crate) use runtime::LiveRootCompact;
 pub(crate) use runtime::SPINE_NAMESPACE;
 pub(crate) use runtime::SPINE_TOOL_CLOSE;
 pub(crate) use runtime::SPINE_TOOL_NEXT;
