@@ -21,7 +21,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::InferenceTraceContext;
-use codex_tools::ToolSpec;
 use futures::StreamExt;
 use std::sync::Arc;
 
@@ -35,7 +34,6 @@ impl Session {
         suffix_start: usize,
         close_output: &ResponseItem,
         instruction: Option<String>,
-        close_compact_tools: Vec<ToolSpec>,
     ) -> Result<SpineCloseCompactOutcome, SpineError> {
         let raw_items = history.raw_items();
         if suffix_start >= raw_items.len() {
@@ -100,8 +98,8 @@ impl Session {
         prompt_input.push(spine_close_compact_system_message(&compact_instructions));
         let prompt = Prompt {
             input: prompt_input,
-            tools: close_compact_tools,
-            parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+            tools: Vec::new(),
+            parallel_tool_calls: false,
             base_instructions: self.get_base_instructions().await,
             personality: turn_context.personality,
             ..Default::default()

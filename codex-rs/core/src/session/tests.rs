@@ -155,9 +155,6 @@ use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_thread_store::TurnPage;
 use codex_thread_store::UpdateThreadMetadataParams;
-use codex_tools::JsonSchema;
-use codex_tools::ResponsesApiTool;
-use codex_tools::ToolSpec;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
@@ -209,42 +206,21 @@ fn spine_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
         .collect()
 }
 
-fn assert_none_tool_choice_with_model_visible_tools(request: &ResponsesRequest, message: &str) {
+fn assert_close_compact_hard_no_tool_request(request: &ResponsesRequest, message: &str) {
     let body = request.body_json();
     assert_eq!(body["tool_choice"].as_str(), Some("none"), "{message}");
+    assert_eq!(
+        body["parallel_tool_calls"].as_bool(),
+        Some(false),
+        "{message}: close compact must not permit parallel tool calls"
+    );
     assert!(
         body["tools"]
             .as_array()
             .expect("tools should be an array")
-            .len()
-            > 0,
-        "{message}"
+            .is_empty(),
+        "{message}: close compact must not expose model-visible tools"
     );
-}
-
-fn assert_reused_tools_from_sampling_request(
-    sampling_request: &ResponsesRequest,
-    compact_request: &ResponsesRequest,
-    message: &str,
-) {
-    assert_none_tool_choice_with_model_visible_tools(compact_request, message);
-    assert_eq!(
-        compact_request.body_json()["tools"],
-        sampling_request.body_json()["tools"],
-        "{message}: close compact must reuse exact tools from the sampling request that produced the close/next call"
-    );
-}
-
-fn sentinel_close_compact_tools() -> Vec<ToolSpec> {
-    vec![ToolSpec::Function(ResponsesApiTool {
-        name: "sentinel_close_compact_tool".to_string(),
-        description: "Sentinel model-visible tool for close compact request-shape tests."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::object(Default::default(), None, Some(false.into())),
-        output_schema: None,
-    })]
 }
 
 async fn prime_model_client_turn_state(
@@ -8162,7 +8138,6 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
             &turn_context,
             &mut client_session,
             &close_output,
-            sentinel_close_compact_tools(),
         )
         .await
         .expect("commit close output");
@@ -8190,9 +8165,9 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         Some(session.conversation_id.to_string().as_str()),
         "spine.close compact should reuse the current thread prompt cache key"
     );
-    assert_none_tool_choice_with_model_visible_tools(
+    assert_close_compact_hard_no_tool_request(
         compact_request,
-        "spine.close compact should preserve ordinary tools while disabling actual tool calls",
+        "spine.close compact should use a hard no-tool envelope",
     );
     assert!(
         compact_request.body_json()["instructions"]
@@ -8465,9 +8440,9 @@ async fn spine_next_bridge_replaces_suffix_and_opens_sibling() {
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_none_tool_choice_with_model_visible_tools(
+    assert_close_compact_hard_no_tool_request(
         &compact_request,
-        "spine.next close compact should preserve ordinary tools while disabling actual tool calls",
+        "spine.next close compact should use a hard no-tool envelope",
     );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
@@ -8623,9 +8598,9 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
     assert_no_pending_spine_commit(&session, "image-next").await;
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_none_tool_choice_with_model_visible_tools(
+    assert_close_compact_hard_no_tool_request(
         &compact_request,
-        "failed compact request should preserve ordinary tools while disabling actual tool calls",
+        "failed compact request should use a hard no-tool envelope",
     );
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -8745,17 +8720,17 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
         requests[0].body_json()["tool_choice"].as_str(),
         Some("auto")
     );
-    assert_reused_tools_from_sampling_request(
-        &requests[0],
+    assert_close_compact_hard_no_tool_request(
         &requests[1],
-        "spine compact failure request should reuse the sampling request tools while disabling actual tool calls",
+        "spine compact failure request should use a hard no-tool envelope",
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_close_compact_reuses_successful_sampling_request_tools() -> anyhow::Result<()> {
+async fn spine_close_compact_uses_hard_no_tool_envelope_after_sampling_request()
+-> anyhow::Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config
@@ -8821,10 +8796,9 @@ async fn spine_close_compact_reuses_successful_sampling_request_tools() -> anyho
         requests[0].body_json()["tool_choice"].as_str(),
         Some("auto")
     );
-    assert_reused_tools_from_sampling_request(
-        &requests[0],
+    assert_close_compact_hard_no_tool_request(
         &requests[1],
-        "successful spine.close compact should reuse exact sampling request tools",
+        "successful spine.close compact should use a hard no-tool envelope",
     );
 
     Ok(())
@@ -9548,9 +9522,9 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert_none_tool_choice_with_model_visible_tools(
+    assert_close_compact_hard_no_tool_request(
         &requests[0],
-        "spine.close suffix compact should preserve ordinary tools while disabling actual tool calls",
+        "spine.close suffix compact should use a hard no-tool envelope",
     );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),

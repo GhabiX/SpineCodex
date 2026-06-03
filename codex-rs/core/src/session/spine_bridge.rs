@@ -6,8 +6,6 @@ use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_compact::SpineCloseCompactOutcome;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
-#[cfg(test)]
-use crate::session::turn::built_tools;
 use crate::spine::LiveRootCompact;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCloneBoundary;
@@ -23,12 +21,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
-use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
-#[cfg(test)]
-use std::collections::HashSet;
-#[cfg(test)]
-use tokio_util::sync::CancellationToken;
 
 pub(super) struct PreparedSpineReplay {
     raw_len: u64,
@@ -571,36 +564,12 @@ impl Session {
         item: &ResponseItem,
     ) -> Result<SpineToolCommit, SpineError> {
         let mut client_session = self.services.model_client.new_session();
-        let close_compact_tools = self
-            .test_default_close_compact_tools(turn_context)
-            .await
-            .map_err(|err| {
-                SpineError::Operation(format!("failed to build test close compact tools: {err}"))
-            })?;
         self.maybe_commit_spine_tool_output_with_client_session(
             turn_context,
             &mut client_session,
             item,
-            close_compact_tools,
         )
         .await
-    }
-
-    #[cfg(test)]
-    async fn test_default_close_compact_tools(
-        &self,
-        turn_context: &Arc<TurnContext>,
-    ) -> codex_protocol::error::Result<Vec<ToolSpec>> {
-        Ok(built_tools(
-            self,
-            turn_context,
-            &[],
-            &HashSet::new(),
-            Some(turn_context.turn_skills.outcome.as_ref()),
-            &CancellationToken::new(),
-        )
-        .await?
-        .model_visible_specs())
     }
 
     pub(crate) async fn maybe_commit_spine_tool_output_with_client_session(
@@ -608,7 +577,6 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
         item: &ResponseItem,
-        close_compact_tools: Vec<ToolSpec>,
     ) -> Result<SpineToolCommit, SpineError> {
         let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
             return Ok(Self::no_spine_tool_commit());
@@ -640,7 +608,6 @@ impl Session {
                     suffix_start,
                     item,
                     instruction,
-                    close_compact_tools,
                 ))
                 .await
                 {
