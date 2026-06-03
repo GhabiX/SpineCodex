@@ -867,9 +867,19 @@ impl Session {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) async fn install_spine_root_compact(
         &self,
         body: String,
+    ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
+        self.install_spine_root_compact_with_handoff(body, None)
+            .await
+    }
+
+    async fn install_spine_root_compact_with_handoff(
+        &self,
+        body: String,
+        root_compact_handoff: Option<SpineTokenBaselines>,
     ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
@@ -900,8 +910,9 @@ impl Session {
         let token_metadata = SpineRootCompactTokenMetadata {
             close_input_tokens: close_baselines.input_tokens,
             close_context_tokens: close_baselines.context_tokens,
-            next_open_input_tokens: None,
-            next_open_context_tokens: None,
+            next_open_input_tokens: root_compact_handoff.and_then(|handoff| handoff.input_tokens),
+            next_open_context_tokens: root_compact_handoff
+                .and_then(|handoff| handoff.context_tokens),
         };
         {
             let mut guard = spine_slot.lock().await;
@@ -949,6 +960,7 @@ impl Session {
         &self,
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
+        root_compact_handoff: Option<SpineTokenBaselines>,
     ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
@@ -972,12 +984,12 @@ impl Session {
                     .to_string(),
             }
         })?;
-        let Some((root_compact, snapshot)) =
-            self.install_spine_root_compact(body).await.map_err(|err| {
-                CodexErr::SpineTerminalFailure {
-                    operation: "install Spine root compact".to_string(),
-                    reason: err.to_string(),
-                }
+        let Some((root_compact, snapshot)) = self
+            .install_spine_root_compact_with_handoff(body, root_compact_handoff)
+            .await
+            .map_err(|err| CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: err.to_string(),
             })?
         else {
             return Ok(None);

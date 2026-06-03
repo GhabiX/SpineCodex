@@ -10475,6 +10475,79 @@ async fn spine_root_compact_records_close_tokens_without_next_open_baseline() {
 }
 
 #[tokio::test]
+async fn native_compact_missing_usage_does_not_copy_stale_token_info_to_root_handoff() {
+    let server = start_mock_server().await;
+    let _responses_mock = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_assistant_message("native-missing-usage-summary", "native compact summary"),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "native-missing-usage-response"
+                }
+            }),
+        ])],
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .record_conversation_items(
+            &turn_context,
+            &[user_message("prefix before native compact without usage")],
+        )
+        .await
+        .expect("record prefix");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 98_765,
+                total_tokens: 87_654,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+
+    crate::compact::run_compact_task(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        vec![UserInput::Text {
+            text: "compact without token usage".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await
+    .expect("native compact succeeds");
+
+    let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
+    assert_eq!(
+        store
+            .root_compact_next_open_tokens_for_test()
+            .expect("root compact handoff tokens"),
+        vec![(None, None)]
+    );
+}
+
+#[tokio::test]
 async fn spine_context_matches_h_ps_across_operation_sequence() {
     let server = start_mock_server().await;
     let responses_mock = mount_sse_sequence(

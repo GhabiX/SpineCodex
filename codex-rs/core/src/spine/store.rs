@@ -436,6 +436,24 @@ impl SpineStore {
             .collect())
     }
 
+    #[cfg(test)]
+    pub(crate) fn root_compact_next_open_tokens_for_test(
+        &self,
+    ) -> Result<Vec<(Option<i64>, Option<i64>)>, SpineError> {
+        Ok(self
+            .events()?
+            .into_iter()
+            .filter_map(|event| match event.event {
+                SpineLedgerEvent::RootCompact {
+                    next_open_input_tokens,
+                    next_open_context_tokens,
+                    ..
+                } => Some((next_open_input_tokens, next_open_context_tokens)),
+                _ => None,
+            })
+            .collect())
+    }
+
     pub(super) fn compact_checkpoints(&self) -> Result<Vec<SpineCompactCheckpoint>, SpineError> {
         if !self.compact_checkpoint_path().exists() {
             return Ok(Vec::new());

@@ -247,7 +247,7 @@ async fn run_remote_compact_task_inner_impl(
         replacement_history: Some(new_history.clone()),
     };
     let spine_tree_snapshot = sess
-        .replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .replace_compacted_history(new_history, reference_context_item, compacted_item, None)
         .await?;
     if let Some(snapshot) = spine_tree_snapshot {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)

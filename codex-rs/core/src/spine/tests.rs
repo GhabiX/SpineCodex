@@ -3972,6 +3972,61 @@ fn root_compact_keeps_close_tokens_without_next_open_baseline() {
 }
 
 #[test]
+fn root_compact_handoff_tokens_survive_replay() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "root visible work");
+    runtime
+        .root_compact_with_checkpoint(
+            &rollout,
+            "root compact summary".to_string(),
+            &raw,
+            SpineRootCompactTokenMetadata {
+                close_input_tokens: Some(111_222),
+                close_context_tokens: Some(222_333),
+                next_open_input_tokens: Some(12_345),
+                next_open_context_tokens: Some(67_890),
+            },
+        )
+        .expect("compact root");
+
+    assert_eq!(runtime.current_open_input_tokens(), Some(12_345));
+    assert_eq!(runtime.current_open_context_tokens(), Some(67_890));
+    assert_eq!(
+        runtime.current_open_context_baseline_source(),
+        Some(SpineNodeContextBaselineSource::RootCompactHandoff)
+    );
+
+    let events = event_log(&runtime);
+    assert!(matches!(
+        events.as_slice(),
+        [
+            SpineLedgerEvent::Init { .. },
+            SpineLedgerEvent::Open { .. },
+            SpineLedgerEvent::Msg { .. },
+            SpineLedgerEvent::RootCompact {
+                next_open_input_tokens: Some(12_345),
+                next_open_context_tokens: Some(67_890),
+                ..
+            },
+        ]
+    ));
+
+    let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
+        .expect("load spine")
+        .expect("sidecar exists");
+    assert_eq!(replayed.current_open_input_tokens(), Some(12_345));
+    assert_eq!(replayed.current_open_context_tokens(), Some(67_890));
+    assert_eq!(
+        replayed.current_open_context_baseline_source(),
+        Some(SpineNodeContextBaselineSource::RootCompactHandoff)
+    );
+}
+
+#[test]
 fn root_compact_checkpoint_validates_against_root_compact_marker() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);

@@ -13,6 +13,7 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
+use crate::spine::SpineTokenBaselines;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -31,6 +32,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -146,7 +148,7 @@ async fn run_compact_task_inner(
                 .await;
             return Err(CodexErr::TurnAborted);
         }
-    }
+    };
     let result = run_compact_task_inner_impl(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
@@ -162,7 +164,7 @@ async fn run_compact_task_inner(
             attempt.track(sess.as_ref(), status, error).await;
             return Err(CodexErr::TurnAborted);
         }
-    }
+    };
     attempt.track(sess.as_ref(), status, error).await;
     result.map(|_| ())
 }
@@ -194,7 +196,7 @@ async fn run_compact_task_inner_impl(
     // request tracking)
     // survives retries within this compact turn.
 
-    loop {
+    let handoff_token_baselines = loop {
         // Clone is required because of the loop
         let turn_input = history
             .clone()
@@ -217,8 +219,8 @@ async fn run_compact_task_inner_impl(
         .await;
 
         match attempt_result {
-            Ok(()) => {
-                break;
+            Ok(handoff_token_baselines) => {
+                break handoff_token_baselines;
             }
             Err(CodexErr::Interrupted) => {
                 return Err(CodexErr::Interrupted);
@@ -257,7 +259,7 @@ async fn run_compact_task_inner_impl(
                 }
             }
         }
-    }
+    };
 
     let history_snapshot = sess.clone_history().await;
     let history_items = history_snapshot.raw_items();
@@ -284,7 +286,12 @@ async fn run_compact_task_inner_impl(
         replacement_history: Some(new_history.clone()),
     };
     let spine_tree_snapshot = match sess
-        .replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .replace_compacted_history(
+            new_history,
+            reference_context_item,
+            compacted_item,
+            handoff_token_baselines,
+        )
         .await
     {
         Ok(spine_tree_snapshot) => spine_tree_snapshot,
@@ -551,7 +558,7 @@ async fn drain_to_completed(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     prompt: &Prompt,
-) -> CodexResult<()> {
+) -> CodexResult<Option<SpineTokenBaselines>> {
     let mut stream = client_session
         .stream(
             prompt,
@@ -586,14 +593,22 @@ async fn drain_to_completed(
                 sess.update_rate_limits(turn_context, snapshot).await;
             }
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
+                let handoff_token_baselines = token_baselines_from_usage(token_usage.as_ref());
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())
                     .await;
-                return Ok(());
+                return Ok(handoff_token_baselines);
             }
             Ok(_) => continue,
             Err(e) => return Err(e),
         }
     }
+}
+
+fn token_baselines_from_usage(current: Option<&TokenUsage>) -> Option<SpineTokenBaselines> {
+    current.map(|current| SpineTokenBaselines {
+        input_tokens: Some(current.input_tokens),
+        context_tokens: Some(current.tokens_in_context_window()),
+    })
 }
 
 #[cfg(test)]

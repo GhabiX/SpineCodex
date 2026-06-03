@@ -42,6 +42,7 @@ use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineError;
 use crate::spine::SpineSessionState;
+use crate::spine::SpineTokenBaselines;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -2854,9 +2855,14 @@ impl Session {
         mut items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         mut compacted_item: CompactedItem,
+        root_compact_handoff: Option<SpineTokenBaselines>,
     ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
         let spine_tree_snapshot = self
-            .install_spine_root_compact_after_native_compact(&mut items, &mut compacted_item)
+            .install_spine_root_compact_after_native_compact(
+                &mut items,
+                &mut compacted_item,
+                root_compact_handoff,
+            )
             .await?;
         let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
         if let Some(turn_context_item) = reference_context_item.clone() {
