@@ -157,7 +157,7 @@ jobs:
           for binary in ${{ matrix.binaries }}; do
             build_args+=(--bin "$binary")
           done
-          cargo build --target "${{ matrix.target }}" --release --timings "${build_args[@]}"
+          cargo build -p codex-cli --target "${{ matrix.target }}" --release --timings "${build_args[@]}"
 
       - name: Stage artifacts
         shell: bash
