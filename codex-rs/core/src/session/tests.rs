@@ -155,11 +155,15 @@ use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_thread_store::TurnPage;
 use codex_thread_store::UpdateThreadMetadataParams;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
@@ -205,6 +209,44 @@ fn spine_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
         .collect()
 }
 
+fn assert_none_tool_choice_with_model_visible_tools(request: &ResponsesRequest, message: &str) {
+    let body = request.body_json();
+    assert_eq!(body["tool_choice"].as_str(), Some("none"), "{message}");
+    assert!(
+        body["tools"]
+            .as_array()
+            .expect("tools should be an array")
+            .len()
+            > 0,
+        "{message}"
+    );
+}
+
+fn assert_reused_tools_from_sampling_request(
+    sampling_request: &ResponsesRequest,
+    compact_request: &ResponsesRequest,
+    message: &str,
+) {
+    assert_none_tool_choice_with_model_visible_tools(compact_request, message);
+    assert_eq!(
+        compact_request.body_json()["tools"],
+        sampling_request.body_json()["tools"],
+        "{message}: close compact must reuse exact tools from the sampling request that produced the close/next call"
+    );
+}
+
+fn sentinel_close_compact_tools() -> Vec<ToolSpec> {
+    vec![ToolSpec::Function(ResponsesApiTool {
+        name: "sentinel_close_compact_tool".to_string(),
+        description: "Sentinel model-visible tool for close compact request-shape tests."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(Default::default(), None, Some(false.into())),
+        output_schema: None,
+    })]
+}
+
 async fn prime_model_client_turn_state(
     client_session: &mut crate::client::ModelClientSession,
     turn_context: &TurnContext,
@@ -232,7 +274,7 @@ async fn prime_model_client_turn_state(
                 .current_header_value()
                 .as_deref(),
             &InferenceTraceContext::disabled(),
-            ResponsesToolChoice::None,
+            ResponsesToolChoice::Auto,
         )
         .await
         .expect("prime request should start");
@@ -8120,6 +8162,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
             &turn_context,
             &mut client_session,
             &close_output,
+            sentinel_close_compact_tools(),
         )
         .await
         .expect("commit close output");
@@ -8147,17 +8190,9 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         Some(session.conversation_id.to_string().as_str()),
         "spine.close compact should reuse the current thread prompt cache key"
     );
-    assert_eq!(
-        compact_request.body_json()["tool_choice"].as_str(),
-        Some("none"),
-        "spine.close compact should hard-disable tool output"
-    );
-    assert!(
-        compact_request.body_json()["tools"]
-            .as_array()
-            .expect("tools should be an array")
-            .is_empty(),
-        "spine.close compact is an internal compact request and should not expose model-visible tools"
+    assert_none_tool_choice_with_model_visible_tools(
+        compact_request,
+        "spine.close compact should preserve ordinary tools while disabling actual tool calls",
     );
     assert!(
         compact_request.body_json()["instructions"]
@@ -8430,10 +8465,9 @@ async fn spine_next_bridge_replaces_suffix_and_opens_sibling() {
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_eq!(
-        compact_request.body_json()["tool_choice"].as_str(),
-        Some("none"),
-        "spine.next close compact should hard-disable tool output"
+    assert_none_tool_choice_with_model_visible_tools(
+        &compact_request,
+        "spine.next close compact should preserve ordinary tools while disabling actual tool calls",
     );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
@@ -8589,10 +8623,9 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
     assert_no_pending_spine_commit(&session, "image-next").await;
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_eq!(
-        compact_request.body_json()["tool_choice"].as_str(),
-        Some("none"),
-        "failed compact request should still be hard no-tool"
+    assert_none_tool_choice_with_model_visible_tools(
+        &compact_request,
+        "failed compact request should preserve ordinary tools while disabling actual tool calls",
     );
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -8712,9 +8745,86 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
         requests[0].body_json()["tool_choice"].as_str(),
         Some("auto")
     );
+    assert_reused_tools_from_sampling_request(
+        &requests[0],
+        &requests[1],
+        "spine compact failure request should reuse the sampling request tools while disabling actual tool calls",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_close_compact_reuses_successful_sampling_request_tools() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineJit)
+            .expect("enable spine feature");
+        config.model_provider.supports_websockets = false;
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "call-spine-close-success",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_CLOSE,
+                    r#"{"instruction":"compact the successful real-turn suffix"}"#,
+                ),
+                ev_completed("spine-close-tool-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message(
+                    "spine-close-compact-success",
+                    "successful close compact memory",
+                ),
+                ev_completed("spine-close-compact-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("spine-close-follow-up", "closed"),
+                ev_completed("spine-close-follow-up-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "do some root-child work, then close the Spine node".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    let last_agent_message = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(turn_complete) => turn_complete.last_agent_message.clone(),
+        _ => None,
+    })
+    .await;
+    assert_eq!(last_agent_message.as_str(), "closed");
+
+    let requests = responses.requests();
     assert_eq!(
-        requests[1].body_json()["tool_choice"].as_str(),
-        Some("none")
+        requests.len(),
+        3,
+        "expected sampling request, close compact request, and follow-up request"
+    );
+    assert_eq!(
+        requests[0].body_json()["tool_choice"].as_str(),
+        Some("auto")
+    );
+    assert_reused_tools_from_sampling_request(
+        &requests[0],
+        &requests[1],
+        "successful spine.close compact should reuse exact sampling request tools",
     );
 
     Ok(())
@@ -9438,9 +9548,9 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(
-        requests[0].body_json()["tool_choice"].as_str(),
-        Some("none")
+    assert_none_tool_choice_with_model_visible_tools(
+        &requests[0],
+        "spine.close suffix compact should preserve ordinary tools while disabling actual tool calls",
     );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),

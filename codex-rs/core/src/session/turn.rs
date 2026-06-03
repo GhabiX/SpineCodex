@@ -104,6 +104,7 @@ use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -2015,6 +2016,7 @@ async fn drain_in_flight(
     turn_context: Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     spine_control_overlay: &mut SpineControlOverlay,
+    close_compact_tools: Vec<ToolSpec>,
 ) -> Result<(), SamplingRequestError> {
     while let Some(res) = in_flight.next().await {
         match res {
@@ -2024,27 +2026,24 @@ async fn drain_in_flight(
                     .is_pending_spine_close_like_output(&response_item)
                     .await
                     .map_err(|err| {
-                        SamplingRequestError::FailedNoTurnComplete(
-                            CodexErr::SpineTerminalFailure {
-                                operation: "inspect Spine tool output".to_string(),
-                                reason: err.to_string(),
-                            },
-                        )
+                        SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
+                            operation: "inspect Spine tool output".to_string(),
+                            reason: err.to_string(),
+                        })
                     })?;
                 let commit = sess
                     .maybe_commit_spine_tool_output_with_client_session(
                         &turn_context,
                         client_session,
                         &response_item,
+                        close_compact_tools.clone(),
                     )
                     .await
                     .map_err(|err| {
-                        SamplingRequestError::FailedNoTurnComplete(
-                            CodexErr::SpineTerminalFailure {
-                                operation: "commit Spine tool output".to_string(),
-                                reason: err.to_string(),
-                            },
-                        )
+                        SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
+                            operation: "commit Spine tool output".to_string(),
+                            reason: err.to_string(),
+                        })
                     })?;
                 if !commit.record_output {
                     continue;
@@ -2576,6 +2575,7 @@ async fn try_run_sampling_request(
         turn_context.clone(),
         client_session,
         &mut spine_control_overlay,
+        prompt.tools.clone(),
     )
     .await?;
 
