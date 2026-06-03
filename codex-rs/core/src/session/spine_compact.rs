@@ -34,6 +34,7 @@ impl Session {
         suffix_start: usize,
         close_output: &ResponseItem,
         instruction: Option<String>,
+        close_target_projection: String,
     ) -> Result<SpineCloseCompactOutcome, SpineError> {
         let raw_items = history.raw_items();
         if suffix_start >= raw_items.len() {
@@ -93,6 +94,7 @@ impl Session {
         let suffix_items = prompt_input.split_off(suffix_start);
         let compact_instructions =
             spine_close_compact_instruction_text(&node_id, instruction.as_deref());
+        prompt_input.push(spine_close_compact_system_message(&close_target_projection));
         prompt_input.push(spine_close_compact_suffix_boundary_message(&node_id));
         prompt_input.extend(suffix_items);
         prompt_input.push(spine_close_compact_system_message(&compact_instructions));

@@ -20,6 +20,7 @@ pub(crate) use runtime::SpineCloseCompact;
 pub(crate) use runtime::SpineCommitKind;
 pub(crate) use runtime::SpineError;
 pub(crate) use runtime::SpineOpenNodeContextProjection;
+pub(crate) use runtime::SpinePendingCloseAction;
 pub(crate) use runtime::SpinePendingCommit;
 pub(crate) use runtime::SpineRootCompactResult;
 pub(crate) use runtime::SpineRootCompactTokenMetadata;

@@ -176,13 +176,21 @@ pub(crate) enum SpineCommitKind {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpinePendingCloseAction {
+    Close,
+    Next,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpinePendingCommit {
     Open,
     Close {
+        action: SpinePendingCloseAction,
         node: NodeId,
         suffix_start: usize,
         instruction: Option<String>,
+        next_summary: Option<String>,
     },
 }
 
@@ -1211,13 +1219,28 @@ impl SpineRuntime {
         }
         Ok(Some(match pending {
             PendingTransition::Open { .. } => SpinePendingCommit::Open,
-            PendingTransition::Close { instruction, .. }
-            | PendingTransition::NextSugar { instruction, .. } => {
+            PendingTransition::Close { instruction, .. } => {
                 let open_meta = self.current_close_open_meta()?;
                 SpinePendingCommit::Close {
+                    action: SpinePendingCloseAction::Close,
                     node: open_meta.id.clone(),
                     suffix_start: open_meta.index,
                     instruction: instruction.clone(),
+                    next_summary: None,
+                }
+            }
+            PendingTransition::NextSugar {
+                summary,
+                instruction,
+                ..
+            } => {
+                let open_meta = self.current_close_open_meta()?;
+                SpinePendingCommit::Close {
+                    action: SpinePendingCloseAction::Next,
+                    node: open_meta.id.clone(),
+                    suffix_start: open_meta.index,
+                    instruction: instruction.clone(),
+                    next_summary: Some(summary.clone()),
                 }
             }
         }))

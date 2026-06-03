@@ -8197,6 +8197,13 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                 .contains("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY")
         })
         .expect("prefix-only context should remain in full compact input");
+    let target_index = input
+        .iter()
+        .position(|item| {
+            item.to_string()
+                .contains("---------- Spine Close Target ----------")
+        })
+        .expect("close target projection should be inserted into compact input");
     let boundary_index = input
         .iter()
         .position(|item| {
@@ -8216,10 +8223,35 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         })
         .expect("compact directive should be appended to compact input");
     assert!(
-        prefix_index < boundary_index
+        prefix_index < target_index
+            && target_index < boundary_index
             && boundary_index < suffix_index
             && suffix_index < directive_index,
-        "compact input should be full prefix || boundary || original suffix || directive, got prefix={prefix_index} boundary={boundary_index} suffix={suffix_index} directive={directive_index}: {input:?}"
+        "compact input should be full prefix || close target projection || boundary || original suffix || directive, got prefix={prefix_index} target={target_index} boundary={boundary_index} suffix={suffix_index} directive={directive_index}: {input:?}"
+    );
+    assert_eq!(
+        input[target_index]
+            .get("role")
+            .and_then(|role| role.as_str()),
+        Some("system"),
+        "close target projection should be a system message: {}",
+        input_text(target_index)
+    );
+    assert!(
+        system_texts.iter().any(
+            |text| text.contains("---------- Spine Close Target ----------")
+                && text.contains(
+                    "---------- Spine Close Target ----------\nUse this only to orient the memory; do not summarize this block."
+                )
+                && text
+                    .contains("Use this only to orient the memory; do not summarize this block.")
+                && text.contains("Action: close")
+                && text.contains("Closing node: 1.1.1 \"child\"")
+                && text.contains("Cursor before commit: 1.1.1")
+                && text.lines().any(|line| line == "Parent node: 1.1")
+                && !text.contains("Next sibling:")
+        ),
+        "close compact should include pre-commit close target projection: {system_texts:?}"
     );
     assert_eq!(
         input[boundary_index]
@@ -8305,6 +8337,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                         if text.contains("Spine Memory 1.1.1")
                             && text.contains("real compact summary")
                             && !text.contains("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY")
+                            && !text.contains("---------- Spine Close Target ----------")
                             && !text.contains("---------- Spine Suffix Begin ----------")
                             && !text.contains("---------- Spine Compact Directive ----------")
                             && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
@@ -8446,6 +8479,14 @@ async fn spine_next_bridge_replaces_suffix_and_opens_sibling() {
     );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
+    assert!(compact_request.body_contains_text(
+        "---------- Spine Close Target ----------\nUse this only to orient the memory; do not summarize this block."
+    ));
+    assert!(compact_request.body_contains_text("Action: next"));
+    assert!(compact_request.body_contains_text("Closing node: 1.1.1 \"child\""));
+    assert!(compact_request.body_contains_text("Cursor before commit: 1.1.1"));
+    assert!(compact_request.body_contains_text("Parent node: 1.1\n"));
+    assert!(compact_request.body_contains_text("Next sibling: \"next sibling\""));
     assert!(!compact_request.has_function_call("next"));
     assert!(compact_request.function_call_output_text("next").is_none());
     assert!(
@@ -8469,6 +8510,7 @@ async fn spine_next_bridge_replaces_suffix_and_opens_sibling() {
                         if text.contains("Spine Memory 1.1.1")
                             && text.contains("next compact summary")
                             && !text.contains("NEXT_CLOSE_GUIDANCE")
+                            && !text.contains("---------- Spine Close Target ----------")
                 )
     ));
     assert!(!items.iter().any(

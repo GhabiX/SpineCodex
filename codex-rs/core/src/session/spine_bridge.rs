@@ -7,10 +7,12 @@ use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_compact::SpineCloseCompactOutcome;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
 use crate::spine::LiveRootCompact;
+use crate::spine::NodeId;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCloseCompact;
 use crate::spine::SpineCommitKind;
+use crate::spine::SpinePendingCloseAction;
 use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
@@ -594,10 +596,27 @@ impl Session {
         };
         let close_compact = match pending_commit {
             Some(SpinePendingCommit::Close {
+                action,
                 node,
                 suffix_start,
                 instruction,
+                next_summary,
             }) => {
+                let close_target_projection = {
+                    let guard = spine_slot.lock().await;
+                    guard.ensure_valid()?;
+                    let Some(spine) = guard.runtime() else {
+                        return Err(SpineError::Invariant(format!(
+                            "spine runtime missing while building close target projection for call_id={call_id}"
+                        )));
+                    };
+                    build_spine_close_target_projection(
+                        spine,
+                        &node,
+                        action,
+                        next_summary.as_deref(),
+                    )?
+                };
                 let history = self.clone_history().await;
                 let expected_history = history.raw_items().to_vec();
                 let compact = match Box::pin(self.spine_compact_close(
@@ -608,6 +627,7 @@ impl Session {
                     suffix_start,
                     item,
                     instruction,
+                    close_target_projection,
                 ))
                 .await
                 {
@@ -1066,6 +1086,90 @@ fn render_spine_tree_for_model(
     token_info: Option<TokenUsageInfo>,
 ) -> Result<String, SpineError> {
     Ok(build_spine_tree_inside_view(runtime, token_info.as_ref())?.rendered_tree)
+}
+
+
+fn build_spine_close_target_projection(
+    runtime: &SpineRuntime,
+    node: &NodeId,
+    action: SpinePendingCloseAction,
+    next_summary: Option<&str>,
+) -> Result<String, SpineError> {
+    let snapshot = runtime.build_tree_snapshot()?;
+    let closing_node_id = node.to_string();
+    let closing_node = snapshot
+        .nodes
+        .iter()
+        .find(|candidate| candidate.node_id == closing_node_id)
+        .ok_or_else(|| {
+            SpineError::Invariant(format!(
+                "pending Spine close target {closing_node_id} is missing from pre-commit tree"
+            ))
+        })?;
+    let parent_node = if let Some(parent_id) = closing_node.parent_id.as_deref() {
+        Some(
+            snapshot
+                .nodes
+                .iter()
+                .find(|candidate| candidate.node_id == parent_id)
+                .ok_or_else(|| {
+                    SpineError::Invariant(format!(
+                        "pending Spine close target {closing_node_id} references missing parent {parent_id} in pre-commit tree"
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
+
+    let mut text = "---------- Spine Close Target ----------\n\
+Use this only to orient the memory; do not summarize this block.\n"
+        .to_string();
+    text.push_str(match action {
+        SpinePendingCloseAction::Close => "Action: close\n",
+        SpinePendingCloseAction::Next => "Action: next\n",
+    });
+    text.push_str(&format!(
+        "Closing node: {}{}\n",
+        closing_node.node_id,
+        format_spine_close_target_summary(closing_node.summary.as_deref())
+    ));
+    text.push_str(&format!(
+        "Cursor before commit: {}\n",
+        snapshot.active_node_id
+    ));
+    if let Some(parent) = parent_node {
+        text.push_str(&format!(
+            "Parent node: {}{}\n",
+            parent.node_id,
+            format_spine_close_target_summary(parent.summary.as_deref())
+        ));
+    } else {
+        text.push_str("Parent node: none\n");
+    }
+    if action == SpinePendingCloseAction::Next {
+        text.push_str(&format!(
+            "Next sibling: {}\n",
+            format_spine_close_target_summary_value(next_summary)
+        ));
+    }
+    Ok(text)
+}
+
+fn format_spine_close_target_summary(summary: Option<&str>) -> String {
+    summary
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .map(|summary| format!(" \"{}\"", summary.replace('"', "\\\"")))
+        .unwrap_or_default()
+}
+
+fn format_spine_close_target_summary_value(summary: Option<&str>) -> String {
+    summary
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .map(|summary| format!("\"{}\"", summary.replace('"', "\\\"")))
+        .unwrap_or_else(|| "none".to_string())
 }
 
 fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {
