@@ -283,8 +283,8 @@ Explain what the user wanted in this node, including explicit instructions, corr
 State what this node actually did or decided. Include the current state, conclusions, partial results, and what remains unresolved. Do not imply the overall task is complete unless the raw trace clearly proves it.\n\n\
 3. Critical Details\n\
 Preserve exact details needed for continuation: file paths, identifiers, commands, important command outputs, test names/results, errors, task/worklog paths, approvals, risks, and any values the close instruction says to preserve exactly. Lines containing `_CRITICAL_ID=`, `_FILE=`, sentinel values, source paths, or explicit exact-preservation instructions are mandatory evidence and must appear in the memory.\n\n\
-4. Next Step\n\
-State how the parent should continue after this memory. Be specific: continue implementation, review a decision, answer the user, wait for approval, run tests, switch back to a corrected user request, or return a subproblem result to the parent.\n\n\
+4. Resume Focus\n\
+State the parent-level focus after this memory: what is settled, what remains open, and what context should guide continuation.\n\n\
 Rules:\n\
 - Prefer high-signal facts over chronology.\n\
 - Do not archive routine progress updates, tool-call noise, or irrelevant implementation minutiae.\n\

@@ -14,6 +14,7 @@ use crate::spine::io::rollout_stem;
 use crate::spine::io::sha1_hex;
 use crate::spine::io::write_json_file;
 use crate::spine::io::write_json_file_if_unchanged;
+use crate::spine::model::COMMIT_MARKER_VERSION;
 use crate::spine::model::LoggedPressureEvent;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemKind;
@@ -21,6 +22,9 @@ use crate::spine::model::MemRecord;
 #[cfg(test)]
 use crate::spine::model::PressureEvent;
 use crate::spine::model::RawMask;
+use crate::spine::model::SpineCommitKindMarker;
+use crate::spine::model::SpineCommitMarker;
+use crate::spine::model::SpineCommitMemoryRef;
 use crate::spine::model::SpineLedgerEvent;
 use serde::Deserialize;
 use serde::Serialize;
@@ -40,6 +44,7 @@ const LOCATOR_VERSION: u32 = 1;
 const TREE_FILE: &str = "tree.jsonl";
 const PRESSURE_FILE: &str = "pressure.jsonl";
 const MEM_FILE: &str = "mem.jsonl";
+const COMMIT_FILE: &str = "commits.jsonl";
 const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
 const CHECKPOINT_DIR: &str = "checkpoints";
 const INITIAL_CHECKPOINT_FILE: &str = "initial.json";
@@ -159,17 +164,10 @@ impl SpineStore {
         let target = Self::create_for_rollout(target_rollout_path)?;
         let source_raw_live = &raw_live[..raw_ordinal_limit];
         let mask = RawMask::new(source_raw_live);
-        let mut cloned_events = Vec::new();
-        for event in source.events()? {
-            if event.seq < boundary.structural_seq_limit && event.allowed_by(mask)? {
-                cloned_events.push(event);
-            }
-        }
-        for event in &cloned_events {
-            target.append_logged_event(event)?;
-        }
+        let source_events = source.events()?;
         let source_mems = source.mems()?;
         let source_compact_checkpoints = source.compact_checkpoints()?;
+        let source_commit_markers = source.commit_markers()?;
         let mut cloned_compact_checkpoints = Vec::new();
         for checkpoint in source_compact_checkpoints {
             let checkpoint_boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
@@ -184,10 +182,41 @@ impl SpineStore {
                 cloned_compact_checkpoints.push(checkpoint);
             }
         }
+        let mut cloned_commit_markers = Vec::new();
+        for marker in source_commit_markers {
+            if marker.token_seq_end <= boundary.structural_seq_limit
+                && marker.raw_boundary <= boundary.raw_ordinal_limit
+                && commit_marker_allowed_by_source_live(&marker, source_raw_live)?
+            {
+                cloned_commit_markers.push(marker);
+            }
+        }
+        let mut marker_proved_event_seqs = BTreeSet::new();
+        for marker in &cloned_commit_markers {
+            for seq in marker.token_seq_start..marker.token_seq_end {
+                marker_proved_event_seqs.insert(seq);
+            }
+        }
+        let mut cloned_events = Vec::new();
+        for event in source_events {
+            if event.seq < boundary.structural_seq_limit
+                && (event.allowed_by(mask)? || marker_proved_event_seqs.contains(&event.seq))
+            {
+                cloned_events.push(event);
+            }
+        }
+        for event in &cloned_events {
+            target.append_logged_event(event)?;
+        }
         let mut required_memory_ids =
             required_memory_ids_for_cloned_events(&cloned_events, &source_mems, mask)?;
         for checkpoint in &cloned_compact_checkpoints {
             for memory in &checkpoint.memory_refs {
+                required_memory_ids.insert(memory.compact_id.clone());
+            }
+        }
+        for marker in &cloned_commit_markers {
+            for memory in &marker.memory_refs {
                 required_memory_ids.insert(memory.compact_id.clone());
             }
         }
@@ -223,6 +252,10 @@ impl SpineStore {
             )?;
             target.append_compact_checkpoint(&checkpoint)?;
         }
+        for marker in cloned_commit_markers {
+            let marker = clone_commit_marker_for_target(marker, &cloned_memory_paths)?;
+            target.append_commit_marker(&marker)?;
+        }
         Ok(())
     }
 
@@ -241,6 +274,15 @@ impl SpineStore {
 
     pub(super) fn mem_path(&self) -> PathBuf {
         self.root.join(MEM_FILE)
+    }
+
+    fn commit_path(&self) -> PathBuf {
+        self.root.join(COMMIT_FILE)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn commit_path_for_test(&self) -> PathBuf {
+        self.commit_path()
     }
 
     pub(super) fn pressure_path(&self) -> PathBuf {
@@ -309,6 +351,13 @@ impl SpineStore {
 
     pub(super) fn append_mem(&self, mem: &MemRecord) -> Result<(), SpineError> {
         append_json_line(&self.mem_path(), mem)
+    }
+
+    pub(super) fn append_commit_marker(
+        &self,
+        marker: &SpineCommitMarker,
+    ) -> Result<(), SpineError> {
+        append_json_line(&self.commit_path(), marker)
     }
 
     pub(super) fn append_compact_checkpoint(
@@ -423,6 +472,18 @@ impl SpineStore {
             return Ok(Vec::new());
         }
         read_json_lines(&self.mem_path())
+    }
+
+    pub(super) fn commit_markers(&self) -> Result<Vec<SpineCommitMarker>, SpineError> {
+        if !self.commit_path().exists() {
+            return Ok(Vec::new());
+        }
+        read_json_lines(&self.commit_path())
+    }
+
+    #[cfg(test)]
+    pub(super) fn commit_markers_for_test(&self) -> Result<Vec<SpineCommitMarker>, SpineError> {
+        self.commit_markers()
     }
 
     #[cfg(test)]
@@ -614,6 +675,329 @@ impl SpineStore {
         }
         Ok(body)
     }
+
+    pub(super) fn validate_commit_markers_for_replay(
+        &self,
+        events: &[LoggedSpineLedgerEvent],
+        mems: &[MemRecord],
+        raw_live: &[bool],
+    ) -> Result<(), SpineError> {
+        let markers = self.commit_markers()?;
+        let events_by_seq = events
+            .iter()
+            .map(|event| (event.seq, event))
+            .collect::<BTreeMap<_, _>>();
+        let mut markers_by_start = BTreeMap::new();
+        for marker in &markers {
+            validate_commit_marker_record(marker)?;
+            if markers_by_start
+                .insert(marker.token_seq_start, marker)
+                .is_some()
+            {
+                return Err(SpineError::InvalidStore(format!(
+                    "ambiguous Spine commit marker at token_seq {}",
+                    marker.token_seq_start
+                )));
+            }
+            validate_commit_marker_events(marker, &events_by_seq)?;
+            validate_commit_marker_memory_refs(&self.root, marker, mems, raw_live)?;
+        }
+
+        for event in events {
+            match &event.event {
+                SpineLedgerEvent::Close { .. } => match markers_by_start.get(&event.seq) {
+                    Some(marker)
+                        if matches!(
+                            marker.kind,
+                            SpineCommitKindMarker::Close | SpineCommitKindMarker::CloseThenOpen
+                        ) => {}
+                    Some(marker) => {
+                        return Err(SpineError::InvalidStore(format!(
+                            "Spine commit marker {} at token_seq {} does not commit Close",
+                            marker.op_id, event.seq
+                        )));
+                    }
+                    None => {
+                        return Err(SpineError::InvalidStore(format!(
+                            "missing Spine commit marker for Close ledger event at token_seq {}",
+                            event.seq
+                        )));
+                    }
+                },
+                SpineLedgerEvent::RootCompact { .. } => match markers_by_start.get(&event.seq) {
+                    Some(marker) if marker.kind == SpineCommitKindMarker::RootCompact => {}
+                    Some(marker) => {
+                        return Err(SpineError::InvalidStore(format!(
+                            "Spine commit marker {} at token_seq {} does not commit RootCompact",
+                            marker.op_id, event.seq
+                        )));
+                    }
+                    None => {
+                        return Err(SpineError::InvalidStore(format!(
+                            "missing Spine commit marker for RootCompact ledger event at token_seq {}",
+                            event.seq
+                        )));
+                    }
+                },
+                SpineLedgerEvent::Init { .. }
+                | SpineLedgerEvent::Msg { .. }
+                | SpineLedgerEvent::Open { .. } => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_commit_marker_record(marker: &SpineCommitMarker) -> Result<(), SpineError> {
+    if marker.version != COMMIT_MARKER_VERSION {
+        return Err(SpineError::InvalidStore(format!(
+            "unsupported Spine commit marker version {}",
+            marker.version
+        )));
+    }
+    if marker.op_id.trim().is_empty() {
+        return Err(SpineError::InvalidStore(
+            "Spine commit marker op_id must not be empty".to_string(),
+        ));
+    }
+    if marker.token_seq_start >= marker.token_seq_end {
+        return Err(SpineError::InvalidStore(format!(
+            "invalid Spine commit marker token range {}..{}",
+            marker.token_seq_start, marker.token_seq_end
+        )));
+    }
+    if marker.memory_refs.is_empty() {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} must reference memory artifacts",
+            marker.op_id
+        )));
+    }
+    Ok(())
+}
+
+fn validate_commit_marker_events(
+    marker: &SpineCommitMarker,
+    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
+) -> Result<(), SpineError> {
+    match marker.kind {
+        SpineCommitKindMarker::Close => {
+            validate_commit_marker_width(marker, 1)?;
+            let event = event_at_marker_start(marker, events_by_seq)?;
+            let SpineLedgerEvent::Close { node, boundary, .. } = &event.event else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} is not backed by Close at token_seq {}",
+                    marker.op_id, marker.token_seq_start
+                )));
+            };
+            validate_close_marker_fields(marker, node, *boundary)
+        }
+        SpineCommitKindMarker::CloseThenOpen => {
+            validate_commit_marker_width(marker, 2)?;
+            let close = event_at_marker_start(marker, events_by_seq)?;
+            let SpineLedgerEvent::Close { node, boundary, .. } = &close.event else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} is not backed by Close at token_seq {}",
+                    marker.op_id, marker.token_seq_start
+                )));
+            };
+            validate_close_marker_fields(marker, node, *boundary)?;
+            let open_seq = marker.token_seq_start.checked_add(1).ok_or_else(|| {
+                SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
+            })?;
+            let Some(open) = events_by_seq.get(&open_seq) else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} is missing synthetic Open at token_seq {}",
+                    marker.op_id, open_seq
+                )));
+            };
+            let SpineLedgerEvent::Open { boundary, .. } = &open.event else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} is not followed by synthetic Open at token_seq {}",
+                    marker.op_id, open_seq
+                )));
+            };
+            if *boundary != marker.raw_boundary {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} raw boundary {} does not match synthetic Open boundary {}",
+                    marker.op_id, marker.raw_boundary, boundary
+                )));
+            }
+            Ok(())
+        }
+        SpineCommitKindMarker::RootCompact => {
+            validate_commit_marker_width(marker, 1)?;
+            let event = event_at_marker_start(marker, events_by_seq)?;
+            let SpineLedgerEvent::RootCompact {
+                node,
+                boundary,
+                mem,
+                raw_live_hash,
+                ..
+            } = &event.event
+            else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} is not backed by RootCompact at token_seq {}",
+                    marker.op_id, marker.token_seq_start
+                )));
+            };
+            if *boundary != marker.raw_boundary {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} raw boundary {} does not match RootCompact boundary {}",
+                    marker.op_id, marker.raw_boundary, boundary
+                )));
+            }
+            if marker.raw_live_hash.as_deref() != Some(raw_live_hash.as_str()) {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} raw live hash does not match RootCompact",
+                    marker.op_id
+                )));
+            }
+            let memory = single_commit_memory_ref(marker)?;
+            if &memory.compact_id != mem || &memory.node != node {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} memory does not match RootCompact",
+                    marker.op_id
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_commit_marker_width(marker: &SpineCommitMarker, width: u64) -> Result<(), SpineError> {
+    let expected_end = marker.token_seq_start.checked_add(width).ok_or_else(|| {
+        SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
+    })?;
+    if marker.token_seq_end != expected_end {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} token range {}..{} has unexpected width {width}",
+            marker.op_id, marker.token_seq_start, marker.token_seq_end
+        )));
+    }
+    Ok(())
+}
+
+fn event_at_marker_start<'a>(
+    marker: &SpineCommitMarker,
+    events_by_seq: &'a BTreeMap<u64, &LoggedSpineLedgerEvent>,
+) -> Result<&'a LoggedSpineLedgerEvent, SpineError> {
+    events_by_seq
+        .get(&marker.token_seq_start)
+        .copied()
+        .ok_or_else(|| {
+            SpineError::InvalidStore(format!(
+                "Spine commit marker {} references missing token_seq {}",
+                marker.op_id, marker.token_seq_start
+            ))
+        })
+}
+
+fn validate_close_marker_fields(
+    marker: &SpineCommitMarker,
+    node: &crate::spine::model::NodeId,
+    boundary: u64,
+) -> Result<(), SpineError> {
+    if boundary != marker.raw_boundary {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} raw boundary {} does not match Close boundary {}",
+            marker.op_id, marker.raw_boundary, boundary
+        )));
+    }
+    if marker.raw_live_hash.is_some() {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine suffix commit marker {} must not carry a raw_live_hash",
+            marker.op_id
+        )));
+    }
+    let memory = single_commit_memory_ref(marker)?;
+    if &memory.node != node {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} memory node {} does not match Close node {}",
+            marker.op_id, memory.node, node
+        )));
+    }
+    if memory.raw_end != marker.raw_boundary {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} memory raw_end {} does not match raw boundary {}",
+            marker.op_id, memory.raw_end, marker.raw_boundary
+        )));
+    }
+    Ok(())
+}
+
+fn single_commit_memory_ref(
+    marker: &SpineCommitMarker,
+) -> Result<&SpineCommitMemoryRef, SpineError> {
+    match marker.memory_refs.as_slice() {
+        [memory] => Ok(memory),
+        _ => Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} must reference exactly one memory artifact",
+            marker.op_id
+        ))),
+    }
+}
+
+fn validate_commit_marker_memory_refs(
+    store_root: &Path,
+    marker: &SpineCommitMarker,
+    mems: &[MemRecord],
+    raw_live: &[bool],
+) -> Result<(), SpineError> {
+    for memory in &marker.memory_refs {
+        let mut matching_mems = mems
+            .iter()
+            .filter(|record| record.compact_id == memory.compact_id);
+        let Some(mem) = matching_mems.next() else {
+            return Err(SpineError::InvalidStore(format!(
+                "Spine commit marker {} references missing memory {}",
+                marker.op_id, memory.compact_id
+            )));
+        };
+        if matching_mems.next().is_some() {
+            return Err(SpineError::InvalidStore(format!(
+                "Spine commit marker {} references ambiguous memory {}",
+                marker.op_id, memory.compact_id
+            )));
+        }
+        if memory.kind != mem.kind
+            || memory.node != mem.node
+            || memory.raw_start != mem.raw_start
+            || memory.raw_end != mem.raw_end
+            || memory.context_start != mem.context_start
+            || memory.context_end != mem.context_end
+            || memory.raw_live_hash != mem.raw_live_hash
+            || memory.body_path != mem.body_path
+            || memory.body_hash != mem.body_hash
+        {
+            return Err(SpineError::InvalidStore(format!(
+                "Spine commit marker {} memory ref {} does not match committed memory record",
+                marker.op_id, memory.compact_id
+            )));
+        }
+        if !mem.allowed_by(RawMask::new(raw_live))? {
+            return Err(SpineError::InvalidStore(format!(
+                "memory {} does not cover live raw evidence for Spine commit marker {}",
+                mem.compact_id, marker.op_id
+            )));
+        }
+        let body_path = sidecar_store_path(store_root, &memory.body_path);
+        let body = std::fs::read_to_string(&body_path)?;
+        if sha1_hex(body.as_bytes()) != memory.body_hash {
+            return Err(SpineError::InvalidStore(format!(
+                "memory body hash mismatch for {}",
+                memory.compact_id
+            )));
+        }
+    }
+    if let Some(raw_live_hash) = marker.raw_live_hash.as_deref()
+        && !raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
+    {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} raw boundary {} is not proved by durable raw live state",
+            marker.op_id, marker.raw_boundary
+        )));
+    }
+    Ok(())
 }
 
 fn validate_compact_checkpoint_root_marker(
@@ -904,4 +1288,88 @@ fn clone_compact_checkpoint_for_target(
         memory_refs,
         ..checkpoint
     })
+}
+
+fn commit_marker_allowed_by_source_live(
+    marker: &SpineCommitMarker,
+    raw_live: &[bool],
+) -> Result<bool, SpineError> {
+    if marker.raw_boundary
+        > u64::try_from(raw_live.len())
+            .map_err(|_| SpineError::InvalidEvent("raw live length overflow".to_string()))?
+    {
+        return Ok(false);
+    }
+    if let Some(raw_live_hash) = marker.raw_live_hash.as_deref()
+        && !raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
+    {
+        return Ok(false);
+    }
+    for memory in &marker.memory_refs {
+        if !commit_memory_ref_allowed_by_source_live(memory, raw_live)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn commit_memory_ref_allowed_by_source_live(
+    memory: &SpineCommitMemoryRef,
+    raw_live: &[bool],
+) -> Result<bool, SpineError> {
+    match memory.kind {
+        MemKind::Suffix => {
+            let start = usize::try_from(memory.raw_start)
+                .map_err(|_| SpineError::InvalidEvent("raw start overflow".to_string()))?;
+            let end = usize::try_from(memory.raw_end)
+                .map_err(|_| SpineError::InvalidEvent("raw end overflow".to_string()))?;
+            Ok(start <= end
+                && end <= raw_live.len()
+                && raw_live[start..end].iter().all(|live| *live))
+        }
+        MemKind::RootEpoch => memory
+            .raw_live_hash
+            .as_deref()
+            .map(|hash| raw_live_prefix_hash_matches(raw_live, memory.raw_end, hash))
+            .unwrap_or(Ok(false)),
+    }
+}
+
+fn clone_commit_marker_for_target(
+    marker: SpineCommitMarker,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<SpineCommitMarker, SpineError> {
+    let mut memory_refs = Vec::with_capacity(marker.memory_refs.len());
+    for memory in marker.memory_refs {
+        let body_path = cloned_memory_paths
+            .get(&memory.compact_id)
+            .ok_or_else(|| {
+                SpineError::InvalidStore(format!(
+                    "Spine commit marker references uncloned memory {}",
+                    memory.compact_id
+                ))
+            })?
+            .clone();
+        memory_refs.push(SpineCommitMemoryRef {
+            body_path,
+            ..memory
+        });
+    }
+    Ok(SpineCommitMarker {
+        memory_refs,
+        ..marker
+    })
+}
+
+fn raw_live_prefix_hash_matches(
+    raw_live: &[bool],
+    boundary: u64,
+    expected: &str,
+) -> Result<bool, SpineError> {
+    let boundary = usize::try_from(boundary)
+        .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
+    if boundary > raw_live.len() {
+        return Ok(false);
+    }
+    Ok(hash_raw_live(&raw_live[..boundary]) == expected)
 }

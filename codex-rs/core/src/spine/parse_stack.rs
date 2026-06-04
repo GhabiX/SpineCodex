@@ -234,13 +234,15 @@ impl ParseStack {
 
     pub(super) fn tree_snapshot_nodes(&self) -> Result<Vec<SpineTreeNodeSnapshot>, SpineError> {
         let rows = self.tree_rows()?;
-        let projected_ids = rows
-            .iter()
-            .map(|row| row.id.clone())
-            .collect::<BTreeSet<_>>();
+        let rows = tree_rows_by_id(rows);
+        let Some((_, projected_ids)) = visible_tree_row_ids(&rows) else {
+            return Ok(Vec::new());
+        };
         Ok(rows
             .into_iter()
+            .filter(|(id, _)| projected_ids.contains(id))
             .map(|row| {
+                let (_, row) = row;
                 let status = row.snapshot_status();
                 let summary = visible_summary(&row).map(str::to_string);
                 // Snapshot parents describe this projected forest, not hidden
@@ -545,49 +547,10 @@ fn format_tree_rows(
     rows: Vec<TreeRenderRow>,
     context_annotations: &BTreeMap<NodeId, String>,
 ) -> String {
-    let rows = rows
-        .into_iter()
-        .map(|row| (row.id.clone(), row))
-        .collect::<BTreeMap<_, _>>();
-    let mut visible = BTreeSet::<NodeId>::new();
-    let Some(cursor) = rows
-        .values()
-        .find(|row| row.status == NodeStatus::Live)
-        .map(|row| row.id.clone())
-    else {
+    let rows = tree_rows_by_id(rows);
+    let Some((cursor, visible)) = visible_tree_row_ids(&rows) else {
         return String::new();
     };
-
-    let mut path = Vec::<NodeId>::new();
-    let mut current = Some(cursor.clone());
-    while let Some(id) = current {
-        path.push(id.clone());
-        current = id.parent();
-    }
-    path.reverse();
-
-    for node_id in &path {
-        visible.insert(node_id.clone());
-        if node_id.is_root_epoch() {
-            for sibling in rows.keys() {
-                if sibling.is_root_epoch() && sibling < node_id {
-                    visible.insert(sibling.clone());
-                }
-            }
-        }
-        if let Some(parent) = node_id.parent() {
-            for sibling in rows.keys() {
-                if sibling.parent() == Some(parent.clone()) && sibling < node_id {
-                    visible.insert(sibling.clone());
-                }
-            }
-        }
-    }
-    for (id, row) in &rows {
-        if id.parent().as_ref() == Some(&cursor) && row.status == NodeStatus::Closed {
-            visible.insert(id.clone());
-        }
-    }
 
     let mut lines = vec![
         format!("Cursor: {cursor}"),
@@ -633,6 +596,54 @@ fn format_tree_rows(
         ));
     }
     lines.join("\n")
+}
+
+fn tree_rows_by_id(rows: Vec<TreeRenderRow>) -> BTreeMap<NodeId, TreeRenderRow> {
+    rows.into_iter()
+        .map(|row| (row.id.clone(), row))
+        .collect::<BTreeMap<_, _>>()
+}
+
+fn visible_tree_row_ids(
+    rows: &BTreeMap<NodeId, TreeRenderRow>,
+) -> Option<(NodeId, BTreeSet<NodeId>)> {
+    let cursor = rows
+        .values()
+        .find(|row| row.status == NodeStatus::Live)
+        .map(|row| row.id.clone())?;
+    let mut visible = BTreeSet::<NodeId>::new();
+    let mut path = Vec::<NodeId>::new();
+    let mut current = Some(cursor.clone());
+    while let Some(id) = current {
+        path.push(id.clone());
+        current = id.parent();
+    }
+    path.reverse();
+
+    for node_id in &path {
+        visible.insert(node_id.clone());
+        if node_id.is_root_epoch() {
+            for sibling in rows.keys() {
+                if sibling.is_root_epoch() && sibling < node_id {
+                    visible.insert(sibling.clone());
+                }
+            }
+        }
+        if let Some(parent) = node_id.parent() {
+            for sibling in rows.keys() {
+                if sibling.parent() == Some(parent.clone()) && sibling < node_id {
+                    visible.insert(sibling.clone());
+                }
+            }
+        }
+    }
+    for (id, row) in rows {
+        if id.parent().as_ref() == Some(&cursor) && row.status == NodeStatus::Closed {
+            visible.insert(id.clone());
+        }
+    }
+
+    Some((cursor, visible))
 }
 
 fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
@@ -812,11 +823,12 @@ pub(super) fn event_to_token(
     }
 }
 
-pub(super) fn parse_stack_from_events(
+pub(super) fn parse_stack_from_events_with_forced_events(
     events: &[LoggedSpineLedgerEvent],
     archive: &SpineArchive,
     mems: &[MemRecord],
     raw_mask: RawMask<'_>,
+    forced_event_seqs: &BTreeSet<u64>,
 ) -> Result<ParseStack, SpineError> {
     let mems = mems
         .iter()
@@ -825,7 +837,7 @@ pub(super) fn parse_stack_from_events(
         .collect::<BTreeMap<_, _>>();
     let mut ps = ParseStack::new();
     for event in events {
-        if !event.allowed_by(raw_mask)? {
+        if !forced_event_seqs.contains(&event.seq) && !event.allowed_by(raw_mask)? {
             continue;
         }
         ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;

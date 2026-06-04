@@ -283,6 +283,105 @@ fn spine_error_classifies_missing_raw_coverage_as_sidecar_corruption() {
     assert!(err.to_string().contains("token_seq="));
 }
 
+#[test]
+fn close_commit_marker_is_required_for_resume() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "root child work before close");
+    close_task(&mut runtime, &mut raw, "close-marker", "1.1");
+
+    let markers = runtime
+        .store
+        .commit_markers_for_test()
+        .expect("read commit markers");
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].kind, SpineCommitKindMarker::Close);
+    assert_eq!(markers[0].token_seq_end, markers[0].token_seq_start + 1);
+    assert_eq!(markers[0].memory_refs.len(), 1);
+
+    std::fs::remove_file(runtime.store.commit_path_for_test()).expect("remove commit markers");
+    let err = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
+        .expect_err("Close ledger without commit marker must fail closed");
+    assert!(
+        err.to_string()
+            .contains("missing Spine commit marker for Close ledger event"),
+        "unexpected resume error: {err}"
+    );
+}
+
+#[test]
+fn next_commit_marker_covers_close_then_open_without_next_event() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "root child work before next");
+    next_task(&mut runtime, &mut raw, "next-marker", "1.1", "next sibling");
+
+    let markers = runtime
+        .store
+        .commit_markers_for_test()
+        .expect("read commit markers");
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].kind, SpineCommitKindMarker::CloseThenOpen);
+    assert_eq!(markers[0].token_seq_end, markers[0].token_seq_start + 2);
+    let events = event_log(&runtime);
+    assert!(matches!(
+        events.as_slice(),
+        [
+            SpineLedgerEvent::Init { .. },
+            SpineLedgerEvent::Open { .. },
+            SpineLedgerEvent::Msg { .. },
+            SpineLedgerEvent::Close { .. },
+            SpineLedgerEvent::Open { .. },
+        ]
+    ));
+
+    std::fs::remove_file(runtime.store.commit_path_for_test()).expect("remove commit markers");
+    let err = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
+        .expect_err("Close+Open ledger without commit marker must fail closed");
+    assert!(
+        err.to_string()
+            .contains("missing Spine commit marker for Close ledger event"),
+        "unexpected resume error: {err}"
+    );
+}
+
+#[test]
+fn root_compact_commit_marker_is_required_for_resume() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "root visible work before compact");
+    runtime
+        .root_compact("root compact marker body".to_string(), &raw)
+        .expect("root compact");
+
+    let markers = runtime
+        .store
+        .commit_markers_for_test()
+        .expect("read commit markers");
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].kind, SpineCommitKindMarker::RootCompact);
+    assert_eq!(markers[0].token_seq_end, markers[0].token_seq_start + 1);
+    assert!(markers[0].raw_live_hash.is_some());
+
+    std::fs::remove_file(runtime.store.commit_path_for_test()).expect("remove commit markers");
+    let err = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
+        .expect_err("RootCompact ledger without commit marker must fail closed");
+    assert!(
+        err.to_string()
+            .contains("missing Spine commit marker for RootCompact ledger event"),
+        "unexpected resume error: {err}"
+    );
+}
+
 // Shared lifecycle and tree projection fixtures.
 
 fn open_task(
@@ -536,6 +635,54 @@ fn closed_child_tree_snapshot_keeps_visible_parent_link() {
     assert_eq!(nodes["1.1.1"].parent_id.as_deref(), Some("1.1"));
     assert_eq!(nodes["1.1.1"].summary.as_deref(), Some("child task"));
     assert_eq!(nodes["1.1.1"].status, SpineTreeNodeStatus::Closed);
+}
+
+#[test]
+fn tree_snapshot_hides_closed_historical_subtree_descendants() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    open_task(
+        &mut runtime,
+        &mut raw,
+        "open-historical",
+        "historical parent",
+    );
+    open_task(&mut runtime, &mut raw, "open-child", "historical child");
+    append_msg(&mut runtime, &mut raw, "historical child work");
+    close_task(&mut runtime, &mut raw, "close-child", "1.1.1.1");
+    append_msg(&mut runtime, &mut raw, "historical parent work");
+    next_task(
+        &mut runtime,
+        &mut raw,
+        "next-sibling",
+        "1.1.1",
+        "current sibling",
+    );
+    open_task(&mut runtime, &mut raw, "open-active-child", "active child");
+
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("[1.1.1] Done historical parent"), "{tree}");
+    assert!(!tree.contains("[1.1.1.1] Done historical child"), "{tree}");
+
+    let snapshot = runtime.build_tree_snapshot().expect("snapshot");
+    assert_snapshot_is_self_contained_forest(&snapshot);
+    let nodes = snapshot_nodes_by_id(&snapshot);
+
+    assert_eq!(snapshot.active_node_id, "1.1.2.1");
+    assert!(nodes.contains_key("1"));
+    assert!(nodes.contains_key("1.1"));
+    assert_eq!(nodes["1.1.1"].parent_id.as_deref(), Some("1.1"));
+    assert_eq!(nodes["1.1.1"].status, SpineTreeNodeStatus::Closed);
+    assert_eq!(nodes["1.1.1"].summary.as_deref(), Some("historical parent"));
+    assert!(nodes.contains_key("1.1.2"));
+    assert!(nodes.contains_key("1.1.2.1"));
+    assert!(
+        !nodes.contains_key("1.1.1.1"),
+        "closed historical descendants must stay out of the TUI snapshot: {snapshot:?}"
+    );
 }
 
 #[test]

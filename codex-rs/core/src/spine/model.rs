@@ -7,6 +7,8 @@ use std::fmt;
 use std::ops::Range;
 use std::path::PathBuf;
 
+pub(super) const COMMIT_MARKER_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub(crate) struct NodeId(pub(super) Vec<u32>);
@@ -176,7 +178,7 @@ pub(super) struct LoggedPressureEvent {
     pub(super) event: PressureEvent,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum MemKind {
     Suffix,
@@ -208,6 +210,42 @@ pub(super) struct MemRecord {
     pub(super) memory_output_tokens: Option<i64>,
     pub(super) body_path: String,
     pub(super) body_hash: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SpineCommitKindMarker {
+    Close,
+    CloseThenOpen,
+    RootCompact,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct SpineCommitMemoryRef {
+    pub(super) compact_id: String,
+    pub(super) kind: MemKind,
+    pub(super) node: NodeId,
+    pub(super) raw_start: u64,
+    pub(super) raw_end: u64,
+    pub(super) context_start: usize,
+    pub(super) context_end: usize,
+    #[serde(default)]
+    pub(super) raw_live_hash: Option<String>,
+    pub(super) body_path: String,
+    pub(super) body_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct SpineCommitMarker {
+    pub(super) version: u32,
+    pub(super) op_id: String,
+    pub(super) kind: SpineCommitKindMarker,
+    pub(super) token_seq_start: u64,
+    pub(super) token_seq_end: u64,
+    pub(super) raw_boundary: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) raw_live_hash: Option<String>,
+    pub(super) memory_refs: Vec<SpineCommitMemoryRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -491,6 +491,484 @@ async fn assert_session_history_matches_spine_materialization(
     );
 }
 
+struct PostNextFixture {
+    session: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    rx: async_channel::Receiver<Event>,
+    rollout_path: PathBuf,
+    rollout_items: Vec<RolloutItem>,
+    raw_items: Vec<Option<ResponseItem>>,
+    expected_history: Vec<ResponseItem>,
+}
+
+fn assert_post_next_tree(tree: &str) {
+    assert!(tree.contains("Cursor: 1.1.2"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done"), "{tree}");
+    assert!(tree.contains("[1.1.2] Current post next sibling"), "{tree}");
+}
+
+async fn assert_post_next_session_state(
+    session: &Session,
+    rollout_path: &Path,
+    raw_items: &[Option<ResponseItem>],
+    expected_history: &[ResponseItem],
+) {
+    assert_eq!(session.clone_history().await.raw_items(), expected_history);
+    let runtime = SpineRuntime::load_for_rollout_items(rollout_path, raw_items, &[])
+        .expect("load post-next spine runtime")
+        .expect("post-next spine sidecar should exist");
+    assert_eq!(
+        runtime
+            .materialize_history(raw_items)
+            .expect("materialize post-next h(PS)"),
+        expected_history
+    );
+    assert_post_next_tree(&runtime.render_tree().expect("render post-next tree"));
+}
+
+async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_summary_sse("post-next-summary", summary_text),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("post-next prefix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record post-next prefix");
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "post-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record post-next open request");
+    session
+        .stage_spine_open("post-next-open".to_string(), "post next child".to_string())
+        .await
+        .expect("stage post-next open");
+    let open_output = function_output("post-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record post-next open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit post-next open");
+
+    let child_body = user_message("post-next child body");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record post-next child body");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "post-next");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_request))
+        .await
+        .expect("record post-next request");
+    session
+        .stage_spine_next(
+            "post-next".to_string(),
+            "post next sibling".to_string(),
+            Some("post next close guidance".to_string()),
+        )
+        .await
+        .expect("stage post-next");
+    let next_output = commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("post-next"),
+    )
+    .await
+    .expect("commit post-next output and record raw evidence");
+    assert!(matches!(
+        next_output,
+        ResponseItem::FunctionCallOutput { output, .. }
+            if output
+                .text_content()
+                .is_some_and(|text| text.contains("Spine advanced to next sibling."))
+    ));
+    assert_eq!(compact_mock.requests().len(), 1);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read post-next rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load post-next runtime")
+        .expect("post-next spine sidecar should exist");
+    let expected_history = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize post-next h(PS)");
+    assert_eq!(session.clone_history().await.raw_items(), expected_history);
+    assert_post_next_tree(&runtime.render_tree().expect("render post-next tree"));
+    assert!(
+        expected_history.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                            && text.contains(summary_text)
+                )
+        )),
+        "post-next closed sibling memory should be visible"
+    );
+    assert!(!expected_history.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "post-next")
+    ));
+    assert!(!expected_history.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "post-next")
+    ));
+
+    PostNextFixture {
+        session,
+        turn_context,
+        rx,
+        rollout_path,
+        rollout_items: resumed.history,
+        raw_items,
+        expected_history,
+    }
+}
+
+struct CloseWindowFixture {
+    rollout_path: PathBuf,
+    rollout_items: Vec<RolloutItem>,
+    raw_items: Vec<Option<ResponseItem>>,
+    expected_history: Vec<ResponseItem>,
+}
+
+fn assert_close_window_tree(tree: &str) {
+    assert!(tree.contains("Cursor: 1.1"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done"), "{tree}");
+}
+
+async fn assert_close_window_session_state(
+    session: &Session,
+    rollout_path: &Path,
+    raw_items: &[Option<ResponseItem>],
+    expected_history: &[ResponseItem],
+) {
+    assert_eq!(session.clone_history().await.raw_items(), expected_history);
+    let runtime = SpineRuntime::load_for_rollout_items(rollout_path, raw_items, &[])
+        .expect("load close-window spine runtime")
+        .expect("close-window spine sidecar should exist");
+    assert_eq!(
+        runtime
+            .materialize_history(raw_items)
+            .expect("materialize close-window h(PS)"),
+        expected_history
+    );
+    assert_close_window_tree(&runtime.render_tree().expect("render close-window tree"));
+}
+
+async fn make_spine_close_window_missing_output_carrier(summary_text: &str) -> CloseWindowFixture {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_summary_sse("close-window-summary", summary_text),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("close-window prefix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record close-window prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "close-window-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record close-window open request");
+    session
+        .stage_spine_open(
+            "close-window-open".to_string(),
+            "close window child".to_string(),
+        )
+        .await
+        .expect("stage close-window open");
+    let open_output = function_output("close-window-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record close-window open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit close-window open");
+
+    let child_body = user_message("close-window child body");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record close-window child body");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "close-window");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close-window request");
+    session
+        .stage_spine_close("close-window".to_string(), None)
+        .await
+        .expect("stage close-window");
+
+    let commit = session
+        .maybe_commit_spine_tool_output(&turn_context, &function_output("close-window"))
+        .await
+        .expect("commit close-window sidecar only");
+    assert!(
+        commit.deferred_history_update.is_some(),
+        "close should defer host history replacement"
+    );
+    assert!(
+        commit.deferred_tree_update.is_some(),
+        "close should defer tree update until output carrier is durable"
+    );
+    assert_eq!(compact_mock.requests().len(), 1);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read close-window rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert!(
+        !resumed.history.iter().any(|item| matches!(
+            item,
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput { call_id, .. })
+                if call_id == "close-window"
+        )),
+        "test setup must omit the close output carrier"
+    );
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load close-window runtime")
+        .expect("close-window sidecar should exist");
+    let expected_history = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize close-window h(PS)");
+    assert_close_window_tree(&runtime.render_tree().expect("render close-window tree"));
+    assert!(
+        expected_history.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                            && text.contains(summary_text)
+                )
+        )),
+        "closed child memory should be visible"
+    );
+    assert!(!expected_history.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "close-window")
+    ));
+    assert!(!expected_history.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "close-window")
+    ));
+
+    CloseWindowFixture {
+        rollout_path,
+        rollout_items: resumed.history,
+        raw_items,
+        expected_history,
+    }
+}
+
+async fn make_spine_next_window_missing_output_carrier(summary_text: &str) -> PostNextFixture {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_summary_sse("next-window-summary", summary_text),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("next-window prefix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record next-window prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "next-window-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record next-window open request");
+    session
+        .stage_spine_open(
+            "next-window-open".to_string(),
+            "next window child".to_string(),
+        )
+        .await
+        .expect("stage next-window open");
+    let open_output = function_output("next-window-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record next-window open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit next-window open");
+
+    let child_body = user_message("next-window child body");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record next-window child body");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "next-window");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_request))
+        .await
+        .expect("record next-window request");
+    session
+        .stage_spine_next(
+            "next-window".to_string(),
+            "post next sibling".to_string(),
+            Some("next-window close guidance".to_string()),
+        )
+        .await
+        .expect("stage next-window");
+
+    let commit = session
+        .maybe_commit_spine_tool_output(&turn_context, &function_output("next-window"))
+        .await
+        .expect("commit next-window sidecar only");
+    assert!(
+        commit.deferred_history_update.is_some(),
+        "next should defer host history replacement"
+    );
+    assert!(
+        commit.deferred_tree_update.is_some(),
+        "next should defer tree update until output carrier is durable"
+    );
+    assert_eq!(compact_mock.requests().len(), 1);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read next-window rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert!(
+        !resumed.history.iter().any(|item| matches!(
+            item,
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput { call_id, .. })
+                if call_id == "next-window"
+        )),
+        "test setup must omit the next output carrier"
+    );
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load next-window runtime")
+        .expect("next-window sidecar should exist");
+    let expected_history = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize next-window h(PS)");
+    let source_host_items = session.clone_history().await.raw_items().to_vec();
+    assert!(
+        !source_host_items.iter().any(
+            |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "next-window")
+        ),
+        "test setup must leave the next output carrier non-durable"
+    );
+    assert_post_next_tree(&runtime.render_tree().expect("render next-window tree"));
+    assert!(
+        expected_history.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                            && text.contains(summary_text)
+                )
+        )),
+        "post-next closed sibling memory should be visible"
+    );
+    assert!(!expected_history.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "next-window")
+    ));
+    assert!(!expected_history.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "next-window")
+    ));
+
+    PostNextFixture {
+        session,
+        turn_context,
+        rx,
+        rollout_path,
+        rollout_items: resumed.history,
+        raw_items,
+        expected_history,
+    }
+}
+
 async fn make_spine_session_with_closed_child(
     summary_text: &str,
 ) -> (Arc<Session>, Arc<TurnContext>, PathBuf, Vec<RolloutItem>) {
@@ -8559,7 +9037,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
             && text.contains("1. User Intent")
             && text.contains("2. Work Done")
             && text.contains("3. Critical Details")
-            && text.contains("4. Next Step")
+            && text.contains("4. Resume Focus")
             && text
                 .contains("If there is conflict between an old plan and a later user correction")
             && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
@@ -8813,6 +9291,372 @@ async fn spine_next_bridge_replaces_suffix_and_opens_sibling() {
         items
     );
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
+async fn spine_next_resume_restores_closed_and_current_sibling() {
+    let fixture = make_spine_session_after_next("post-next resume summary").await;
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = fixture
+        .raw_items
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&fixture.rollout_path, &resumed_rollout_path, &raw_live);
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: fixture.rollout_items.clone(),
+            rollout_path: Some(fixture.rollout_path.clone()),
+        }))
+        .await
+        .expect("resume post-next rollout");
+
+    assert_post_next_session_state(
+        &resumed_session,
+        &resumed_rollout_path,
+        &fixture.raw_items,
+        &fixture.expected_history,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn spine_next_fork_restores_closed_and_current_sibling() {
+    let fixture = make_spine_session_after_next("post-next fork summary").await;
+    let source_events_before = SpineStore::for_rollout(&fixture.rollout_path)
+        .expect("load source spine store")
+        .event_count_for_test()
+        .expect("source event count before fork");
+
+    let (mut forked_session, _forked_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let forked_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut forked_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = fixture
+        .raw_items
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&fixture.rollout_path, &forked_rollout_path, &raw_live);
+
+    forked_session
+        .record_initial_history(InitialHistory::Forked(fixture.rollout_items.clone()))
+        .await
+        .expect("fork post-next rollout");
+
+    assert_post_next_session_state(
+        &forked_session,
+        &forked_rollout_path,
+        &fixture.raw_items,
+        &fixture.expected_history,
+    )
+    .await;
+    let source_events_after = SpineStore::for_rollout(&fixture.rollout_path)
+        .expect("reload source spine store")
+        .event_count_for_test()
+        .expect("source event count after fork");
+    assert_eq!(
+        source_events_after, source_events_before,
+        "fork replay must not mutate the source Spine sidecar"
+    );
+}
+
+#[tokio::test]
+async fn spine_next_rollback_preserves_closed_sibling_and_drops_new_live_turn() {
+    let fixture = make_spine_session_after_next("post-next rollback summary").await;
+    while fixture.rx.try_recv().is_ok() {}
+
+    let rolled_back_user = user_message("post-next live user that rollback drops");
+    let rolled_back_assistant = assistant_message("post-next live assistant that rollback drops");
+    fixture
+        .session
+        .record_conversation_items(
+            &fixture.turn_context,
+            &[rolled_back_user.clone(), rolled_back_assistant.clone()],
+        )
+        .await
+        .expect("record post-next live turn");
+    assert!(
+        fixture
+            .session
+            .clone_history()
+            .await
+            .raw_items()
+            .contains(&rolled_back_user),
+        "test setup should append a live turn after spine.next"
+    );
+
+    handlers::thread_rollback(
+        &fixture.session,
+        "post-next-rollback".to_string(),
+        /*num_turns*/ 1,
+    )
+    .await;
+    let rollback_event = wait_for_thread_rolled_back(&fixture.rx).await;
+    assert_eq!(rollback_event.num_turns, 1);
+
+    let history = fixture.session.clone_history().await;
+    assert_eq!(history.raw_items(), fixture.expected_history.as_slice());
+    assert!(!history.raw_items().contains(&rolled_back_user));
+    assert!(!history.raw_items().contains(&rolled_back_assistant));
+
+    fixture.session.ensure_rollout_materialized().await;
+    fixture
+        .session
+        .flush_rollout()
+        .await
+        .expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) =
+        RolloutRecorder::get_rollout_history(&fixture.rollout_path)
+            .await
+            .expect("read post-next rollback rollout")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&fixture.rollout_path, &raw_items, &[])
+        .expect("load post-next rollback runtime")
+        .expect("post-next rollback sidecar should exist");
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize post-next rollback h(PS)"),
+        fixture.expected_history
+    );
+    assert_post_next_tree(&runtime.render_tree().expect("render rollback tree"));
+}
+
+#[tokio::test]
+async fn spine_close_resume_restores_h_ps_when_output_carrier_missing() {
+    let fixture =
+        make_spine_close_window_missing_output_carrier("close-window resume summary").await;
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = fixture
+        .raw_items
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&fixture.rollout_path, &resumed_rollout_path, &raw_live);
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: fixture.rollout_items.clone(),
+            rollout_path: Some(fixture.rollout_path.clone()),
+        }))
+        .await
+        .expect("resume close-window rollout");
+
+    assert_close_window_session_state(
+        &resumed_session,
+        &resumed_rollout_path,
+        &fixture.raw_items,
+        &fixture.expected_history,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn spine_close_fork_restores_h_ps_when_output_carrier_missing() {
+    let fixture = make_spine_close_window_missing_output_carrier("close-window fork summary").await;
+    let source_events_before = SpineStore::for_rollout(&fixture.rollout_path)
+        .expect("load source spine store")
+        .event_count_for_test()
+        .expect("source event count before fork");
+
+    let (mut forked_session, _forked_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let forked_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut forked_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = fixture
+        .raw_items
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&fixture.rollout_path, &forked_rollout_path, &raw_live);
+
+    forked_session
+        .record_initial_history(InitialHistory::Forked(fixture.rollout_items.clone()))
+        .await
+        .expect("fork close-window rollout");
+
+    assert_close_window_session_state(
+        &forked_session,
+        &forked_rollout_path,
+        &fixture.raw_items,
+        &fixture.expected_history,
+    )
+    .await;
+    let source_events_after = SpineStore::for_rollout(&fixture.rollout_path)
+        .expect("reload source spine store")
+        .event_count_for_test()
+        .expect("source event count after fork");
+    assert_eq!(
+        source_events_after, source_events_before,
+        "fork replay must not mutate the source Spine sidecar"
+    );
+}
+
+#[tokio::test]
+async fn spine_next_resume_restores_h_ps_when_output_carrier_missing() {
+    let fixture = make_spine_next_window_missing_output_carrier("next-window resume summary").await;
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = fixture
+        .raw_items
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&fixture.rollout_path, &resumed_rollout_path, &raw_live);
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: fixture.rollout_items.clone(),
+            rollout_path: Some(fixture.rollout_path.clone()),
+        }))
+        .await
+        .expect("resume next-window rollout");
+
+    assert_post_next_session_state(
+        &resumed_session,
+        &resumed_rollout_path,
+        &fixture.raw_items,
+        &fixture.expected_history,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn spine_close_resume_restores_h_ps_when_raw_output_durable_but_host_replace_missing() {
+    let (_source_session, _source_turn_context, source_rollout_path, rollout_items) =
+        make_spine_session_with_closed_child("close-window2 resume summary").await;
+    let raw_items = spine_raw_items_after_rollback(&rollout_items);
+    assert!(
+        raw_items.iter().flatten().any(|item| matches!(
+            item,
+            ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "resume-close"
+        )),
+        "test setup must include durable close output carrier"
+    );
+    let runtime = SpineRuntime::load_for_rollout_items(&source_rollout_path, &raw_items, &[])
+        .expect("load close-window2 runtime")
+        .expect("close-window2 sidecar should exist");
+    let expected_history = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize close-window2 h(PS)");
+    assert!(!expected_history.iter().any(
+        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "resume-close")
+    ));
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&source_rollout_path, &resumed_rollout_path, &raw_live);
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: Some(source_rollout_path),
+        }))
+        .await
+        .expect("resume close-window2 rollout");
+
+    assert_close_window_session_state(
+        &resumed_session,
+        &resumed_rollout_path,
+        &raw_items,
+        &expected_history,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -9346,6 +10190,350 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
     assert!(!tree.contains("bad sibling"), "{tree}");
 }
 
+#[tokio::test]
+async fn spine_next_native_compact_partial_success_does_not_open_sibling() {
+    let server = start_mock_server().await;
+    let delayed_next_compact = core_test_support::responses::mount_response_once(
+        &server,
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(spine_summary_sse(
+                "late-spine-next-summary",
+                "late next compact summary",
+            ))
+            .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+    let native_compact_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message(
+                "native-partial-next-summary",
+                "native compact wins during next",
+            ),
+            ev_completed("native-partial-next-response"),
+        ]),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before partial next");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "partial-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "partial-next-open".to_string(),
+            "partial next child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("partial-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let child_body = user_message("partial next child work");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record child body");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "partial-next");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_request))
+        .await
+        .expect("record next request");
+    session
+        .stage_spine_next(
+            "partial-next".to_string(),
+            "partial next sibling".to_string(),
+            Some("partial next close guidance".to_string()),
+        )
+        .await
+        .expect("stage next");
+    let next_output = function_output("partial-next");
+
+    let commit_session = Arc::clone(&session);
+    let commit_turn_context = Arc::clone(&turn_context);
+    let commit_next_output = next_output.clone();
+    let commit_task = tokio::spawn(async move {
+        commit_session
+            .maybe_commit_spine_tool_output(&commit_turn_context, &commit_next_output)
+            .await
+    });
+    timeout(Duration::from_secs(2), async {
+        while delayed_next_compact.requests().is_empty() {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("next compact request should start before native compact");
+
+    crate::compact::run_compact_task(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        vec![UserInput::Text {
+            text: "native compact during next".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await
+    .expect("native compact succeeds");
+
+    let err = commit_task
+        .await
+        .expect("next commit task should join")
+        .expect_err("late next commit must be rejected after native compact");
+    assert!(
+        err.to_string()
+            .contains("history changed while compacting suffix")
+            && err.to_string().contains("call_id=partial-next"),
+        "unexpected partial-success next error: {err}"
+    );
+    assert_no_pending_spine_commit(&session, "partial-next").await;
+    assert_eq!(delayed_next_compact.requests().len(), 1);
+    assert_eq!(native_compact_mock.requests().len(), 1);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    assert!(
+        raw_items.iter().flatten().all(|item| {
+            !matches!(
+                item,
+                ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "partial-next"
+            )
+        }),
+        "rejected late next output should not be persisted"
+    );
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    assert_eq!(session.clone_history().await.raw_items(), materialized);
+    let tree = runtime.render_tree().expect("render spine tree");
+    assert!(tree.contains("[1] Done"), "{tree}");
+    assert!(tree.contains("[2.1] Current"), "{tree}");
+    assert!(
+        !tree.contains("[1.1.2]") && !tree.contains("partial next sibling"),
+        "native compact must not open the pending next sibling: {tree}"
+    );
+    assert!(
+        materialized.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("native compact wins during next")
+                )
+        )),
+        "native compact memory should be the visible h(PS)"
+    );
+}
+
+#[tokio::test]
+async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next() {
+    let server = start_mock_server().await;
+    let responses_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse_failed(
+                "spine-next-overflow",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            sse(vec![
+                ev_assistant_message(
+                    "native-after-next-overflow",
+                    "native compact after next overflow",
+                ),
+                ev_completed("native-after-next-overflow-response"),
+            ]),
+        ],
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.name = "non-openai test provider".to_string();
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before next overflow");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "overflow-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "overflow-next-open".to_string(),
+            "overflow next child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("overflow-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let child_body = user_message("child work before next overflow");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record child body");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "overflow-next");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_request))
+        .await
+        .expect("record next request");
+    session
+        .stage_spine_next(
+            "overflow-next".to_string(),
+            "overflow next sibling".to_string(),
+            None,
+        )
+        .await
+        .expect("stage next");
+    let next_output = function_output("overflow-next");
+
+    let commit = session
+        .maybe_commit_spine_tool_output(&turn_context, &next_output)
+        .await
+        .expect("next overflow should run native compact instead of failing next");
+    assert!(
+        !commit.record_output,
+        "invalidated next output must not be appended after native compact"
+    );
+    assert_no_pending_spine_commit(&session, "overflow-next").await;
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_close_compact_hard_no_tool_request(
+        &requests[0],
+        "spine.next suffix compact should use a hard no-tool envelope",
+    );
+    assert_eq!(
+        requests[1].body_json()["tool_choice"].as_str(),
+        Some("auto")
+    );
+    assert!(
+        requests[0].body_contains_text("Write a compact handoff memory for Spine node"),
+        "first request should be the original spine.next suffix compact"
+    );
+    assert!(
+        requests[0].body_contains_text("Action: next")
+            && requests[0].body_contains_text("Next sibling: pending"),
+        "first request should carry spine.next close-target metadata"
+    );
+    assert!(
+        !requests[1].body_contains_text("Write a compact handoff memory for Spine node"),
+        "native auto compact must not reuse the spine.next compact directive"
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    assert!(
+        raw_items.iter().flatten().all(|item| {
+            !matches!(
+                item,
+                ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "overflow-next"
+            )
+        }),
+        "invalidated next output should not be persisted"
+    );
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    assert_eq!(session.clone_history().await.raw_items(), materialized);
+    let tree = runtime.render_tree().expect("render spine tree");
+    assert!(tree.contains("[1] Done"), "{tree}");
+    assert!(tree.contains("[2.1] Current"), "{tree}");
+    assert!(
+        !tree.contains("[1.1.2]") && !tree.contains("overflow next sibling"),
+        "context-window native compact must not open the pending next sibling: {tree}"
+    );
+    assert!(
+        materialized.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("native compact after next overflow")
+                )
+        )),
+        "native compact memory should replace visible context"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Result<()> {
     let server = start_mock_server().await;
@@ -9569,15 +10757,13 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         .stage_spine_close("close-root-child".to_string(), None)
         .await
         .expect("stage close");
-    let close_output = function_output("close-root-child");
-    session
-        .maybe_commit_spine_tool_output(&turn_context, &close_output)
-        .await
-        .expect("commit close output");
-    session
-        .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await
-        .expect("record conversation items");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("close-root-child"),
+    )
+    .await
+    .expect("commit close output and record raw evidence");
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
@@ -10395,18 +11581,13 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
         .stage_spine_close("inner-close".to_string(), None)
         .await
         .expect("stage inner close");
-    let inner_close_output = function_output("inner-close");
-    session
-        .maybe_commit_spine_tool_output(&turn_context, &inner_close_output)
-        .await
-        .expect("commit inner close");
-    session
-        .record_conversation_items_raw_only(
-            &turn_context,
-            std::slice::from_ref(&inner_close_output),
-        )
-        .await
-        .expect("record conversation items");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("inner-close"),
+    )
+    .await
+    .expect("commit inner close and record raw evidence");
 
     let after_inner = user_message("after inner in outer suffix");
     session
@@ -10423,18 +11604,13 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
         .stage_spine_close("outer-close".to_string(), None)
         .await
         .expect("stage outer close");
-    let outer_close_output = function_output("outer-close");
-    session
-        .maybe_commit_spine_tool_output(&turn_context, &outer_close_output)
-        .await
-        .expect("commit outer close");
-    session
-        .record_conversation_items_raw_only(
-            &turn_context,
-            std::slice::from_ref(&outer_close_output),
-        )
-        .await
-        .expect("record conversation items");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("outer-close"),
+    )
+    .await
+    .expect("commit outer close and record raw evidence");
 
     let requests = compact_mock.requests();
     assert_eq!(requests.len(), 2);
@@ -11317,15 +12493,13 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
         .stage_spine_close("sequence-close".to_string(), None)
         .await
         .expect("stage close");
-    let close_output = function_output("sequence-close");
-    session
-        .maybe_commit_spine_tool_output(&turn_context, &close_output)
-        .await
-        .expect("commit close");
-    session
-        .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await
-        .expect("record conversation items");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("sequence-close"),
+    )
+    .await
+    .expect("commit close and record raw evidence");
     assert_eq!(responses_mock.requests().len(), 1);
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 
@@ -11521,15 +12695,13 @@ async fn spine_native_compact_new_root_open_index_matches_installed_history_befo
         .stage_spine_close("post-native-close".to_string(), None)
         .await
         .expect("stage post-native close");
-    let close_output = function_output("post-native-close");
-    session
-        .maybe_commit_spine_tool_output(&turn_context, &close_output)
-        .await
-        .expect("close after native compact should use corrected root open index");
-    session
-        .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await
-        .expect("record conversation items");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("post-native-close"),
+    )
+    .await
+    .expect("close after native compact should use corrected root open index");
 
     assert_eq!(responses_mock.requests().len(), 2);
     let close_compact_request = &responses_mock.requests()[1];
@@ -12029,21 +13201,22 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
         .stage_spine_close("overlay-close".to_string(), None)
         .await
         .expect("stage close");
-    let close_output = function_output("overlay-close");
-    let commit = session
-        .maybe_commit_spine_tool_output(&turn_context, &close_output)
-        .await
-        .expect("commit close");
-    let output_text = commit
-        .output_text
-        .expect("close commit should return post-state output");
+    let close_output = commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("overlay-close"),
+    )
+    .await
+    .expect("commit close and record raw evidence");
+    let output_text = match &close_output {
+        ResponseItem::FunctionCallOutput { output, .. } => output
+            .text_content()
+            .expect("close commit should return post-state output"),
+        _ => panic!("expected close output response item"),
+    };
     assert!(output_text.starts_with("Spine closed."), "{output_text}");
     assert!(output_text.contains("Done overlay child"), "{output_text}");
     assert!(output_text.contains("Memory.md"), "{output_text}");
-    session
-        .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await
-        .expect("record close output raw-only");
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();

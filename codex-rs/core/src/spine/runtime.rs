@@ -17,6 +17,7 @@ use crate::spine::checkpoint::validate_checkpoint;
 use crate::spine::compact_checkpoint::build_compact_checkpoint;
 use crate::spine::io::hash_raw_live;
 use crate::spine::io::sha1_hex;
+use crate::spine::model::COMMIT_MARKER_VERSION;
 use crate::spine::model::ContextBaselineSource;
 #[cfg(test)]
 use crate::spine::model::ControlSymbol;
@@ -28,6 +29,9 @@ use crate::spine::model::NodeId;
 use crate::spine::model::PressureEvent;
 use crate::spine::model::RawMask;
 use crate::spine::model::SegRef;
+use crate::spine::model::SpineCommitKindMarker;
+use crate::spine::model::SpineCommitMarker;
+use crate::spine::model::SpineCommitMemoryRef;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 #[cfg(test)]
@@ -37,7 +41,7 @@ use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::event_to_token;
-use crate::spine::parse_stack::parse_stack_from_events;
+use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 #[cfg(test)]
 use crate::spine::parse_stack::parse_stack_msg_leaf_count;
 use crate::spine::render::memory_response_item;
@@ -442,6 +446,10 @@ impl SpineRuntime {
     ) -> Result<Self, SpineError> {
         let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
         let mems = store.mems()?;
+        let markers = store.commit_markers()?;
+        store.validate_commit_markers_for_replay(&ledger.events, &mems, &raw_live)?;
+        let forced_event_seqs =
+            forced_replay_event_seqs_from_markers(&markers, &mems, RawMask::new(&raw_live))?;
         let events = if let Some(limit) = event_limit {
             ledger
                 .events
@@ -454,7 +462,15 @@ impl SpineRuntime {
         };
         let replay_structural_seq = event_limit.unwrap_or(ledger.next_event_seq);
         let archive = SpineArchive::new(store.root.clone());
-        let parse_stack = replay_from_events(&archive, &events, &mems, &raw_live, None, None)?;
+        let parse_stack = replay_from_events(
+            &archive,
+            &events,
+            &mems,
+            &raw_live,
+            &forced_event_seqs,
+            None,
+            None,
+        )?;
         let pressure_baselines = replay_pressure_baselines(
             &parse_stack,
             &ledger.pressure_events,
@@ -484,6 +500,10 @@ impl SpineRuntime {
     ) -> Result<Self, SpineError> {
         let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
         let mems = store.mems()?;
+        let markers = store.commit_markers()?;
+        store.validate_commit_markers_for_replay(&ledger.events, &mems, &raw_live)?;
+        let forced_event_seqs =
+            forced_replay_event_seqs_from_markers(&markers, &mems, RawMask::new(&raw_live))?;
         let archive = SpineArchive::new(store.root.clone());
         let raw_ordinal = usize::try_from(checkpoint.raw_ordinal)
             .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
@@ -495,7 +515,15 @@ impl SpineRuntime {
             .filter(|event| event.seq < checkpoint.token_seq)
             .cloned()
             .collect::<Vec<_>>();
-        let prefix_ps = parse_stack_from_events(&prefix_events, &archive, &mems, prefix_mask)?;
+        let prefix_forced_event_seqs =
+            forced_replay_event_seqs_from_markers(&markers, &mems, prefix_mask)?;
+        let prefix_ps = parse_stack_from_events_with_forced_events(
+            &prefix_events,
+            &archive,
+            &mems,
+            prefix_mask,
+            &prefix_forced_event_seqs,
+        )?;
         if prefix_ps != checkpoint.parse_stack {
             return Err(SpineError::Invariant(format!(
                 "spine checkpoint ParseStack mismatch for {} at raw_ordinal={} token_seq={}",
@@ -508,6 +536,7 @@ impl SpineRuntime {
             &ledger.events,
             &mems,
             &raw_live,
+            &forced_event_seqs,
             Some(&checkpoint.parse_stack),
             Some(checkpoint.token_seq),
         )?;
@@ -814,6 +843,51 @@ impl SpineRuntime {
         Ok(seq)
     }
 
+    fn append_committed_events(
+        &mut self,
+        events: Vec<SpineLedgerEvent>,
+        marker: SpineCommitMarker,
+    ) -> Result<(), SpineError> {
+        let seq_start = self.ledger.next_event_seq;
+        if marker.token_seq_start != seq_start {
+            return Err(SpineError::Invariant(format!(
+                "Spine commit marker {} starts at token_seq {}, expected {seq_start}",
+                marker.op_id, marker.token_seq_start
+            )));
+        }
+        let event_count = u64::try_from(events.len())
+            .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?;
+        let seq_end = seq_start
+            .checked_add(event_count)
+            .ok_or_else(|| SpineError::InvalidEvent("spine event seq overflow".to_string()))?;
+        if marker.token_seq_end != seq_end {
+            return Err(SpineError::Invariant(format!(
+                "Spine commit marker {} ends at token_seq {}, expected {seq_end}",
+                marker.op_id, marker.token_seq_end
+            )));
+        }
+        let logged = events
+            .into_iter()
+            .enumerate()
+            .map(|(offset, event)| {
+                let offset = u64::try_from(offset).map_err(|_| {
+                    SpineError::InvalidEvent("spine event offset overflow".to_string())
+                })?;
+                let seq = seq_start.checked_add(offset).ok_or_else(|| {
+                    SpineError::InvalidEvent("spine event seq overflow".to_string())
+                })?;
+                Ok(LoggedSpineLedgerEvent { seq, event })
+            })
+            .collect::<Result<Vec<_>, SpineError>>()?;
+        for event in &logged {
+            self.store.append_logged_event(event)?;
+        }
+        self.store.append_commit_marker(&marker)?;
+        self.ledger.events.extend(logged);
+        self.ledger.next_event_seq = seq_end;
+        Ok(())
+    }
+
     fn append_cached_pressure_event(&mut self, event: PressureEvent) -> Result<u64, SpineError> {
         let pressure_seq = self.ledger.next_pressure_seq;
         let next_pressure_seq = pressure_seq
@@ -1071,7 +1145,12 @@ impl SpineRuntime {
             .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
         self.store.append_mem(&prepared.mem)?;
-        self.append_cached_event(prepared.close_event)?;
+        let marker = close_commit_marker(
+            self.ledger.next_event_seq,
+            &prepared.mem,
+            SpineCommitKindMarker::Close,
+        )?;
+        self.append_committed_events(vec![prepared.close_event], marker)?;
         self.parse_stack = prepared.staged_parse_stack;
         Ok(SpineCommitKind::Close {
             suffix_start: prepared.suffix_start,
@@ -1125,8 +1204,12 @@ impl SpineRuntime {
             .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
         self.store.append_mem(&prepared.mem)?;
-        self.append_cached_event(prepared.close_event)?;
-        self.append_cached_event(open_event)?;
+        let marker = close_commit_marker(
+            self.ledger.next_event_seq,
+            &prepared.mem,
+            SpineCommitKindMarker::CloseThenOpen,
+        )?;
+        self.append_committed_events(vec![prepared.close_event, open_event], marker)?;
         self.parse_stack = prepared.staged_parse_stack;
         Ok(SpineCommitKind::CloseThenOpen {
             suffix_start: prepared.suffix_start,
@@ -1296,7 +1379,8 @@ impl SpineRuntime {
         if let Some(checkpoint) = prepared.compact_checkpoint.as_ref() {
             self.store.append_compact_checkpoint(checkpoint)?;
         }
-        self.append_cached_event(prepared.root_compact_event)?;
+        let marker = root_compact_commit_marker(self.ledger.next_event_seq, &prepared.mem)?;
+        self.append_committed_events(vec![prepared.root_compact_event], marker)?;
         self.parse_stack = prepared.staged_parse_stack;
         self.pending = None;
         Ok(prepared.result)
@@ -1783,6 +1867,7 @@ fn replay_from_events(
     events: &[LoggedSpineLedgerEvent],
     mems: &[MemRecord],
     raw_live: &[bool],
+    forced_event_seqs: &BTreeSet<u64>,
     initial: Option<&ParseStack>,
     min_seq: Option<u64>,
 ) -> Result<ParseStack, SpineError> {
@@ -1793,7 +1878,13 @@ fn replay_from_events(
             .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
             .cloned()
             .collect::<Vec<_>>();
-        return parse_stack_from_events(&events, archive, mems, raw_mask);
+        return parse_stack_from_events_with_forced_events(
+            &events,
+            archive,
+            mems,
+            raw_mask,
+            forced_event_seqs,
+        );
     };
     let mem_map = mems
         .iter()
@@ -1805,12 +1896,49 @@ fn replay_from_events(
         .iter()
         .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
     {
-        if !event.allowed_by(raw_mask)? {
+        if !forced_event_seqs.contains(&event.seq) && !event.allowed_by(raw_mask)? {
             continue;
         }
         parse_stack.shift(event_to_token(event, archive, &mem_map, raw_mask)?, archive)?;
     }
     Ok(parse_stack)
+}
+
+fn forced_replay_event_seqs_from_markers(
+    markers: &[SpineCommitMarker],
+    mems: &[MemRecord],
+    raw_mask: RawMask<'_>,
+) -> Result<BTreeSet<u64>, SpineError> {
+    let mems_by_id = mems
+        .iter()
+        .map(|mem| (mem.compact_id.as_str(), mem))
+        .collect::<BTreeMap<_, _>>();
+    let mut forced = BTreeSet::new();
+    for marker in markers {
+        if !commit_marker_live_for_replay(marker, &mems_by_id, raw_mask)? {
+            continue;
+        }
+        for seq in marker.token_seq_start..marker.token_seq_end {
+            forced.insert(seq);
+        }
+    }
+    Ok(forced)
+}
+
+fn commit_marker_live_for_replay(
+    marker: &SpineCommitMarker,
+    mems_by_id: &BTreeMap<&str, &MemRecord>,
+    raw_mask: RawMask<'_>,
+) -> Result<bool, SpineError> {
+    for memory in &marker.memory_refs {
+        let Some(mem) = mems_by_id.get(memory.compact_id.as_str()) else {
+            return Ok(false);
+        };
+        if !mem.allowed_by(raw_mask)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn mark_raw_covered(covered: &mut [bool], raw_ordinal: u64) -> Result<(), SpineError> {
@@ -1850,6 +1978,72 @@ fn raw_item_requires_spine_coverage(
         }
         ResponseItem::Other | ResponseItem::CompactionTrigger => false,
         _ => true,
+    }
+}
+
+fn close_commit_marker(
+    seq: u64,
+    mem: &MemRecord,
+    kind: SpineCommitKindMarker,
+) -> Result<SpineCommitMarker, SpineError> {
+    let width = match kind {
+        SpineCommitKindMarker::Close => 1,
+        SpineCommitKindMarker::CloseThenOpen => 2,
+        SpineCommitKindMarker::RootCompact => {
+            return Err(SpineError::Invariant(
+                "root compact marker requested from close marker builder".to_string(),
+            ));
+        }
+    };
+    Ok(SpineCommitMarker {
+        version: COMMIT_MARKER_VERSION,
+        op_id: format!("{}:{}", commit_marker_kind_label(kind), mem.compact_id),
+        kind,
+        token_seq_start: seq,
+        token_seq_end: seq.checked_add(width).ok_or_else(|| {
+            SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
+        })?,
+        raw_boundary: mem.raw_end,
+        raw_live_hash: None,
+        memory_refs: vec![commit_memory_ref(mem)],
+    })
+}
+
+fn root_compact_commit_marker(seq: u64, mem: &MemRecord) -> Result<SpineCommitMarker, SpineError> {
+    Ok(SpineCommitMarker {
+        version: COMMIT_MARKER_VERSION,
+        op_id: format!("root_compact:{}", mem.compact_id),
+        kind: SpineCommitKindMarker::RootCompact,
+        token_seq_start: seq,
+        token_seq_end: seq.checked_add(1).ok_or_else(|| {
+            SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
+        })?,
+        raw_boundary: mem.raw_end,
+        raw_live_hash: mem.raw_live_hash.clone(),
+        memory_refs: vec![commit_memory_ref(mem)],
+    })
+}
+
+fn commit_marker_kind_label(kind: SpineCommitKindMarker) -> &'static str {
+    match kind {
+        SpineCommitKindMarker::Close => "close",
+        SpineCommitKindMarker::CloseThenOpen => "close_then_open",
+        SpineCommitKindMarker::RootCompact => "root_compact",
+    }
+}
+
+fn commit_memory_ref(mem: &MemRecord) -> SpineCommitMemoryRef {
+    SpineCommitMemoryRef {
+        compact_id: mem.compact_id.clone(),
+        kind: mem.kind,
+        node: mem.node.clone(),
+        raw_start: mem.raw_start,
+        raw_end: mem.raw_end,
+        context_start: mem.context_start,
+        context_end: mem.context_end,
+        raw_live_hash: mem.raw_live_hash.clone(),
+        body_path: mem.body_path.clone(),
+        body_hash: mem.body_hash.clone(),
     }
 }
 
