@@ -9140,7 +9140,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
 }
 
 #[tokio::test]
-async fn spine_next_bridge_replaces_suffix_and_opens_sibling() {
+async fn spine_next_control_carrier_does_not_enter_h_ps() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -9457,7 +9457,7 @@ async fn spine_next_rollback_preserves_closed_sibling_and_drops_new_live_turn() 
 }
 
 #[tokio::test]
-async fn spine_close_resume_restores_h_ps_when_output_carrier_missing() {
+async fn resume_recovers_committed_prefix_after_interrupted_turn() {
     let fixture =
         make_spine_close_window_missing_output_carrier("close-window resume summary").await;
 
@@ -9601,7 +9601,7 @@ async fn spine_next_resume_restores_h_ps_when_output_carrier_missing() {
 }
 
 #[tokio::test]
-async fn spine_close_resume_restores_h_ps_when_raw_output_durable_but_host_replace_missing() {
+async fn resume_committed_sidecar_overrides_stale_host_history() {
     let (_source_session, _source_turn_context, source_rollout_path, rollout_items) =
         make_spine_session_with_closed_child("close-window2 resume summary").await;
     let raw_items = spine_raw_items_after_rollback(&rollout_items);
@@ -9660,7 +9660,7 @@ async fn spine_close_resume_restores_h_ps_when_raw_output_durable_but_host_repla
 }
 
 #[tokio::test]
-async fn spine_close_raw_output_append_failure_does_not_replace_host_history() {
+async fn close_commit_is_atomic_across_sidecar_and_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -11797,7 +11797,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
 }
 
 #[tokio::test]
-async fn spine_native_compact_checkpoint_failure_invalidates_without_replacing_history() {
+async fn native_compact_commit_marker_distinguishes_prefix_recovery() {
     let server = start_mock_server().await;
     let _responses_mock = mount_sse_sequence(
         &server,
@@ -14068,7 +14068,7 @@ fn pressure_overlay_text(item: &ResponseItem) -> &str {
 }
 
 #[tokio::test]
-async fn spine_sidecar_write_failure_invalidates_runtime_and_resume_fails_closed() {
+async fn resume_rejects_committed_raw_without_sidecar_token() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -14542,6 +14542,15 @@ async fn failed_spine_replay_does_not_mutate_live_session_history() {
 
 #[tokio::test]
 async fn replacement_history_not_used_as_spine_replay_source() {
+    assert_rendered_replacement_history_fails_closed().await;
+}
+
+#[tokio::test]
+async fn resume_rejects_unprovable_rendered_memory() {
+    assert_rendered_replacement_history_fails_closed().await;
+}
+
+async fn assert_rendered_replacement_history_fails_closed() {
     let (mut resumed_session, _resumed_context, _rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
