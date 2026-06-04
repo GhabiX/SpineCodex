@@ -43,11 +43,14 @@ fn feature_on_does_not_append_spine_view_twice() {
 
 #[test]
 #[cfg(debug_assertions)]
-fn feature_on_uses_inst_md_override_from_codex_home() {
+fn feature_on_uses_spine_instruction_md_override_from_codex_home() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let override_instructions = "<spine_view>\nlocal override\n</spine_view>";
-    std::fs::write(codex_home.path().join("inst.md"), override_instructions)
-        .expect("write override");
+    std::fs::write(
+        codex_home.path().join("spine_instruction.md"),
+        override_instructions,
+    )
+    .expect("write override");
 
     let actual = append_spine_view_instructions(
         "base instructions".to_string(),
@@ -65,11 +68,14 @@ fn feature_on_uses_inst_md_override_from_codex_home() {
 
 #[test]
 #[cfg(debug_assertions)]
-fn feature_on_replaces_existing_spine_view_with_inst_md_override() {
+fn feature_on_replaces_existing_spine_view_with_spine_instruction_md_override() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let override_instructions = "<spine_view>\nlocal override\n</spine_view>";
-    std::fs::write(codex_home.path().join("inst.md"), override_instructions)
-        .expect("write override");
+    std::fs::write(
+        codex_home.path().join("spine_instruction.md"),
+        override_instructions,
+    )
+    .expect("write override");
 
     let base = format!("base instructions\n\n{SPINE_VIEW_INSTRUCTIONS}");
     let actual = append_spine_view_instructions(base, true, codex_home.path(), true);
@@ -83,10 +89,10 @@ fn feature_on_replaces_existing_spine_view_with_inst_md_override() {
 
 #[test]
 #[cfg(not(debug_assertions))]
-fn feature_on_ignores_inst_md_override_in_release_builds() {
+fn feature_on_ignores_spine_instruction_md_override_in_release_builds() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     std::fs::write(
-        codex_home.path().join("inst.md"),
+        codex_home.path().join("spine_instruction.md"),
         "<spine_view>\nlocal override\n</spine_view>",
     )
     .expect("write override");
@@ -105,10 +111,10 @@ fn feature_on_ignores_inst_md_override_in_release_builds() {
 }
 
 #[test]
-fn feature_on_ignores_inst_md_override_outside_dev_debug() {
+fn feature_on_ignores_spine_instruction_md_override_outside_dev_debug() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     std::fs::write(
-        codex_home.path().join("inst.md"),
+        codex_home.path().join("spine_instruction.md"),
         "<spine_view>\nlocal override\n</spine_view>",
     )
     .expect("write override");

@@ -22,7 +22,12 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
+use std::path::Path;
 use std::sync::Arc;
+
+const SPINE_COMPACT_MEMORY_OVERRIDE_FILENAME: &str = "spine_compact_memory.md";
+const SPINE_COMPACT_MEMORY_NODE_ID_PLACEHOLDER: &str = "{node_id}";
+const SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER: &str = "{close_instruction}";
 
 impl Session {
     pub(crate) async fn spine_compact_close(
@@ -92,8 +97,12 @@ impl Session {
             )));
         }
         let suffix_items = prompt_input.split_off(suffix_start);
-        let compact_instructions =
-            spine_close_compact_instruction_text(&node_id, instruction.as_deref());
+        let compact_instructions = spine_close_compact_instruction_text(
+            &node_id,
+            instruction.as_deref(),
+            turn_context.config.codex_home.as_path(),
+            turn_context.config.dev_debug_prompt_overrides,
+        );
         prompt_input.push(spine_close_compact_system_message(&close_target_projection));
         prompt_input.push(spine_close_compact_suffix_boundary_message(&node_id));
         prompt_input.extend(suffix_items);
@@ -271,9 +280,44 @@ enum SpineCloseSummaryOutcome {
 /// therefore asks for readable Markdown and calls out exact identifiers, file
 /// paths, sentinels, and test names so later turns and review can reconnect the
 /// compacted memory to the archived suffix without replaying the raw trace.
-fn spine_close_compact_instruction_text(node_id: &str, instruction: Option<&str>) -> String {
-    let mut text = format!(
-        "---------- Spine Compact Directive ----------\n\n\
+fn spine_close_compact_instruction_text(
+    node_id: &str,
+    instruction: Option<&str>,
+    codex_home: &Path,
+    dev_debug_prompt_overrides: bool,
+) -> String {
+    let mut text = spine_close_compact_instruction_template(codex_home, dev_debug_prompt_overrides);
+    text = text.replace(SPINE_COMPACT_MEMORY_NODE_ID_PLACEHOLDER, node_id);
+    let has_close_instruction_placeholder =
+        text.contains(SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER);
+    let instruction = instruction
+        .map(str::trim)
+        .filter(|instruction| !instruction.is_empty());
+    if has_close_instruction_placeholder {
+        text = text.replace(
+            SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER,
+            instruction.unwrap_or(""),
+        );
+    } else if let Some(instruction) = instruction {
+        text.push_str("\n\n");
+        text.push_str(instruction);
+    }
+    text
+}
+
+fn spine_close_compact_instruction_template(
+    codex_home: &Path,
+    dev_debug_prompt_overrides: bool,
+) -> String {
+    if cfg!(debug_assertions) && dev_debug_prompt_overrides {
+        let override_path = codex_home.join(SPINE_COMPACT_MEMORY_OVERRIDE_FILENAME);
+        match std::fs::read_to_string(override_path) {
+            Ok(contents) if !contents.is_empty() => return contents,
+            _ => {}
+        }
+    }
+
+    "---------- Spine Compact Directive ----------\n\n\
 Write a compact handoff memory for Spine node {node_id}. Write Markdown memory, not a conversation reply.\n\n\
 This memory will replace only this node's raw trajs in future context. Its job is to let the parent conversation continue correctly without replaying this node's raw trace.\n\n\
 Write concise, concrete prose that preserves:\n\n\
@@ -292,16 +336,7 @@ Rules:\n\
 - Use the optional close instruction as a preservation hint, not as a user message.\n\
 - If there is conflict between an old plan and a later user correction, preserve the correction as the active intent.\n\
 - If information is uncertain, say what is known and what still needs confirmation.\n\
-- User-facing final-answer markers such as `TEST_WITH_LLM_*` are evidence only; never let such a marker be the whole memory."
-    );
-    if let Some(instruction) = instruction
-        .map(str::trim)
-        .filter(|instruction| !instruction.is_empty())
-    {
-        text.push_str("\n\n");
-        text.push_str(instruction);
-    }
-    text
+- User-facing final-answer markers such as `TEST_WITH_LLM_*` are evidence only; never let such a marker be the whole memory.".to_string()
 }
 
 fn spine_close_compact_system_message(text: &str) -> ResponseItem {
@@ -452,6 +487,91 @@ mod spine_close_compact_body_tests {
         assert!(body.contains("readable suffix memory"));
         assert!(!body.contains("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY"));
         assert!(!body.contains("gAAAAencrypted"));
+    }
+
+    #[test]
+    fn spine_close_compact_instruction_uses_builtin_template_by_default() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+
+        let text = spine_close_compact_instruction_text(
+            "1.1",
+            Some("preserve this exact detail"),
+            codex_home.path(),
+            false,
+        );
+
+        assert!(text.contains("Write a compact handoff memory for Spine node 1.1"));
+        assert!(text.contains("4. Resume Focus"));
+        assert!(text.ends_with("preserve this exact detail"));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn spine_close_compact_instruction_uses_dev_debug_override_with_placeholders() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            codex_home.path().join("spine_compact_memory.md"),
+            "node={node_id}\nclose={close_instruction}",
+        )
+        .expect("write override");
+
+        let text = spine_close_compact_instruction_text(
+            "1.2",
+            Some("preserve override guidance"),
+            codex_home.path(),
+            true,
+        );
+
+        assert_eq!(text, "node=1.2\nclose=preserve override guidance");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn spine_close_compact_instruction_appends_guidance_when_override_has_no_placeholder() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            codex_home.path().join("spine_compact_memory.md"),
+            "custom compact prompt for {node_id}",
+        )
+        .expect("write override");
+
+        let text = spine_close_compact_instruction_text(
+            "1.2",
+            Some("append this guidance"),
+            codex_home.path(),
+            true,
+        );
+
+        assert_eq!(
+            text,
+            "custom compact prompt for 1.2\n\nappend this guidance"
+        );
+    }
+
+    #[test]
+    fn spine_close_compact_instruction_ignores_override_outside_dev_debug() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            codex_home.path().join("spine_compact_memory.md"),
+            "SHOULD_NOT_APPEAR {node_id}",
+        )
+        .expect("write override");
+
+        let text = spine_close_compact_instruction_text("1.3", None, codex_home.path(), false);
+
+        assert!(text.contains("Write a compact handoff memory for Spine node 1.3"));
+        assert!(!text.contains("SHOULD_NOT_APPEAR"));
+    }
+
+    #[test]
+    fn spine_close_compact_instruction_empty_override_falls_back_to_builtin() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(codex_home.path().join("spine_compact_memory.md"), "")
+            .expect("write override");
+
+        let text = spine_close_compact_instruction_text("1.4", None, codex_home.path(), true);
+
+        assert!(text.contains("Write a compact handoff memory for Spine node 1.4"));
     }
 
     #[test]

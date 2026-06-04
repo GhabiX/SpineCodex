@@ -46,7 +46,7 @@ Runtime may add context-pressure guidance. When pressure rises, first identify w
 Use update_plan as a checklist when helpful.
 </spine_view>"#;
 
-const SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME: &str = "inst.md";
+const SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME: &str = "spine_instruction.md";
 const SPINE_VIEW_SEPARATOR_AND_START_MARKER: &str = "\n\n<spine_view>";
 
 pub(crate) fn append_spine_view_instructions(
