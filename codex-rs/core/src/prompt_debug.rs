@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -10,6 +11,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
@@ -22,14 +24,23 @@ use crate::thread_manager::ThreadManager;
 use crate::thread_manager::thread_store_from_config;
 use codex_extension_api::empty_extension_registry;
 
-/// Build the model-visible `input` list for a single debug turn.
+/// Model-visible prompt payload for a single debug turn.
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptDebugOutput {
+    pub instructions: String,
+    pub input: Vec<ResponseItem>,
+}
+
+/// Build the model-visible prompt payload for a single debug turn.
 #[doc(hidden)]
 pub async fn build_prompt_input(
     mut config: Config,
     input: Vec<UserInput>,
     state_db: Option<StateDbHandle>,
-) -> CodexResult<Vec<ResponseItem>> {
-    config.ephemeral = true;
+) -> CodexResult<PromptDebugOutput> {
+    // SpineJit needs a rollout path for its sidecar even in prompt-debug mode.
+    config.ephemeral = !config.features.enabled(Feature::SpineJit);
+    config.dev_debug_prompt_overrides = true;
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
@@ -59,7 +70,8 @@ pub async fn build_prompt_input(
     );
     let thread = thread_manager.start_thread(config).await?;
 
-    let output = build_prompt_input_from_session(thread.thread.codex.session.as_ref(), input).await;
+    let output =
+        build_prompt_debug_output_from_session(thread.thread.codex.session.as_ref(), input).await;
     let shutdown = thread.thread.shutdown_and_wait().await;
     let _removed = thread_manager.remove_thread(&thread.thread_id).await;
 
@@ -67,10 +79,20 @@ pub async fn build_prompt_input(
     output
 }
 
+#[cfg(test)]
 pub(crate) async fn build_prompt_input_from_session(
     sess: &Session,
     input: Vec<UserInput>,
 ) -> CodexResult<Vec<ResponseItem>> {
+    build_prompt_debug_output_from_session(sess, input)
+        .await
+        .map(|output| output.input)
+}
+
+async fn build_prompt_debug_output_from_session(
+    sess: &Session,
+    input: Vec<UserInput>,
+) -> CodexResult<PromptDebugOutput> {
     let turn_context = sess.new_default_turn().await;
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await?;
@@ -103,5 +125,11 @@ pub(crate) async fn build_prompt_input_from_session(
         base_instructions,
     );
 
-    Ok(prompt.get_formatted_input())
+    let input = prompt.get_formatted_input();
+    let instructions = prompt.base_instructions.text;
+
+    Ok(PromptDebugOutput {
+        instructions,
+        input,
+    })
 }

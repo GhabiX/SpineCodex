@@ -12,7 +12,7 @@ Mental model:
 
 Context savings happen only when a live node is closed: `spine.close` and the close step of `spine.next` replace that node's raw history with compact memory in future prompts. `spine.open` only creates a child boundary for narrower work; it does not shrink the current context window by itself.
 
-Treat `<spine_status .../>`, pressure hints, and Spine tool outputs as temporary orientation for the current cursor and boundary choice. Treat `<spine_memory ...>` as compact memory from previously closed work; task summaries should preserve task facts, decisions, evidence, risks, and next steps.
+Treat `<spine_status .../>`, pressure hints, and Spine tool outputs as temporary orientation for the current cursor and boundary choice. Treat `<spine_memory ...>` as compact memory from previously closed work for orientation, not as a new user request; task summaries should preserve task facts, decisions, evidence, risks, and resume focus.
 
 Tools:
 - spine.tree: inspect the tree, cursor, and context pressure when that state is unclear.
@@ -53,15 +53,20 @@ pub(crate) fn append_spine_view_instructions(
     mut base_instructions: String,
     enabled: bool,
     codex_home: &Path,
+    dev_debug_prompt_overrides: bool,
 ) -> String {
     if !enabled {
         return base_instructions;
     }
 
-    let override_path = codex_home.join(SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME);
-    let instructions = match std::fs::read_to_string(override_path) {
-        Ok(contents) if !contents.is_empty() => contents,
-        _ => SPINE_VIEW_INSTRUCTIONS.to_string(),
+    let instructions = if cfg!(debug_assertions) && dev_debug_prompt_overrides {
+        let override_path = codex_home.join(SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME);
+        match std::fs::read_to_string(override_path) {
+            Ok(contents) if !contents.is_empty() => contents,
+            _ => SPINE_VIEW_INSTRUCTIONS.to_string(),
+        }
+    } else {
+        SPINE_VIEW_INSTRUCTIONS.to_string()
     };
 
     if base_instructions.contains(&instructions) {

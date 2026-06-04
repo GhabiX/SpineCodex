@@ -811,6 +811,11 @@ pub struct Config {
     /// When true, session is not persisted on disk. Default to `false`
     pub ephemeral: bool,
 
+    /// Dev-debug-only prompt override knob set by `debug prompt-input`.
+    ///
+    /// This is runtime-only, not loaded from config files, and ignored by non-debug builds.
+    pub dev_debug_prompt_overrides: bool,
+
     /// Whether enabled hooks should run without requiring persisted hook trust for this session.
     ///
     /// This is a runtime-only knob populated from invocation overrides, not from config files.
@@ -3393,6 +3398,7 @@ impl Config {
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
+            dev_debug_prompt_overrides: false,
             bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_self_exe,

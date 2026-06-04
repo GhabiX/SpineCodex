@@ -23,7 +23,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         .await?;
     config.user_instructions = Some("Project-specific test instructions".to_string());
 
-    let input = build_prompt_input(
+    let output = build_prompt_input(
         config,
         vec![UserInput::Text {
             text: "hello from debug prompt".to_string(),
@@ -32,6 +32,9 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         /*state_db*/ None,
     )
     .await?;
+
+    assert!(!output.instructions.is_empty());
+    let input = output.input;
 
     let expected_user_message = ResponseItem::Message {
         id: None,

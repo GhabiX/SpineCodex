@@ -578,6 +578,7 @@ impl Codex {
                 base_instructions,
                 provider_capabilities.namespace_tools,
                 config.codex_home.as_path(),
+                config.dev_debug_prompt_overrides,
             )
         } else {
             base_instructions

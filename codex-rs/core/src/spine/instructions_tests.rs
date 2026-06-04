@@ -9,7 +9,7 @@ fn occurrences(haystack: &str, needle: &str) -> usize {
 fn feature_off_leaves_base_instructions_byte_identical() {
     let base = "base instructions\nwith punctuation: !?".to_string();
     let codex_home = tempfile::tempdir().expect("tempdir");
-    let actual = append_spine_view_instructions(base.clone(), false, codex_home.path());
+    let actual = append_spine_view_instructions(base.clone(), false, codex_home.path(), false);
 
     assert_eq!(actual.as_bytes(), base.as_bytes());
 }
@@ -18,7 +18,7 @@ fn feature_off_leaves_base_instructions_byte_identical() {
 fn feature_on_appends_spine_view_instructions_once() {
     let base = "base instructions".to_string();
     let codex_home = tempfile::tempdir().expect("tempdir");
-    let actual = append_spine_view_instructions(base.clone(), true, codex_home.path());
+    let actual = append_spine_view_instructions(base.clone(), true, codex_home.path(), false);
 
     assert!(actual.starts_with(&base));
     assert!(actual.len() > base.len());
@@ -35,21 +35,26 @@ fn feature_on_appends_spine_view_instructions_once() {
 fn feature_on_does_not_append_spine_view_twice() {
     let base = format!("base instructions\n\n{SPINE_VIEW_INSTRUCTIONS}");
     let codex_home = tempfile::tempdir().expect("tempdir");
-    let actual = append_spine_view_instructions(base.clone(), true, codex_home.path());
+    let actual = append_spine_view_instructions(base.clone(), true, codex_home.path(), false);
 
     assert_eq!(actual, base);
     assert_eq!(occurrences(&actual, SPINE_VIEW_INSTRUCTIONS), 1);
 }
 
 #[test]
+#[cfg(debug_assertions)]
 fn feature_on_uses_inst_md_override_from_codex_home() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let override_instructions = "<spine_view>\nlocal override\n</spine_view>";
     std::fs::write(codex_home.path().join("inst.md"), override_instructions)
         .expect("write override");
 
-    let actual =
-        append_spine_view_instructions("base instructions".to_string(), true, codex_home.path());
+    let actual = append_spine_view_instructions(
+        "base instructions".to_string(),
+        true,
+        codex_home.path(),
+        true,
+    );
 
     assert_eq!(
         actual,
@@ -59,6 +64,7 @@ fn feature_on_uses_inst_md_override_from_codex_home() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
 fn feature_on_replaces_existing_spine_view_with_inst_md_override() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let override_instructions = "<spine_view>\nlocal override\n</spine_view>";
@@ -66,11 +72,56 @@ fn feature_on_replaces_existing_spine_view_with_inst_md_override() {
         .expect("write override");
 
     let base = format!("base instructions\n\n{SPINE_VIEW_INSTRUCTIONS}");
-    let actual = append_spine_view_instructions(base, true, codex_home.path());
+    let actual = append_spine_view_instructions(base, true, codex_home.path(), true);
 
     assert_eq!(
         actual,
         format!("base instructions\n\n{override_instructions}")
     );
     assert!(!actual.contains(SPINE_VIEW_INSTRUCTIONS));
+}
+
+#[test]
+#[cfg(not(debug_assertions))]
+fn feature_on_ignores_inst_md_override_in_release_builds() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        codex_home.path().join("inst.md"),
+        "<spine_view>\nlocal override\n</spine_view>",
+    )
+    .expect("write override");
+
+    let actual = append_spine_view_instructions(
+        "base instructions".to_string(),
+        true,
+        codex_home.path(),
+        true,
+    );
+
+    assert_eq!(
+        actual,
+        format!("base instructions\n\n{SPINE_VIEW_INSTRUCTIONS}")
+    );
+}
+
+#[test]
+fn feature_on_ignores_inst_md_override_outside_dev_debug() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        codex_home.path().join("inst.md"),
+        "<spine_view>\nlocal override\n</spine_view>",
+    )
+    .expect("write override");
+
+    let actual = append_spine_view_instructions(
+        "base instructions".to_string(),
+        true,
+        codex_home.path(),
+        false,
+    );
+
+    assert_eq!(
+        actual,
+        format!("base instructions\n\n{SPINE_VIEW_INSTRUCTIONS}")
+    );
 }
