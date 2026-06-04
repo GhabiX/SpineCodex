@@ -142,6 +142,8 @@ pub enum CodexErr {
     #[error("failed to record Spine sidecar append: {reason}")]
     SpineAppendFailure { reason: String },
     #[error("failed to {operation}: {reason}")]
+    SpineCompactCommitFailure { operation: String, reason: String },
+    #[error("failed to {operation}: {reason}")]
     SpineTerminalFailure { operation: String, reason: String },
     #[error("Fatal error: {0}")]
     Fatal(String),
@@ -177,6 +179,7 @@ impl CodexErr {
             | CodexErr::Interrupted
             | CodexErr::EnvVar(_)
             | CodexErr::SpineAppendFailure { .. }
+            | CodexErr::SpineCompactCommitFailure { .. }
             | CodexErr::SpineTerminalFailure { .. }
             | CodexErr::Fatal(_)
             | CodexErr::UsageNotIncluded

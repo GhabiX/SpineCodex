@@ -11937,8 +11937,11 @@ async fn native_compact_rollout_append_failure_does_not_replace_host_history() {
     .await
     .expect_err("native compact rollout append failure should fail closed");
     assert!(
-        err.to_string()
-            .contains("failed to persist native compact rollout boundary"),
+        matches!(
+            &err,
+            CodexErr::SpineCompactCommitFailure { operation, .. }
+                if operation == "persist native compact rollout boundary"
+        ),
         "unexpected compact error: {err}"
     );
     assert_eq!(

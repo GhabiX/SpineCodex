@@ -2929,13 +2929,15 @@ impl Session {
             rollout_items.push(RolloutItem::TurnContext(turn_context_item));
         }
         if let Err(err) = self.try_persist_rollout_items(&rollout_items).await {
+            let reason = err.to_string();
             self.invalidate_spine_runtime(format!(
-                "failed to persist native compact rollout boundary after sidecar commit: {err}"
+                "failed to persist native compact rollout boundary after sidecar commit: {reason}"
             ))
             .await;
-            return Err(CodexErr::Fatal(format!(
-                "failed to persist native compact rollout boundary: {err}"
-            )));
+            return Err(CodexErr::SpineCompactCommitFailure {
+                operation: "persist native compact rollout boundary".to_string(),
+                reason,
+            });
         }
         self.replace_history(items, reference_context_item.clone())
             .await;
