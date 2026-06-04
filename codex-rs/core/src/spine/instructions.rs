@@ -1,24 +1,24 @@
 pub(crate) const SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
-Spine is the primary framework for managing task structure, attention focus, and context for every task. At the start of each request, use the current Spine tree to decide whether to stay in the current scope, open a focused child, advance to a sibling phase, or close completed work. Keeping Spine healthy is part of doing the task, not optional bookkeeping. Move Spine only when the work reaches a meaningful scope boundary.
+Spine structures task context and compact memory. Use Spine tool calls selectively: keep momentum in the current node when the task is short, direct, or the next step is clear; move Spine at meaningful scope boundaries where it will clarify focus or reduce future context.
 
 Mental model:
 - Current node = live scratchpad for one coherent phase.
 - Closed node = runtime-generated compact memory for future orientation.
-- spine.open = enter a narrower blocker or dependency.
+- spine.open = enter a focused child for a substantial blocker or dependency.
 - spine.next = finish this phase and start a sibling phase.
 - spine.close = finish this scope and return to its parent.
 
 Context savings happen only when a live node is closed: `spine.close` and the close step of `spine.next` replace that node's raw history with compact memory in future prompts. `spine.open` only creates a child boundary for narrower work; it does not shrink the current context window by itself.
 
 Tools:
-- spine.tree: inspect the tree, cursor, and context pressure without moving the cursor.
-- spine.open(summary): open a focused child under the current node; write summary as a short motivation/boundary label for the Spine tree. It is visible progress context for you and the user, so make it clear, concrete, and specific about why this narrower node exists now. Avoid generic phase names or repeating the parent.
+- spine.tree: inspect the tree, cursor, and context pressure when that state is unclear.
+- spine.open(summary): open a focused child under the current node when the phase is likely to benefit from later compaction. Write summary as a short motivation/boundary label.
 - spine.close(instruction?): close the current node, compact its raw history into memory, and resume the parent.
 - spine.next(summary, instruction?): close the current node, preserve compact guidance as memory, then continue in a new sibling under the resumed parent. Write summary with the same rule as spine.open: label why the next sibling phase exists now, not a recap of the node being closed.
 
-At the start of a task, assume its shape may grow as evidence appears. Orient from the current tree, keep the tree ready to absorb new phases, and let structure emerge at natural boundaries. After every spine.open/close/next result, use the returned tree as the source of truth for cursor, parent, siblings, and the next boundary.
+Let task structure emerge from evidence and natural boundaries. After spine.open/close/next, use the returned tree as the source of truth for cursor, parent, and siblings.
 
-Scope discipline: keep umbrella/parent nodes for coordination, not as long work buffers. Before substantive research, implementation, verification, or long task-specific discussion, open a focused child; keep only routing, approvals, cross-phase decisions, and final synthesis in the parent.
+Scope discipline: keep umbrella/parent nodes for coordination. For compact or straightforward work, continue in the current node. For larger work, open before a focused phase, then close or advance when future turns will benefit from compact memory.
 
 Move Spine by matching the next work to the tree:
 - Same scope: continue in the current node.
@@ -37,9 +37,9 @@ Examples:
 
 For spine.close and spine.next, keep the optional instruction to one short sentence about what future work should preserve. Do not write a full compact summary in the tool argument; runtime owns compact memory generation.
 
-Runtime may add context-pressure guidance: a boundary hint when the current live node reaches about 50K context tokens and each later 25K band, and a context warning when the overall prompt reaches about 80% of the model window. Under pressure, use `spine.open` only for a genuine narrower blocker; to reduce context, close or advance a completed scope so runtime can compact it.
+Runtime may add context-pressure guidance. When pressure rises, prefer the next coherent close or advance so completed detail becomes compact memory.
 
-Use update_plan only as a checklist. In Plan mode, inspect with `spine.tree` only.
+Use update_plan as a checklist when helpful.
 </spine_view>"#;
 
 pub(crate) fn append_spine_view_instructions(
