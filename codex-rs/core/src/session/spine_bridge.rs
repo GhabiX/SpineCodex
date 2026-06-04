@@ -21,6 +21,7 @@ use crate::spine::SpineStore;
 use crate::spine::SpineTokenBaselines;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
@@ -35,10 +36,28 @@ pub(super) struct PreparedSpineReplay {
 pub(crate) struct SpineToolCommit {
     pub(crate) output_text: Option<String>,
     pub(crate) record_output: bool,
+    pub(crate) deferred_history_update: Option<DeferredSpineHistoryUpdate>,
+    pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
-type SpineCommitOutput = (Option<SpineTreeUpdateEvent>, Option<String>);
 const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
+
+#[derive(Debug)]
+pub(crate) struct DeferredSpineHistoryUpdate {
+    call_id: String,
+    operation: &'static str,
+    suffix_start: usize,
+    expected_history: Vec<ResponseItem>,
+    replacement: Vec<ResponseItem>,
+    reference_context_item: Option<TurnContextItem>,
+}
+
+struct SpineCommitOutput {
+    snapshot: Option<SpineTreeUpdateEvent>,
+    output_text: Option<String>,
+    history_update: Option<DeferredSpineHistoryUpdate>,
+    defer_tree_update_until_raw_output: bool,
+}
 
 enum SpineCommitAttempt {
     Done(SpineCommitOutput),
@@ -51,6 +70,8 @@ impl Session {
         SpineToolCommit {
             output_text: None,
             record_output: true,
+            deferred_history_update: None,
+            deferred_tree_update: None,
         }
     }
 
@@ -58,6 +79,8 @@ impl Session {
         SpineToolCommit {
             output_text: None,
             record_output: false,
+            deferred_history_update: None,
+            deferred_tree_update: None,
         }
     }
 
@@ -669,7 +692,7 @@ impl Session {
             }
         }
         let mut lock_retries = 0;
-        let (snapshot, output_text) = loop {
+        let commit_output = loop {
             match self.try_commit_spine_tool_output_once(
                 spine_slot,
                 call_id,
@@ -695,13 +718,78 @@ impl Session {
                 }
             }
         };
-        if let Some(snapshot) = snapshot {
-            self.send_spine_tree_update(turn_context, snapshot).await;
+        let SpineCommitOutput {
+            snapshot,
+            output_text,
+            history_update,
+            defer_tree_update_until_raw_output,
+        } = commit_output;
+        let deferred_tree_update = if defer_tree_update_until_raw_output {
+            snapshot
+        } else {
+            if let Some(snapshot) = snapshot {
+                self.send_spine_tree_update(turn_context, snapshot).await;
+            }
+            None
+        };
+        if deferred_tree_update.is_some() {
+            tracing::debug!(
+                call_id,
+                "deferring Spine close-like tree update until raw output evidence is durable"
+            );
         }
         Ok(SpineToolCommit {
             output_text,
             record_output: true,
+            deferred_history_update: history_update,
+            deferred_tree_update,
         })
+    }
+
+    pub(crate) async fn apply_deferred_spine_history_update(
+        &self,
+        update: DeferredSpineHistoryUpdate,
+    ) -> CodexResult<()> {
+        let result = {
+            let mut state = self.state.lock().await;
+            let history = state.clone_history();
+            let current_history = history.raw_items();
+            if current_history != update.expected_history.as_slice() {
+                Err(format!(
+                    "{} history changed before deferred suffix replacement for call_id={}",
+                    update.operation, update.call_id
+                ))
+            } else if update.suffix_start > current_history.len() {
+                Err(format!(
+                    "{} suffix start {} exceeds history length {} for call_id={}",
+                    update.operation,
+                    update.suffix_start,
+                    current_history.len(),
+                    update.call_id
+                ))
+            } else {
+                state
+                    .replace_history_suffix(
+                        update.suffix_start..current_history.len(),
+                        update.replacement,
+                        update.reference_context_item,
+                    )
+                    .map_err(|err| {
+                        format!(
+                            "{} deferred suffix replacement failed for call_id={}: {err}",
+                            update.operation, update.call_id
+                        )
+                    })
+            }
+        };
+        if let Err(reason) = result {
+            self.invalidate_spine_runtime(reason.clone()).await;
+            return Err(CodexErr::SpineTerminalFailure {
+                operation: "apply deferred Spine close-like history replacement".to_string(),
+                reason,
+            });
+        }
+        Ok(())
     }
 
     fn try_commit_spine_tool_output_once(
@@ -741,8 +829,13 @@ impl Session {
             close_compact,
             token_baselines,
         )?;
+        let defer_tree_update_until_raw_output = matches!(
+            commit_kind,
+            Some(SpineCommitKind::Close { .. } | SpineCommitKind::CloseThenOpen { .. })
+        );
         let mut snapshot = None;
         let mut output_text = None;
+        let mut history_update = None;
         if let Some(commit_kind) = commit_kind.as_ref() {
             let output_prefix = match commit_kind {
                 SpineCommitKind::Open { .. } => "Spine opened.",
@@ -789,40 +882,44 @@ impl Session {
                     suffix_start,
                     replacement,
                 } => {
-                    let suffix_end = state.clone_history().raw_items().len();
+                    let history = state.clone_history();
+                    let history_items = history.raw_items();
+                    let suffix_end = history_items.len();
                     if *suffix_start > suffix_end {
                         return Err(SpineError::Invariant(format!(
                             "spine.close suffix start {suffix_start} exceeds history length {suffix_end} for call_id={call_id}"
                         )));
                     }
-                    let reference_context_item = state.reference_context_item();
-                    state
-                        .replace_history_suffix(
-                            *suffix_start..suffix_end,
-                            replacement.clone(),
-                            reference_context_item,
-                        )
-                        .map_err(SpineError::Invariant)?;
+                    history_update = Some(DeferredSpineHistoryUpdate {
+                        call_id: call_id.to_string(),
+                        operation: "spine.close",
+                        suffix_start: *suffix_start,
+                        expected_history: history_items.to_vec(),
+                        replacement: replacement.clone(),
+                        reference_context_item: state.reference_context_item(),
+                    });
                 }
                 SpineCommitKind::CloseThenOpen {
                     suffix_start,
                     replacement,
                     ..
                 } => {
-                    let suffix_end = state.clone_history().raw_items().len();
+                    let history = state.clone_history();
+                    let history_items = history.raw_items();
+                    let suffix_end = history_items.len();
                     if *suffix_start > suffix_end {
                         return Err(SpineError::Invariant(format!(
                             "spine.next suffix start {suffix_start} exceeds history length {suffix_end} for call_id={call_id}"
                         )));
                     }
-                    let reference_context_item = state.reference_context_item();
-                    state
-                        .replace_history_suffix(
-                            *suffix_start..suffix_end,
-                            replacement.clone(),
-                            reference_context_item,
-                        )
-                        .map_err(SpineError::Invariant)?;
+                    history_update = Some(DeferredSpineHistoryUpdate {
+                        call_id: call_id.to_string(),
+                        operation: "spine.next",
+                        suffix_start: *suffix_start,
+                        expected_history: history_items.to_vec(),
+                        replacement: replacement.clone(),
+                        reference_context_item: state.reference_context_item(),
+                    });
                 }
             }
             let token_info = state.token_info();
@@ -830,7 +927,12 @@ impl Session {
             let tree = render_spine_tree_for_model(spine, token_info)?;
             output_text = Some(format!("{output_prefix}\n\n{tree}"));
         }
-        Ok(SpineCommitAttempt::Done((snapshot, output_text)))
+        Ok(SpineCommitAttempt::Done(SpineCommitOutput {
+            snapshot,
+            output_text,
+            history_update,
+            defer_tree_update_until_raw_output,
+        }))
     }
 
     pub(crate) async fn is_pending_spine_close_like_output(
@@ -852,6 +954,24 @@ impl Session {
             spine.pending_commit(call_id)?,
             Some(SpinePendingCommit::Close { .. })
         ))
+    }
+
+    pub(crate) async fn is_spine_control_output_response_item(
+        &self,
+        item: &ResponseItem,
+    ) -> Result<bool, SpineError> {
+        let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
+            return Ok(false);
+        };
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(false);
+        };
+        let guard = spine_slot.lock().await;
+        guard.ensure_valid()?;
+        let Some(spine) = guard.runtime() else {
+            return Ok(false);
+        };
+        Ok(spine.is_control_output_call_id(call_id))
     }
 
     #[cfg(test)]
@@ -1088,12 +1208,11 @@ fn render_spine_tree_for_model(
     Ok(build_spine_tree_inside_view(runtime, token_info.as_ref())?.rendered_tree)
 }
 
-
 fn build_spine_close_target_projection(
     runtime: &SpineRuntime,
     node: &NodeId,
     action: SpinePendingCloseAction,
-    next_summary: Option<&str>,
+    _next_summary: Option<&str>,
 ) -> Result<String, SpineError> {
     let snapshot = runtime.build_tree_snapshot()?;
     let closing_node_id = node.to_string();
@@ -1129,47 +1248,20 @@ Use this only to orient the memory; do not summarize this block.\n"
         SpinePendingCloseAction::Close => "Action: close\n",
         SpinePendingCloseAction::Next => "Action: next\n",
     });
-    text.push_str(&format!(
-        "Closing node: {}{}\n",
-        closing_node.node_id,
-        format_spine_close_target_summary(closing_node.summary.as_deref())
-    ));
+    text.push_str(&format!("Closing node: {}\n", closing_node.node_id));
     text.push_str(&format!(
         "Cursor before commit: {}\n",
         snapshot.active_node_id
     ));
     if let Some(parent) = parent_node {
-        text.push_str(&format!(
-            "Parent node: {}{}\n",
-            parent.node_id,
-            format_spine_close_target_summary(parent.summary.as_deref())
-        ));
+        text.push_str(&format!("Parent node: {}\n", parent.node_id));
     } else {
         text.push_str("Parent node: none\n");
     }
     if action == SpinePendingCloseAction::Next {
-        text.push_str(&format!(
-            "Next sibling: {}\n",
-            format_spine_close_target_summary_value(next_summary)
-        ));
+        text.push_str("Next sibling: pending\n");
     }
     Ok(text)
-}
-
-fn format_spine_close_target_summary(summary: Option<&str>) -> String {
-    summary
-        .map(str::trim)
-        .filter(|summary| !summary.is_empty())
-        .map(|summary| format!(" \"{}\"", summary.replace('"', "\\\"")))
-        .unwrap_or_default()
-}
-
-fn format_spine_close_target_summary_value(summary: Option<&str>) -> String {
-    summary
-        .map(str::trim)
-        .filter(|summary| !summary.is_empty())
-        .map(|summary| format!("\"{}\"", summary.replace('"', "\\\"")))
-        .unwrap_or_else(|| "none".to_string())
 }
 
 fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {

@@ -278,7 +278,7 @@ Write a compact handoff memory for Spine node {node_id}. Write Markdown memory, 
 This memory will replace only this node's raw trajs in future context. Its job is to let the parent conversation continue correctly without replaying this node's raw trace.\n\n\
 Write concise, concrete prose that preserves:\n\n\
 1. User Intent\n\
-Explain what the user wanted in this node, including explicit instructions, corrections, approvals, constraints, authorization boundaries, and any change of direction. If the latest user message changes the task, make that current intent clear.\n\n\
+Explain what the user wanted in this node, including explicit instructions, corrections, approvals, constraints, authorization boundaries, and any change of direction. Preserve the latest user message, including its key wording and intent. If the latest user message changes the task, make that current intent clear.\n\n\
 2. Work Done\n\
 State what this node actually did or decided. Include the current state, conclusions, partial results, and what remains unresolved. Do not imply the overall task is complete unless the raw trace clearly proves it.\n\n\
 3. Critical Details\n\

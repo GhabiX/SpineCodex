@@ -10,13 +10,15 @@ Mental model:
 
 Context savings happen only when a live node is closed: `spine.close` and the close step of `spine.next` replace that node's raw history with compact memory in future prompts. `spine.open` only creates a child boundary for narrower work; it does not shrink the current context window by itself.
 
+Treat `<spine_status .../>`, pressure hints, and Spine tool outputs as temporary orientation for the current cursor and boundary choice. Treat `<spine_memory ...>` as compact memory from previously closed work; task summaries should preserve task facts, decisions, evidence, risks, and next steps.
+
 Tools:
 - spine.tree: inspect the tree, cursor, and context pressure when that state is unclear.
 - spine.open(summary): open a focused child under the current node when the phase is likely to benefit from later compaction. Write summary as a short motivation/boundary label.
 - spine.close(instruction?): close the current node, compact its raw history into memory, and resume the parent.
 - spine.next(summary, instruction?): close the current node, preserve compact guidance as memory, then continue in a new sibling under the resumed parent. Write summary with the same rule as spine.open: label why the next sibling phase exists now, not a recap of the node being closed.
 
-Let task structure emerge from evidence and natural boundaries. After spine.open/close/next, use the returned tree as the source of truth for cursor, parent, and siblings.
+Let task structure emerge from evidence and natural boundaries. After spine.open/close/next, use the returned Spine projection as the source of truth for cursor, parent, and siblings.
 
 Scope discipline: keep umbrella/parent nodes for coordination. For compact or straightforward work, continue in the current node. For larger work, open before a focused phase, then close or advance when future turns will benefit from compact memory.
 
@@ -35,9 +37,9 @@ Examples:
 - Implementation -> investigate one failing test is a nested blocker; use spine.open for the investigation.
 - If the user says "first make a POC" after you started implementing, close or advance into the POC phase before acting.
 
-For spine.close and spine.next, keep the optional instruction to one short sentence about what future work should preserve. Do not write a full compact summary in the tool argument; runtime owns compact memory generation.
+For spine.close and spine.next, pass only one short compact-guidance sentence about what future work should preserve; runtime writes the compact memory.
 
-Runtime may add context-pressure guidance. When pressure rises, prefer the next coherent close or advance so completed detail becomes compact memory.
+Runtime may add context-pressure guidance. When pressure rises, first identify whether a coherent phase is complete; if so, close or advance so completed detail becomes compact memory.
 
 Use update_plan as a checklist when helpful.
 </spine_view>"#;

@@ -286,6 +286,7 @@ fn build_specs_with_inputs_for_test(
             dynamic_tools,
         },
     )
+    .expect("build tool router")
     .model_visible_specs()
 }
 
@@ -346,7 +347,8 @@ async fn assert_model_tools(
             extension_tool_executors: Vec::new(),
             dynamic_tools: &[],
         },
-    );
+    )
+    .expect("build tool router");
     let model_visible_specs = router.model_visible_specs();
     let tool_names = model_visible_specs
         .iter()
@@ -1302,7 +1304,8 @@ async fn code_mode_only_can_expose_multi_agent_v2_as_normal_tools() {
             extension_tool_executors: Vec::new(),
             dynamic_tools: &[],
         },
-    );
+    )
+    .expect("build tool router");
     let model_visible_specs = router.model_visible_specs();
     let tool_names = model_visible_specs
         .iter()

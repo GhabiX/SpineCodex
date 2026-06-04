@@ -2661,10 +2661,55 @@ impl Session {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn record_conversation_items_raw_only(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
+    ) -> CodexResult<()> {
+        self.record_conversation_items_raw_only_with_policy(
+            turn_context,
+            items,
+            false, /* require_durable_append */
+            true,  /* emit_raw_response_items */
+        )
+        .await
+    }
+
+    pub(crate) async fn record_conversation_items_raw_only_durable_without_emission(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) -> CodexResult<()> {
+        self.record_conversation_items_raw_only_durable_with_emission(
+            turn_context,
+            items,
+            false, /* emit_raw_response_items */
+        )
+        .await
+    }
+
+    async fn record_conversation_items_raw_only_durable_with_emission(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        emit_raw_response_items: bool,
+    ) -> CodexResult<()> {
+        self.record_conversation_items_raw_only_with_policy(
+            turn_context,
+            items,
+            true, /* require_durable_append */
+            emit_raw_response_items,
+        )
+        .await
+    }
+
+    async fn record_conversation_items_raw_only_with_policy(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        require_durable_append: bool,
+        emit_raw_response_items: bool,
     ) -> CodexResult<()> {
         let (_, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
             let raw_start = spine_slot.lock().await.raw_len();
@@ -2679,7 +2724,18 @@ impl Session {
         } else {
             (Vec::new(), 0)
         };
-        self.persist_rollout_response_items(items).await;
+        if require_durable_append {
+            if let Err(err) = self.try_persist_rollout_response_items(items).await {
+                return Err(self
+                    .spine_append_fatal(
+                        "persist Spine raw output evidence",
+                        SpineError::InvalidStore(err.to_string()),
+                    )
+                    .await);
+            }
+        } else {
+            self.persist_rollout_response_items(items).await;
+        }
         self.ensure_rollout_materialized_for_spine_append().await?;
         if let Err(err) = self.ensure_spine_runtime_if_available().await {
             return Err(self
@@ -2690,7 +2746,9 @@ impl Session {
                 .spine_append_fatal("observe Spine raw items", err)
                 .await);
         }
-        self.send_raw_response_items(turn_context, items).await;
+        if emit_raw_response_items {
+            self.send_raw_response_items(turn_context, items).await;
+        }
         Ok(())
     }
 
@@ -2890,6 +2948,18 @@ impl Session {
             .map(RolloutItem::ResponseItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
+    }
+
+    async fn try_persist_rollout_response_items(
+        &self,
+        items: &[ResponseItem],
+    ) -> Result<(), ThreadStoreError> {
+        let rollout_items: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        self.try_persist_rollout_items(&rollout_items).await
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

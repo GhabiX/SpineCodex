@@ -77,7 +77,24 @@ fn extension_tool_executor(
     name: &str,
     description: &str,
 ) -> Arc<dyn ToolExecutor<ExtensionToolCall>> {
+    extension_tool_executor_with_tool_name(ToolName::plain(name), name, description)
+}
+
+fn namespaced_extension_tool_executor(
+    namespace: &str,
+    name: &str,
+    description: &str,
+) -> Arc<dyn ToolExecutor<ExtensionToolCall>> {
+    extension_tool_executor_with_tool_name(ToolName::namespaced(namespace, name), name, description)
+}
+
+fn extension_tool_executor_with_tool_name(
+    tool_name: ToolName,
+    spec_name: &str,
+    description: &str,
+) -> Arc<dyn ToolExecutor<ExtensionToolCall>> {
     struct SpecOnlyExtensionExecutor {
+        tool_name: ToolName,
         name: String,
         description: String,
     }
@@ -85,7 +102,7 @@ fn extension_tool_executor(
     #[async_trait::async_trait]
     impl ToolExecutor<ExtensionToolCall> for SpecOnlyExtensionExecutor {
         fn tool_name(&self) -> ToolName {
-            ToolName::plain(self.name.as_str())
+            self.tool_name.clone()
         }
 
         fn spec(&self) -> Option<ToolSpec> {
@@ -115,7 +132,8 @@ fn extension_tool_executor(
     }
 
     Arc::new(SpecOnlyExtensionExecutor {
-        name: name.to_string(),
+        tool_name,
+        name: spec_name.to_string(),
         description: description.to_string(),
     })
 }
@@ -1495,6 +1513,154 @@ fn spine_namespace_is_registered_only_when_feature_enabled() {
 }
 
 #[test]
+fn spine_namespace_dynamic_tool_is_allowed_when_spine_jit_is_disabled() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let features = Features::with_defaults();
+    let mut config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    config.spine_jit = false;
+    let dynamic_tools = vec![DynamicToolSpec {
+        namespace: Some("spine".to_string()),
+        name: "external_tool".to_string(),
+        description: "External dynamic tool.".to_string(),
+        input_schema: json!({"type": "object", "properties": {}}),
+        defer_loading: true,
+    }];
+
+    let (_, registry) = build_specs(&config, None, None, &dynamic_tools);
+
+    assert!(registry.has_tool(&ToolName::namespaced("spine", "external_tool")));
+}
+
+#[test]
+fn spine_namespace_dynamic_tool_returns_invalid_request_when_spine_jit_is_enabled() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let features = Features::with_defaults();
+    let mut config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    config.spine_jit = true;
+    let dynamic_tools = vec![DynamicToolSpec {
+        namespace: Some("spine".to_string()),
+        name: "external_tool".to_string(),
+        description: "External dynamic tool.".to_string(),
+        input_schema: json!({"type": "object", "properties": {}}),
+        defer_loading: true,
+    }];
+
+    let err = match build_specs_with_inputs_result_for_test(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        /*extension_tool_executors*/ &[],
+        &dynamic_tools,
+    ) {
+        Ok(_) => panic!("spine namespace dynamic tool should be rejected"),
+        Err(err) => err,
+    };
+    let message = match err {
+        CodexErr::InvalidRequest(message) => message,
+        other => panic!("expected invalid request, got {other:?}"),
+    };
+    assert!(message.contains("dynamic tool namespace `spine`"));
+    assert!(message.contains("external_tool"));
+}
+
+#[test]
+fn spine_namespace_extension_tool_is_allowed_when_spine_jit_is_disabled() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let features = Features::with_defaults();
+    let mut config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    config.spine_jit = false;
+    let extension_tool_executors = vec![namespaced_extension_tool_executor(
+        "spine",
+        "external_tool",
+        "External extension tool.",
+    )];
+
+    let (_, registry) = build_specs_with_inputs_for_test(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_executors,
+        &[],
+    );
+
+    assert!(registry.has_tool(&ToolName::namespaced("spine", "external_tool")));
+}
+
+#[test]
+fn spine_namespace_extension_tool_returns_invalid_request_when_spine_jit_is_enabled() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let features = Features::with_defaults();
+    let mut config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    config.spine_jit = true;
+    let extension_tool_executors = vec![namespaced_extension_tool_executor(
+        "spine",
+        "external_tool",
+        "External extension tool.",
+    )];
+
+    let err = match build_specs_with_inputs_result_for_test(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_executors,
+        &[],
+    ) {
+        Ok(_) => panic!("spine namespace extension tool should be rejected"),
+        Err(err) => err,
+    };
+    let message = match err {
+        CodexErr::InvalidRequest(message) => message,
+        other => panic!("expected invalid request, got {other:?}"),
+    };
+    assert!(message.contains("extension tool namespace `spine`"));
+    assert!(message.contains("spine"));
+    assert!(message.contains("external_tool"));
+}
+
+#[test]
 fn namespaced_dynamic_specs_are_hidden_when_namespace_tools_are_disabled() {
     let model_info = model_info();
     let features = Features::with_defaults();
@@ -2468,6 +2634,25 @@ fn build_specs_with_inputs_for_test(
     extension_tool_executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ToolSpec>, ToolRegistry) {
+    build_specs_with_inputs_result_for_test(
+        config,
+        mcp_tools,
+        deferred_mcp_tools,
+        discoverable_tools,
+        extension_tool_executors,
+        dynamic_tools,
+    )
+    .expect("build tool specs")
+}
+
+fn build_specs_with_inputs_result_for_test(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
+    deferred_mcp_tools: Option<Vec<ToolInfo>>,
+    discoverable_tools: Option<Vec<DiscoverableTool>>,
+    extension_tool_executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
+    dynamic_tools: &[DynamicToolSpec],
+) -> CodexResult<(Vec<ToolSpec>, ToolRegistry)> {
     let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
         mcp_tools
             .iter()
@@ -2483,10 +2668,14 @@ fn build_specs_with_inputs_for_test(
         default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
         wait_agent_timeouts: wait_agent_timeout_options(),
     };
-    let mut executors = collect_tool_executors(config, params);
+    let mut executors = collect_tool_executors(config, params)?;
     append_tool_search_executor(config, &mut executors);
     prepend_code_mode_executors(config, &mut executors);
-    build_model_visible_specs_and_registry(config, executors, hosted_model_tool_specs(config))
+    Ok(build_model_visible_specs_and_registry(
+        config,
+        executors,
+        hosted_model_tool_specs(config),
+    ))
 }
 
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {

@@ -10,6 +10,7 @@ use crate::tools::registry::ToolRegistry;
 use crate::tools::spec_plan::build_tool_router;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
@@ -45,7 +46,7 @@ pub(crate) struct ToolRouterParams<'a> {
 }
 
 impl ToolRouter {
-    pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
+    pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> CodexResult<Self> {
         build_tool_router(config, params)
     }
 

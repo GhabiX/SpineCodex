@@ -1394,7 +1394,7 @@ pub(crate) async fn built_tools(
             extension_tool_executors: extension_tool_executors(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
-    )))
+    )?))
 }
 
 #[derive(Debug)]
@@ -2048,14 +2048,30 @@ async fn drain_in_flight(
                 if let Some(text) = commit.output_text {
                     replace_function_output_text(&mut response_item, text);
                 }
+                let deferred_history_update = commit.deferred_history_update;
+                let deferred_tree_update = commit.deferred_tree_update;
                 spine_control_overlay.push_output_if_matching(&response_item);
                 if is_pending_spine_close_like {
-                    sess.record_conversation_items_raw_only(
+                    sess.record_conversation_items_raw_only_durable_without_emission(
                         &turn_context,
                         std::slice::from_ref(&response_item),
                     )
                     .await
                     .map_err(SamplingRequestError::Codex)?;
+                    if let Some(update) = deferred_history_update {
+                        sess.apply_deferred_spine_history_update(update)
+                            .await
+                            .map_err(SamplingRequestError::Codex)?;
+                    }
+                    sess.send_raw_response_items(
+                        &turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await;
+                    if let Some(snapshot) = deferred_tree_update {
+                        sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
+                            .await;
+                    }
                 } else if spine_control_overlay.contains_matching_request(&response_item) {
                     sess.record_conversation_items_spine_control_overlay_only(
                         &turn_context,

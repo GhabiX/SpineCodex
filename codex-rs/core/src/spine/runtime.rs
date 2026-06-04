@@ -1246,6 +1246,14 @@ impl SpineRuntime {
         }))
     }
 
+    pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
+        self.control_call_ids.contains(call_id)
+            || self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.call_id() == call_id)
+    }
+
     #[cfg(test)]
     pub(crate) fn root_compact(
         &mut self,

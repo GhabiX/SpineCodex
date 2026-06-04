@@ -57,6 +57,8 @@ use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -85,15 +87,18 @@ struct ToolRegistryBuildParams<'a> {
     wait_agent_timeouts: WaitAgentTimeoutOptions,
 }
 
-pub(crate) fn build_tool_router(config: &ToolsConfig, params: ToolRouterParams<'_>) -> ToolRouter {
-    let (model_visible_specs, registry) = build_tool_specs_and_registry(config, params);
-    ToolRouter::from_parts(registry, model_visible_specs)
+pub(crate) fn build_tool_router(
+    config: &ToolsConfig,
+    params: ToolRouterParams<'_>,
+) -> CodexResult<ToolRouter> {
+    let (model_visible_specs, registry) = build_tool_specs_and_registry(config, params)?;
+    Ok(ToolRouter::from_parts(registry, model_visible_specs))
 }
 
 fn build_tool_specs_and_registry(
     config: &ToolsConfig,
     params: ToolRouterParams<'_>,
-) -> (Vec<ToolSpec>, ToolRegistry) {
+) -> CodexResult<(Vec<ToolSpec>, ToolRegistry)> {
     let ToolRouterParams {
         mcp_tools,
         deferred_mcp_tools,
@@ -114,10 +119,14 @@ fn build_tool_specs_and_registry(
             default_agent_type_description: &default_agent_type_description,
             wait_agent_timeouts: wait_agent_timeout_options(config),
         },
-    );
+    )?;
     append_tool_search_executor(config, &mut executors);
     prepend_code_mode_executors(config, &mut executors);
-    build_model_visible_specs_and_registry(config, executors, hosted_model_tool_specs(config))
+    Ok(build_model_visible_specs_and_registry(
+        config,
+        executors,
+        hosted_model_tool_specs(config),
+    ))
 }
 
 fn build_model_visible_specs_and_registry(
@@ -334,7 +343,7 @@ fn code_mode_namespace_descriptions(
 fn collect_tool_executors(
     config: &ToolsConfig,
     params: ToolRegistryBuildParams<'_>,
-) -> Vec<Arc<dyn CoreToolRuntime>> {
+) -> CodexResult<Vec<Arc<dyn CoreToolRuntime>>> {
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
     let mut executors = Vec::<Arc<dyn CoreToolRuntime>>::new();
 
@@ -512,6 +521,17 @@ fn collect_tool_executors(
     }
 
     for tool in params.dynamic_tools {
+        if config.spine_jit
+            && tool
+                .namespace
+                .as_deref()
+                .is_some_and(crate::is_spine_reserved_tool_namespace)
+        {
+            return Err(CodexErr::InvalidRequest(format!(
+                "dynamic tool namespace `spine` is reserved when spine_jit is enabled: {}",
+                tool.name
+            )));
+        }
         let Some(handler) = DynamicToolHandler::new(tool).map(Arc::new) else {
             tracing::error!(
                 "Failed to convert dynamic tool {:?} to OpenAI tool",
@@ -523,9 +543,9 @@ fn collect_tool_executors(
         executors.push(handler);
     }
 
-    append_extension_tool_executors(config, params.extension_tool_executors, &mut executors);
+    append_extension_tool_executors(config, params.extension_tool_executors, &mut executors)?;
 
-    executors
+    Ok(executors)
 }
 
 fn append_tool_search_executor(
@@ -565,9 +585,9 @@ fn append_extension_tool_executors(
     config: &ToolsConfig,
     executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
     registered_executors: &mut Vec<Arc<dyn CoreToolRuntime>>,
-) {
+) -> CodexResult<()> {
     if executors.is_empty() {
-        return;
+        return Ok(());
     }
 
     let mut reserved_tool_names = registered_executors
@@ -589,12 +609,23 @@ fn append_extension_tool_executors(
 
     for executor in executors.iter().cloned() {
         let tool_name = executor.tool_name();
+        if config.spine_jit
+            && tool_name
+                .namespace
+                .as_deref()
+                .is_some_and(crate::is_spine_reserved_tool_namespace)
+        {
+            return Err(CodexErr::InvalidRequest(format!(
+                "extension tool namespace `spine` is reserved when spine_jit is enabled: {tool_name}"
+            )));
+        }
         if !reserved_tool_names.insert(tool_name.clone()) {
             warn!("Skipping extension tool `{tool_name}`: tool already registered");
             continue;
         }
         registered_executors.push(Arc::new(ExtensionToolAdapter::new(executor)));
     }
+    Ok(())
 }
 
 fn multi_agent_v2_handler(

@@ -74,6 +74,117 @@ fn function_output(call_id: &str) -> ResponseItem {
     }
 }
 
+#[tokio::test]
+async fn inject_response_items_rejects_pending_spine_control_output_when_spine_jit_enabled() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SpineJit)
+        .expect("enable spine");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let thread = manager
+        .start_thread(config)
+        .await
+        .expect("start spine thread");
+    let session = &thread.thread.codex.session;
+    let turn_context = session.new_default_turn().await;
+    let open_request = spine_call(crate::spine::SPINE_TOOL_OPEN, "injected-spine-output");
+    session
+        .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&open_request))
+        .await
+        .expect("record spine open request");
+    session
+        .stage_spine_open(
+            "injected-spine-output".to_string(),
+            "injected output guard".to_string(),
+        )
+        .await
+        .expect("stage spine open");
+
+    let err = thread
+        .thread
+        .inject_response_items(vec![function_output("injected-spine-output")])
+        .await
+        .expect_err("pending Spine control output injection should be rejected");
+    let message = match err {
+        codex_protocol::error::CodexErr::InvalidRequest(message) => message,
+        other => panic!("expected invalid request, got {other:?}"),
+    };
+    assert!(message.contains("items[0]"));
+    assert!(message.contains("Spine control tool outputs"));
+    assert!(!session.clone_history().await.raw_items().iter().any(
+        |item| matches!(
+            item,
+            ResponseItem::FunctionCallOutput { call_id, .. }
+                if call_id == "injected-spine-output"
+        )
+    ));
+
+    thread
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown thread");
+}
+
+#[tokio::test]
+async fn inject_response_items_allows_spine_shaped_output_when_spine_jit_disabled() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable spine");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let thread = manager
+        .start_thread(config)
+        .await
+        .expect("start non-spine thread");
+    let output = function_output("spine-shaped-output");
+
+    thread
+        .thread
+        .inject_response_items(vec![output.clone()])
+        .await
+        .expect("feature-off raw import should remain allowed");
+
+    assert!(
+        thread
+            .thread
+            .codex
+            .session
+            .clone_history()
+            .await
+            .raw_items()
+            .contains(&output)
+    );
+
+    thread
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown thread");
+}
+
 fn contextual_user_interrupted_marker() -> ResponseItem {
     interrupted_turn_history_marker(InterruptedTurnHistoryMarker::ContextualUser)
         .expect("contextual-user interrupted marker should be enabled")

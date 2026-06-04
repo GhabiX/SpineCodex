@@ -408,6 +408,7 @@ impl CodexThread {
                 "items must not be empty".to_string(),
             ));
         }
+        self.validate_injected_response_items(&items).await?;
 
         let turn_context = self.codex.session.new_default_turn().await;
         if self.codex.session.reference_context_item().await.is_none() {
@@ -421,6 +422,34 @@ impl CodexThread {
             .record_conversation_items(turn_context.as_ref(), &items)
             .await?;
         self.codex.session.flush_rollout().await?;
+        Ok(())
+    }
+
+    async fn validate_injected_response_items(&self, items: &[ResponseItem]) -> CodexResult<()> {
+        if !self.enabled(Feature::SpineJit) {
+            return Ok(());
+        }
+        for (index, item) in items.iter().enumerate() {
+            if crate::stream_events_utils::is_spine_control_function_call(item) {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "items[{index}] must not inject Spine control tool calls when spine_jit is enabled"
+                )));
+            }
+            if self
+                .codex
+                .session
+                .is_spine_control_output_response_item(item)
+                .await
+                .map_err(|err| CodexErr::SpineTerminalFailure {
+                    operation: "inspect injected Spine control tool output".to_string(),
+                    reason: err.to_string(),
+                })?
+            {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "items[{index}] must not inject Spine control tool outputs when spine_jit is enabled"
+                )));
+            }
+        }
         Ok(())
     }
 
