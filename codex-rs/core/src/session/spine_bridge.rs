@@ -258,6 +258,7 @@ impl Session {
             store.validate_compact_checkpoint_for_boundary(
                 &rollout_path,
                 &raw_live,
+                raw_items,
                 base_boundary.raw_boundary,
                 &base_boundary.replacement_history,
             )?;
@@ -267,6 +268,7 @@ impl Session {
                 &store,
                 &rollout_path,
                 &raw_live,
+                raw_items,
             )?;
         } else {
             validate_no_live_root_compacts_without_rollout_boundaries(&live_root_compacts)?;
@@ -1113,6 +1115,7 @@ fn validate_live_root_compacts_have_rollout_boundary_proofs(
     store: &SpineStore,
     rollout_path: &Path,
     raw_live: &[bool],
+    raw_items: &[Option<ResponseItem>],
 ) -> Result<(), SpineError> {
     for compact in live_root_compacts {
         if prove_live_root_compact_with_rollout_boundary(
@@ -1121,6 +1124,7 @@ fn validate_live_root_compacts_have_rollout_boundary_proofs(
             store,
             rollout_path,
             raw_live,
+            raw_items,
         )?
         .is_none()
         {
@@ -1139,6 +1143,7 @@ fn prove_live_root_compact_with_rollout_boundary(
     store: &SpineStore,
     rollout_path: &Path,
     raw_live: &[bool],
+    raw_items: &[Option<ResponseItem>],
 ) -> Result<Option<()>, SpineError> {
     let mut saw_same_boundary = false;
     for boundary in replacement_history_boundaries
@@ -1149,6 +1154,7 @@ fn prove_live_root_compact_with_rollout_boundary(
         let checkpoint_token_seq = store.validate_compact_checkpoint_for_boundary(
             rollout_path,
             raw_live,
+            raw_items,
             boundary.raw_boundary,
             &boundary.replacement_history,
         )?;

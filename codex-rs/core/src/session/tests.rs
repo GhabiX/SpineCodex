@@ -12419,7 +12419,7 @@ async fn native_compact_missing_usage_does_not_copy_stale_token_info_to_root_han
 }
 
 #[tokio::test]
-async fn spine_context_matches_h_ps_across_operation_sequence() {
+async fn replacement_history_validates_at_compact_boundary() {
     let server = start_mock_server().await;
     let responses_mock = mount_sse_sequence(
         &server,
@@ -12570,7 +12570,7 @@ async fn spine_context_matches_h_ps_across_operation_sequence() {
 }
 
 #[tokio::test]
-async fn spine_native_compact_new_root_open_index_matches_installed_history_before_close() {
+async fn replacement_history_not_compared_to_post_compact_close_h_ps() {
     let server = start_mock_server().await;
     let responses_mock = mount_sse_sequence(
         &server,
@@ -14582,7 +14582,7 @@ async fn replacement_history_not_used_as_spine_replay_source() {
 }
 
 #[tokio::test]
-async fn spine_resume_rejects_unproved_matching_replacement_history_checkpoint() {
+async fn replacement_history_missing_boundary_proof_fails_closed() {
     let (_source_session, _source_turn_context, source_rollout_path, mut rollout_items) =
         make_spine_session_with_closed_child("sidecar resume summary").await;
     let expected_raw_items = spine_raw_items_after_rollback(&rollout_items);

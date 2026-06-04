@@ -3,6 +3,7 @@ use crate::spine::CHECKPOINT_VERSION;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::archive::tree_meta;
 use crate::spine::checkpoint::CheckpointMemoryRef;
+use crate::spine::compact_checkpoint::CompactCheckpointMemoryItemRef;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
 use crate::spine::io::hash_response_items;
 use codex_protocol::models::ContentItem;
@@ -74,6 +75,13 @@ fn root_compact_checkpoint_for_memory(
         context_len: replacement_history.len(),
         h_ps_hash: replacement_history_hash.clone(),
         replacement_history_hash,
+        response_item_refs: Vec::new(),
+        memory_item_refs: vec![CompactCheckpointMemoryItemRef {
+            compact_id: mem.compact_id.clone(),
+            context_index: 0,
+            item_hash: hash_response_items(&[memory_response_item(body)])
+                .expect("hash memory item"),
+        }],
         memory_refs: vec![CheckpointMemoryRef {
             compact_id: mem.compact_id.clone(),
             node_id: mem.node.to_string(),
@@ -2002,6 +2010,7 @@ fn clone_for_rollout_rewrites_compact_checkpoint_memory_refs() {
         .validate_compact_checkpoint_for_boundary(
             &target_rollout,
             &[],
+            &[],
             0,
             &[memory_response_item(body)],
         )
@@ -2046,7 +2055,13 @@ fn compact_checkpoint_without_root_compact_marker_fails_validation() {
         .expect("append compact checkpoint");
 
     let err = store
-        .validate_compact_checkpoint_for_boundary(&rollout, &[], 0, &[memory_response_item(body)])
+        .validate_compact_checkpoint_for_boundary(
+            &rollout,
+            &[],
+            &[],
+            0,
+            &[memory_response_item(body)],
+        )
         .expect_err("checkpoint without RootCompact marker must fail closed");
     assert!(
         err.to_string().contains("is not preceded by RootCompact"),
@@ -2103,8 +2118,133 @@ fn compact_checkpoint_with_mismatched_root_memory_ref_fails_validation() {
         .expect("append compact checkpoint");
 
     let err = store
-        .validate_compact_checkpoint_for_boundary(&rollout, &[], 0, &[memory_response_item(body)])
+        .validate_compact_checkpoint_for_boundary(
+            &rollout,
+            &[],
+            &[],
+            0,
+            &[memory_response_item(body)],
+        )
         .expect_err("mismatched root compact memory ref must fail closed");
+    assert!(
+        err.to_string()
+            .contains("does not match committed memory record"),
+        "unexpected checkpoint validation error: {err}"
+    );
+}
+
+#[test]
+fn replacement_history_memory_ref_span_hash_checked() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+    store
+        .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
+        .expect("append init");
+
+    let root_body = "root compact body";
+    let root_body_path = store
+        .write_memory_body("root-1-0", root_body)
+        .expect("write root body");
+    let root_mem = MemRecord {
+        compact_id: "root-1-0".to_string(),
+        kind: MemKind::RootEpoch,
+        node: NodeId::root_epoch(1),
+        raw_start: 0,
+        raw_end: 0,
+        context_start: 0,
+        context_end: 1,
+        raw_live_hash: Some(hash_raw_live(&[])),
+        open_input_tokens: None,
+        close_input_tokens: None,
+        open_context_tokens: None,
+        close_context_tokens: None,
+        open_context_source: None,
+        memory_output_tokens: None,
+        body_path: root_body_path.clone(),
+        body_hash: sha1_hex(root_body.as_bytes()),
+    };
+    store.append_mem(&root_mem).expect("append root mem");
+
+    let suffix_body = "suffix memory body";
+    let suffix_body_path = store
+        .write_memory_body("suffix-1-1", suffix_body)
+        .expect("write suffix body");
+    let suffix_mem = MemRecord {
+        compact_id: "suffix-1-1".to_string(),
+        kind: MemKind::Suffix,
+        node: NodeId::root_epoch(1).child(1),
+        raw_start: 0,
+        raw_end: 0,
+        context_start: 1,
+        context_end: 2,
+        raw_live_hash: None,
+        open_input_tokens: None,
+        close_input_tokens: None,
+        open_context_tokens: None,
+        close_context_tokens: None,
+        open_context_source: None,
+        memory_output_tokens: None,
+        body_path: suffix_body_path.clone(),
+        body_hash: sha1_hex(suffix_body.as_bytes()),
+    };
+    store.append_mem(&suffix_mem).expect("append suffix mem");
+    store
+        .append_event(&SpineLedgerEvent::RootCompact {
+            node: NodeId::root_epoch(1),
+            boundary: 0,
+            mem: root_mem.compact_id.clone(),
+            next_open_index: 1,
+            raw_live_hash: hash_raw_live(&[]),
+            next_open_input_tokens: None,
+            next_open_context_tokens: None,
+        })
+        .expect("append root compact");
+
+    let replacement_history = vec![
+        memory_response_item(root_body),
+        memory_response_item(suffix_body),
+    ];
+    let replacement_history_hash =
+        hash_response_items(&replacement_history).expect("hash replacement_history");
+    let mut checkpoint =
+        root_compact_checkpoint_for_memory(&rollout, &root_mem, root_body, 1, 2, root_body_path);
+    checkpoint.context_len = replacement_history.len();
+    checkpoint.h_ps_hash = replacement_history_hash.clone();
+    checkpoint.replacement_history_hash = replacement_history_hash;
+    checkpoint
+        .memory_item_refs
+        .push(CompactCheckpointMemoryItemRef {
+            compact_id: suffix_mem.compact_id.clone(),
+            context_index: 1,
+            item_hash: hash_response_items(&[memory_response_item(suffix_body)])
+                .expect("hash suffix memory item"),
+        });
+    checkpoint.memory_refs.push(CheckpointMemoryRef {
+        compact_id: suffix_mem.compact_id.clone(),
+        node_id: suffix_mem.node.to_string(),
+        body_path: suffix_body_path,
+        body_hash: suffix_mem.body_hash.clone(),
+        source_raw_start: suffix_mem.raw_start,
+        source_raw_end: suffix_mem.raw_end,
+        source_context_start: 0,
+        source_context_end: suffix_mem.context_end,
+        source_token_seq_start: 0,
+        source_token_seq_end: 1,
+        open_input_tokens: suffix_mem.open_input_tokens,
+        close_input_tokens: suffix_mem.close_input_tokens,
+        open_context_tokens: suffix_mem.open_context_tokens,
+        close_context_tokens: suffix_mem.close_context_tokens,
+        open_context_source: suffix_mem.open_context_source,
+        memory_output_tokens: suffix_mem.memory_output_tokens,
+    });
+    store
+        .append_compact_checkpoint(&checkpoint)
+        .expect("append corrupted compact checkpoint");
+
+    let err = store
+        .validate_compact_checkpoint_for_boundary(&rollout, &[], &[], 0, &replacement_history)
+        .expect_err("corrupted suffix memory span must fail closed");
     assert!(
         err.to_string()
             .contains("does not match committed memory record"),
@@ -2178,7 +2318,13 @@ fn compact_checkpoint_same_boundary_hash_multiple_token_seq_fails_closed() {
         .expect("append ambiguous newer compact checkpoint");
 
     let err = store
-        .validate_compact_checkpoint_for_boundary(&rollout, &[], 0, &[memory_response_item(body)])
+        .validate_compact_checkpoint_for_boundary(
+            &rollout,
+            &[],
+            &[],
+            0,
+            &[memory_response_item(body)],
+        )
         .expect_err("multiple compact token seq candidates must fail closed");
     assert!(
         err.to_string()
@@ -2267,6 +2413,7 @@ fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
         .validate_compact_checkpoint_for_boundary(
             &target_rollout,
             &raw_live,
+            &[],
             2,
             &[memory_response_item(body)],
         )
@@ -4195,6 +4342,7 @@ fn root_compact_checkpoint_validates_against_root_compact_marker() {
         .validate_compact_checkpoint_for_boundary(
             &rollout,
             &runtime.raw_live,
+            &raw,
             result.raw_boundary,
             &result.materialized,
         )
@@ -4259,6 +4407,7 @@ fn root_compact_checkpoint_append_failure_can_retry_without_duplicate_mem() {
         .validate_compact_checkpoint_for_boundary(
             &rollout,
             &runtime.raw_live,
+            &raw,
             result.raw_boundary,
             &result.materialized,
         )

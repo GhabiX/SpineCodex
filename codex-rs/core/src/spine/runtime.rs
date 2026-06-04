@@ -1531,6 +1531,7 @@ impl SpineRuntime {
                     result.raw_boundary,
                     result.token_seq_after,
                     &self.raw_live,
+                    raw_items,
                     &staged_parse_stack,
                     &result.materialized,
                     &result.materialized,
