@@ -577,6 +577,7 @@ impl Codex {
             crate::spine::append_spine_view_instructions(
                 base_instructions,
                 provider_capabilities.namespace_tools,
+                config.codex_home.as_path(),
             )
         } else {
             base_instructions

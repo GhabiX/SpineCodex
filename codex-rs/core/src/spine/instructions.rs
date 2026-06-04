@@ -1,3 +1,5 @@
+use std::path::Path;
+
 pub(crate) const SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
 Spine structures task context and compact memory. Use Spine tool calls selectively: keep momentum in the current node when the task is short, direct, or the next step is clear; move Spine at meaningful scope boundaries where it will clarify focus or reduce future context.
 
@@ -44,18 +46,35 @@ Runtime may add context-pressure guidance. When pressure rises, first identify w
 Use update_plan as a checklist when helpful.
 </spine_view>"#;
 
+const SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME: &str = "inst.md";
+const SPINE_VIEW_SEPARATOR_AND_START_MARKER: &str = "\n\n<spine_view>";
+
 pub(crate) fn append_spine_view_instructions(
     mut base_instructions: String,
     enabled: bool,
+    codex_home: &Path,
 ) -> String {
-    if !enabled || base_instructions.contains(SPINE_VIEW_INSTRUCTIONS) {
+    if !enabled {
         return base_instructions;
+    }
+
+    let override_path = codex_home.join(SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME);
+    let instructions = match std::fs::read_to_string(override_path) {
+        Ok(contents) if !contents.is_empty() => contents,
+        _ => SPINE_VIEW_INSTRUCTIONS.to_string(),
+    };
+
+    if base_instructions.contains(&instructions) {
+        return base_instructions;
+    }
+    if let Some(start) = base_instructions.rfind(SPINE_VIEW_SEPARATOR_AND_START_MARKER) {
+        base_instructions.truncate(start);
     }
 
     if !base_instructions.is_empty() {
         base_instructions.push_str("\n\n");
     }
-    base_instructions.push_str(SPINE_VIEW_INSTRUCTIONS);
+    base_instructions.push_str(&instructions);
     base_instructions
 }
 
