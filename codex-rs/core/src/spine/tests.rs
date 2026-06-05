@@ -592,6 +592,34 @@ fn next_task(
         .expect("next should commit")
 }
 
+fn next_task_with_token_baselines(
+    runtime: &mut SpineRuntime,
+    raw: &mut Vec<Option<ResponseItem>>,
+    call_id: &str,
+    closing_node_id: &str,
+    next_summary: &str,
+    token_baselines: SpineTokenBaselines,
+) -> SpineCommitKind {
+    observe_spine_request(runtime, raw, SPINE_TOOL_NEXT, call_id);
+    runtime
+        .stage_next(call_id.to_string(), next_summary.to_string(), None)
+        .expect("stage next");
+    let suffix_start = pending_close_suffix_start(runtime, call_id, "pending close-like next");
+
+    observe_function_output(runtime, raw, call_id);
+    runtime
+        .maybe_commit_output_with_token_baselines(
+            call_id,
+            Some(compact_body_with_context_range(
+                closing_node_id,
+                suffix_start..raw.len(),
+            )),
+            token_baselines,
+        )
+        .expect("commit next")
+        .expect("next should commit")
+}
+
 fn snapshot_nodes_by_id(snapshot: &SpineTreeUpdateEvent) -> BTreeMap<&str, &SpineTreeNodeSnapshot> {
     snapshot
         .nodes
@@ -1378,6 +1406,87 @@ fn spine_next_equivalent_to_close_then_open() {
 }
 
 #[test]
+fn spine_next_records_provider_baseline_for_sibling_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "root child work");
+    open_task(&mut runtime, &mut raw, "open-child", "nested child");
+    append_msg(&mut runtime, &mut raw, "nested child work");
+
+    let token_baselines = SpineTokenBaselines {
+        input_tokens: Some(12_345),
+        context_tokens: Some(10_000),
+    };
+    let commit = next_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "next-child",
+        "1.1.1",
+        "next sibling",
+        token_baselines,
+    );
+
+    assert!(matches!(
+        commit,
+        SpineCommitKind::CloseThenOpen { open_index: 2, .. }
+    ));
+    assert_eq!(runtime.current_open_input_tokens(), Some(12_345));
+    assert_eq!(runtime.current_open_context_tokens(), Some(10_000));
+    assert_eq!(
+        runtime.current_open_context_baseline_source(),
+        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
+    );
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            Symbol::Control(ControlSymbol::Init(_)),
+            Symbol::Control(ControlSymbol::Open(_)),
+            Symbol::SpineTreeNodes(_),
+            Symbol::Control(ControlSymbol::Open(next_sibling)),
+        ] if next_sibling.id == NodeId::root_epoch(1).child(1).child(2)
+            && next_sibling.summary == "next sibling"
+            && next_sibling.index == 2
+            && next_sibling.open_input_tokens == Some(12_345)
+            && next_sibling.open_context_tokens == Some(10_000)
+            && next_sibling.open_context_source == Some(ContextBaselineSource::ProviderAtOpen)
+    ));
+
+    let events = event_log(&runtime);
+    assert!(matches!(
+        events.as_slice(),
+        [
+            SpineLedgerEvent::Init { .. },
+            SpineLedgerEvent::Open { .. },
+            SpineLedgerEvent::Msg { .. },
+            SpineLedgerEvent::Open { .. },
+            SpineLedgerEvent::Msg { .. },
+            SpineLedgerEvent::Close { .. },
+            SpineLedgerEvent::Open {
+                child: next,
+                index: 2,
+                open_input_tokens: Some(12_345),
+                open_context_tokens: Some(10_000),
+                open_context_source: Some(ContextBaselineSource::ProviderAtOpen),
+                ..
+            },
+        ] if *next == NodeId::root_epoch(1).child(1).child(2)
+    ));
+
+    let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
+        .expect("load spine")
+        .expect("sidecar exists");
+    assert_eq!(replayed.current_open_input_tokens(), Some(12_345));
+    assert_eq!(replayed.current_open_context_tokens(), Some(10_000));
+    assert_eq!(
+        replayed.current_open_context_baseline_source(),
+        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
+    );
+}
+
+#[test]
 fn spine_next_close_failure_does_not_open_sibling() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -1969,6 +2078,15 @@ fn try_commit_internal_failure_does_not_silently_abort_pending() {
 
 #[test]
 fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
+    assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing();
+}
+
+#[test]
+fn fork_missing_memory_artifact_fails_closed() {
+    assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing();
+}
+
+fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source_rollout = dir.path().join("source.jsonl");
     let target_rollout = dir.path().join("target.jsonl");
@@ -1976,10 +2094,40 @@ fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
     source
         .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
+    let node = NodeId::root_epoch(1).child(1);
+    source
+        .append_event(&SpineLedgerEvent::Open {
+            child: node.clone(),
+            boundary: 0,
+            index: 0,
+            summary: "root".to_string(),
+            open_input_tokens: None,
+            open_context_tokens: None,
+            open_context_source: None,
+        })
+        .expect("append open");
+    source
+        .append_event(&SpineLedgerEvent::Msg {
+            raw_ordinal: 0,
+            context_index: 0,
+            from_user: true,
+        })
+        .expect("append msg");
+    let close_seq = source
+        .append_event(&SpineLedgerEvent::Close {
+            node: node.clone(),
+            boundary: 1,
+            summary: "closed".to_string(),
+            instruction: None,
+            close_input_tokens: None,
+            close_context_tokens: None,
+        })
+        .expect("append close");
+    let body = "missing body";
     let mem = MemRecord {
         compact_id: "mem-missing".to_string(),
         kind: MemKind::Suffix,
-        node: NodeId::root_epoch(1).child(1),
+        node: node.clone(),
         raw_start: 0,
         raw_end: 1,
         context_start: 0,
@@ -1991,10 +2139,33 @@ fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
         close_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
-        body_path: "bodies/mem-missing.md".to_string(),
-        body_hash: sha1_hex(b"missing body"),
+        body_path: "memory/mem-missing.md".to_string(),
+        body_hash: sha1_hex(body.as_bytes()),
     };
     source.append_mem(&mem).expect("append missing mem ref");
+    source
+        .append_commit_marker(&SpineCommitMarker {
+            version: COMMIT_MARKER_VERSION,
+            op_id: "missing-body-close".to_string(),
+            kind: SpineCommitKindMarker::Close,
+            token_seq_start: close_seq,
+            token_seq_end: close_seq + 1,
+            raw_boundary: 1,
+            raw_live_hash: None,
+            memory_refs: vec![SpineCommitMemoryRef {
+                compact_id: mem.compact_id.clone(),
+                kind: mem.kind,
+                node: mem.node.clone(),
+                raw_start: mem.raw_start,
+                raw_end: mem.raw_end,
+                context_start: mem.context_start,
+                context_end: mem.context_end,
+                raw_live_hash: mem.raw_live_hash.clone(),
+                body_path: mem.body_path.clone(),
+                body_hash: mem.body_hash.clone(),
+            }],
+        })
+        .expect("append close commit marker");
 
     let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout, 1)
         .expect("capture clone boundary")
@@ -2004,6 +2175,39 @@ fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
     assert!(
         err.to_string().contains("No such file") || err.to_string().contains("os error 2"),
         "unexpected clone error: {err}"
+    );
+    assert!(
+        !SpineStore::has_for_rollout(&target_rollout).expect("check unpublished target"),
+        "failed clone must not publish the target locator"
+    );
+
+    let restored_body_path = source
+        .write_memory_body(&mem.compact_id, body)
+        .expect("restore missing body");
+    assert_eq!(restored_body_path, mem.body_path);
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true])
+        .expect("retry clone after restoring missing body");
+    let target = SpineStore::for_rollout(&target_rollout).expect("target store after retry");
+    let target_mems = target.mems().expect("target mems after retry");
+    assert_eq!(
+        target_mems
+            .iter()
+            .map(|record| record.compact_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["mem-missing"]
+    );
+    assert_eq!(
+        target
+            .read_memory_body(&target_mems[0])
+            .expect("read cloned memory body"),
+        body
+    );
+    assert_eq!(
+        target
+            .commit_markers_for_test()
+            .expect("target commit markers")
+            .len(),
+        1
     );
 }
 
@@ -2402,6 +2606,77 @@ fn compact_checkpoint_same_boundary_hash_multiple_token_seq_fails_closed() {
 }
 
 #[test]
+fn compact_checkpoint_same_boundary_hash_token_seq_multiple_records_fails_closed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+    store
+        .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
+        .expect("append init");
+    let body = "root compact body";
+    let body_path = store
+        .write_memory_body("root-1-0", body)
+        .expect("write body");
+    let mem = MemRecord {
+        compact_id: "root-1-0".to_string(),
+        kind: MemKind::RootEpoch,
+        node: NodeId::root_epoch(1),
+        raw_start: 0,
+        raw_end: 0,
+        context_start: 0,
+        context_end: 1,
+        raw_live_hash: Some(hash_raw_live(&[])),
+        open_input_tokens: None,
+        close_input_tokens: None,
+        open_context_tokens: None,
+        close_context_tokens: None,
+        open_context_source: None,
+        memory_output_tokens: None,
+        body_path: body_path.clone(),
+        body_hash: sha1_hex(body.as_bytes()),
+    };
+    store.append_mem(&mem).expect("append mem");
+    store
+        .append_event(&SpineLedgerEvent::RootCompact {
+            node: NodeId::root_epoch(1),
+            boundary: 0,
+            mem: mem.compact_id.clone(),
+            next_open_index: 1,
+            raw_live_hash: hash_raw_live(&[]),
+            next_open_input_tokens: None,
+            next_open_context_tokens: None,
+        })
+        .expect("append root compact");
+
+    let mut corrupted =
+        root_compact_checkpoint_for_memory(&rollout, &mem, body, 1, 2, body_path.clone());
+    corrupted.context_len += 1;
+    store
+        .append_compact_checkpoint(&corrupted)
+        .expect("append corrupted compact checkpoint");
+    store
+        .append_compact_checkpoint(&root_compact_checkpoint_for_memory(
+            &rollout, &mem, body, 1, 2, body_path,
+        ))
+        .expect("append duplicate valid compact checkpoint");
+
+    let err = store
+        .validate_compact_checkpoint_for_boundary(
+            &rollout,
+            &[],
+            &[],
+            0,
+            &[memory_response_item(body)],
+        )
+        .expect_err("multiple compact proof records must fail closed");
+    assert!(
+        err.to_string()
+            .contains("ambiguous spine compact checkpoint proof"),
+        "unexpected checkpoint validation error: {err}"
+    );
+}
+
+#[test]
 fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source_rollout = dir.path().join("source.jsonl");
@@ -2686,6 +2961,15 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
 
 #[test]
 fn clone_boundary_excludes_future_structural_and_pressure_records() {
+    assert_clone_boundary_excludes_future_structural_and_pressure_records();
+}
+
+#[test]
+fn fork_preserves_context_pressure_metadata() {
+    assert_clone_boundary_excludes_future_structural_and_pressure_records();
+}
+
+fn assert_clone_boundary_excludes_future_structural_and_pressure_records() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source_rollout = dir.path().join("source.jsonl");
     let target_rollout = dir.path().join("target.jsonl");
@@ -3552,6 +3836,25 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
 
 #[test]
 fn fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
+    assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent();
+}
+
+#[test]
+fn fork_child_initial_h_ps_matches_parent() {
+    assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent();
+}
+
+#[test]
+fn fork_child_mutation_does_not_change_parent() {
+    assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent();
+}
+
+#[test]
+fn fork_rewrites_node_dir_to_child_sidecar() {
+    assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent();
+}
+
+fn assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let parent_rollout = dir.path().join("parent.jsonl");
     let child_rollout = dir.path().join("child.jsonl");
@@ -4812,6 +5115,15 @@ fn rollback_checkpoint_without_pressure_watermark_excludes_later_pressure_overla
 
 #[test]
 fn rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible_overlay() {
+    assert_rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible_overlay();
+}
+
+#[test]
+fn rollback_restores_checkpoint_visible_pressure_metadata() {
+    assert_rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible_overlay();
+}
+
+fn assert_rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible_overlay() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![Some(text_item("kept")), None];
@@ -4859,6 +5171,15 @@ fn rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible_overla
 
 #[test]
 fn rollback_uses_pre_user_checkpoint_to_restore_parse_stack() {
+    assert_rollback_uses_pre_user_checkpoint_to_restore_parse_stack();
+}
+
+#[test]
+fn rollback_restores_parse_stack_before_target_user_msg() {
+    assert_rollback_uses_pre_user_checkpoint_to_restore_parse_stack();
+}
+
+fn assert_rollback_uses_pre_user_checkpoint_to_restore_parse_stack() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![Some(text_item("kept")), None];
@@ -5035,6 +5356,15 @@ fn rollback_checkpoint_rebuilds_cache_from_full_sidecar_before_new_append() {
 
 #[test]
 fn rollback_checkpoint_new_open_reuses_restored_sibling_id() {
+    assert_rollback_checkpoint_new_open_reuses_restored_sibling_id();
+}
+
+#[test]
+fn rollback_allocates_correct_sibling_after_restore() {
+    assert_rollback_checkpoint_new_open_reuses_restored_sibling_id();
+}
+
+fn assert_rollback_checkpoint_new_open_reuses_restored_sibling_id() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![
@@ -5113,6 +5443,15 @@ fn rollback_checkpoint_new_open_reuses_restored_sibling_id() {
 
 #[test]
 fn rollback_without_pre_user_checkpoint_fails_closed() {
+    assert_rollback_without_pre_user_checkpoint_fails_closed();
+}
+
+#[test]
+fn rollback_does_not_parse_rendered_history() {
+    assert_rollback_does_not_parse_rendered_history();
+}
+
+fn assert_rollback_without_pre_user_checkpoint_fails_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![Some(text_item("kept")), None, Some(text_item("new turn"))];
@@ -5138,8 +5477,71 @@ fn rollback_without_pre_user_checkpoint_fails_closed() {
     );
 }
 
+fn assert_rollback_does_not_parse_rendered_history() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    append_msg(&mut runtime, &mut raw, "kept");
+    runtime
+        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .expect("write rollback checkpoint");
+    append_msg(&mut runtime, &mut raw, "rolled back");
+    open_task(&mut runtime, &mut raw, "rendered-open", "rendered child");
+    append_msg(&mut runtime, &mut raw, "rendered child work");
+    close_task(&mut runtime, &mut raw, "rendered-close", "1.1.1");
+
+    let rendered_history = runtime
+        .materialize_history(&raw)
+        .expect("materialize plausible rendered h(PS)");
+    let rendered_memory = rendered_history
+        .iter()
+        .find(|item| {
+            matches!(
+                item,
+                ResponseItem::Message { content, .. }
+                    if matches!(
+                        content.as_slice(),
+                        [ContentItem::InputText { text }]
+                            if text.contains("<spine_memory>")
+                                && text.contains("Spine Memory 1.1.1")
+                    )
+            )
+        })
+        .cloned()
+        .expect("rendered h(PS) should include plausible closed-child memory");
+    let rendered_tree = runtime.render_tree().expect("render plausible tree");
+    assert!(rendered_tree.contains("[1.1.1] Done rendered child"));
+
+    std::fs::remove_file(runtime.store.checkpoint_path(1)).expect("remove rollback checkpoint");
+    let raw_after_rollback = vec![
+        Some(text_item("kept")),
+        None,
+        Some(rendered_memory),
+        Some(text_item(&format!("Spine Task Tree:\n{rendered_tree}"))),
+    ];
+
+    let err = SpineRuntime::load_for_rollout_items(&rollout, &raw_after_rollback, &[1])
+        .expect_err("rollback must fail closed instead of parsing rendered text");
+    assert!(
+        err.to_string()
+            .contains("missing spine rollback checkpoint before raw ordinal 1"),
+        "unexpected error: {err}"
+    );
+}
+
 #[test]
 fn checkpoint_missing_required_field_fails_closed() {
+    assert_checkpoint_missing_required_field_fails_closed();
+}
+
+#[test]
+fn rollback_checkpoint_missing_field_fails_closed() {
+    assert_checkpoint_missing_required_field_fails_closed();
+}
+
+fn assert_checkpoint_missing_required_field_fails_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![Some(text_item("kept")), None];
@@ -5186,6 +5588,10 @@ fn checkpoint_missing_required_field_fails_closed() {
 
 #[test]
 fn corrupt_checkpoint_hash_fails_closed() {
+    assert_corrupt_checkpoint_hash_fails_closed();
+}
+
+fn assert_corrupt_checkpoint_hash_fails_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![Some(text_item("kept")), None];

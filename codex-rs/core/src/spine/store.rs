@@ -15,17 +15,24 @@ use crate::spine::io::sha1_hex;
 use crate::spine::io::write_json_file;
 use crate::spine::io::write_json_file_if_unchanged;
 use crate::spine::model::COMMIT_MARKER_VERSION;
+use crate::spine::model::ControlSymbol;
 use crate::spine::model::LoggedPressureEvent;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
+use crate::spine::model::MemoryRef;
 #[cfg(test)]
 use crate::spine::model::PressureEvent;
 use crate::spine::model::RawMask;
+use crate::spine::model::RootEpoch;
+use crate::spine::model::SegRef;
 use crate::spine::model::SpineCommitKindMarker;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineCommitMemoryRef;
 use crate::spine::model::SpineLedgerEvent;
+use crate::spine::model::SpineTreeNode;
+use crate::spine::model::Symbol;
+use crate::spine::model::TreeMeta;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -39,6 +46,8 @@ use std::io::Seek;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 const LOCATOR_VERSION: u32 = 1;
 const TREE_FILE: &str = "tree.jsonl";
@@ -92,19 +101,9 @@ impl SpineStore {
     }
 
     pub(crate) fn create_for_rollout(rollout_path: &Path) -> Result<Self, SpineError> {
-        let parent = rollout_parent(rollout_path)?;
-        let stem = rollout_stem(rollout_path)?;
-        let root = parent.join(format!("spine-{stem}"));
+        let root = sidecar_root_for_rollout(rollout_path)?;
         std::fs::create_dir_all(&root)?;
-        let locator = Locator {
-            version: LOCATOR_VERSION,
-            base: root
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| SpineError::InvalidStore("invalid sidecar path".to_string()))?
-                .to_string(),
-        };
-        write_json_file(&locator_path(rollout_path)?, &locator)?;
+        write_locator_for_root(rollout_path, &root)?;
         Ok(Self { root })
     }
 
@@ -161,108 +160,311 @@ impl SpineStore {
             ));
         }
         let source = Self::for_rollout(&boundary.source_rollout_path)?;
-        let target = Self::create_for_rollout(target_rollout_path)?;
-        let source_raw_live = &raw_live[..raw_ordinal_limit];
-        let mask = RawMask::new(source_raw_live);
-        let source_events = source.events()?;
-        let source_mems = source.mems()?;
-        let source_compact_checkpoints = source.compact_checkpoints()?;
-        let source_commit_markers = source.commit_markers()?;
-        let mut cloned_compact_checkpoints = Vec::new();
-        for checkpoint in source_compact_checkpoints {
-            let checkpoint_boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
-                SpineError::InvalidEvent("compact checkpoint raw boundary overflow".to_string())
-            })?;
-            if checkpoint.token_seq <= boundary.structural_seq_limit
-                && checkpoint.raw_boundary <= boundary.raw_ordinal_limit
-                && checkpoint_boundary <= source_raw_live.len()
-                && checkpoint.raw_live_hash
-                    == hash_raw_live(&source_raw_live[..checkpoint_boundary])
-            {
-                cloned_compact_checkpoints.push(checkpoint);
-            }
+        let staging_root = create_unpublished_clone_root(target_rollout_path)?;
+        let target_root = staging_root.clone();
+        let target = Self {
+            root: staging_root.clone(),
+        };
+
+        let result = clone_for_rollout_into_store(
+            &source,
+            &target,
+            &target_root,
+            boundary,
+            target_rollout_path,
+            raw_live,
+            raw_ordinal_limit,
+        )
+        .and_then(|()| publish_unpublished_clone(target_rollout_path, &staging_root));
+        if result.is_err() {
+            discard_unpublished_sidecar(&staging_root);
         }
-        let mut cloned_commit_markers = Vec::new();
-        for marker in source_commit_markers {
-            if marker.token_seq_end <= boundary.structural_seq_limit
-                && marker.raw_boundary <= boundary.raw_ordinal_limit
-                && commit_marker_allowed_by_source_live(&marker, source_raw_live)?
-            {
-                cloned_commit_markers.push(marker);
-            }
-        }
-        let mut marker_proved_event_seqs = BTreeSet::new();
-        for marker in &cloned_commit_markers {
-            for seq in marker.token_seq_start..marker.token_seq_end {
-                marker_proved_event_seqs.insert(seq);
-            }
-        }
-        let mut cloned_events = Vec::new();
-        for event in source_events {
-            if event.seq < boundary.structural_seq_limit
-                && (event.allowed_by(mask)? || marker_proved_event_seqs.contains(&event.seq))
-            {
-                cloned_events.push(event);
-            }
-        }
-        for event in &cloned_events {
-            target.append_logged_event(event)?;
-        }
-        let mut required_memory_ids =
-            required_memory_ids_for_cloned_events(&cloned_events, &source_mems, mask)?;
-        for checkpoint in &cloned_compact_checkpoints {
-            for memory in &checkpoint.memory_refs {
-                required_memory_ids.insert(memory.compact_id.clone());
-            }
-        }
-        for marker in &cloned_commit_markers {
-            for memory in &marker.memory_refs {
-                required_memory_ids.insert(memory.compact_id.clone());
-            }
-        }
-        for pressure in source.pressure_events()? {
-            if boundary
-                .pressure_seq_watermark
-                .is_some_and(|watermark| pressure.pressure_seq <= watermark)
-                && pressure.allowed_by(source_raw_live)
-            {
-                target.append_logged_pressure_event(&pressure)?;
-            }
-        }
-        let mut cloned_memory_paths = BTreeMap::new();
-        for mem in source_mems {
-            if mem.allowed_by(mask)? {
-                // Memory records do not carry a structural sequence, so any
-                // raw-visible record must still be readable. Only records
-                // referenced by cloned events/checkpoints are copied.
-                let body = source.read_memory_body(&mem)?;
-                if required_memory_ids.contains(&mem.compact_id) {
-                    let body_path = target.write_memory_body(&mem.compact_id, &body)?;
-                    cloned_memory_paths.insert(mem.compact_id.clone(), body_path.clone());
-                    let cloned = MemRecord { body_path, ..mem };
-                    target.append_mem(&cloned)?;
-                }
-            }
-        }
-        for checkpoint in cloned_compact_checkpoints {
-            let checkpoint = clone_compact_checkpoint_for_target(
-                checkpoint,
-                target_rollout_path,
-                &cloned_memory_paths,
-            )?;
-            target.append_compact_checkpoint(&checkpoint)?;
-        }
-        for marker in cloned_commit_markers {
-            let marker = clone_commit_marker_for_target(marker, &cloned_memory_paths)?;
-            target.append_commit_marker(&marker)?;
-        }
-        Ok(())
+        result
     }
 
     pub(crate) fn has_for_rollout(rollout_path: &Path) -> Result<bool, SpineError> {
         Ok(locator_path(rollout_path)?.exists())
     }
+}
 
+fn sidecar_root_for_rollout(rollout_path: &Path) -> Result<PathBuf, SpineError> {
+    let parent = rollout_parent(rollout_path)?;
+    let stem = rollout_stem(rollout_path)?;
+    Ok(parent.join(format!("spine-{stem}")))
+}
+
+fn write_locator_for_root(rollout_path: &Path, root: &Path) -> Result<(), SpineError> {
+    let locator = locator_for_root(rollout_path, root)?;
+    let content = serde_json::to_string_pretty(&locator)? + "\n";
+    write_locator_content_atomically(&locator_path(rollout_path)?, &content)
+}
+
+fn write_new_locator_for_root(rollout_path: &Path, root: &Path) -> Result<bool, SpineError> {
+    let locator = locator_for_root(rollout_path, root)?;
+    let content = serde_json::to_string_pretty(&locator)? + "\n";
+    let locator_path = locator_path(rollout_path)?;
+    let temp_path = write_locator_temp(&locator_path, &content)?;
+    match std::fs::hard_link(&temp_path, &locator_path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&temp_path);
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&temp_path);
+            Ok(false)
+        }
+        Err(err) => {
+            let _ = std::fs::remove_file(&temp_path);
+            Err(err.into())
+        }
+    }
+}
+
+fn write_locator_content_atomically(locator_path: &Path, content: &str) -> Result<(), SpineError> {
+    let temp_path = write_locator_temp(locator_path, content)?;
+    if let Err(err) = std::fs::rename(&temp_path, locator_path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(err.into());
+    }
+    Ok(())
+}
+
+fn write_locator_temp(locator_path: &Path, content: &str) -> Result<PathBuf, SpineError> {
+    let parent = locator_path
+        .parent()
+        .ok_or_else(|| SpineError::InvalidStore("locator path has no parent".to_string()))?;
+    let file_name = locator_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| SpineError::InvalidStore("invalid locator path".to_string()))?;
+    std::fs::create_dir_all(parent)?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    for attempt in 0..1000u32 {
+        let temp_path = parent.join(format!(
+            ".{file_name}.tmp-{}-{nanos}-{attempt}",
+            std::process::id()
+        ));
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err.into()),
+        };
+        let write_result = file
+            .write_all(content.as_bytes())
+            .and_then(|()| file.sync_all());
+        drop(file);
+        if let Err(err) = write_result {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(err.into());
+        }
+        return Ok(temp_path);
+    }
+    Err(SpineError::InvalidStore(format!(
+        "failed to allocate temp locator for {}",
+        locator_path.display()
+    )))
+}
+
+fn locator_for_root(rollout_path: &Path, root: &Path) -> Result<Locator, SpineError> {
+    let parent = rollout_parent(rollout_path)?;
+    if root.parent() != Some(parent) {
+        return Err(SpineError::InvalidStore(format!(
+            "sidecar root {} is not under rollout parent {}",
+            root.display(),
+            parent.display()
+        )));
+    }
+    Ok(Locator {
+        version: LOCATOR_VERSION,
+        base: root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| SpineError::InvalidStore("invalid sidecar path".to_string()))?
+            .to_string(),
+    })
+}
+
+fn create_unpublished_clone_root(rollout_path: &Path) -> Result<PathBuf, SpineError> {
+    let parent = rollout_parent(rollout_path)?;
+    let stem = rollout_stem(rollout_path)?;
+    std::fs::create_dir_all(parent)?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    for attempt in 0..1000u32 {
+        let root = parent.join(format!(
+            ".spine-{stem}.clone-{}-{nanos}-{attempt}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&root) {
+            Ok(()) => return Ok(root),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Err(SpineError::InvalidStore(format!(
+        "failed to allocate unpublished sidecar for {}",
+        rollout_path.display()
+    )))
+}
+
+fn publish_unpublished_clone(rollout_path: &Path, staging_root: &Path) -> Result<(), SpineError> {
+    if SpineStore::has_for_rollout(rollout_path)? {
+        discard_unpublished_sidecar(staging_root);
+        return Ok(());
+    }
+    if !write_new_locator_for_root(rollout_path, staging_root)? {
+        discard_unpublished_sidecar(staging_root);
+    }
+    Ok(())
+}
+
+fn discard_unpublished_sidecar(root: &Path) {
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn clone_for_rollout_into_store(
+    source: &SpineStore,
+    target: &SpineStore,
+    target_root: &Path,
+    boundary: &SpineCloneBoundary,
+    target_rollout_path: &Path,
+    raw_live: &[bool],
+    raw_ordinal_limit: usize,
+) -> Result<(), SpineError> {
+    let source_raw_live = &raw_live[..raw_ordinal_limit];
+    let mask = RawMask::new(source_raw_live);
+    let source_events = source.events()?;
+    let source_mems = source.mems()?;
+    let source_checkpoints = source.checkpoints()?;
+    let source_compact_checkpoints = source.compact_checkpoints()?;
+    let source_commit_markers = source.commit_markers()?;
+    let mut cloned_checkpoints = Vec::new();
+    for checkpoint in source_checkpoints {
+        let checkpoint_boundary = usize::try_from(checkpoint.raw_ordinal)
+            .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
+        if checkpoint.checkpoint_id != "initial"
+            && checkpoint.token_seq <= boundary.structural_seq_limit
+            && checkpoint.raw_ordinal <= boundary.raw_ordinal_limit
+            && checkpoint_boundary <= source_raw_live.len()
+            && checkpoint.raw_live_hash == hash_raw_live(&source_raw_live[..checkpoint_boundary])
+        {
+            cloned_checkpoints.push(checkpoint);
+        }
+    }
+    let mut cloned_compact_checkpoints = Vec::new();
+    for checkpoint in source_compact_checkpoints {
+        let checkpoint_boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
+            SpineError::InvalidEvent("compact checkpoint raw boundary overflow".to_string())
+        })?;
+        if checkpoint.token_seq <= boundary.structural_seq_limit
+            && checkpoint.raw_boundary <= boundary.raw_ordinal_limit
+            && checkpoint_boundary <= source_raw_live.len()
+            && checkpoint.raw_live_hash == hash_raw_live(&source_raw_live[..checkpoint_boundary])
+        {
+            cloned_compact_checkpoints.push(checkpoint);
+        }
+    }
+    let mut cloned_commit_markers = Vec::new();
+    for marker in source_commit_markers {
+        if marker.token_seq_end <= boundary.structural_seq_limit
+            && marker.raw_boundary <= boundary.raw_ordinal_limit
+            && commit_marker_allowed_by_source_live(&marker, source_raw_live)?
+        {
+            cloned_commit_markers.push(marker);
+        }
+    }
+    let mut marker_proved_event_seqs = BTreeSet::new();
+    for marker in &cloned_commit_markers {
+        for seq in marker.token_seq_start..marker.token_seq_end {
+            marker_proved_event_seqs.insert(seq);
+        }
+    }
+    let mut cloned_events = Vec::new();
+    for event in source_events {
+        if event.seq < boundary.structural_seq_limit
+            && (event.allowed_by(mask)? || marker_proved_event_seqs.contains(&event.seq))
+        {
+            cloned_events.push(event);
+        }
+    }
+    for event in &cloned_events {
+        target.append_logged_event(event)?;
+    }
+    let mut required_memory_ids =
+        required_memory_ids_for_cloned_events(&cloned_events, &source_mems, mask)?;
+    for checkpoint in &cloned_compact_checkpoints {
+        for memory in &checkpoint.memory_refs {
+            required_memory_ids.insert(memory.compact_id.clone());
+        }
+    }
+    for checkpoint in &cloned_checkpoints {
+        for memory in &checkpoint.memory_refs {
+            required_memory_ids.insert(memory.compact_id.clone());
+        }
+    }
+    for marker in &cloned_commit_markers {
+        for memory in &marker.memory_refs {
+            required_memory_ids.insert(memory.compact_id.clone());
+        }
+    }
+    for pressure in source.pressure_events()? {
+        if boundary
+            .pressure_seq_watermark
+            .is_some_and(|watermark| pressure.pressure_seq <= watermark)
+            && pressure.allowed_by(source_raw_live)
+        {
+            target.append_logged_pressure_event(&pressure)?;
+        }
+    }
+    let mut cloned_memory_paths = BTreeMap::new();
+    for mem in source_mems {
+        if mem.allowed_by(mask)? {
+            // Memory records do not carry a structural sequence, so any
+            // raw-visible record must still be readable. Only records
+            // referenced by cloned events/checkpoints are copied.
+            let body = source.read_memory_body(&mem)?;
+            if required_memory_ids.contains(&mem.compact_id) {
+                let body_path = target.write_memory_body(&mem.compact_id, &body)?;
+                cloned_memory_paths.insert(mem.compact_id.clone(), body_path.clone());
+                let cloned = MemRecord { body_path, ..mem };
+                target.append_mem(&cloned)?;
+            }
+        }
+    }
+    for checkpoint in cloned_compact_checkpoints {
+        let checkpoint = clone_compact_checkpoint_for_target(
+            checkpoint,
+            target_rollout_path,
+            &cloned_memory_paths,
+        )?;
+        target.append_compact_checkpoint(&checkpoint)?;
+    }
+    for checkpoint in cloned_checkpoints {
+        let checkpoint = clone_checkpoint_for_target(
+            checkpoint,
+            target_rollout_path,
+            target_root,
+            &cloned_memory_paths,
+        )?;
+        target.write_checkpoint(&checkpoint)?;
+    }
+    for marker in cloned_commit_markers {
+        let marker = clone_commit_marker_for_target(marker, &cloned_memory_paths)?;
+        target.append_commit_marker(&marker)?;
+    }
+    Ok(())
+}
+
+impl SpineStore {
     pub(super) fn tree_path(&self) -> PathBuf {
         self.root.join(TREE_FILE)
     }
@@ -563,37 +765,27 @@ impl SpineStore {
                 "ambiguous spine compact checkpoint token_seq for raw boundary {raw_boundary}"
             )));
         }
-        let mut last_err = None;
-        for checkpoint in checkpoints {
-            match validate_compact_checkpoint(
-                &checkpoint,
-                rollout_path,
-                raw_live,
-                raw_items,
-                replacement_history,
-            ) {
-                Ok(()) => {
-                    let events = self.events()?;
-                    let mems = self.mems()?;
-                    validate_compact_checkpoint_root_marker(
-                        &self.root,
-                        &checkpoint,
-                        &events,
-                        &mems,
-                    )?;
-                    validate_compact_checkpoint_memory_refs(&self.root, &checkpoint, &mems)?;
-                    return Ok(checkpoint.token_seq);
-                }
-                Err(err) => {
-                    last_err = Some(err);
-                }
-            }
+        if checkpoints.len() != 1 {
+            return Err(SpineError::InvalidStore(format!(
+                "ambiguous spine compact checkpoint proof for raw boundary {raw_boundary}"
+            )));
         }
-        Err(last_err.unwrap_or_else(|| {
-            SpineError::InvalidStore(format!(
-                "missing spine compact checkpoint at raw boundary {raw_boundary}"
-            ))
-        }))
+        let checkpoint = checkpoints
+            .into_iter()
+            .next()
+            .expect("checkpoint length checked above");
+        validate_compact_checkpoint(
+            &checkpoint,
+            rollout_path,
+            raw_live,
+            raw_items,
+            replacement_history,
+        )?;
+        let events = self.events()?;
+        let mems = self.mems()?;
+        validate_compact_checkpoint_root_marker(&self.root, &checkpoint, &events, &mems)?;
+        validate_compact_checkpoint_memory_refs(&self.root, &checkpoint, &mems)?;
+        Ok(checkpoint.token_seq)
     }
 
     fn checkpoints(&self) -> Result<Vec<SpineCheckpoint>, SpineError> {
@@ -642,6 +834,34 @@ impl SpineStore {
                     "missing spine rollback checkpoint before raw ordinal {cut}"
                 ))
             })
+    }
+
+    pub(super) fn resume_checkpoint(
+        &self,
+        raw_boundary: usize,
+    ) -> Result<Option<SpineCheckpoint>, SpineError> {
+        let raw_boundary = u64::try_from(raw_boundary)
+            .map_err(|_| SpineError::InvalidEvent("resume raw boundary overflow".to_string()))?;
+        Ok(self
+            .checkpoints()?
+            .into_iter()
+            .filter(|checkpoint| checkpoint.checkpoint_id != "initial")
+            .filter(|checkpoint| checkpoint.raw_ordinal <= raw_boundary)
+            .max_by_key(|checkpoint| (checkpoint.raw_ordinal, checkpoint.token_seq)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_latest_resume_checkpoint_h_ps_hash_for_test(
+        &self,
+        raw_boundary: usize,
+    ) -> Result<u64, SpineError> {
+        let mut checkpoint = self
+            .resume_checkpoint(raw_boundary)?
+            .ok_or_else(|| SpineError::InvalidStore("missing resume checkpoint".to_string()))?;
+        checkpoint.h_ps_hash = "bad-hash".to_string();
+        let raw_ordinal = checkpoint.raw_ordinal;
+        write_json_file(&self.checkpoint_path(raw_ordinal), &checkpoint)?;
+        Ok(raw_ordinal)
     }
 
     pub(super) fn write_memory_body(
@@ -1337,6 +1557,177 @@ fn clone_compact_checkpoint_for_target(
         memory_refs,
         ..checkpoint
     })
+}
+
+fn clone_checkpoint_for_target(
+    mut checkpoint: SpineCheckpoint,
+    target_rollout_path: &Path,
+    target_root: &Path,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<SpineCheckpoint, SpineError> {
+    checkpoint.rollout_path = target_rollout_path.display().to_string();
+    for memory in &mut checkpoint.memory_refs {
+        memory.body_path =
+            cloned_memory_body_path(target_root, cloned_memory_paths, &memory.compact_id)?
+                .display()
+                .to_string();
+    }
+    for tree_meta in &mut checkpoint.tree_meta {
+        tree_meta.node_dir = checkpoint_node_dir(target_root, &tree_meta.id)
+            .display()
+            .to_string();
+    }
+    for trajs_ref in &mut checkpoint.trajs_refs {
+        trajs_ref.trajs_path = checkpoint_node_archive_path(&trajs_ref.node_id, "Trajs.md")
+            .display()
+            .to_string();
+    }
+    rewrite_checkpoint_symbols_for_target(
+        &mut checkpoint.parse_stack.symbols,
+        target_root,
+        cloned_memory_paths,
+    )?;
+    checkpoint.parse_stack_symbols = checkpoint
+        .parse_stack
+        .symbols
+        .iter()
+        .map(|symbol| format!("{symbol:?}"))
+        .collect();
+    Ok(checkpoint)
+}
+
+fn rewrite_checkpoint_symbols_for_target(
+    symbols: &mut [Symbol],
+    target_root: &Path,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<(), SpineError> {
+    for symbol in symbols {
+        match symbol {
+            Symbol::Control(control) => {
+                rewrite_checkpoint_control_for_target(control, target_root, cloned_memory_paths)?
+            }
+            Symbol::SpineTreeNode(node) => {
+                rewrite_checkpoint_node_for_target(node, target_root, cloned_memory_paths)?
+            }
+            Symbol::SpineTreeNodes(nodes) => {
+                for node in nodes {
+                    rewrite_checkpoint_node_for_target(node, target_root, cloned_memory_paths)?;
+                }
+            }
+            Symbol::RootEpoches(root_epochs) => {
+                for RootEpoch { memory } in root_epochs {
+                    rewrite_checkpoint_memory_ref_for_target(
+                        memory,
+                        target_root,
+                        cloned_memory_paths,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rewrite_checkpoint_control_for_target(
+    control: &mut ControlSymbol,
+    target_root: &Path,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<(), SpineError> {
+    match control {
+        ControlSymbol::Init(meta) | ControlSymbol::Open(meta) => {
+            rewrite_checkpoint_tree_meta_for_target(meta, target_root);
+            Ok(())
+        }
+        ControlSymbol::End => Ok(()),
+        ControlSymbol::Close(memory) | ControlSymbol::Compact(memory, _, _, _) => {
+            rewrite_checkpoint_memory_ref_for_target(memory, target_root, cloned_memory_paths)
+        }
+    }
+}
+
+fn rewrite_checkpoint_node_for_target(
+    node: &mut SpineTreeNode,
+    target_root: &Path,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<(), SpineError> {
+    match node {
+        SpineTreeNode::MsgAsLeafNode { msg, .. } => {
+            rewrite_checkpoint_seg_ref_for_target(msg, target_root, cloned_memory_paths)
+        }
+        SpineTreeNode::SpineTree {
+            memory,
+            meta,
+            children,
+            memory_path,
+            trajs_path,
+        } => {
+            rewrite_checkpoint_memory_ref_for_target(memory, target_root, cloned_memory_paths)?;
+            rewrite_checkpoint_tree_meta_for_target(meta, target_root);
+            for child in children {
+                rewrite_checkpoint_node_for_target(child, target_root, cloned_memory_paths)?;
+            }
+            let node_id = meta.id.as_path();
+            *memory_path = checkpoint_node_archive_path(&node_id, "Memory.md");
+            *trajs_path = checkpoint_node_archive_path(&node_id, "Trajs.md");
+            Ok(())
+        }
+    }
+}
+
+fn rewrite_checkpoint_tree_meta_for_target(meta: &mut TreeMeta, target_root: &Path) {
+    meta.node_dir = checkpoint_node_dir(target_root, &meta.id.as_path());
+}
+
+fn rewrite_checkpoint_memory_ref_for_target(
+    memory: &mut MemoryRef,
+    target_root: &Path,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<(), SpineError> {
+    memory.body_path =
+        cloned_memory_body_path(target_root, cloned_memory_paths, &memory.compact_id)?;
+    Ok(())
+}
+
+fn rewrite_checkpoint_seg_ref_for_target(
+    seg: &mut SegRef,
+    target_root: &Path,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<(), SpineError> {
+    match seg {
+        SegRef::ResponseItem { .. } => Ok(()),
+        SegRef::Memory {
+            memory_id,
+            body_path,
+        } => {
+            *body_path = cloned_memory_body_path(target_root, cloned_memory_paths, memory_id)?;
+            Ok(())
+        }
+    }
+}
+
+fn cloned_memory_body_path(
+    target_root: &Path,
+    cloned_memory_paths: &BTreeMap<String, String>,
+    compact_id: &str,
+) -> Result<PathBuf, SpineError> {
+    cloned_memory_paths
+        .get(compact_id)
+        .map(|path| target_root.join(path))
+        .ok_or_else(|| {
+            SpineError::InvalidStore(format!(
+                "checkpoint references uncloned memory {compact_id}"
+            ))
+        })
+}
+
+fn checkpoint_node_dir(target_root: &Path, node_id: &str) -> PathBuf {
+    target_root.join("nodes").join(node_id.replace('.', "/"))
+}
+
+fn checkpoint_node_archive_path(node_id: &str, file_name: &str) -> PathBuf {
+    PathBuf::from("nodes")
+        .join(node_id.replace('.', "/"))
+        .join(file_name)
 }
 
 fn commit_marker_allowed_by_source_live(
