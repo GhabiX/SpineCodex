@@ -43,7 +43,6 @@ For spine.close and spine.next, pass only one short compact-guidance sentence ab
 
 Runtime may add context-pressure guidance. When pressure rises, first identify whether a coherent phase is complete; if so, close or advance so completed detail becomes compact memory.
 
-Use update_plan as a checklist when helpful.
 </spine_view>"#;
 
 const SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME: &str = "spine_instruction.md";
