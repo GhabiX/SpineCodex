@@ -329,6 +329,21 @@ State what this node actually did or decided. Include the current state, conclus
 Preserve exact details needed for continuation: file paths, identifiers, commands, important command outputs, test names/results, errors, task/worklog paths, approvals, risks, and any values the close instruction says to preserve exactly. Lines containing `_CRITICAL_ID=`, `_FILE=`, sentinel values, source paths, or explicit exact-preservation instructions are mandatory evidence and must appear in the memory.\n\n\
 4. Resume Focus\n\
 State the parent-level focus after this memory: what is settled, what remains open, and what context should guide continuation.\n\n\
+Memory Body Structure:\n\
+- Walk the suffix in original order.\n\
+- Preserve each real user message as exact text in a `## User Message` block.\n\
+- Compact only adjacent assistant/tool/runtime messages into a `## Memory Slot` block. If the suffix starts with non-user messages, start with a `## Memory Slot` block.\n\
+- Preserve existing Spine memory for a closed child node as a `## Child Memory` block, including its Spine node id/header. Do not collapse child memory into an anonymous parent summary.\n\
+- Omit empty blocks, but keep the original order of user messages, memory slots, and child memory blocks.\n\n\
+Template:\n\
+## User Message\n\
+${exact user message text}\n\n\
+## Memory Slot\n\
+<compact only the non-user messages after that user message and before the next user message or closed child memory>\n\n\
+## Child Memory\n\
+${closed child memory, including its Spine node id/header}\n\n\
+## Memory Slot\n\
+<compact only the adjacent non-user messages after that child memory and before the next user message or child memory>\n\n\
 Rules:\n\
 - Prefer high-signal facts over chronology.\n\
 - Do not archive routine progress updates, tool-call noise, or irrelevant implementation minutiae.\n\
@@ -503,6 +518,20 @@ mod spine_close_compact_body_tests {
         assert!(text.contains("Write a compact handoff memory for Spine node 1.1"));
         assert!(text.contains("4. Resume Focus"));
         assert!(text.ends_with("preserve this exact detail"));
+    }
+
+    #[test]
+    fn spine_close_compact_instruction_includes_compositional_memory_template() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+
+        let text = spine_close_compact_instruction_text("1.1", None, codex_home.path(), false);
+
+        assert!(text.contains("Memory Body Structure"));
+        assert!(text.contains("## User Message"));
+        assert!(text.contains("## Memory Slot"));
+        assert!(text.contains("## Child Memory"));
+        assert!(text.contains("${exact user message text}"));
+        assert!(text.contains("${closed child memory, including its Spine node id/header}"));
     }
 
     #[test]
