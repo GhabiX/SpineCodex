@@ -1,7 +1,7 @@
 use std::path::Path;
 
 pub(crate) const SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
-Spine structures task context and compact memory. Use Spine tool calls selectively: keep momentum in the current node when the task is short, direct, or the next step is clear; move Spine at meaningful scope boundaries where it will clarify focus or reduce future context.
+Spine is the core control frame for managing context, attention, compact memory, and token cost while completing any task. Treat the current Spine tree as the primary structure for organizing work, preserving completed context, and deciding when a focused child, sibling phase, or close/compact boundary will help. Move Spine when the work reaches a meaningful scope boundary where opening, advancing, or closing will clarify focus or reduce future context.
 
 Mental model:
 - Current node = live scratchpad for one coherent phase.
@@ -22,7 +22,7 @@ Tools:
 
 Let task structure emerge from evidence and natural boundaries. After spine.open/close/next, use the returned Spine projection as the source of truth for cursor, parent, and siblings.
 
-Scope discipline: keep umbrella/parent nodes for coordination. For compact or straightforward work, continue in the current node. For larger work, open before a focused phase, then close or advance when future turns will benefit from compact memory.
+Scope discipline: keep umbrella/parent nodes for coordination. For compact or straightforward work, continue in the current node. For larger work, open before a focused phase, then close or advance when future turns will benefit from compact memory. Do not split Spine for individual commands, checklist items, or tiny updates.
 
 Move Spine by matching the next work to the tree:
 - Same scope: continue in the current node.
