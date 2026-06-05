@@ -28,6 +28,8 @@ use std::sync::Arc;
 const SPINE_COMPACT_MEMORY_OVERRIDE_FILENAME: &str = "spine_compact_memory.md";
 const SPINE_COMPACT_MEMORY_NODE_ID_PLACEHOLDER: &str = "{node_id}";
 const SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER: &str = "{close_instruction}";
+const SPINE_COMPACT_MEMORY_TEMPLATE_BOUNDARY: &str =
+    "----------- Spine Compact Memory Template ----------";
 
 impl Session {
     pub(crate) async fn spine_compact_close(
@@ -103,10 +105,13 @@ impl Session {
             turn_context.config.codex_home.as_path(),
             turn_context.config.dev_debug_prompt_overrides,
         );
-        prompt_input.push(spine_close_compact_system_message(&close_target_projection));
-        prompt_input.push(spine_close_compact_suffix_boundary_message(&node_id));
-        prompt_input.extend(suffix_items);
-        prompt_input.push(spine_close_compact_system_message(&compact_instructions));
+        append_spine_close_compact_prompt_items(
+            &mut prompt_input,
+            &node_id,
+            suffix_items,
+            &close_target_projection,
+            &compact_instructions,
+        );
         let prompt = Prompt {
             input: prompt_input,
             tools: Vec::new(),
@@ -335,16 +340,8 @@ Memory Body Structure:\n\
 - Compact only adjacent assistant/tool/runtime messages into a `## Memory Slot` block. If the suffix starts with non-user messages, start with a `## Memory Slot` block.\n\
 - Preserve existing Spine memory for a closed child node as a `## Child Memory` block, including its Spine node id/header. Do not collapse child memory into an anonymous parent summary.\n\
 - Omit empty blocks, but keep the original order of user messages, memory slots, and child memory blocks.\n\n\
-Template:\n\
-## User Message\n\
-${exact user message text}\n\n\
-## Memory Slot\n\
-<compact only the non-user messages after that user message and before the next user message or closed child memory>\n\n\
-## Child Memory\n\
-${closed child memory, including its Spine node id/header}\n\n\
-## Memory Slot\n\
-<compact only the adjacent non-user messages after that child memory and before the next user message or child memory>\n\n\
 Rules:\n\
+- Follow the final Spine Compact Memory Template appended at the end of this prompt.\n\
 - Prefer high-signal facts over chronology.\n\
 - Do not archive routine progress updates, tool-call noise, or irrelevant implementation minutiae.\n\
 - Use prefix context only to understand names, parent goal, and constraints; do not summarize unrelated prefix.\n\
@@ -352,6 +349,126 @@ Rules:\n\
 - If there is conflict between an old plan and a later user correction, preserve the correction as the active intent.\n\
 - If information is uncertain, say what is known and what still needs confirmation.\n\
 - User-facing final-answer markers such as `TEST_WITH_LLM_*` are evidence only; never let such a marker be the whole memory.".to_string()
+}
+
+fn append_spine_close_compact_prompt_items(
+    prompt_input: &mut Vec<ResponseItem>,
+    node_id: &str,
+    suffix_items: Vec<ResponseItem>,
+    close_target_projection: &str,
+    compact_instructions: &str,
+) {
+    let memory_template = spine_close_compact_memory_template(node_id, &suffix_items);
+    prompt_input.push(spine_close_compact_system_message(close_target_projection));
+    prompt_input.push(spine_close_compact_suffix_boundary_message(node_id));
+    prompt_input.extend(suffix_items);
+    prompt_input.push(spine_close_compact_system_message(compact_instructions));
+    prompt_input.push(spine_close_compact_system_message(&memory_template));
+}
+
+fn spine_close_compact_memory_template(node_id: &str, suffix_items: &[ResponseItem]) -> String {
+    let mut builder = SpineCompactMemoryTemplateBuilder::new(node_id);
+    for item in suffix_items {
+        if let Some(child_memory) = rendered_spine_memory_prompt_text(item) {
+            builder.flush_non_user_slot();
+            builder.push_child_memory(child_memory);
+        } else if let Some(user_text) = real_user_message_text(item) {
+            builder.flush_non_user_slot();
+            builder.push_user_message(user_text);
+        } else {
+            builder.push_non_user_item();
+        }
+    }
+    builder.finish()
+}
+
+struct SpineCompactMemoryTemplateBuilder<'a> {
+    node_id: &'a str,
+    text: String,
+    pending_non_user_count: usize,
+    slot_index: usize,
+    emitted_blocks: bool,
+}
+
+impl<'a> SpineCompactMemoryTemplateBuilder<'a> {
+    fn new(node_id: &'a str) -> Self {
+        let mut text = format!(
+            "{SPINE_COMPACT_MEMORY_TEMPLATE_BOUNDARY}\n\
+Output exactly one Markdown memory body for Spine node {node_id}.\n\
+Use the blocks below in this order. Preserve `${{...}}` blocks exactly and replace `<...>` slots with compact memory prose. Omit empty generated slots."
+        );
+        text.push('\n');
+        Self {
+            node_id,
+            text,
+            pending_non_user_count: 0,
+            slot_index: 0,
+            emitted_blocks: false,
+        }
+    }
+
+    fn push_non_user_item(&mut self) {
+        self.pending_non_user_count += 1;
+    }
+
+    fn push_user_message(&mut self, text: &str) {
+        self.push_exact_block("## User Message", text);
+    }
+
+    fn push_child_memory(&mut self, text: &str) {
+        self.push_exact_block("## Child Memory", text);
+    }
+
+    fn push_exact_block(&mut self, heading: &str, body: &str) {
+        self.flush_non_user_slot();
+        self.push_block_heading(heading);
+        self.text.push_str("${\n");
+        self.text.push_str(body);
+        if !body.ends_with('\n') {
+            self.text.push('\n');
+        }
+        self.text.push('}');
+        self.text.push('\n');
+    }
+
+    fn flush_non_user_slot(&mut self) {
+        if self.pending_non_user_count == 0 {
+            return;
+        }
+        self.slot_index += 1;
+        let count = self.pending_non_user_count;
+        self.pending_non_user_count = 0;
+        self.push_block_heading("## Memory Slot");
+        self.text.push_str(&format!(
+            "<compact suffix non-user segment {}: {} message{}>\n",
+            self.slot_index,
+            count,
+            if count == 1 { "" } else { "s" }
+        ));
+    }
+
+    fn push_block_heading(&mut self, heading: &str) {
+        if self.emitted_blocks {
+            self.text.push('\n');
+        }
+        self.text.push('\n');
+        self.text.push_str(heading);
+        self.text.push('\n');
+        self.emitted_blocks = true;
+    }
+
+    fn finish(mut self) -> String {
+        self.flush_non_user_slot();
+        if !self.emitted_blocks {
+            self.slot_index += 1;
+            self.push_block_heading("## Memory Slot");
+            self.text.push_str(&format!(
+                "<compact empty suffix for Spine node {} if any continuation-critical facts are visible>\n",
+                self.node_id
+            ));
+        }
+        self.text
+    }
 }
 
 fn spine_close_compact_system_message(text: &str) -> ResponseItem {
@@ -394,6 +511,55 @@ fn is_current_spine_close_like_carrier(item: &ResponseItem, close_call_id: &str)
         item,
         ResponseItem::FunctionCallOutput { call_id, .. } if call_id == close_call_id
     )
+}
+
+fn real_user_message_text(item: &ResponseItem) -> Option<&str> {
+    let ResponseItem::Message { role, .. } = item else {
+        return None;
+    };
+    if role != "user" {
+        return None;
+    }
+    let text = response_item_text(item)?;
+    if looks_like_rendered_spine_memory_item(text) {
+        return None;
+    }
+    Some(text)
+}
+
+fn rendered_spine_memory_prompt_text(item: &ResponseItem) -> Option<&str> {
+    let ResponseItem::Message { role, .. } = item else {
+        return None;
+    };
+    if role != "user" {
+        return None;
+    }
+    let text = response_item_text(item)?;
+    if looks_like_rendered_spine_memory_item(text) {
+        Some(text)
+    } else {
+        None
+    }
+}
+
+fn response_item_text(item: &ResponseItem) -> Option<&str> {
+    let ResponseItem::Message { content, .. } = item else {
+        return None;
+    };
+    match content.as_slice() {
+        [ContentItem::InputText { text }] | [ContentItem::OutputText { text }] => Some(text),
+        _ => None,
+    }
+}
+
+// This only recognizes the bridge's prompt rendering of memory_response_item()
+// so the compact prompt can preserve child memory provenance. ParseStack replay
+// and resume/rollback semantics must not depend on this rendered text.
+fn looks_like_rendered_spine_memory_item(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.starts_with("<spine_memory>")
+        && trimmed.ends_with("</spine_memory>")
+        && trimmed.contains("# Spine Memory ")
 }
 
 /// Extracts the stored memory body from the compact response.
@@ -468,6 +634,51 @@ mod spine_close_compact_body_tests {
         }
     }
 
+    fn user_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            phase: None,
+        }
+    }
+
+    fn spine_memory_message(body: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("<spine_memory>\n{body}\n</spine_memory>"),
+            }],
+            phase: None,
+        }
+    }
+
+    fn message_text(item: &ResponseItem) -> &str {
+        let ResponseItem::Message { content, .. } = item else {
+            panic!("expected message item");
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected single input text item");
+        };
+        text.as_str()
+    }
+
+    fn assert_before(haystack: &str, left: &str, right: &str) {
+        let left_index = haystack
+            .find(left)
+            .unwrap_or_else(|| panic!("missing left marker {left:?} in {haystack}"));
+        let right_index = haystack
+            .find(right)
+            .unwrap_or_else(|| panic!("missing right marker {right:?} in {haystack}"));
+        assert!(
+            left_index < right_index,
+            "expected {left:?} before {right:?} in {haystack}"
+        );
+    }
+
     fn spine_call(name: &str, call_id: &str) -> ResponseItem {
         ResponseItem::FunctionCall {
             id: None,
@@ -521,17 +732,96 @@ mod spine_close_compact_body_tests {
     }
 
     #[test]
-    fn spine_close_compact_instruction_includes_compositional_memory_template() {
+    fn spine_close_compact_instruction_points_to_dynamic_memory_template() {
         let codex_home = tempfile::tempdir().expect("tempdir");
 
         let text = spine_close_compact_instruction_text("1.1", None, codex_home.path(), false);
 
         assert!(text.contains("Memory Body Structure"));
-        assert!(text.contains("## User Message"));
-        assert!(text.contains("## Memory Slot"));
-        assert!(text.contains("## Child Memory"));
-        assert!(text.contains("${exact user message text}"));
-        assert!(text.contains("${closed child memory, including its Spine node id/header}"));
+        assert!(text.contains("Follow the final Spine Compact Memory Template"));
+        assert!(!text.contains(SPINE_COMPACT_MEMORY_TEMPLATE_BOUNDARY));
+        assert!(!text.contains("Template:\n## User Message"));
+        assert!(!text.contains("${exact user message text}"));
+        assert!(!text.contains("${closed child memory"));
+    }
+
+    #[test]
+    fn spine_close_compact_memory_template_is_dynamic() {
+        let suffix_items = vec![
+            assistant_message("assistant before first user"),
+            user_message("USER_A_EXACT\nline 2"),
+            assistant_message("assistant after user"),
+            spine_memory_message("# Spine Memory 1.1.1\n\nchild memory body"),
+            user_message("<spine_memory>plain user text, not a child memory</spine_memory>"),
+        ];
+
+        let template = spine_close_compact_memory_template("1.1", &suffix_items);
+
+        assert!(template.starts_with(SPINE_COMPACT_MEMORY_TEMPLATE_BOUNDARY));
+        assert!(template.contains("Output exactly one Markdown memory body for Spine node 1.1"));
+        assert!(template.contains("<compact suffix non-user segment 1: 1 message>"));
+        assert!(template.contains("${\nUSER_A_EXACT\nline 2\n}"));
+        assert!(template.contains("<compact suffix non-user segment 2: 1 message>"));
+        assert!(template.contains("# Spine Memory 1.1.1"));
+        assert!(template.contains("child memory body"));
+        assert!(
+            template.contains(
+                "${\n<spine_memory>plain user text, not a child memory</spine_memory>\n}"
+            ),
+            "{template}"
+        );
+        assert!(!template.contains("${exact user message text}"));
+        assert_before(
+            &template,
+            "<compact suffix non-user segment 1: 1 message>",
+            "USER_A_EXACT",
+        );
+        assert_before(&template, "USER_A_EXACT", "# Spine Memory 1.1.1");
+        assert_before(
+            &template,
+            "# Spine Memory 1.1.1",
+            "plain user text, not a child memory",
+        );
+    }
+
+    #[test]
+    fn spine_close_compact_prompt_appends_memory_template_at_tail() {
+        let mut prompt_input = vec![user_message("prefix")];
+        let suffix_items = vec![user_message("tail user")];
+        let instruction = "---------- Spine Compact Directive ----------\ncompact tail";
+        append_spine_close_compact_prompt_items(
+            &mut prompt_input,
+            "1.1",
+            suffix_items,
+            "---------- Spine Close Target ----------",
+            instruction,
+        );
+
+        let final_item = prompt_input.last().expect("prompt tail");
+        let final_text = message_text(final_item);
+        assert!(final_text.starts_with(SPINE_COMPACT_MEMORY_TEMPLATE_BOUNDARY));
+        assert!(final_text.contains("tail user"));
+        assert_before(
+            &prompt_input
+                .iter()
+                .map(|item| match item {
+                    ResponseItem::Message { content, .. } => content
+                        .iter()
+                        .filter_map(|content| match content {
+                            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                                Some(text.as_str())
+                            }
+                            ContentItem::InputImage { .. } => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    _ => String::new(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            "---------- Spine Compact Directive ----------",
+            SPINE_COMPACT_MEMORY_TEMPLATE_BOUNDARY,
+        );
     }
 
     #[test]

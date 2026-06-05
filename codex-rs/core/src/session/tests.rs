@@ -10775,6 +10775,26 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         compact_request
             .body_contains_text("Messages below this boundary are the suffix for Spine node 1.1")
     );
+    let compact_input = compact_request.input();
+    let final_compact_item = compact_input
+        .last()
+        .expect("compact prompt should have a final memory template item");
+    assert_eq!(
+        final_compact_item.get("role").and_then(serde_json::Value::as_str),
+        Some("system")
+    );
+    let final_compact_text = final_compact_item
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|content| content.first())
+        .and_then(|span| span.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .expect("final compact prompt item should be input text");
+    assert!(
+        final_compact_text.starts_with("----------- Spine Compact Memory Template ----------"),
+        "{final_compact_text}"
+    );
+    assert!(final_compact_text.contains("${\ninitial root child work\n}"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
