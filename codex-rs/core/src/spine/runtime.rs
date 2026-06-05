@@ -436,7 +436,49 @@ impl SpineRuntime {
             validate_checkpoint(checkpoint, rollout_path, &raw_live, raw_items)?;
             return Self::load_with_rollback_checkpoint(store, raw_live, checkpoint);
         }
+        if let Some(checkpoint) = store.resume_checkpoint(raw_live.len())? {
+            validate_checkpoint(&checkpoint, rollout_path, &raw_live, raw_items)?;
+            Self::validate_checkpoint_parse_stack_prefix(&store, &raw_live, &checkpoint)?;
+        }
         Self::load_with_raw_live(store, raw_live)
+    }
+
+    fn validate_checkpoint_parse_stack_prefix(
+        store: &SpineStore,
+        raw_live: &[bool],
+        checkpoint: &SpineCheckpoint,
+    ) -> Result<(), SpineError> {
+        let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
+        let mems = store.mems()?;
+        let markers = store.commit_markers()?;
+        store.validate_commit_markers_for_replay(&ledger.events, &mems, raw_live)?;
+        let archive = SpineArchive::new(store.root.clone());
+        let raw_ordinal = usize::try_from(checkpoint.raw_ordinal)
+            .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
+        let prefix_live = &raw_live[..raw_ordinal.min(raw_live.len())];
+        let prefix_mask = RawMask::new(prefix_live);
+        let prefix_events = ledger
+            .events
+            .iter()
+            .filter(|event| event.seq < checkpoint.token_seq)
+            .cloned()
+            .collect::<Vec<_>>();
+        let prefix_forced_event_seqs =
+            forced_replay_event_seqs_from_markers(&markers, &mems, prefix_mask)?;
+        let prefix_ps = parse_stack_from_events_with_forced_events(
+            &prefix_events,
+            &archive,
+            &mems,
+            prefix_mask,
+            &prefix_forced_event_seqs,
+        )?;
+        if prefix_ps != checkpoint.parse_stack {
+            return Err(SpineError::Invariant(format!(
+                "spine checkpoint ParseStack mismatch for {} at raw_ordinal={} token_seq={}",
+                checkpoint.checkpoint_id, checkpoint.raw_ordinal, checkpoint.token_seq
+            )));
+        }
+        Ok(())
     }
 
     fn load_with_raw_live_and_event_limit(
@@ -1177,14 +1219,17 @@ impl SpineRuntime {
         let open_index_u64 = u64::try_from(open_index).map_err(|_| {
             SpineError::InvalidEvent("spine.next synthetic open index overflow".to_string())
         })?;
+        let open_context_source = token_baselines
+            .context_tokens
+            .map(|_| ContextBaselineSource::ProviderAtOpen);
         let open_event = SpineLedgerEvent::Open {
             child: child.clone(),
             boundary: self.raw_len,
             index: open_index_u64,
             summary: summary.clone(),
-            open_input_tokens: None,
-            open_context_tokens: None,
-            open_context_source: None,
+            open_input_tokens: token_baselines.input_tokens,
+            open_context_tokens: token_baselines.context_tokens,
+            open_context_source,
         };
         prepared.staged_parse_stack.shift(
             SpineToken::Open {
@@ -1193,9 +1238,9 @@ impl SpineRuntime {
                     child,
                     open_index_u64,
                     summary,
-                    None,
-                    None,
-                    None,
+                    token_baselines.input_tokens,
+                    token_baselines.context_tokens,
+                    open_context_source,
                 )?,
             },
             &self.archive(),

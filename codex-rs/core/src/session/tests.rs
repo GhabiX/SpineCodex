@@ -9602,6 +9602,63 @@ async fn spine_next_resume_restores_h_ps_when_output_carrier_missing() {
 
 #[tokio::test]
 async fn resume_committed_sidecar_overrides_stale_host_history() {
+    assert_resume_committed_sidecar_overrides_stale_host_history().await;
+}
+
+#[tokio::test]
+async fn resume_replays_nested_open_close_tree() {
+    assert_resume_replays_nested_open_close_tree().await;
+}
+
+#[tokio::test]
+async fn resume_corrupt_checkpoint_hash_fails_closed() {
+    let (_source_session, _source_turn_context, source_rollout_path, rollout_items) =
+        make_spine_session_with_closed_child("corrupt resume checkpoint").await;
+    let raw_items = spine_raw_items_after_rollback(&rollout_items);
+    let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    clone_spine_sidecar_for_test(&source_rollout_path, &resumed_rollout_path, &raw_live);
+    let corrupted_ordinal = SpineStore::for_rollout(&resumed_rollout_path)
+        .expect("resumed spine store")
+        .corrupt_latest_resume_checkpoint_h_ps_hash_for_test(raw_items.len())
+        .expect("corrupt latest resume checkpoint");
+    assert!(
+        corrupted_ordinal <= u64::try_from(raw_items.len()).expect("raw item count"),
+        "corrupted checkpoint must be applicable to the resumed raw boundary"
+    );
+
+    let err = resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: Some(source_rollout_path),
+        }))
+        .await
+        .expect_err("corrupt ordinary resume checkpoint must fail closed");
+    assert!(
+        err.to_string()
+            .contains("spine checkpoint h(PS) hash mismatch"),
+        "unexpected resume error: {err}"
+    );
+}
+
+async fn assert_resume_committed_sidecar_overrides_stale_host_history() {
     let (_source_session, _source_turn_context, source_rollout_path, rollout_items) =
         make_spine_session_with_closed_child("close-window2 resume summary").await;
     let raw_items = spine_raw_items_after_rollback(&rollout_items);
@@ -9622,6 +9679,82 @@ async fn resume_committed_sidecar_overrides_stale_host_history() {
         |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "resume-close")
     ));
 
+    assert_resumed_close_window_matches_sidecar(
+        source_rollout_path,
+        rollout_items,
+        raw_items,
+        expected_history,
+    )
+    .await;
+}
+
+async fn assert_resume_replays_nested_open_close_tree() {
+    let (source_session, source_turn_context, source_rollout_path, _rollout_items) =
+        make_spine_session_with_closed_child("nested resume summary").await;
+    let parent_suffix = user_message("parent suffix after closed child");
+    source_session
+        .record_conversation_items(&source_turn_context, std::slice::from_ref(&parent_suffix))
+        .await
+        .expect("record parent suffix after closed child");
+    source_session.ensure_rollout_materialized().await;
+    source_session
+        .flush_rollout()
+        .await
+        .expect("rollout with parent suffix should flush");
+    let InitialHistory::Resumed(resumed) =
+        RolloutRecorder::get_rollout_history(&source_rollout_path)
+            .await
+            .expect("read rollout history with parent suffix")
+    else {
+        panic!("expected resumed rollout history with parent suffix");
+    };
+    let rollout_items = resumed.history;
+    let raw_items = spine_raw_items_after_rollback(&rollout_items);
+    assert!(
+        raw_items
+            .iter()
+            .flatten()
+            .any(|item| item == &parent_suffix),
+        "test setup must include a durable parent suffix after child close"
+    );
+    let runtime = SpineRuntime::load_for_rollout_items(&source_rollout_path, &raw_items, &[])
+        .expect("load nested resume runtime")
+        .expect("nested resume sidecar should exist");
+    let expected_history = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize nested resume h(PS)");
+    assert!(
+        expected_history.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                )
+        )),
+        "h(PS) should include the closed child memory"
+    );
+    assert!(
+        expected_history.contains(&parent_suffix),
+        "h(PS) should preserve the current parent suffix after the closed child"
+    );
+
+    assert_resumed_close_window_matches_sidecar(
+        source_rollout_path,
+        rollout_items,
+        raw_items,
+        expected_history,
+    )
+    .await;
+}
+
+async fn assert_resumed_close_window_matches_sidecar(
+    source_rollout_path: PathBuf,
+    rollout_items: Vec<RolloutItem>,
+    raw_items: Vec<Option<ResponseItem>>,
+    expected_history: Vec<ResponseItem>,
+) {
     let (mut resumed_session, _resumed_context, _rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
@@ -9657,6 +9790,118 @@ async fn resume_committed_sidecar_overrides_stale_host_history() {
         &expected_history,
     )
     .await;
+}
+
+#[tokio::test]
+async fn resume_base_reconstruction_metadata_survives_h_ps_override() {
+    assert_resume_base_reconstruction_metadata_survives_h_ps_override().await;
+}
+
+#[tokio::test]
+async fn resume_restores_context_manager_items_from_h_ps() {
+    assert_resume_base_reconstruction_metadata_survives_h_ps_override().await;
+}
+
+async fn assert_resume_base_reconstruction_metadata_survives_h_ps_override() {
+    let (_source_session, source_turn_context, source_rollout_path, mut rollout_items) =
+        make_spine_session_with_closed_child("metadata survives sidecar override").await;
+    let raw_items = spine_raw_items_after_rollback(&rollout_items);
+    let runtime = SpineRuntime::load_for_rollout_items(&source_rollout_path, &raw_items, &[])
+        .expect("load source runtime")
+        .expect("source sidecar should exist");
+    let expected_history = runtime
+        .materialize_history(&raw_items)
+        .expect("source h(PS)");
+    assert_ne!(
+        rollout_items
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::ResponseItem(item) => Some(item),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        expected_history.iter().collect::<Vec<_>>(),
+        "base rollout reconstruction must differ so sidecar h(PS) is the final authority"
+    );
+
+    let mut previous_context_item = source_turn_context.to_turn_context_item();
+    previous_context_item.model = "metadata-survives-model".to_string();
+    let metadata_turn_id = previous_context_item
+        .turn_id
+        .clone()
+        .expect("turn context item should have a turn id");
+    rollout_items.push(RolloutItem::EventMsg(EventMsg::TurnStarted(
+        TurnStartedEvent {
+            turn_id: metadata_turn_id.clone(),
+            started_at: None,
+            model_context_window: Some(128_000),
+            collaboration_mode_kind: ModeKind::Default,
+        },
+    )));
+    rollout_items.push(RolloutItem::EventMsg(EventMsg::UserMessage(
+        UserMessageEvent {
+            message: "metadata-only resume turn".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        },
+    )));
+    rollout_items.push(RolloutItem::TurnContext(previous_context_item.clone()));
+    rollout_items.push(RolloutItem::EventMsg(EventMsg::TurnComplete(
+        TurnCompleteEvent {
+            turn_id: metadata_turn_id,
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        },
+    )));
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
+    )
+    .await;
+    let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&source_rollout_path, &resumed_rollout_path, &raw_live);
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: Some(source_rollout_path),
+        }))
+        .await
+        .expect("resume with sidecar h(PS) override");
+
+    assert_eq!(
+        resumed_session.clone_history().await.raw_items(),
+        expected_history.as_slice()
+    );
+    assert_eq!(
+        resumed_session.previous_turn_settings().await,
+        Some(PreviousTurnSettings {
+            model: previous_context_item.model.clone(),
+            realtime_active: previous_context_item.realtime_active,
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(resumed_session.reference_context_item().await)
+            .expect("serialize resumed reference context"),
+        serde_json::to_value(Some(previous_context_item))
+            .expect("serialize expected reference context")
+    );
 }
 
 #[tokio::test]
@@ -10780,7 +11025,9 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         .last()
         .expect("compact prompt should have a final memory template item");
     assert_eq!(
-        final_compact_item.get("role").and_then(serde_json::Value::as_str),
+        final_compact_item
+            .get("role")
+            .and_then(serde_json::Value::as_str),
         Some("system")
     );
     let final_compact_text = final_compact_item
@@ -12594,6 +12841,20 @@ async fn replacement_history_validates_at_compact_boundary() {
 
 #[tokio::test]
 async fn replacement_history_not_compared_to_post_compact_close_h_ps() {
+    assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps().await;
+}
+
+#[tokio::test]
+async fn resume_final_history_is_sidecar_h_ps_after_replacement_history_suffix() {
+    assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps().await;
+}
+
+#[tokio::test]
+async fn resume_does_not_compare_checkpoint_history_to_latest_h_ps() {
+    assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps().await;
+}
+
+async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
     let server = start_mock_server().await;
     let responses_mock = mount_sse_sequence(
         &server,
@@ -12965,7 +13226,7 @@ async fn spine_feature_off_does_not_overlay_spine_shaped_streaming_followup() ->
 }
 
 #[tokio::test]
-async fn spine_new_session_initializes_sidecar_before_tree() {
+async fn init_new_session_creates_root_and_1_1() {
     let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -13381,6 +13642,15 @@ async fn spine_tree_tool_omits_context_pressure_when_window_unknown() {
 
 #[tokio::test]
 async fn spine_tree_tool_node_context_uses_provider_context_delta() {
+    assert_spine_tree_tool_node_context_uses_provider_context_delta().await;
+}
+
+#[tokio::test]
+async fn resume_restores_context_pressure_metadata_for_tree_display() {
+    assert_spine_tree_tool_node_context_uses_provider_context_delta().await;
+}
+
+async fn assert_spine_tree_tool_node_context_uses_provider_context_delta() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -13548,6 +13818,135 @@ async fn spine_tree_tool_node_context_uses_provider_context_delta() {
         .expect("active node");
     let accounting = active.accounting.as_ref().expect("active accounting");
     assert_eq!(accounting.current_node_context_tokens, Some(181_546));
+    assert_eq!(
+        accounting.current_node_context_baseline_source,
+        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
+    );
+    assert_eq!(accounting.current_node_context_unavailable, None);
+}
+
+#[tokio::test]
+async fn spine_next_sibling_tree_uses_provider_open_baseline() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_summary_sse("next-baseline-summary", "next baseline compact"),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "next-baseline-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "next-baseline-open".to_string(),
+            "next baseline child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("next-baseline-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let child_body = user_message("next baseline child body");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record child body");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "next-baseline");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_request))
+        .await
+        .expect("record next request");
+    session
+        .stage_spine_next(
+            "next-baseline".to_string(),
+            "next baseline sibling".to_string(),
+            Some("next baseline close guidance".to_string()),
+        )
+        .await
+        .expect("stage next");
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 40_000,
+                total_tokens: 40_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+    let next_output = function_output("next-baseline");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &next_output)
+        .await
+        .expect("commit next");
+    assert_eq!(compact_mock.requests().len(), 1);
+    {
+        let mut state = session.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 55_500,
+                total_tokens: 55_500,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }));
+    }
+    while rx.try_recv().is_ok() {}
+
+    let tree = session.spine_tree().await.expect("tree");
+    assert!(
+        tree.contains("[1.1.2] Current next baseline sibling (~15.5K inclusive context)"),
+        "{tree}"
+    );
+
+    session
+        .emit_spine_tree_snapshot(&turn_context)
+        .await
+        .expect("emit Spine tree snapshot");
+    let event = timeout(StdDuration::from_secs(1), rx.recv())
+        .await
+        .expect("timeout waiting for Spine tree snapshot")
+        .expect("event");
+    let snapshot = match event.msg {
+        EventMsg::SpineTreeUpdate(snapshot) => snapshot,
+        msg => panic!("expected Spine tree update, got {msg:?}"),
+    };
+    let active = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == snapshot.active_node_id)
+        .expect("active node");
+    assert_eq!(active.node_id, "1.1.2");
+    let accounting = active.accounting.as_ref().expect("active accounting");
+    assert_eq!(accounting.current_node_context_tokens, Some(15_500));
     assert_eq!(
         accounting.current_node_context_baseline_source,
         Some(SpineNodeContextBaselineSource::ProviderAtOpen)
@@ -14165,7 +14564,7 @@ async fn resume_rejects_committed_raw_without_sidecar_token() {
 }
 
 #[tokio::test]
-async fn spine_feature_off_prompt_history_is_byte_identical_to_base_codex() {
+async fn init_feature_off_has_no_spine_state() {
     let (mut base_session, base_turn_context, _base_rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
@@ -14289,7 +14688,7 @@ async fn spine_feature_off_prompt_history_is_byte_identical_to_base_codex() {
 }
 
 #[tokio::test]
-async fn spine_feature_off_replacement_history_resume_is_host_verbatim() {
+async fn resume_feature_off_replacement_history_unchanged() {
     let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -14336,7 +14735,7 @@ async fn spine_feature_off_replacement_history_resume_is_host_verbatim() {
 }
 
 #[tokio::test]
-async fn spine_fixed_query_is_not_shifted_as_msg() {
+async fn init_does_not_shift_fixed_query_as_msg() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -14676,6 +15075,15 @@ async fn replacement_history_missing_boundary_proof_fails_closed() {
 
 #[tokio::test]
 async fn spine_resume_non_spine_session_fails_closed() {
+    assert_spine_resume_non_spine_session_fails_closed().await;
+}
+
+#[tokio::test]
+async fn resume_non_spine_session_in_spine_mode_fails_closed() {
+    assert_spine_resume_non_spine_session_fails_closed().await;
+}
+
+async fn assert_spine_resume_non_spine_session_fails_closed() {
     let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),

@@ -444,8 +444,10 @@ impl Session {
             .ok_or_else(|| {
                 SpineError::InvalidStore("spine_jit checkpoint requires rollout path".to_string())
             })?;
-        let history = self.clone_history().await;
-        let raw_history = history.raw_items().to_vec();
+        let rollout_history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
         let mut guard = spine_slot.lock().await;
         guard.ensure_valid()?;
         let Some(runtime) = guard.runtime_mut() else {
@@ -465,14 +467,14 @@ impl Session {
                 SpineError::InvalidEvent("context append input index outside items".to_string())
             })?;
             if crate::spine::is_user_message(item) {
-                let context = raw_history
-                    .get(..append.context_index)
-                    .ok_or_else(|| {
-                        SpineError::InvalidEvent(
-                            "checkpoint context index outside history".to_string(),
-                        )
-                    })?
-                    .to_vec();
+                let raw_end = usize::try_from(raw_ordinal)
+                    .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+                let prefix = raw_items.get(..raw_end).ok_or_else(|| {
+                    SpineError::InvalidEvent(
+                        "checkpoint raw ordinal outside raw history".to_string(),
+                    )
+                })?;
+                let context = runtime.materialize_history(prefix)?;
                 runtime.checkpoint_before_user_msg(&rollout_path, raw_ordinal, &context)?;
             }
             runtime.observe_context_item(raw_ordinal, append.context_index, item)?;
@@ -619,6 +621,14 @@ impl Session {
             };
             spine.pending_commit(call_id)?
         };
+        let pre_compact_token_baselines =
+            if matches!(pending_commit, Some(SpinePendingCommit::Close { .. })) {
+                Some(token_baselines_from_info(
+                    self.token_usage_info().await.as_ref(),
+                ))
+            } else {
+                None
+            };
         let close_compact = match pending_commit {
             Some(SpinePendingCommit::Close {
                 action,
@@ -699,6 +709,7 @@ impl Session {
                 spine_slot,
                 call_id,
                 close_compact.clone(),
+                pre_compact_token_baselines,
             )? {
                 SpineCommitAttempt::Done(output) => break output,
                 SpineCommitAttempt::RuntimeMissing => {
@@ -799,6 +810,7 @@ impl Session {
         spine_slot: &Mutex<SpineSessionState>,
         call_id: &str,
         close_compact: Option<(SpineCloseCompact, Vec<ResponseItem>)>,
+        pre_compact_token_baselines: Option<SpineTokenBaselines>,
     ) -> Result<SpineCommitAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
@@ -825,7 +837,8 @@ impl Session {
             )));
         }
         let close_compact = close_compact.map(|(compact, _)| compact);
-        let token_baselines = token_baselines_from_info(state.token_info().as_ref());
+        let token_baselines = pre_compact_token_baselines
+            .unwrap_or_else(|| token_baselines_from_info(state.token_info().as_ref()));
         let commit_kind = spine.maybe_commit_output_with_token_baselines(
             call_id,
             close_compact,
