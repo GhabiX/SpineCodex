@@ -16,10 +16,10 @@ use crate::spine::checkpoint::build_checkpoint;
 use crate::spine::checkpoint::validate_checkpoint;
 use crate::spine::compact_checkpoint::build_compact_checkpoint;
 use crate::spine::io::hash_raw_live;
+use crate::spine::io::hash_response_items;
 use crate::spine::io::sha1_hex;
 use crate::spine::model::COMMIT_MARKER_VERSION;
 use crate::spine::model::ContextBaselineSource;
-#[cfg(test)]
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::LoggedPressureEvent;
 use crate::spine::model::LoggedSpineLedgerEvent;
@@ -34,9 +34,7 @@ use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineCommitMemoryRef;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
-#[cfg(test)]
 use crate::spine::model::SpineTreeNode;
-#[cfg(test)]
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::parse_stack::ParseStack;
@@ -45,6 +43,7 @@ use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 #[cfg(test)]
 use crate::spine::parse_stack::parse_stack_msg_leaf_count;
 use crate::spine::render::memory_response_item;
+use crate::spine::render::read_memory_ref_body;
 use crate::spine::render::render_parse_stack_to_context;
 use crate::spine::render::render_parse_stack_to_context_with_memory_body;
 use crate::spine::store::BODY_DIR;
@@ -203,6 +202,36 @@ pub(crate) struct SpineCloseCompact {
     pub(crate) body: String,
     pub(crate) source_context_range: Range<usize>,
     pub(crate) memory_output_tokens: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpineCompactSourcePlan {
+    pub(crate) node_id: NodeId,
+    pub(crate) source_context_range: Range<usize>,
+    pub(crate) entries: Vec<SpineCompactSourcePlanEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpineCompactSourcePlanEntry {
+    pub(crate) context_index: usize,
+    pub(crate) source_ordinal: usize,
+    pub(crate) source_hash: String,
+    pub(crate) kind: SpineCompactSourceEntryKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SpineCompactSourceEntryKind {
+    RawResponseItem {
+        item: ResponseItem,
+        raw_ordinal: u64,
+        from_user: bool,
+    },
+    ChildMemory {
+        node_id: NodeId,
+        compact_id: String,
+        body: String,
+        body_hash: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1374,6 +1403,148 @@ impl SpineRuntime {
         }))
     }
 
+    pub(crate) fn build_close_source_plan(
+        &self,
+        raw_context_items: &[ResponseItem],
+        node: &NodeId,
+        suffix_start: usize,
+        close_call_id: &str,
+    ) -> Result<SpineCompactSourcePlan, SpineError> {
+        let open_meta = self.current_close_open_meta()?;
+        if &open_meta.id != node {
+            return Err(SpineError::Invariant(format!(
+                "spine.close source plan requested for node {node}, but current close node is {}",
+                open_meta.id
+            )));
+        }
+        if open_meta.index != suffix_start {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close source plan suffix start {suffix_start} does not match h(PS) open index {} for node {node}",
+                open_meta.index
+            )));
+        }
+        if !self.parse_stack.current_open_has_nodes()? {
+            return Err(SpineError::Operation(format!(
+                "spine.close requires non-empty live suffix for node {node}"
+            )));
+        }
+        if suffix_start >= raw_context_items.len() {
+            return Err(SpineError::Operation(format!(
+                "spine.close suffix start {suffix_start} is outside history length {} for node {node}",
+                raw_context_items.len()
+            )));
+        }
+
+        let close_context_end = raw_context_items
+            .iter()
+            .position(|item| is_current_close_like_carrier(item, close_call_id))
+            .unwrap_or(raw_context_items.len());
+        if close_context_end < suffix_start {
+            return Err(SpineError::Operation(format!(
+                "spine.close request index {close_context_end} precedes suffix start {suffix_start} for node {node} call_id={close_call_id}"
+            )));
+        }
+        if close_context_end == suffix_start {
+            return Err(SpineError::Operation(format!(
+                "spine.close requires non-empty live suffix for node {node} call_id={close_call_id}"
+            )));
+        }
+        for item in &raw_context_items[close_context_end..] {
+            if !is_current_close_like_carrier(item, close_call_id) {
+                return Err(SpineError::CompactFailure(format!(
+                    "spine.close source plan found non-carrier host history item after close request for node {node} call_id={close_call_id}: {item:?}"
+                )));
+            }
+        }
+
+        let suffix_nodes = self.current_open_suffix_nodes()?;
+        let mut entries = Vec::new();
+        for node in suffix_nodes {
+            collect_source_plan_entries_from_node(
+                node,
+                suffix_start,
+                raw_context_items,
+                &mut entries,
+            )?;
+        }
+
+        if entries.is_empty() {
+            return Err(SpineError::Operation(format!(
+                "spine.close requires non-empty live suffix for node {}",
+                open_meta.id
+            )));
+        }
+
+        for (expected_ordinal, entry) in entries.iter().enumerate() {
+            if entry.source_ordinal != expected_ordinal {
+                return Err(SpineError::Invariant(format!(
+                    "spine.close source plan ordinal {} is not contiguous at expected ordinal {expected_ordinal}",
+                    entry.source_ordinal
+                )));
+            }
+            let expected_context_index =
+                suffix_start.checked_add(expected_ordinal).ok_or_else(|| {
+                    SpineError::InvalidEvent(
+                        "spine.close source plan context index overflow".to_string(),
+                    )
+                })?;
+            if entry.context_index != expected_context_index {
+                return Err(SpineError::CompactFailure(format!(
+                    "spine.close source plan entry ordinal {} has context_index {}, expected {expected_context_index}",
+                    entry.source_ordinal, entry.context_index
+                )));
+            }
+            let host_item = raw_context_items.get(entry.context_index).ok_or_else(|| {
+                SpineError::CompactFailure(format!(
+                    "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
+                    entry.source_ordinal,
+                    entry.context_index,
+                    raw_context_items.len()
+                ))
+            })?;
+            let expected_item = entry.visible_response_item();
+            let host_hash = hash_response_items(std::slice::from_ref(host_item))?;
+            if host_item != &expected_item || host_hash != entry.source_hash {
+                return Err(SpineError::CompactFailure(format!(
+                    "spine.close source plan mismatch at ordinal {} context_index {} source_hash {} host_hash {host_hash}",
+                    entry.source_ordinal, entry.context_index, entry.source_hash
+                )));
+            }
+        }
+
+        let source_context_end = suffix_start.checked_add(entries.len()).ok_or_else(|| {
+            SpineError::InvalidEvent("spine.close source plan context range overflow".to_string())
+        })?;
+        if source_context_end != close_context_end {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close source plan covers context range [{suffix_start}..{source_context_end}), but close request begins at {close_context_end} for node {}",
+                open_meta.id
+            )));
+        }
+
+        Ok(SpineCompactSourcePlan {
+            node_id: open_meta.id.clone(),
+            source_context_range: suffix_start..source_context_end,
+            entries,
+        })
+    }
+
+    fn current_open_suffix_nodes(&self) -> Result<&[SpineTreeNode], SpineError> {
+        let open_idx = self
+            .parse_stack
+            .symbols
+            .iter()
+            .rposition(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Open(_))))
+            .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))?;
+        let suffix = &self.parse_stack.symbols[open_idx + 1..];
+        let [Symbol::SpineTreeNodes(nodes)] = suffix else {
+            return Err(SpineError::InvalidEvent(format!(
+                "spine.close source plan expected one live node list after current Open, found {suffix:?}"
+            )));
+        };
+        Ok(nodes)
+    }
+
     pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
         self.control_call_ids.contains(call_id)
             || self
@@ -2025,6 +2196,102 @@ fn raw_item_requires_spine_coverage(
         ResponseItem::Other | ResponseItem::CompactionTrigger => false,
         _ => true,
     }
+}
+
+impl SpineCompactSourcePlanEntry {
+    pub(crate) fn visible_response_item(&self) -> ResponseItem {
+        match &self.kind {
+            SpineCompactSourceEntryKind::RawResponseItem { item, .. } => item.clone(),
+            SpineCompactSourceEntryKind::ChildMemory { body, .. } => memory_response_item(body),
+        }
+    }
+}
+
+fn collect_source_plan_entries_from_node(
+    node: &SpineTreeNode,
+    suffix_start: usize,
+    raw_context_items: &[ResponseItem],
+    entries: &mut Vec<SpineCompactSourcePlanEntry>,
+) -> Result<(), SpineError> {
+    match node {
+        SpineTreeNode::MsgAsLeafNode { msg, from_user } => match msg {
+            SegRef::ResponseItem {
+                raw_ordinal,
+                context_index,
+            } => {
+                let context_index = *context_index;
+                let source_ordinal = context_index.checked_sub(suffix_start).ok_or_else(|| {
+                    SpineError::CompactFailure(format!(
+                        "spine.close source plan raw item context_index {context_index} precedes suffix start {suffix_start}"
+                    ))
+                })?;
+                let item = raw_context_items
+                    .get(context_index)
+                    .cloned()
+                    .ok_or_else(|| {
+                        SpineError::CompactFailure(format!(
+                            "spine.close source plan raw item context_index {context_index} exceeds host history length {}",
+                            raw_context_items.len()
+                        ))
+                    })?;
+                let source_hash = hash_response_items(std::slice::from_ref(&item))?;
+                entries.push(SpineCompactSourcePlanEntry {
+                    context_index,
+                    source_ordinal,
+                    source_hash,
+                    kind: SpineCompactSourceEntryKind::RawResponseItem {
+                        item,
+                        raw_ordinal: *raw_ordinal,
+                        from_user: *from_user,
+                    },
+                });
+                Ok(())
+            }
+            SegRef::Memory { memory_id, .. } => Err(SpineError::CompactFailure(format!(
+                "spine.close source plan cannot trust SegRef::Memory {memory_id} without MemoryRef body_hash provenance"
+            ))),
+        },
+        SpineTreeNode::SpineTree { memory, .. } => {
+            let context_index = memory.source_context_range.start;
+            let source_ordinal = context_index.checked_sub(suffix_start).ok_or_else(|| {
+                SpineError::CompactFailure(format!(
+                    "spine.close source plan child memory context_index {context_index} precedes suffix start {suffix_start}"
+                ))
+            })?;
+            let body = read_memory_ref_body(memory)?;
+            let visible_item = memory_response_item(&body);
+            let source_hash = hash_response_items(std::slice::from_ref(&visible_item))?;
+            entries.push(SpineCompactSourcePlanEntry {
+                context_index,
+                source_ordinal,
+                source_hash,
+                kind: SpineCompactSourceEntryKind::ChildMemory {
+                    node_id: memory.node_id.clone(),
+                    compact_id: memory.compact_id.clone(),
+                    body,
+                    body_hash: memory.body_hash.clone(),
+                },
+            });
+            Ok(())
+        }
+    }
+}
+
+fn is_current_close_like_carrier(item: &ResponseItem, close_call_id: &str) -> bool {
+    matches!(
+        item,
+        ResponseItem::FunctionCall {
+            call_id,
+            namespace,
+            name,
+            ..
+        } if call_id == close_call_id
+            && namespace.as_deref() == Some(SPINE_NAMESPACE)
+            && is_spine_close_like_tool_name(name)
+    ) || matches!(
+        item,
+        ResponseItem::FunctionCallOutput { call_id, .. } if call_id == close_call_id
+    )
 }
 
 fn close_commit_marker(

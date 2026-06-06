@@ -103,8 +103,12 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::image_close_tag_text;
+use codex_protocol::models::image_open_tag_text;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -200,11 +204,32 @@ fn spine_summary_sse(id: &str, text: &str) -> String {
     sse(vec![ev_assistant_message(id, text), ev_completed(id)])
 }
 
-fn spine_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
+fn spine_slot_summary_sse(id: &str, text: &str) -> String {
+    spine_slots_summary_sse(id, &[text])
+}
+
+fn spine_slots_summary_sse(id: &str, texts: &[&str]) -> String {
+    let slot_json = serde_json::json!({
+        "memory_slots": texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                serde_json::json!({
+                    "slot_id": format!("slot_{}", index + 1),
+                    "body": text,
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .to_string();
+    sse(vec![ev_assistant_message(id, &slot_json), ev_completed(id)])
+}
+
+fn spine_slot_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
     texts
         .iter()
         .enumerate()
-        .map(|(index, text)| spine_summary_sse(&format!("spine-summary-{index}"), text))
+        .map(|(index, text)| spine_slot_summary_sse(&format!("spine-summary-{index}"), text))
         .collect()
 }
 
@@ -530,7 +555,7 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse("post-next-summary", summary_text),
+        spine_slot_summary_sse("post-next-summary", summary_text),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -576,7 +601,7 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
         .await
         .expect("commit post-next open");
 
-    let child_body = user_message("post-next child body");
+    let child_body = assistant_message("post-next child body");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -693,7 +718,7 @@ async fn make_spine_close_window_missing_output_carrier(summary_text: &str) -> C
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse("close-window-summary", summary_text),
+        spine_slot_summary_sse("close-window-summary", summary_text),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -741,7 +766,7 @@ async fn make_spine_close_window_missing_output_carrier(summary_text: &str) -> C
         .await
         .expect("commit close-window open");
 
-    let child_body = user_message("close-window child body");
+    let child_body = assistant_message("close-window child body");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -826,7 +851,7 @@ async fn make_spine_next_window_missing_output_carrier(summary_text: &str) -> Po
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse("next-window-summary", summary_text),
+        spine_slot_summary_sse("next-window-summary", summary_text),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -874,7 +899,7 @@ async fn make_spine_next_window_missing_output_carrier(summary_text: &str) -> Po
         .await
         .expect("commit next-window open");
 
-    let child_body = user_message("next-window child body");
+    let child_body = assistant_message("next-window child body");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -975,7 +1000,7 @@ async fn make_spine_session_with_closed_child(
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse("closed-child-summary", summary_text),
+        spine_slot_summary_sse("closed-child-summary", summary_text),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -1021,7 +1046,7 @@ async fn make_spine_session_with_closed_child(
         .await
         .expect("commit open");
 
-    let child_body = user_message("child body before close");
+    let child_body = assistant_message("child body before close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -8804,7 +8829,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                 crate::client::X_CODEX_TURN_STATE_HEADER,
                 "spine-close-turn-state",
             ),
-            sse_response(spine_summary_sse(
+            sse_response(spine_slot_summary_sse(
                 "spine-close-summary",
                 "real compact summary",
             )),
@@ -8858,7 +8883,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .expect("commit open output");
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 
-    let inner = user_message("inside");
+    let inner = assistant_message("inside");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
         .await
@@ -8915,14 +8940,14 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         compact_request.body_json()["instructions"]
             .as_str()
             .is_some_and(|instructions| !instructions
-                .contains("Write a compact handoff memory for Spine node 1.1.1")),
+                .contains("Write compact handoff slot bodies for Spine node 1.1.1")),
         "compact directive should be a trailing prompt input message, not duplicated into base instructions"
     );
     assert!(
         compact_request.body_contains_text("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
     );
     assert!(compact_request.body_contains_text("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY"));
-    assert!(compact_request.body_contains_text("---------- Spine Suffix Begin ----------"));
+    assert!(compact_request.body_contains_text("---------- Spine Suffix Boundary ----------"));
     assert!(!compact_request.has_function_call("open"));
     assert!(compact_request.function_call_output_text("open").is_none());
     assert!(!compact_request.has_function_call("close"));
@@ -8939,46 +8964,22 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                 .contains("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY")
         })
         .expect("prefix-only context should remain in full compact input");
-    let target_index = input
-        .iter()
-        .position(|item| {
-            item.to_string()
-                .contains("---------- Spine Close Target ----------")
-        })
-        .expect("close target projection should be inserted into compact input");
-    let boundary_index = input
-        .iter()
-        .position(|item| {
-            item.to_string()
-                .contains("---------- Spine Suffix Begin ----------")
-        })
-        .expect("suffix boundary should be inserted into compact input");
     let suffix_index = input
         .iter()
         .position(|item| item.to_string().contains("inside"))
         .expect("original suffix item should remain in compact input");
-    let directive_index = input
+    let tail_index = input
         .iter()
         .position(|item| {
             item.to_string()
                 .contains("---------- Spine Compact Directive ----------")
         })
-        .expect("compact directive should be appended to compact input");
+        .expect("compact directive tail should be appended to compact input");
     assert!(
-        prefix_index < target_index
-            && target_index < boundary_index
-            && boundary_index < suffix_index
-            && suffix_index < directive_index,
-        "compact input should be full prefix || close target projection || boundary || original suffix || directive, got prefix={prefix_index} target={target_index} boundary={boundary_index} suffix={suffix_index} directive={directive_index}: {input:?}"
+        prefix_index < suffix_index && suffix_index < tail_index,
+        "compact input should be raw prefix || raw suffix || tail directive, got prefix={prefix_index} suffix={suffix_index} tail={tail_index}: {input:?}"
     );
-    assert_eq!(
-        input[target_index]
-            .get("role")
-            .and_then(|role| role.as_str()),
-        Some("system"),
-        "close target projection should be a system message: {}",
-        input_text(target_index)
-    );
+    let tail_text = input_text(tail_index);
     assert!(
         system_texts.iter().any(
             |text| text.contains("---------- Spine Close Target ----------")
@@ -9002,14 +9003,6 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         "model-authored node summary must not be promoted into compact system prompt: {system_texts:?}"
     );
     assert_eq!(
-        input[boundary_index]
-            .get("role")
-            .and_then(|role| role.as_str()),
-        Some("system"),
-        "suffix boundary should be a system message: {}",
-        input_text(boundary_index)
-    );
-    assert_eq!(
         input
             .last()
             .and_then(|item| item.get("role"))
@@ -9021,8 +9014,8 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         input[suffix_index]
             .get("role")
             .and_then(|role| role.as_str()),
-        Some("user"),
-        "suffix should be the original user message, not a system evidence copy: {}",
+        Some("assistant"),
+        "suffix should be the original assistant message, not a system evidence copy: {}",
         input_text(suffix_index)
     );
     assert!(
@@ -9033,11 +9026,13 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     assert!(
         system_texts.iter().any(|text| text
             .contains("---------- Spine Compact Directive ----------")
-            && text.contains("Write a compact handoff memory for Spine node 1.1.1")
+            && text.contains("Write compact handoff slot bodies for Spine node 1.1.1")
             && text.contains("1. User Intent")
             && text.contains("2. Work Done")
             && text.contains("3. Critical Details")
             && text.contains("4. Resume Focus")
+            && text.contains("----------- Spine Compact Slot Map ----------")
+            && text.contains("<slot_1: compact source ordinals [0]>")
             && text
                 .contains("If there is conflict between an old plan and a later user correction")
             && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
@@ -9055,21 +9050,24 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     assert!(
         system_texts.iter().any(
-            |text| text.contains("---------- Spine Suffix Begin ----------")
+            |text| text.contains("---------- Spine Suffix Boundary ----------")
                 && text
-                    .contains("Messages below this boundary are the suffix for Spine node 1.1.1")
-                && text.contains("Messages above are prefix context")
+                    .contains("The raw suffix for Spine node 1.1.1 is already present immediately before this tail directive.")
+                && text.contains("Source context range: [1..2).")
         ),
         "suffix boundary should mark the materialized Open.meta.index boundary: {system_texts:?}"
     );
     assert!(
         user_texts.iter().all(|text| {
             !text.contains("---------- Spine Compact Directive ----------")
-                && !text.contains("Write a compact handoff memory for Spine node")
+                && !text.contains("Write compact handoff slot bodies for Spine node")
                 && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
         }),
         "compact directive must not be injected as user input: {user_texts:?}"
     );
+    assert!(tail_text.contains("---------- Spine Close Target ----------"));
+    assert!(tail_text.contains("---------- Spine Suffix Boundary ----------"));
+    assert!(tail_text.contains("----------- Spine Compact Slot Map ----------"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -9086,7 +9084,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                             && text.contains("real compact summary")
                             && !text.contains("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY")
                             && !text.contains("---------- Spine Close Target ----------")
-                            && !text.contains("---------- Spine Suffix Begin ----------")
+                            && !text.contains("---------- Spine Suffix Boundary ----------")
                             && !text.contains("---------- Spine Compact Directive ----------")
                             && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
                 )
@@ -9140,11 +9138,335 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
 }
 
 #[tokio::test]
+async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_prompt() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_slot_summary_sse("spine-close-image-summary", "image prefix compact summary"),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, mut turn_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+                config.model_provider.base_url = Some(base_url.clone());
+                config.model_provider.supports_websockets = false;
+            },
+        )
+        .await;
+    Arc::get_mut(&mut turn_context)
+        .expect("turn context should be unique")
+        .model_info
+        .input_modalities = vec![InputModality::Text];
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let image_url = "data:image/png;base64,SPINE_RAW_IMAGE_URL_SENTINEL_42";
+    let prefix = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "prefix multimodal user text before close".to_string(),
+            },
+            ContentItem::InputImage {
+                image_url: image_url.to_string(),
+                detail: Some(ImageDetail::High),
+            },
+        ],
+        phase: None,
+    };
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "image-prefix-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "image-prefix-open".to_string(),
+            "image prefix child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("image-prefix-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open output");
+
+    let inner = assistant_message("assistant suffix requiring generated compact slot");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
+        .await
+        .expect("record suffix evidence");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "image-prefix-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .stage_spine_close("image-prefix-close".to_string(), None)
+        .await
+        .expect("stage close");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("image-prefix-close"),
+    )
+    .await
+    .expect("commit close output and record raw evidence");
+
+    let compact_request = compact_mock.single_request();
+    assert_close_compact_hard_no_tool_request(
+        &compact_request,
+        "spine.close compact with text-only model should use hard no-tool envelope",
+    );
+    assert!(
+        compact_request
+            .body_contains_text("image content omitted because you do not support image input")
+    );
+    assert!(
+        !compact_request.body_contains_text(image_url),
+        "text-only compact prompt must not send raw image URLs"
+    );
+    assert!(
+        compact_request.message_input_image_urls("user").is_empty(),
+        "text-only compact prompt must not contain input_image spans"
+    );
+    assert!(
+        compact_request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == "prefix multimodal user text before close"),
+        "non-image text in the multimodal prefix should remain visible"
+    );
+
+    let history = session.clone_history().await;
+    assert!(
+        history.raw_items().iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if content.iter().any(|content| matches!(
+                    content,
+                    ContentItem::InputImage { image_url: existing, .. } if existing == image_url
+                ))
+        )),
+        "raw/materialized history should keep provenance image data; only the model prompt is normalized"
+    );
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
+async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_prompt() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_slot_summary_sse(
+            "spine-close-suffix-image-summary",
+            "image suffix compact summary",
+        ),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, mut turn_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+                config.model_provider.base_url = Some(base_url.clone());
+                config.model_provider.supports_websockets = false;
+            },
+        )
+        .await;
+    Arc::get_mut(&mut turn_context)
+        .expect("turn context should be unique")
+        .model_info
+        .input_modalities = vec![InputModality::Text];
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("suffix image prefix outside closed node");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "image-suffix-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "image-suffix-open".to_string(),
+            "image suffix child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("image-suffix-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open output");
+
+    let image_url = "data:image/png;base64,SPINE_RAW_IMAGE_URL_SENTINEL_43";
+    let suffix = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "suffix multimodal user text before close".to_string(),
+            },
+            ContentItem::InputText {
+                text: image_open_tag_text(),
+            },
+            ContentItem::InputImage {
+                image_url: image_url.to_string(),
+                detail: Some(ImageDetail::High),
+            },
+            ContentItem::InputText {
+                text: image_close_tag_text(),
+            },
+        ],
+        phase: None,
+    };
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&suffix))
+        .await
+        .expect("record suffix image evidence");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "image-suffix-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .stage_spine_close("image-suffix-close".to_string(), None)
+        .await
+        .expect("stage close");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("image-suffix-close"),
+    )
+    .await
+    .expect("commit close output and record raw evidence");
+
+    let compact_request = compact_mock.single_request();
+    assert_close_compact_hard_no_tool_request(
+        &compact_request,
+        "spine.close compact with text-only suffix image should use hard no-tool envelope",
+    );
+    assert!(
+        compact_request
+            .body_contains_text("image content omitted because you do not support image input")
+    );
+    assert!(
+        compact_request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == "suffix multimodal user text before close"),
+        "non-image text in the multimodal suffix should remain visible"
+    );
+    assert!(
+        compact_request.body_contains_text("<slot_1: compact source ordinals [0]>"),
+        "multimodal suffix user message should be represented by a generated slot"
+    );
+    assert!(
+        !compact_request.body_contains_text(image_url),
+        "text-only compact prompt must not send raw suffix image URLs"
+    );
+    assert!(
+        compact_request.message_input_image_urls("user").is_empty(),
+        "text-only compact prompt must not contain user input_image spans"
+    );
+    assert!(
+        !compact_request
+            .body_json()
+            .to_string()
+            .contains("\"input_image\""),
+        "text-only compact prompt must not contain input_image spans"
+    );
+
+    let history = session.clone_history().await;
+    let items = history.raw_items();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0], prefix);
+    assert!(matches!(
+        &items[1],
+        ResponseItem::Message { role, content, .. }
+            if role == "user"
+                && matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                            && text.contains("## Memory Slot\nimage suffix compact summary")
+                            && !text.contains("## User Message")
+                            && !text.contains(image_url)
+                )
+    ));
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    {
+        InitialHistory::Resumed(resumed) => spine_raw_items_after_rollback(&resumed.history),
+        _ => panic!("expected resumed rollout history"),
+    };
+    assert!(
+        raw_items.iter().flatten().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if content.iter().any(|content| matches!(
+                    content,
+                    ContentItem::InputImage { image_url: existing, .. } if existing == image_url
+                ))
+        )),
+        "raw rollout provenance should keep suffix image data; only the compact model prompt is normalized"
+    );
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)"),
+        items
+    );
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
 async fn spine_next_control_carrier_does_not_enter_h_ps() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse("spine-next-summary", "next compact summary"),
+        spine_slot_summary_sse("spine-next-summary", "next compact summary"),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -9193,7 +9515,7 @@ async fn spine_next_control_carrier_does_not_enter_h_ps() {
         .await
         .expect("commit open");
 
-    let inner = user_message("inside next");
+    let inner = assistant_message("inside next");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
         .await
@@ -9909,7 +10231,7 @@ async fn close_commit_is_atomic_across_sidecar_and_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse(
+        spine_slot_summary_sse(
             "spine-close-raw-output-failure",
             "close failure compact summary",
         ),
@@ -9962,7 +10284,7 @@ async fn close_commit_is_atomic_across_sidecar_and_history() {
         .await
         .expect("commit open");
 
-    let inner = user_message("child body before close raw output failure");
+    let inner = assistant_message("child body before close raw output failure");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
         .await
@@ -10038,7 +10360,7 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse(
+        spine_slot_summary_sse(
             "spine-close-history-failure",
             "close history failure compact summary",
         ),
@@ -10087,7 +10409,7 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
         .await
         .expect("commit open");
 
-    let inner = user_message("child body before close history failure");
+    let inner = assistant_message("child body before close history failure");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
         .await
@@ -10188,7 +10510,7 @@ async fn spine_next_raw_output_append_failure_does_not_replace_host_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse(
+        spine_slot_summary_sse(
             "spine-next-raw-output-failure",
             "next failure compact summary",
         ),
@@ -10241,7 +10563,7 @@ async fn spine_next_raw_output_append_failure_does_not_replace_host_history() {
         .await
         .expect("commit open");
 
-    let inner = user_message("child body before next raw output failure");
+    let inner = assistant_message("child body before next raw output failure");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
         .await
@@ -10376,7 +10698,7 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
         .await
         .expect("commit open");
 
-    let child_body = user_message("child body before image-generation next failure");
+    let child_body = assistant_message("child body before image-generation next failure");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -10442,7 +10764,7 @@ async fn spine_next_native_compact_partial_success_does_not_open_sibling() {
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .set_body_string(spine_summary_sse(
+            .set_body_string(spine_slot_summary_sse(
                 "late-spine-next-summary",
                 "late next compact summary",
             ))
@@ -10505,7 +10827,7 @@ async fn spine_next_native_compact_partial_success_does_not_open_sibling() {
         .await
         .expect("commit open");
 
-    let child_body = user_message("partial next child work");
+    let child_body = assistant_message("partial next child work");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -10679,7 +11001,7 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         .await
         .expect("commit open");
 
-    let child_body = user_message("child work before next overflow");
+    let child_body = assistant_message("child work before next overflow");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -10720,7 +11042,7 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         Some("auto")
     );
     assert!(
-        requests[0].body_contains_text("Write a compact handoff memory for Spine node"),
+        requests[0].body_contains_text("Write compact handoff slot bodies for Spine node"),
         "first request should be the original spine.next suffix compact"
     );
     assert!(
@@ -10729,7 +11051,7 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         "first request should carry spine.next close-target metadata"
     );
     assert!(
-        !requests[1].body_contains_text("Write a compact handoff memory for Spine node"),
+        !requests[1].body_contains_text("Write compact handoff slot bodies for Spine node"),
         "native auto compact must not reuse the spine.next compact directive"
     );
 
@@ -10898,6 +11220,10 @@ async fn spine_close_compact_uses_hard_no_tool_envelope_after_sampling_request()
         &server,
         vec![
             sse(vec![
+                ev_assistant_message(
+                    "spine-close-precompact-evidence",
+                    "successful close suffix evidence",
+                ),
                 ev_function_call_with_namespace(
                     "call-spine-close-success",
                     SPINE_NAMESPACE,
@@ -10906,13 +11232,13 @@ async fn spine_close_compact_uses_hard_no_tool_envelope_after_sampling_request()
                 ),
                 ev_completed("spine-close-tool-response"),
             ]),
-            sse(vec![
-                ev_assistant_message(
-                    "spine-close-compact-success",
+            spine_slots_summary_sse(
+                "spine-close-compact-success",
+                &[
                     "successful close compact memory",
-                ),
-                ev_completed("spine-close-compact-response"),
-            ]),
+                    "successful close tool request memory",
+                ],
+            ),
             sse(vec![
                 ev_assistant_message("spine-close-follow-up", "closed"),
                 ev_completed("spine-close-follow-up-response"),
@@ -11010,38 +11336,10 @@ async fn spine_close_bridge_can_close_initial_root_child() {
     .await
     .expect("commit close output and record raw evidence");
 
-    assert_eq!(compact_mock.requests().len(), 1);
-    let compact_request = compact_mock.single_request();
-    assert!(compact_request.body_contains_text("initial root child work"));
     assert!(
-        compact_request.body_contains_text("Write a compact handoff memory for Spine node 1.1")
+        compact_mock.requests().is_empty(),
+        "pure user suffix should assemble zero-slot memory without a model compact request"
     );
-    assert!(
-        compact_request
-            .body_contains_text("Messages below this boundary are the suffix for Spine node 1.1")
-    );
-    let compact_input = compact_request.input();
-    let final_compact_item = compact_input
-        .last()
-        .expect("compact prompt should have a final memory template item");
-    assert_eq!(
-        final_compact_item
-            .get("role")
-            .and_then(serde_json::Value::as_str),
-        Some("system")
-    );
-    let final_compact_text = final_compact_item
-        .get("content")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|content| content.first())
-        .and_then(|span| span.get("text"))
-        .and_then(serde_json::Value::as_str)
-        .expect("final compact prompt item should be input text");
-    assert!(
-        final_compact_text.starts_with("----------- Spine Compact Memory Template ----------"),
-        "{final_compact_text}"
-    );
-    assert!(final_compact_text.contains("${\ninitial root child work\n}"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -11054,8 +11352,8 @@ async fn spine_close_bridge_can_close_initial_root_child() {
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1")
-                            && text.contains("root child compact summary")
-                            && !text.contains("initial root child work")
+                            && text.contains("## User Message\ninitial root child work")
+                            && !text.contains("root child compact summary")
                             && !text.contains("---------- Spine Compact Directive ----------")
                 )
     ));
@@ -11093,13 +11391,95 @@ async fn spine_close_bridge_can_close_initial_root_child() {
 }
 
 #[tokio::test]
+async fn spine_close_instruction_forces_slot_when_suffix_is_exact_only() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_slot_summary_sse(
+            "spine-close-instruction-only-summary",
+            "preserved close instruction: KEEP_CLOSE_GUIDANCE_42",
+        ),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let root_child_work = user_message("initial exact-only root child work");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&root_child_work))
+        .await
+        .expect("record conversation items");
+
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "close-root-child-with-instruction");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record conversation items");
+    session
+        .stage_spine_close(
+            "close-root-child-with-instruction".to_string(),
+            Some("KEEP_CLOSE_GUIDANCE_42".to_string()),
+        )
+        .await
+        .expect("stage close");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("close-root-child-with-instruction"),
+    )
+    .await
+    .expect("commit close output and record raw evidence");
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let compact_request = compact_mock.single_request();
+    assert!(compact_request.body_contains_text("KEEP_CLOSE_GUIDANCE_42"));
+    assert!(
+        compact_request.body_contains_text("<slot_1: preserve close instruction and resume focus>")
+    );
+
+    let history = session.clone_history().await;
+    let items = history.raw_items();
+    assert_eq!(items.len(), 1);
+    assert!(matches!(
+        &items[0],
+        ResponseItem::Message { role, content, .. }
+            if role == "user"
+                && matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1")
+                            && text.contains("## User Message\ninitial exact-only root child work")
+                            && text.contains("## Memory Slot\npreserved close instruction: KEEP_CLOSE_GUIDANCE_42")
+                            && !text.contains("## User Message\nKEEP_CLOSE_GUIDANCE_42")
+                            && !text.contains("---------- Spine Compact Directive ----------")
+                )
+    ));
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
 async fn spine_close_aborts_if_history_changes_during_compact() {
     let server = start_mock_server().await;
     let delayed_compact = core_test_support::responses::mount_response_once(
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .set_body_string(spine_summary_sse(
+            .set_body_string(spine_slot_summary_sse(
                 "delayed-spine-summary",
                 "delayed compact summary",
             ))
@@ -11147,7 +11527,7 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
         .expect("commit open output");
-    let inner = user_message("inside");
+    let inner = assistant_message("inside");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
         .await
@@ -11403,7 +11783,7 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
         .expect("commit open");
-    let child_body = user_message("child body before encrypted only close");
+    let child_body = assistant_message("child body before encrypted only close");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -11458,7 +11838,7 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .set_body_string(spine_summary_sse(
+            .set_body_string(spine_slot_summary_sse(
                 "late-spine-summary",
                 "late close compact summary",
             ))
@@ -11514,7 +11894,7 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
         .expect("commit open");
-    let child_body = user_message("partial child work");
+    let child_body = assistant_message("partial child work");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -11668,7 +12048,7 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
         .await
         .expect("commit open");
 
-    let child_body = user_message("child work before close overflow");
+    let child_body = assistant_message("child work before close overflow");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -11705,11 +12085,11 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
         Some("auto")
     );
     assert!(
-        requests[0].body_contains_text("Write a compact handoff memory for Spine node"),
+        requests[0].body_contains_text("Write compact handoff slot bodies for Spine node"),
         "first request should be the original spine.close suffix compact"
     );
     assert!(
-        !requests[1].body_contains_text("Write a compact handoff memory for Spine node"),
+        !requests[1].body_contains_text("Write compact handoff slot bodies for Spine node"),
         "native auto compact must not reuse the spine.close compact directive"
     );
 
@@ -11763,7 +12143,7 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_sequence(
         &server,
-        spine_summary_sse_sequence(&["inner compact summary", "outer compact summary"]),
+        spine_slot_summary_sse_sequence(&["inner compact summary", "outer compact summary"]),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -11856,7 +12236,7 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     .await
     .expect("commit inner close and record raw evidence");
 
-    let after_inner = user_message("after inner in outer suffix");
+    let after_inner = assistant_message("after inner in outer suffix");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&after_inner))
         .await
@@ -11903,7 +12283,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
     let responses_mock = mount_sse_sequence(
         &server,
         vec![
-            spine_summary_sse(
+            spine_slot_summary_sse(
                 "close-compact-summary",
                 "closed child summary before native compact",
             ),
@@ -11960,7 +12340,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
         .await
         .expect("commit open");
 
-    let child_body = user_message("child body before native compact");
+    let child_body = assistant_message("child body before native compact");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -12694,7 +13074,7 @@ async fn replacement_history_validates_at_compact_boundary() {
     let responses_mock = mount_sse_sequence(
         &server,
         vec![
-            spine_summary_sse("sequence-child-summary", "sequence child compact summary"),
+            spine_slot_summary_sse("sequence-child-summary", "sequence child compact summary"),
             sse(vec![
                 ev_assistant_message("sequence-native-summary", "sequence native compact summary"),
                 ev_completed("sequence-native-response"),
@@ -12747,7 +13127,7 @@ async fn replacement_history_validates_at_compact_boundary() {
         .expect("commit open");
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 
-    let child_body = user_message("sequence child body");
+    let child_body = assistant_message("sequence child body");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await
@@ -12863,7 +13243,7 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
                 ev_assistant_message("root-compact-summary", "native root compact summary"),
                 ev_completed("root-compact-response"),
             ]),
-            spine_summary_sse("post-native-close-summary", "post native close summary"),
+            spine_slot_summary_sse("post-native-close-summary", "post native close summary"),
         ],
     )
     .await;
@@ -13412,7 +13792,7 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse(
+        spine_slot_summary_sse(
             "spine-close-overlay-summary",
             "overlay close compact summary",
         ),
@@ -13467,7 +13847,7 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
         .await
         .expect("commit open");
 
-    let inner = user_message("overlay close inner work");
+    let inner = assistant_message("overlay close inner work");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
         .await
@@ -13830,7 +14210,7 @@ async fn spine_next_sibling_tree_uses_provider_open_baseline() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse("next-baseline-summary", "next baseline compact"),
+        spine_slot_summary_sse("next-baseline-summary", "next baseline compact"),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -13871,7 +14251,7 @@ async fn spine_next_sibling_tree_uses_provider_open_baseline() {
         .await
         .expect("commit open");
 
-    let child_body = user_message("next baseline child body");
+    let child_body = assistant_message("next baseline child body");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
         .await

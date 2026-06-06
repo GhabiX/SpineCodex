@@ -18,6 +18,10 @@ pub(crate) use runtime::SPINE_TOOL_OPEN;
 pub(crate) use runtime::SPINE_TOOL_TREE;
 pub(crate) use runtime::SpineCloseCompact;
 pub(crate) use runtime::SpineCommitKind;
+pub(crate) use runtime::SpineCompactSourceEntryKind;
+pub(crate) use runtime::SpineCompactSourcePlan;
+#[cfg(test)]
+pub(crate) use runtime::SpineCompactSourcePlanEntry;
 pub(crate) use runtime::SpineError;
 pub(crate) use runtime::SpineOpenNodeContextProjection;
 pub(crate) use runtime::SpinePendingCloseAction;

@@ -57,6 +57,7 @@ pub(super) fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Resul
     Ok(serde_json::from_str(&text)?)
 }
 
+#[cfg(test)]
 pub(super) fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<(), SpineError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

@@ -134,9 +134,8 @@ impl ContextManager {
     /// normalization and drops un-suited items. When `input_modalities` does not
     /// include `InputModality::Image`, images are stripped from messages and tool
     /// outputs.
-    pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
-        self.normalize_history(input_modalities);
-        self.items
+    pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
+        normalize_prompt_items(self.items, input_modalities)
     }
 
     /// Returns raw items in the history.
@@ -396,15 +395,9 @@ impl ContextManager {
     /// 1. every call (function/custom) has a corresponding output entry
     /// 2. every output has a corresponding call entry
     /// 3. when images are unsupported, image content is stripped from messages and tool outputs
+    #[cfg(test)]
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
-        // all function/tool calls must have a corresponding output
-        normalize::ensure_call_outputs_present(&mut self.items);
-
-        // all outputs must have a corresponding function/tool call
-        normalize::remove_orphan_outputs(&mut self.items);
-
-        // strip images when model does not support them
-        normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
+        self.items = normalize_prompt_items(std::mem::take(&mut self.items), input_modalities);
     }
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
@@ -490,6 +483,21 @@ impl ContextManager {
         }
         cut_idx
     }
+}
+
+pub(crate) fn normalize_prompt_items(
+    mut items: Vec<ResponseItem>,
+    input_modalities: &[InputModality],
+) -> Vec<ResponseItem> {
+    // all function/tool calls must have a corresponding output
+    normalize::ensure_call_outputs_present(&mut items);
+
+    // all outputs must have a corresponding function/tool call
+    normalize::remove_orphan_outputs(&mut items);
+
+    // strip images when model does not support them
+    normalize::strip_images_when_unsupported(input_modalities, &mut items);
+    items
 }
 
 pub(crate) fn truncate_function_output_payload(

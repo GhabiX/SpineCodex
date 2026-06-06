@@ -12,6 +12,7 @@ use crate::spine::io::read_json_lines;
 use crate::spine::io::rollout_parent;
 use crate::spine::io::rollout_stem;
 use crate::spine::io::sha1_hex;
+#[cfg(test)]
 use crate::spine::io::write_json_file;
 use crate::spine::io::write_json_file_if_unchanged;
 use crate::spine::model::COMMIT_MARKER_VERSION;

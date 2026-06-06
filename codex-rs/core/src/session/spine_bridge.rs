@@ -12,6 +12,7 @@ use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCloseCompact;
 use crate::spine::SpineCommitKind;
+use crate::spine::SpineCompactSourcePlan;
 use crate::spine::SpinePendingCloseAction;
 use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRootCompactResult;
@@ -637,23 +638,30 @@ impl Session {
                 instruction,
                 next_summary,
             }) => {
-                let close_target_projection = {
+                let history = self.clone_history().await;
+                let expected_history = history.raw_items().to_vec();
+                let (close_target_projection, source_plan): (String, SpineCompactSourcePlan) = {
                     let guard = spine_slot.lock().await;
                     guard.ensure_valid()?;
                     let Some(spine) = guard.runtime() else {
                         return Err(SpineError::Invariant(format!(
-                            "spine runtime missing while building close target projection for call_id={call_id}"
+                            "spine runtime missing while building close compact source plan for call_id={call_id}"
                         )));
                     };
-                    build_spine_close_target_projection(
+                    let close_target_projection = build_spine_close_target_projection(
                         spine,
                         &node,
                         action,
                         next_summary.as_deref(),
-                    )?
+                    )?;
+                    let source_plan = spine.build_close_source_plan(
+                        history.raw_items(),
+                        &node,
+                        suffix_start,
+                        call_id,
+                    )?;
+                    (close_target_projection, source_plan)
                 };
-                let history = self.clone_history().await;
-                let expected_history = history.raw_items().to_vec();
                 let compact = match Box::pin(self.spine_compact_close(
                     turn_context,
                     client_session,
@@ -663,6 +671,7 @@ impl Session {
                     item,
                     instruction,
                     close_target_projection,
+                    source_plan,
                 ))
                 .await
                 {
