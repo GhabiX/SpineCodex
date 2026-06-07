@@ -285,8 +285,9 @@ async fn run_compact_task_inner_impl(
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
     };
-    let spine_tree_snapshot = match sess
+    let replace_outcome = match sess
         .replace_compacted_history(
+            turn_context.as_ref(),
             new_history,
             reference_context_item,
             compacted_item,
@@ -294,13 +295,14 @@ async fn run_compact_task_inner_impl(
         )
         .await
     {
-        Ok(spine_tree_snapshot) => spine_tree_snapshot,
+        Ok(replace_outcome) => replace_outcome,
         Err(err) => {
             sess.replace_history(pre_compact_items, pre_compact_reference_context_item)
                 .await;
             return Err(err);
         }
     };
+    let spine_tree_snapshot = replace_outcome.spine_tree_snapshot;
     if let Some(snapshot) = spine_tree_snapshot {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;

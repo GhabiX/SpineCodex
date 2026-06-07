@@ -287,6 +287,10 @@ pub(crate) struct PreviousTurnSettings {
     pub(crate) realtime_active: Option<bool>,
 }
 
+pub(crate) struct ReplaceCompactedHistoryOutcome {
+    pub(crate) spine_tree_snapshot: Option<SpineTreeUpdateEvent>,
+}
+
 #[cfg(test)]
 use crate::SkillLoadOutcome;
 #[cfg(test)]
@@ -344,6 +348,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::DeprecationNoticeEvent;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -2912,11 +2918,12 @@ impl Session {
 
     pub(crate) async fn replace_compacted_history(
         &self,
+        turn_context: &TurnContext,
         mut items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         mut compacted_item: CompactedItem,
         root_compact_handoff: Option<SpineTokenBaselines>,
-    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
+    ) -> CodexResult<ReplaceCompactedHistoryOutcome> {
         let spine_tree_snapshot = self
             .install_spine_root_compact_after_native_compact(
                 &mut items,
@@ -2924,6 +2931,7 @@ impl Session {
                 root_compact_handoff,
             )
             .await?;
+        let installed_spine_root_compact = spine_tree_snapshot.is_some();
         let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
         if let Some(turn_context_item) = reference_context_item.clone() {
             rollout_items.push(RolloutItem::TurnContext(turn_context_item));
@@ -2941,8 +2949,34 @@ impl Session {
         }
         self.replace_history(items, reference_context_item.clone())
             .await;
+        if installed_spine_root_compact && reference_context_item.is_some() {
+            let environment_context = Self::cwd_only_environment_context_item(turn_context);
+            self.record_conversation_items(
+                turn_context,
+                std::slice::from_ref(&environment_context),
+            )
+            .await?;
+        }
         self.services.model_client.advance_window_generation();
-        Ok(spine_tree_snapshot)
+        Ok(ReplaceCompactedHistoryOutcome {
+            spine_tree_snapshot,
+        })
+    }
+
+    fn cwd_only_environment_context_item(turn_context: &TurnContext) -> ResponseItem {
+        #[allow(deprecated)]
+        let cwd = turn_context.cwd.to_string_lossy();
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!(
+                    "{ENVIRONMENT_CONTEXT_OPEN_TAG}\n  <cwd>{}</cwd>\n{ENVIRONMENT_CONTEXT_CLOSE_TAG}",
+                    cwd
+                ),
+            }],
+            phase: None,
+        }
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {

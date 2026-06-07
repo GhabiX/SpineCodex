@@ -251,9 +251,16 @@ async fn run_remote_compact_task_inner_impl(
         message: String::new(),
         replacement_history: Some(new_history.clone()),
     };
-    let spine_tree_snapshot = sess
-        .replace_compacted_history(new_history, reference_context_item, compacted_item, None)
+    let replace_outcome = sess
+        .replace_compacted_history(
+            turn_context.as_ref(),
+            new_history,
+            reference_context_item,
+            compacted_item,
+            None,
+        )
         .await?;
+    let spine_tree_snapshot = replace_outcome.spine_tree_snapshot;
     if let Some(snapshot) = spine_tree_snapshot {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;

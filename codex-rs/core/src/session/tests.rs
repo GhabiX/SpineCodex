@@ -12444,6 +12444,121 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
 }
 
 #[tokio::test]
+async fn spine_mid_turn_native_compact_appends_cwd_only_environment_context_suffix() {
+    let server = start_mock_server().await;
+    let responses_mock = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_assistant_message(
+                "native-compact-summary",
+                "mid turn native root compact summary",
+            ),
+            ev_completed("native-compact-response"),
+        ])],
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before mid-turn native compact");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record conversation items");
+
+    crate::compact::run_inline_auto_compact_task(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        crate::compact::InitialContextInjection::BeforeLastUserMessage,
+        codex_analytics::CompactionReason::ContextLimit,
+        codex_analytics::CompactionPhase::MidTurn,
+    )
+    .await
+    .expect("mid-turn native compact succeeds");
+
+    assert_eq!(responses_mock.requests().len(), 1);
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    let replacement_history = resumed
+        .history
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::Compacted(compacted) => compacted.replacement_history.as_ref(),
+            _ => None,
+        })
+        .expect("native compact should persist replacement_history");
+
+    assert_eq!(replacement_history.len(), 1);
+    assert!(matches!(
+        replacement_history.as_slice(),
+        [ResponseItem::Message { content, .. }]
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }]
+                    if text.contains("mid turn native root compact summary")
+                        && text.contains("<spine_memory>")
+                        && !text.contains("<environment_context>")
+            )
+    ));
+
+    let history_items = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(history_items, materialized);
+    assert_eq!(history_items.len(), 2);
+    let cwd_context_text = match &history_items[1] {
+        ResponseItem::Message { role, content, .. } => {
+            assert_eq!(role, "user");
+            match content.as_slice() {
+                [ContentItem::InputText { text }] => text.as_str(),
+                other => panic!("expected one cwd-only input text item, got {other:?}"),
+            }
+        }
+        other => panic!("expected cwd-only environment context message, got {other:?}"),
+    };
+    #[allow(deprecated)]
+    let cwd = turn_context.cwd.to_string_lossy();
+    assert_eq!(
+        cwd_context_text,
+        format!(
+            "<environment_context>\n  <cwd>{}</cwd>\n</environment_context>",
+            cwd
+        )
+    );
+    assert!(!cwd_context_text.contains("<shell>"));
+    assert!(!cwd_context_text.contains("<current_date>"));
+    assert!(!cwd_context_text.contains("<timezone>"));
+    assert!(!cwd_context_text.contains("<network"));
+}
+
+#[tokio::test]
 async fn native_compact_commit_marker_distinguishes_prefix_recovery() {
     let server = start_mock_server().await;
     let _responses_mock = mount_sse_sequence(
