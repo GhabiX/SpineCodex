@@ -24,9 +24,9 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::InferenceTraceContext;
+use codex_tools::ToolSpec;
 use futures::StreamExt;
 use serde::Deserialize;
-use serde_json::json;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -34,6 +34,7 @@ const SPINE_COMPACT_MEMORY_OVERRIDE_FILENAME: &str = "spine_compact_memory.md";
 const SPINE_COMPACT_MEMORY_NODE_ID_PLACEHOLDER: &str = "{node_id}";
 const SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER: &str = "{close_instruction}";
 const SPINE_COMPACT_SLOT_MAP_BOUNDARY: &str = "----------- Spine Compact Slot Map ----------";
+const SPINE_CLOSE_COMPACT_MAX_FORMAT_REPAIRS: usize = 1;
 
 impl Session {
     pub(crate) async fn spine_compact_close(
@@ -47,6 +48,7 @@ impl Session {
         instruction: Option<String>,
         close_target_projection: String,
         source_plan: SpineCompactSourcePlan,
+        close_compact_tools: Vec<ToolSpec>,
     ) -> Result<SpineCloseCompactOutcome, SpineError> {
         let raw_items = history.raw_items();
         if suffix_start >= raw_items.len() {
@@ -119,37 +121,57 @@ impl Session {
             &compact_instructions,
             &skeleton,
         );
-        let prompt = Prompt {
+        let mut prompt = Prompt {
             input: prompt_input,
-            tools: Vec::new(),
-            parallel_tool_calls: false,
+            tools: close_compact_tools,
+            parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
             base_instructions: self.get_base_instructions().await,
             personality: turn_context.personality,
-            output_schema: Some(spine_close_compact_slot_schema(&skeleton)),
-            output_schema_strict: true,
             ..Default::default()
         };
-        let (output, token_usage) = match self
-            .spine_close_summary_items(turn_context, native_compact_client_session, prompt)
-            .await?
-        {
-            SpineCloseSummaryOutcome::Output {
-                output,
-                token_usage,
-            } => (output, token_usage),
-            SpineCloseSummaryOutcome::NativeCompacted {
-                reset_client_session,
-            } => {
-                return Ok(SpineCloseCompactOutcome::NativeCompacted {
+        let mut repair_attempts = 0;
+        let mut memory_output_tokens = None;
+        let body = loop {
+            let (output, token_usage) = match self
+                .spine_close_summary_items(
+                    turn_context,
+                    native_compact_client_session,
+                    prompt.clone(),
+                    ResponsesToolChoice::None,
+                )
+                .await?
+            {
+                SpineCloseSummaryOutcome::Output {
+                    output,
+                    token_usage,
+                } => (output, token_usage),
+                SpineCloseSummaryOutcome::NativeCompacted {
                     reset_client_session,
-                });
+                } => {
+                    return Ok(SpineCloseCompactOutcome::NativeCompacted {
+                        reset_client_session,
+                    });
+                }
+            };
+            add_compact_output_tokens(&mut memory_output_tokens, token_usage.as_ref());
+            match spine_close_compact_body_result(&node_id, &output, &skeleton) {
+                Ok(body) => break body,
+                Err(err)
+                    if err.is_repairable()
+                        && repair_attempts < SPINE_CLOSE_COMPACT_MAX_FORMAT_REPAIRS =>
+                {
+                    repair_attempts += 1;
+                    prompt.input.push(spine_close_compact_developer_message(
+                        &spine_close_compact_repair_text(&err, &skeleton),
+                    ));
+                }
+                Err(err) => return Err(err.into_spine_error()),
             }
         };
-        let body = spine_close_compact_body(&node_id, &output, &skeleton)?;
         Ok(SpineCloseCompactOutcome::Compact(SpineCloseCompact {
             body,
             source_context_range: source_plan.source_context_range,
-            memory_output_tokens: token_usage.map(|usage| usage.output_tokens),
+            memory_output_tokens,
         }))
     }
 
@@ -158,6 +180,7 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         native_compact_client_session: &mut ModelClientSession,
         prompt: Prompt,
+        tool_choice: ResponsesToolChoice,
     ) -> Result<SpineCloseSummaryOutcome, SpineError> {
         let max_retries = turn_context.provider.info().stream_max_retries();
         let mut retries = 0;
@@ -168,6 +191,7 @@ impl Session {
                     turn_context,
                     native_compact_client_session,
                     &prompt,
+                    tool_choice,
                 )
                 .await
             {
@@ -229,6 +253,7 @@ impl Session {
         turn_context: &TurnContext,
         client_session: &crate::client::ModelClientSession,
         prompt: &Prompt,
+        tool_choice: ResponsesToolChoice,
     ) -> Result<(Vec<ResponseItem>, Option<TokenUsage>), CodexErr> {
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         let mut stream = client_session
@@ -241,7 +266,7 @@ impl Session {
                 turn_context.config.service_tier.clone(),
                 turn_metadata_header.as_deref(),
                 &InferenceTraceContext::disabled(),
-                ResponsesToolChoice::None,
+                tool_choice,
             )
             .await?;
 
@@ -288,7 +313,7 @@ enum SpineCloseSummaryOutcome {
     },
 }
 
-/// Builds the system directive that turns a closed Spine node into durable memory.
+/// Builds the close directive that turns a closed Spine node into durable memory.
 ///
 /// The close pass is a handoff artifact, not a conversation reply. The directive
 /// therefore asks for readable Markdown and calls out exact identifiers, file
@@ -332,7 +357,7 @@ fn spine_close_compact_instruction_template(
     }
 
     "---------- Spine Compact Directive ----------\n\n\
-Write compact handoff slot bodies for Spine node {node_id}. Return strict JSON matching the provided schema, not a conversation reply.\n\n\
+Write compact handoff slot bodies for Spine node {node_id}. Return only a JSON object, not a conversation reply, markdown, or a tool call. Use exactly the slot ids requested in the final slot map appended after these instructions.\n\n\
 The runtime will assemble the final Markdown memory from trusted exact user messages, trusted child memory bodies, and your generated slot bodies. These slots will replace only this node's raw trajs in future context. Their job is to let the parent conversation continue correctly without replaying this node's raw trace.\n\n\
 For each generated Memory Slot, write concise, concrete prose that preserves:\n\n\
 1. User Intent\n\
@@ -377,13 +402,13 @@ Source context range: [{}..{}).\n\n\
 {slot_map}",
         skeleton.source_context_range.start, skeleton.source_context_range.end
     );
-    prompt_input.push(spine_close_compact_system_message(&tail));
+    prompt_input.push(spine_close_compact_developer_message(&tail));
 }
 
-fn spine_close_compact_system_message(text: &str) -> ResponseItem {
+fn spine_close_compact_developer_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
-        role: "system".to_string(),
+        role: "developer".to_string(),
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
@@ -561,10 +586,44 @@ impl SpineCompactMemorySkeleton {
         });
     }
 
+    fn slot_ids(&self) -> Vec<&str> {
+        self.blocks
+            .iter()
+            .filter_map(|block| match block {
+                SpineCompactMemoryBlock::MemorySlot { slot_id, .. } => Some(slot_id.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn required_slot_ids_text(&self) -> String {
+        let slot_ids = self.slot_ids();
+        if slot_ids.is_empty() {
+            "none".to_string()
+        } else {
+            slot_ids.join(", ")
+        }
+    }
+
+    fn slot_json_example(&self) -> String {
+        let entries = self
+            .slot_ids()
+            .into_iter()
+            .map(|slot_id| format!(r#"{{"slot_id":"{slot_id}","body":"..."}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(r#"{{"memory_slots":[{entries}]}}"#)
+    }
+
     fn prompt_slot_map(&self) -> String {
+        let slot_ids = self.required_slot_ids_text();
+        let slot_count = self.slot_count;
+        let slot_json_example = self.slot_json_example();
         let mut text = format!(
             "{SPINE_COMPACT_SLOT_MAP_BOUNDARY}\n\
-Return strict JSON with exactly this shape: {{\"memory_slots\":[{{\"slot_id\":\"slot_1\",\"body\":\"...\"}}]}}.\n\
+Required generated Memory Slot ids: {slot_ids}.\n\
+Return exactly {slot_count} memory_slots entries, one for each required slot id, and omit none.\n\
+Return only one JSON object with exactly this shape: {slot_json_example}.\n\
 Only fill generated Memory Slot bodies. Exact User Message and Child Memory blocks are assembled by runtime from trusted source-plan provenance.\n\
 If no User Message block appears below, the final memory must not contain a User Message block.\n\
 Do not include Markdown headings, <spine_memory> tags, close target text, or exact user/child text in slot bodies.\n\n\
@@ -722,37 +781,22 @@ fn push_memory_block(body: &mut String, heading: &str, block_body: &str) {
     body.push('\n');
 }
 
-fn spine_close_compact_slot_schema(skeleton: &SpineCompactMemorySkeleton) -> serde_json::Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["memory_slots"],
-        "properties": {
-            "memory_slots": {
-                "type": "array",
-                "minItems": skeleton.slot_count,
-                "maxItems": skeleton.slot_count,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["slot_id", "body"],
-                    "properties": {
-                        "slot_id": { "type": "string" },
-                        "body": { "type": "string" }
-                    }
-                }
-            }
-        }
-    })
-}
-
+#[cfg(test)]
 fn spine_close_compact_body(
     node_id: &str,
     output: &[ResponseItem],
     skeleton: &SpineCompactMemorySkeleton,
 ) -> Result<String, SpineError> {
+    spine_close_compact_body_result(node_id, output, skeleton).map_err(|err| err.into_spine_error())
+}
+
+fn spine_close_compact_body_result(
+    node_id: &str,
+    output: &[ResponseItem],
+    skeleton: &SpineCompactMemorySkeleton,
+) -> Result<String, SpineCloseCompactBodyError> {
     if skeleton.node_id != node_id {
-        return Err(SpineError::CompactFailure(format!(
+        return Err(SpineCloseCompactBodyError::Fatal(format!(
             "spine.close compact skeleton node {} does not match output node {node_id}",
             skeleton.node_id
         )));
@@ -768,8 +812,9 @@ fn spine_close_compact_body(
                 | ResponseItem::ImageGenerationCall { .. }
         )
     }) {
-        return Err(SpineError::CompactFailure(format!(
-            "spine.close compact produced unexpected tool call: {item:?}"
+        return Err(SpineCloseCompactBodyError::ToolCall(format!(
+            "spine.close compact produced unexpected {} tool call",
+            spine_close_compact_tool_call_kind(item)
         )));
     }
     let mut json_entries = Vec::new();
@@ -789,32 +834,140 @@ fn spine_close_compact_body(
                 ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
             )
         });
-        return Err(SpineError::CompactFailure(if encrypted_only {
+        return Err(SpineCloseCompactBodyError::Repairable(if encrypted_only {
             "spine.close compact produced no readable memory body".to_string()
         } else {
             "spine.close compact produced no memory body".to_string()
         }));
     }
     let joined = json_entries.join("\n");
-    let slot_output: SpineCompactSlotOutput =
-        serde_json::from_str(joined.trim()).map_err(|err| {
-            SpineError::CompactFailure(format!(
-                "spine.close compact produced invalid slot JSON: {err}"
-            ))
-        })?;
+    let json_text = extract_spine_close_compact_slot_json(&joined).map_err(|err| {
+        SpineCloseCompactBodyError::Repairable(format!(
+            "spine.close compact produced invalid slot JSON: {err}"
+        ))
+    })?;
+    let slot_output: SpineCompactSlotOutput = serde_json::from_str(json_text).map_err(|err| {
+        SpineCloseCompactBodyError::Repairable(format!(
+            "spine.close compact produced invalid slot JSON: {err}"
+        ))
+    })?;
     let slots = slot_output
         .memory_slots
         .iter()
         .map(|slot| (slot.slot_id.as_str(), slot.body.as_str()));
-    skeleton.assemble(slots)
+    skeleton
+        .assemble(slots)
+        .map_err(|err| SpineCloseCompactBodyError::Repairable(err.to_string()))
+}
+
+fn spine_close_compact_tool_call_kind(item: &ResponseItem) -> &'static str {
+    match item {
+        ResponseItem::FunctionCall { .. } => "FunctionCall",
+        ResponseItem::LocalShellCall { .. } => "LocalShellCall",
+        ResponseItem::CustomToolCall { .. } => "CustomToolCall",
+        ResponseItem::ToolSearchCall { .. } => "ToolSearchCall",
+        ResponseItem::WebSearchCall { .. } => "WebSearchCall",
+        ResponseItem::ImageGenerationCall { .. } => "ImageGenerationCall",
+        _ => "tool-like",
+    }
+}
+
+#[derive(Debug)]
+enum SpineCloseCompactBodyError {
+    Fatal(String),
+    Repairable(String),
+    ToolCall(String),
+}
+
+impl SpineCloseCompactBodyError {
+    fn is_repairable(&self) -> bool {
+        matches!(self, Self::Repairable(_))
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            Self::Fatal(message) | Self::Repairable(message) | Self::ToolCall(message) => message,
+        }
+    }
+
+    fn into_spine_error(self) -> SpineError {
+        match self {
+            Self::Fatal(message) | Self::Repairable(message) | Self::ToolCall(message) => {
+                SpineError::CompactFailure(message)
+            }
+        }
+    }
+}
+
+fn spine_close_compact_repair_text(
+    err: &SpineCloseCompactBodyError,
+    skeleton: &SpineCompactMemorySkeleton,
+) -> String {
+    format!(
+        "Your previous Spine compact output could not be used: {}\n\
+Required generated Memory Slot ids: {}.\n\
+Return exactly {} memory_slots entries, one for each required slot id, using this JSON shape: {}.\n\
+Do not include markdown, code fences, explanations, or tool calls.",
+        err.message(),
+        skeleton.required_slot_ids_text(),
+        skeleton.slot_count,
+        skeleton.slot_json_example()
+    )
+}
+
+fn add_compact_output_tokens(
+    memory_output_tokens: &mut Option<i64>,
+    token_usage: Option<&TokenUsage>,
+) {
+    let Some(token_usage) = token_usage else {
+        return;
+    };
+    *memory_output_tokens = Some(memory_output_tokens.unwrap_or(0) + token_usage.output_tokens);
+}
+
+fn extract_spine_close_compact_slot_json(text: &str) -> Result<&str, serde_json::Error> {
+    let trimmed = text.trim();
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        return Ok(trimmed);
+    }
+    for candidate in fenced_json_candidates(trimmed) {
+        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+            return Ok(candidate);
+        }
+    }
+    let mut last_err = None;
+    for (start, _) in trimmed.match_indices('{') {
+        for (offset, _) in trimmed[start..].match_indices('}') {
+            let end = start + offset + 1;
+            let candidate = &trimmed[start..end];
+            match serde_json::from_str::<serde_json::Value>(candidate) {
+                Ok(_) => return Ok(candidate),
+                Err(err) => last_err = Some(err),
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| serde_json::from_str::<serde_json::Value>(trimmed).unwrap_err()))
+}
+
+fn fenced_json_candidates(text: &str) -> impl Iterator<Item = &str> {
+    text.split("```").skip(1).step_by(2).map(|block| {
+        let block = block.trim();
+        block
+            .strip_prefix("json")
+            .or_else(|| block.strip_prefix("JSON"))
+            .map(str::trim)
+            .unwrap_or(block)
+    })
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SpineCompactSlotOutput {
     memory_slots: Vec<SpineCompactSlot>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SpineCompactSlot {
     slot_id: String,
     body: String,
@@ -964,6 +1117,38 @@ mod spine_close_slot_map_tests {
     }
 
     #[test]
+    fn slot_map_prompt_lists_all_required_slots_dynamically() {
+        let plan = source_plan(vec![
+            source_entry(2, 0, assistant_message("before user"), false),
+            source_entry(3, 1, user_message("USER_EXACT"), true),
+            source_entry(4, 2, assistant_message("after user"), false),
+        ]);
+        let skeleton =
+            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+
+        let slot_map = skeleton.prompt_slot_map();
+        assert!(slot_map.contains("Required generated Memory Slot ids: slot_1, slot_2."));
+        assert!(slot_map.contains("Return exactly 2 memory_slots entries"));
+        assert!(slot_map.contains(
+            r#"{"memory_slots":[{"slot_id":"slot_1","body":"..."},{"slot_id":"slot_2","body":"..."}]}"#
+        ));
+        assert!(slot_map.contains("<slot_1: compact source ordinals [0]>"));
+        assert!(slot_map.contains("<slot_2: compact source ordinals [2]>"));
+
+        let repair = spine_close_compact_repair_text(
+            &SpineCloseCompactBodyError::Repairable(
+                "spine.close compact missing memory slot slot_2".to_string(),
+            ),
+            &skeleton,
+        );
+        assert!(repair.contains("Required generated Memory Slot ids: slot_1, slot_2."));
+        assert!(repair.contains("Return exactly 2 memory_slots entries"));
+        assert!(repair.contains(
+            r#"{"memory_slots":[{"slot_id":"slot_1","body":"..."},{"slot_id":"slot_2","body":"..."}]}"#
+        ));
+    }
+
+    #[test]
     fn zero_slot_skeleton_assembles_without_model_slots() {
         let plan = source_plan(vec![
             source_entry(2, 0, user_message("only user one"), true),
@@ -1035,6 +1220,41 @@ mod spine_close_slot_map_tests {
     }
 
     #[test]
+    fn slot_json_accepts_wrapped_and_fenced_json() {
+        let plan = source_plan(vec![source_entry(
+            2,
+            0,
+            assistant_message("assistant details"),
+            false,
+        )]);
+        let skeleton =
+            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+
+        let wrapped = spine_close_compact_body(
+            "1.1",
+            &[assistant_message(
+                r#"Here is the compact JSON:
+{"memory_slots":[{"slot_id":"slot_1","body":"wrapped body"}]}"#,
+            )],
+            &skeleton,
+        )
+        .expect("wrapped JSON should parse");
+        assert!(wrapped.contains("## Memory Slot\nwrapped body"));
+
+        let fenced = spine_close_compact_body(
+            "1.1",
+            &[assistant_message(
+                r#"```json
+{"memory_slots":[{"slot_id":"slot_1","body":"fenced body"}]}
+```"#,
+            )],
+            &skeleton,
+        )
+        .expect("fenced JSON should parse");
+        assert!(fenced.contains("## Memory Slot\nfenced body"));
+    }
+
+    #[test]
     fn slot_json_rejects_missing_extra_and_invalid_output() {
         let plan = source_plan(vec![source_entry(
             2,
@@ -1062,6 +1282,19 @@ mod spine_close_slot_map_tests {
         )
         .expect_err("extra slot must fail");
         assert!(extra.to_string().contains("unexpected memory slot slot_2"));
+
+        let unknown_field = spine_close_compact_body(
+            "1.1",
+            &[assistant_message(
+                r#"{"memory_slots":[{"slot_id":"slot_1","body":"ok","extra":"no"}]}"#,
+            )],
+            &skeleton,
+        )
+        .expect_err("unknown slot field must fail");
+        assert!(
+            unknown_field.to_string().contains("unknown field"),
+            "unexpected error: {unknown_field}"
+        );
 
         let invalid = spine_close_compact_body("1.1", &[assistant_message("not json")], &skeleton)
             .expect_err("invalid JSON must fail");

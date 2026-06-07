@@ -233,21 +233,71 @@ fn spine_slot_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
         .collect()
 }
 
-fn assert_close_compact_hard_no_tool_request(request: &ResponsesRequest, message: &str) {
+fn assert_close_compact_tool_envelope_request(
+    request: &ResponsesRequest,
+    expected_tool_choice: &str,
+    message: &str,
+) {
     let body = request.body_json();
-    assert_eq!(body["tool_choice"].as_str(), Some("none"), "{message}");
     assert_eq!(
-        body["parallel_tool_calls"].as_bool(),
-        Some(false),
-        "{message}: close compact must not permit parallel tool calls"
+        body["tool_choice"].as_str(),
+        Some(expected_tool_choice),
+        "{message}: unexpected close compact tool_choice"
     );
     assert!(
         body["tools"]
             .as_array()
             .expect("tools should be an array")
-            .is_empty(),
-        "{message}: close compact must not expose model-visible tools"
+            .len()
+            > 0,
+        "{message}: close compact must keep ordinary model-visible tools for prompt caching"
     );
+    assert!(
+        body.get("text")
+            .and_then(|text| text.get("format"))
+            .is_none(),
+        "{message}: close compact must not send text.format schema because it changes the prompt-cache envelope"
+    );
+    assert_eq!(
+        body["input"]
+            .as_array()
+            .expect("input should be an array")
+            .last()
+            .and_then(|item| item.get("role"))
+            .and_then(|role| role.as_str()),
+        Some("developer"),
+        "{message}: close compact tail directive should use the ordinary developer-message lane for prompt caching"
+    );
+}
+
+fn assert_close_compact_none_tool_choice_request(request: &ResponsesRequest, message: &str) {
+    assert_close_compact_tool_envelope_request(request, "none", message);
+}
+
+fn assert_close_compact_reuses_request_tools(
+    source_request: &ResponsesRequest,
+    target_request: &ResponsesRequest,
+    message: &str,
+) {
+    assert_eq!(
+        target_request.body_json()["tools"],
+        source_request.body_json()["tools"],
+        "{message}: close compact must reuse exact tools from the sampling request that produced the close/next call"
+    );
+    assert_eq!(
+        target_request.body_json()["parallel_tool_calls"],
+        source_request.body_json()["parallel_tool_calls"],
+        "{message}: close compact should keep the sampling request parallel tool-call setting"
+    );
+}
+
+fn assert_close_compact_reuses_sampling_request_tools(
+    sampling_request: &ResponsesRequest,
+    compact_request: &ResponsesRequest,
+    message: &str,
+) {
+    assert_close_compact_none_tool_choice_request(compact_request, message);
+    assert_close_compact_reuses_request_tools(sampling_request, compact_request, message);
 }
 
 async fn prime_model_client_turn_state(
@@ -399,6 +449,13 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
             turn_context,
             client_session,
             &response_item,
+            session
+                .test_default_close_compact_tools(turn_context)
+                .await
+                .map_err(|err| CodexErr::SpineTerminalFailure {
+                    operation: "build test close compact tools".to_string(),
+                    reason: err.to_string(),
+                })?,
         )
         .await
         .map_err(|err| CodexErr::SpineTerminalFailure {
@@ -8932,9 +8989,9 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         Some(session.conversation_id.to_string().as_str()),
         "spine.close compact should reuse the current thread prompt cache key"
     );
-    assert_close_compact_hard_no_tool_request(
+    assert_close_compact_none_tool_choice_request(
         compact_request,
-        "spine.close compact should use a hard no-tool envelope",
+        "spine.close compact should use the POC-backed no-tool cache envelope",
     );
     assert!(
         compact_request.body_json()["instructions"]
@@ -9233,9 +9290,9 @@ async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_pr
     .expect("commit close output and record raw evidence");
 
     let compact_request = compact_mock.single_request();
-    assert_close_compact_hard_no_tool_request(
+    assert_close_compact_none_tool_choice_request(
         &compact_request,
-        "spine.close compact with text-only model should use hard no-tool envelope",
+        "spine.close compact with text-only model should use the POC-backed no-tool cache envelope",
     );
     assert!(
         compact_request
@@ -9376,9 +9433,9 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
     .expect("commit close output and record raw evidence");
 
     let compact_request = compact_mock.single_request();
-    assert_close_compact_hard_no_tool_request(
+    assert_close_compact_none_tool_choice_request(
         &compact_request,
-        "spine.close compact with text-only suffix image should use hard no-tool envelope",
+        "spine.close compact with text-only suffix image should use the POC-backed no-tool cache envelope",
     );
     assert!(
         compact_request
@@ -9542,9 +9599,9 @@ async fn spine_next_control_carrier_does_not_enter_h_ps() {
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_close_compact_hard_no_tool_request(
+    assert_close_compact_none_tool_choice_request(
         &compact_request,
-        "spine.next close compact should use a hard no-tool envelope",
+        "spine.next close compact should use the POC-backed no-tool cache envelope",
     );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
@@ -10721,18 +10778,18 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
     let err = session
         .maybe_commit_spine_tool_output(&turn_context, &next_output)
         .await
-        .expect_err("image-generation compact output should fail");
+        .expect_err("image-generation compact output should fail closed");
     assert!(
-        err.to_string().contains("unexpected tool call")
-            && err.to_string().contains("ImageGenerationCall"),
+        err.to_string().contains("ImageGenerationCall") && err.to_string().contains("tool call"),
         "unexpected error: {err}"
     );
     assert_no_pending_spine_commit(&session, "image-next").await;
+
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_close_compact_hard_no_tool_request(
+    assert_close_compact_none_tool_choice_request(
         &compact_request,
-        "failed compact request should use a hard no-tool envelope",
+        "failed compact request should use the POC-backed no-tool cache envelope",
     );
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -11033,9 +11090,9 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert_close_compact_hard_no_tool_request(
+    assert_close_compact_none_tool_choice_request(
         &requests[0],
-        "spine.next suffix compact should use a hard no-tool envelope",
+        "spine.next suffix compact should use the POC-backed no-tool cache envelope",
     );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),
@@ -11164,7 +11221,7 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
     })
     .await;
     assert!(
-        error_message.contains("unexpected tool call"),
+        error_message.contains("ImageGenerationCall") && error_message.contains("tool call"),
         "unexpected error message: {error_message}"
     );
 
@@ -11196,17 +11253,17 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
         requests[0].body_json()["tool_choice"].as_str(),
         Some("auto")
     );
-    assert_close_compact_hard_no_tool_request(
+    assert_close_compact_reuses_sampling_request_tools(
+        &requests[0],
         &requests[1],
-        "spine compact failure request should use a hard no-tool envelope",
+        "spine compact failure request should reuse sampling tools while denying tool calls",
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_close_compact_uses_hard_no_tool_envelope_after_sampling_request()
--> anyhow::Result<()> {
+async fn spine_close_compact_reuses_sampling_tools_with_none_tool_choice() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config
@@ -11276,9 +11333,10 @@ async fn spine_close_compact_uses_hard_no_tool_envelope_after_sampling_request()
         requests[0].body_json()["tool_choice"].as_str(),
         Some("auto")
     );
-    assert_close_compact_hard_no_tool_request(
+    assert_close_compact_reuses_sampling_request_tools(
+        &requests[0],
         &requests[1],
-        "successful spine.close compact should use a hard no-tool envelope",
+        "successful spine.close compact should reuse sampling tools while denying tool calls",
     );
 
     Ok(())
@@ -12076,9 +12134,9 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert_close_compact_hard_no_tool_request(
+    assert_close_compact_none_tool_choice_request(
         &requests[0],
-        "spine.close suffix compact should use a hard no-tool envelope",
+        "spine.close suffix compact should use the POC-backed no-tool cache envelope",
     );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),
