@@ -102,7 +102,13 @@ fn pretty_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> 
     let mut lines = vec![pretty_header(snapshot)];
     let root_nodes = child_nodes(snapshot, None);
     if root_nodes.is_empty() {
-        lines.push(vec!["  └─ ".dim(), "(empty)".dim().italic()].into());
+        lines.push(
+            vec![
+                format!("  {}", pretty_branch(true)).dim(),
+                "(empty)".dim().italic(),
+            ]
+            .into(),
+        );
         return lines;
     }
 
@@ -178,7 +184,7 @@ fn render_pretty_node(
 ) {
     let children = child_nodes(snapshot, Some(node.node_id.as_str()));
     let active = node.node_id == snapshot.active_node_id;
-    if should_elide_pretty_node(node, active, !children.is_empty()) {
+    if should_elide_pretty_node(node, !children.is_empty()) {
         render_pretty_nodes(snapshot, &children, active_path, prefix, width, out);
         return;
     }
@@ -257,7 +263,7 @@ fn append_pretty_raw_nodes(
             PrettySiblingItem::Node(node) => {
                 let children = child_nodes(snapshot, Some(node.node_id.as_str()));
                 let active = node.node_id == snapshot.active_node_id;
-                if should_elide_pretty_node(node, active, !children.is_empty()) {
+                if should_elide_pretty_node(node, !children.is_empty()) {
                     append_pretty_raw_nodes(snapshot, &children, active_path, prefix, out);
                     continue;
                 }
@@ -289,8 +295,7 @@ fn pretty_render_items<'a>(
             }
             PrettySiblingItem::Node(node) => {
                 let children = child_nodes(snapshot, Some(node.node_id.as_str()));
-                let active = node.node_id == snapshot.active_node_id;
-                if should_elide_pretty_node(node, active, !children.is_empty()) {
+                if should_elide_pretty_node(node, !children.is_empty()) {
                     items.extend(pretty_render_items(snapshot, &children, active_path));
                 } else {
                     items.push(PrettySiblingItem::Node(node));
@@ -429,11 +434,8 @@ fn trimmed_summary(node: &SpineTreeNode) -> Option<&str> {
         .filter(|text| !text.is_empty())
 }
 
-fn should_elide_pretty_node(node: &SpineTreeNode, active: bool, has_children: bool) -> bool {
-    !active
-        && has_children
-        && trimmed_summary(node).is_none()
-        && node.status == SpineTreeNodeStatus::Opened
+fn should_elide_pretty_node(node: &SpineTreeNode, has_children: bool) -> bool {
+    has_children && trimmed_summary(node).is_none()
 }
 
 fn pretty_default_node_label(node: &SpineTreeNode, active: bool) -> &'static str {
@@ -614,11 +616,11 @@ fn child_nodes<'a>(
 }
 
 fn pretty_branch(is_last: bool) -> &'static str {
-    if is_last { "└─ " } else { "├─ " }
+    if is_last { "└ " } else { "├ " }
 }
 
 fn pretty_child_prefix(is_last: bool) -> &'static str {
-    if is_last { "   " } else { "│  " }
+    if is_last { "  " } else { "│ " }
 }
 
 #[cfg(debug_assertions)]
@@ -739,9 +741,9 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ├─ ✓ earlier work
-          └─ ▾ current scope
-             └─ ◉ focused task
+          ├ ✓ earlier work
+          └ ▾ current scope
+            └ ◉ focused task
         "###);
         assert!(rendered.contains("Spine Tree"));
         assert!(!rendered.contains("1 earlier work"));
@@ -816,8 +818,8 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ├─ ◌ Previous task
-          └─ ◉ active
+          ├ ◌ Previous task
+          └ ◉ active
         "###);
         assert!(!rendered.contains("Previous context"));
     }
@@ -842,10 +844,10 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ├─ ◌ 3 previous tasks
-          ├─ ✓ recent 1
-          ├─ ✓ recent 2
-          └─ ◉ active work
+          ├ ◌ 3 previous tasks
+          ├ ✓ recent 1
+          ├ ✓ recent 2
+          └ ◉ active work
         "###);
         assert!(!rendered.contains("old 1"));
         assert!(!rendered.contains("old 2"));
@@ -855,10 +857,10 @@ mod tests {
         let raw = render_lines(&cell.raw_lines()).join("\n");
         insta::assert_snapshot!(raw, @r###"
         Spine Tree
-          ├─ ◌ 3 previous tasks
-          ├─ ✓ recent 1
-          ├─ ✓ recent 2
-          └─ ◉ active work
+          ├ ◌ 3 previous tasks
+          ├ ✓ recent 1
+          ├ ✓ recent 2
+          └ ◉ active work
         "###);
     }
 
@@ -918,11 +920,11 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          └─ ▾ current scope
-             ├─ ◌ 3 previous tasks
-             ├─ ✓ child 4
-             ├─ ✓ child 5
-             └─ ◉ active child
+          └ ▾ current scope
+            ├ ◌ 3 previous tasks
+            ├ ✓ child 4
+            ├ ✓ child 5
+            └ ◉ active child
         "###);
         assert!(!rendered.contains("child 1"));
         assert!(!rendered.contains("child 2"));
@@ -941,8 +943,8 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ├─ ◌ previous
-          └─ ◉ active
+          ├ ◌ previous
+          └ ◉ active
         "###);
         assert!(!rendered.contains("inclusive context"));
         assert!(!rendered.contains("raw"));
@@ -952,8 +954,8 @@ mod tests {
         let raw = render_lines(&cell.raw_lines()).join("\n");
         insta::assert_snapshot!(raw, @r###"
         Spine Tree
-          ├─ ◌ previous
-          └─ ◉ active
+          ├ ◌ previous
+          └ ◉ active
         "###);
         assert!(!raw.contains("inclusive context"));
         assert!(!raw.contains("raw"));
@@ -1103,9 +1105,13 @@ mod tests {
         );
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          └ ✓ Completed task
+        "###);
         assert!(!rendered.contains("(empty)"));
         assert!(!rendered.contains(" 1"));
-        assert!(rendered.contains("◉ Current task"));
+        assert!(!rendered.contains("Current task"));
         assert!(rendered.contains("✓ Completed task"));
         assert!(!rendered.contains("root"));
     }
