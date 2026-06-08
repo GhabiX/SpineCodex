@@ -6,6 +6,9 @@ use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 #[cfg(debug_assertions)]
 use codex_protocol::num_format::format_si_suffix;
+use std::collections::HashSet;
+
+const PRETTY_MAX_VISIBLE_SIBLINGS: usize = 3;
 
 pub(crate) fn new_spine_tree_update(
     turn_id: String,
@@ -103,7 +106,8 @@ fn pretty_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> 
         return lines;
     }
 
-    render_pretty_nodes(snapshot, &root_nodes, 0, width, &mut lines);
+    let active_path = active_path_ids(snapshot);
+    render_pretty_nodes(snapshot, &root_nodes, &active_path, 0, width, &mut lines);
     lines
 }
 
@@ -132,7 +136,8 @@ fn debug_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> V
 
 fn pretty_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from("Spine Tree")];
-    append_pretty_raw_children(snapshot, None, 0, &mut lines);
+    let active_path = active_path_ids(snapshot);
+    append_pretty_raw_children(snapshot, None, &active_path, 0, &mut lines);
     lines
 }
 
@@ -165,6 +170,7 @@ fn debug_header(snapshot: &SpineTreeUpdatedNotification) -> Line<'static> {
 fn render_pretty_node(
     snapshot: &SpineTreeUpdatedNotification,
     node: &SpineTreeNode,
+    active_path: &HashSet<&str>,
     depth: usize,
     width: u16,
     out: &mut Vec<Line<'static>>,
@@ -172,9 +178,7 @@ fn render_pretty_node(
     let children = child_nodes(snapshot, Some(node.node_id.as_str()));
     let active = node.node_id == snapshot.active_node_id;
     if should_elide_pretty_node(node, active, !children.is_empty()) {
-        for child in children {
-            render_pretty_node(snapshot, child, depth, width, out);
-        }
+        render_pretty_nodes(snapshot, &children, active_path, depth, width, out);
         return;
     }
     let mut spans = vec![
@@ -192,75 +196,125 @@ fn render_pretty_node(
     );
     push_owned_lines(&wrapped, out);
 
-    for child in children {
-        render_pretty_node(snapshot, child, depth + 1, width, out);
-    }
+    render_pretty_nodes(snapshot, &children, active_path, depth + 1, width, out);
 }
 
 fn append_pretty_raw_children(
     snapshot: &SpineTreeUpdatedNotification,
     parent_id: Option<&str>,
+    active_path: &HashSet<&str>,
     depth: usize,
     out: &mut Vec<Line<'static>>,
 ) {
     let nodes = child_nodes(snapshot, parent_id);
-    append_pretty_raw_nodes(snapshot, &nodes, depth, out);
+    append_pretty_raw_nodes(snapshot, &nodes, active_path, depth, out);
 }
 
 fn render_pretty_nodes(
     snapshot: &SpineTreeUpdatedNotification,
     nodes: &[&SpineTreeNode],
+    active_path: &HashSet<&str>,
     depth: usize,
     width: u16,
     out: &mut Vec<Line<'static>>,
 ) {
-    let mut index = 0;
-    while index < nodes.len() {
-        if let Some(count) = compacted_placeholder_run_len(snapshot, nodes, depth, index) {
-            render_compacted_placeholder_group(count, depth, width, out);
-            index += count;
-            continue;
+    for item in pretty_sibling_items(nodes, active_path) {
+        match item {
+            PrettySiblingItem::PreviousTasks(count) => {
+                render_previous_tasks_group(count, depth, width, out);
+            }
+            PrettySiblingItem::Node(node) => {
+                render_pretty_node(snapshot, node, active_path, depth, width, out);
+            }
         }
-        render_pretty_node(snapshot, nodes[index], depth, width, out);
-        index += 1;
     }
 }
 
 fn append_pretty_raw_nodes(
     snapshot: &SpineTreeUpdatedNotification,
     nodes: &[&SpineTreeNode],
+    active_path: &HashSet<&str>,
     depth: usize,
     out: &mut Vec<Line<'static>>,
 ) {
-    let mut index = 0;
-    while index < nodes.len() {
-        if let Some(count) = compacted_placeholder_run_len(snapshot, nodes, depth, index) {
-            out.push(Line::from(format!(
+    for item in pretty_sibling_items(nodes, active_path) {
+        match item {
+            PrettySiblingItem::PreviousTasks(count) => out.push(Line::from(format!(
                 "{}◌ {}",
                 "  ".repeat(depth + 1),
-                compacted_placeholder_group_label(count)
-            )));
-            index += count;
-            continue;
+                previous_tasks_group_label(count)
+            ))),
+            PrettySiblingItem::Node(node) => {
+                let children = child_nodes(snapshot, Some(node.node_id.as_str()));
+                let active = node.node_id == snapshot.active_node_id;
+                if should_elide_pretty_node(node, active, !children.is_empty()) {
+                    append_pretty_raw_nodes(snapshot, &children, active_path, depth, out);
+                    continue;
+                }
+                let marker = pretty_marker_text(node, active, !children.is_empty());
+                out.push(Line::from(format!(
+                    "{}{} {}",
+                    "  ".repeat(depth + 1),
+                    marker,
+                    pretty_node_label_text(node, active)
+                )));
+                append_pretty_raw_nodes(snapshot, &children, active_path, depth + 1, out);
+            }
         }
-        let node = nodes[index];
-        let children = child_nodes(snapshot, Some(node.node_id.as_str()));
-        let active = node.node_id == snapshot.active_node_id;
-        if should_elide_pretty_node(node, active, !children.is_empty()) {
-            append_pretty_raw_nodes(snapshot, &children, depth, out);
-            index += 1;
-            continue;
-        }
-        let marker = pretty_marker_text(node, active, !children.is_empty());
-        out.push(Line::from(format!(
-            "{}{} {}",
-            "  ".repeat(depth + 1),
-            marker,
-            pretty_node_label_text(node, active)
-        )));
-        append_pretty_raw_nodes(snapshot, &children, depth + 1, out);
-        index += 1;
     }
+}
+
+enum PrettySiblingItem<'a> {
+    PreviousTasks(usize),
+    Node(&'a SpineTreeNode),
+}
+
+fn pretty_sibling_items<'a>(
+    nodes: &[&'a SpineTreeNode],
+    active_path: &HashSet<&str>,
+) -> Vec<PrettySiblingItem<'a>> {
+    if nodes.len() <= PRETTY_MAX_VISIBLE_SIBLINGS {
+        return nodes.iter().copied().map(PrettySiblingItem::Node).collect();
+    }
+
+    let active_index = nodes
+        .iter()
+        .position(|node| active_path.contains(node.node_id.as_str()));
+    let visible_end = active_index.map_or(nodes.len(), |index| index + 1);
+    if visible_end < nodes.len() {
+        return nodes.iter().copied().map(PrettySiblingItem::Node).collect();
+    };
+    let visible_start = visible_end.saturating_sub(PRETTY_MAX_VISIBLE_SIBLINGS);
+
+    let mut items = Vec::new();
+    if visible_start > 0 {
+        items.push(PrettySiblingItem::PreviousTasks(visible_start));
+    }
+    items.extend(
+        nodes[visible_start..visible_end]
+            .iter()
+            .copied()
+            .map(PrettySiblingItem::Node),
+    );
+    items
+}
+
+fn active_path_ids(snapshot: &SpineTreeUpdatedNotification) -> HashSet<&str> {
+    let mut active_path = HashSet::new();
+    let mut current = snapshot.active_node_id.as_str();
+    active_path.insert(current);
+
+    while let Some(node) = snapshot.nodes.iter().find(|node| node.node_id == current) {
+        let Some(parent_id) = node.parent_id.as_deref() else {
+            break;
+        };
+        if !active_path.insert(parent_id) {
+            break;
+        }
+        current = parent_id;
+    }
+
+    active_path
 }
 
 fn pretty_marker(node: &SpineTreeNode, active: bool, has_children: bool) -> Span<'static> {
@@ -286,7 +340,7 @@ fn pretty_marker_text(node: &SpineTreeNode, active: bool, has_children: bool) ->
     }
 }
 
-fn render_compacted_placeholder_group(
+fn render_previous_tasks_group(
     count: usize,
     depth: usize,
     width: u16,
@@ -296,7 +350,7 @@ fn render_compacted_placeholder_group(
         Span::from(format!("  {}", "  ".repeat(depth))).dim(),
         "◌".yellow().bold(),
         " ".into(),
-        Span::from(compacted_placeholder_group_label(count)),
+        Span::from(previous_tasks_group_label(count)),
     ]);
     let wrapped = adaptive_wrap_line(
         &line,
@@ -306,37 +360,11 @@ fn render_compacted_placeholder_group(
     push_owned_lines(&wrapped, out);
 }
 
-fn compacted_placeholder_run_len(
-    snapshot: &SpineTreeUpdatedNotification,
-    nodes: &[&SpineTreeNode],
-    depth: usize,
-    start: usize,
-) -> Option<usize> {
-    if depth != 0 || !is_top_level_compacted_placeholder(snapshot, nodes[start]) {
-        return None;
-    }
-    let count = nodes[start..]
-        .iter()
-        .take_while(|node| is_top_level_compacted_placeholder(snapshot, *node))
-        .count();
-    Some(count)
-}
-
-fn is_top_level_compacted_placeholder(
-    snapshot: &SpineTreeUpdatedNotification,
-    node: &SpineTreeNode,
-) -> bool {
-    node.parent_id.is_none()
-        && node.status == SpineTreeNodeStatus::Compacted
-        && trimmed_summary(node).is_none()
-        && child_nodes(snapshot, Some(node.node_id.as_str())).is_empty()
-}
-
-fn compacted_placeholder_group_label(count: usize) -> String {
+fn previous_tasks_group_label(count: usize) -> String {
     if count == 1 {
-        "Previous context".to_string()
+        "Previous task".to_string()
     } else {
-        format!("{count} previous contexts")
+        format!("{count} previous tasks")
     }
 }
 
@@ -376,7 +404,7 @@ fn pretty_default_node_label(node: &SpineTreeNode, active: bool) -> &'static str
         SpineTreeNodeStatus::Live => "Current task",
         SpineTreeNodeStatus::Opened => "Task",
         SpineTreeNodeStatus::Closed => "Completed task",
-        SpineTreeNodeStatus::Compacted => "Previous context",
+        SpineTreeNodeStatus::Compacted => "Previous task",
     }
 }
 
@@ -724,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn pretty_labels_single_blank_root_compact_as_previous_context() {
+    fn pretty_labels_single_blank_root_compact_as_previous_task() {
         let cell = new_spine_tree_update(
             "turn".to_string(),
             snapshot_with_active(
@@ -740,33 +768,99 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ◌ Previous context
+          ◌ Previous task
           ◉ active
         "###);
-        assert!(!rendered.contains("Previous task"));
+        assert!(!rendered.contains("Previous context"));
     }
 
     #[test]
-    fn pretty_groups_blank_root_compact_placeholders() {
+    fn pretty_folds_root_siblings_over_budget() {
         let cell = new_spine_tree_update(
             "turn".to_string(),
             snapshot_with_active(
-                "3.1.2",
+                "6",
                 vec![
-                    node("1", None, None, SpineTreeNodeStatus::Compacted),
-                    node("2", None, None, SpineTreeNodeStatus::Compacted),
-                    node("3", None, None, SpineTreeNodeStatus::Opened),
-                    node("3.1", Some("3"), None, SpineTreeNodeStatus::Opened),
+                    node("1", None, Some("old 1"), SpineTreeNodeStatus::Closed),
+                    node("2", None, Some("old 2"), SpineTreeNodeStatus::Closed),
+                    node("3", None, Some("old 3"), SpineTreeNodeStatus::Closed),
+                    node("4", None, Some("recent 1"), SpineTreeNodeStatus::Closed),
+                    node("5", None, Some("recent 2"), SpineTreeNodeStatus::Closed),
+                    node("6", None, Some("active work"), SpineTreeNodeStatus::Live),
+                ],
+            ),
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          ◌ 3 previous tasks
+          ✓ recent 1
+          ✓ recent 2
+          ◉ active work
+        "###);
+        assert!(!rendered.contains("old 1"));
+        assert!(!rendered.contains("old 2"));
+        assert!(!rendered.contains("old 3"));
+        assert!(!rendered.contains("previous contexts"));
+
+        let raw = render_lines(&cell.raw_lines()).join("\n");
+        insta::assert_snapshot!(raw, @r###"
+        Spine Tree
+          ◌ 3 previous tasks
+          ✓ recent 1
+          ✓ recent 2
+          ◉ active work
+        "###);
+    }
+
+    #[test]
+    fn pretty_folds_nested_siblings_per_parent() {
+        let cell = new_spine_tree_update(
+            "turn".to_string(),
+            snapshot_with_active(
+                "2.6",
+                vec![
                     node(
-                        "3.1.1",
-                        Some("3.1"),
-                        Some("previous work"),
+                        "2",
+                        None,
+                        Some("current scope"),
+                        SpineTreeNodeStatus::Opened,
+                    ),
+                    node(
+                        "2.1",
+                        Some("2"),
+                        Some("child 1"),
                         SpineTreeNodeStatus::Closed,
                     ),
                     node(
-                        "3.1.2",
-                        Some("3.1"),
-                        Some("active work"),
+                        "2.2",
+                        Some("2"),
+                        Some("child 2"),
+                        SpineTreeNodeStatus::Closed,
+                    ),
+                    node(
+                        "2.3",
+                        Some("2"),
+                        Some("child 3"),
+                        SpineTreeNodeStatus::Closed,
+                    ),
+                    node(
+                        "2.4",
+                        Some("2"),
+                        Some("child 4"),
+                        SpineTreeNodeStatus::Closed,
+                    ),
+                    node(
+                        "2.5",
+                        Some("2"),
+                        Some("child 5"),
+                        SpineTreeNodeStatus::Closed,
+                    ),
+                    node(
+                        "2.6",
+                        Some("2"),
+                        Some("active child"),
                         SpineTreeNodeStatus::Live,
                     ),
                 ],
@@ -776,19 +870,16 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ◌ 2 previous contexts
-          ✓ previous work
-          ◉ active work
+          ▾ current scope
+            ◌ 3 previous tasks
+            ✓ child 4
+            ✓ child 5
+            ◉ active child
         "###);
-        assert!(!rendered.contains("Previous task"));
-
-        let raw = render_lines(&cell.raw_lines()).join("\n");
-        insta::assert_snapshot!(raw, @r###"
-        Spine Tree
-          ◌ 2 previous contexts
-          ✓ previous work
-          ◉ active work
-        "###);
+        assert!(!rendered.contains("child 1"));
+        assert!(!rendered.contains("child 2"));
+        assert!(!rendered.contains("child 3"));
+        assert!(!rendered.contains("previous contexts"));
     }
 
     #[test]
@@ -923,6 +1014,7 @@ mod tests {
         assert!(rendered.contains("1 compacted"));
         assert!(rendered.contains("2 compacted"));
         assert!(!rendered.contains("2 previous contexts"));
+        assert!(!rendered.contains("2 previous tasks"));
     }
 
     #[test]
