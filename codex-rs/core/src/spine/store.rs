@@ -1655,6 +1655,16 @@ fn rewrite_checkpoint_node_for_target(
         SpineTreeNode::MsgAsLeafNode { msg, .. } => {
             rewrite_checkpoint_seg_ref_for_target(msg, target_root, cloned_memory_paths)
         }
+        SpineTreeNode::ToolCallAsLeafNode {
+            tool_req,
+            tool_resps,
+        } => {
+            rewrite_checkpoint_seg_ref_for_target(tool_req, target_root, cloned_memory_paths)?;
+            for tool_resp in tool_resps {
+                rewrite_checkpoint_seg_ref_for_target(tool_resp, target_root, cloned_memory_paths)?;
+            }
+            Ok(())
+        }
         SpineTreeNode::SpineTree {
             memory,
             meta,

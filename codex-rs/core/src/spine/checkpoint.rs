@@ -170,7 +170,7 @@ fn collect_checkpoint_node_refs(
     trajs_refs: &mut Vec<CheckpointTrajsRef>,
 ) {
     match node {
-        SpineTreeNode::MsgAsLeafNode { .. } => {}
+        SpineTreeNode::MsgAsLeafNode { .. } | SpineTreeNode::ToolCallAsLeafNode { .. } => {}
         SpineTreeNode::SpineTree {
             memory,
             meta,

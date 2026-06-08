@@ -238,71 +238,111 @@ fn collect_visible_item_refs_from_node(
     memory_item_refs: &mut Vec<CompactCheckpointMemoryItemRef>,
 ) -> Result<(), SpineError> {
     match node {
-        SpineTreeNode::MsgAsLeafNode {
-            msg:
-                SegRef::ResponseItem {
-                    raw_ordinal,
-                    context_index,
-                },
-            ..
-        } => {
-            let raw_index = usize::try_from(*raw_ordinal).map_err(|_| {
-                SpineError::InvalidEvent("compact checkpoint raw ordinal overflow".to_string())
-            })?;
-            if *context_index != *next_context_index {
-                return Err(SpineError::InvalidEvent(format!(
-                    "compact checkpoint response item raw ordinal {raw_ordinal} has context index {context_index} but renders at {}",
-                    *next_context_index
-                )));
-            }
-            if raw_index >= raw_boundary {
-                return Err(SpineError::InvalidEvent(format!(
-                    "compact checkpoint response item raw ordinal {raw_ordinal} is outside raw boundary {raw_boundary}"
-                )));
-            }
-            let raw_item = raw_items
-                .get(raw_index)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| {
-                    SpineError::InvalidEvent(format!(
-                        "compact checkpoint response item raw ordinal {raw_ordinal} is not live"
-                    ))
-                })?;
-            let context_item = context.get(*next_context_index).ok_or_else(|| {
-                SpineError::InvalidEvent(format!(
-                    "compact checkpoint response item context index {} exceeds h(PS)",
-                    *next_context_index
-                ))
-            })?;
-            let item_hash = hash_response_item(raw_item)?;
-            if item_hash != hash_response_item(context_item)? {
-                return Err(SpineError::InvalidEvent(format!(
-                    "compact checkpoint response item raw ordinal {raw_ordinal} does not match h(PS) context index {context_index}"
-                )));
-            }
-            response_item_refs.push(CompactCheckpointResponseItemRef {
-                raw_ordinal: *raw_ordinal,
-                context_index: *context_index,
-                item_hash,
-            });
-            *next_context_index += 1;
-            Ok(())
-        }
-        SpineTreeNode::MsgAsLeafNode {
-            msg:
-                SegRef::Memory {
-                    memory_id,
-                    body_path: _,
-                },
-            ..
-        } => collect_memory_item_ref(memory_id, context, next_context_index, memory_item_refs),
+        SpineTreeNode::MsgAsLeafNode { msg, .. } => match msg {
+            SegRef::ResponseItem { .. } => collect_visible_response_item_ref(
+                msg,
+                raw_boundary,
+                raw_items,
+                context,
+                next_context_index,
+                response_item_refs,
+            ),
+            SegRef::Memory {
+                memory_id,
+                body_path: _,
+            } => collect_memory_item_ref(memory_id, context, next_context_index, memory_item_refs),
+        },
         SpineTreeNode::SpineTree { memory, .. } => collect_memory_item_ref(
             &memory.compact_id,
             context,
             next_context_index,
             memory_item_refs,
         ),
+        SpineTreeNode::ToolCallAsLeafNode {
+            tool_req,
+            tool_resps,
+        } => {
+            collect_visible_response_item_ref(
+                tool_req,
+                raw_boundary,
+                raw_items,
+                context,
+                next_context_index,
+                response_item_refs,
+            )?;
+            for tool_resp in tool_resps {
+                collect_visible_response_item_ref(
+                    tool_resp,
+                    raw_boundary,
+                    raw_items,
+                    context,
+                    next_context_index,
+                    response_item_refs,
+                )?;
+            }
+            Ok(())
+        }
     }
+}
+
+fn collect_visible_response_item_ref(
+    seg: &SegRef,
+    raw_boundary: usize,
+    raw_items: &[Option<ResponseItem>],
+    context: &[ResponseItem],
+    next_context_index: &mut usize,
+    response_item_refs: &mut Vec<CompactCheckpointResponseItemRef>,
+) -> Result<(), SpineError> {
+    let SegRef::ResponseItem {
+        raw_ordinal,
+        context_index,
+    } = seg
+    else {
+        return Err(SpineError::InvalidEvent(
+            "compact checkpoint expected response item SegRef".to_string(),
+        ));
+    };
+    let raw_index = usize::try_from(*raw_ordinal).map_err(|_| {
+        SpineError::InvalidEvent("compact checkpoint raw ordinal overflow".to_string())
+    })?;
+    if *context_index != *next_context_index {
+        return Err(SpineError::InvalidEvent(format!(
+            "compact checkpoint response item raw ordinal {raw_ordinal} has context index {context_index} but renders at {}",
+            *next_context_index
+        )));
+    }
+    if raw_index >= raw_boundary {
+        return Err(SpineError::InvalidEvent(format!(
+            "compact checkpoint response item raw ordinal {raw_ordinal} is outside raw boundary {raw_boundary}"
+        )));
+    }
+    let raw_item = raw_items
+        .get(raw_index)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| {
+            SpineError::InvalidEvent(format!(
+                "compact checkpoint response item raw ordinal {raw_ordinal} is not live"
+            ))
+        })?;
+    let context_item = context.get(*next_context_index).ok_or_else(|| {
+        SpineError::InvalidEvent(format!(
+            "compact checkpoint response item context index {} exceeds h(PS)",
+            *next_context_index
+        ))
+    })?;
+    let item_hash = hash_response_item(raw_item)?;
+    if item_hash != hash_response_item(context_item)? {
+        return Err(SpineError::InvalidEvent(format!(
+            "compact checkpoint response item raw ordinal {raw_ordinal} does not match h(PS) context index {context_index}"
+        )));
+    }
+    response_item_refs.push(CompactCheckpointResponseItemRef {
+        raw_ordinal: *raw_ordinal,
+        context_index: *context_index,
+        item_hash,
+    });
+    *next_context_index += 1;
+    Ok(())
 }
 
 fn collect_memory_item_ref(

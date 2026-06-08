@@ -2251,6 +2251,28 @@ fn collect_source_plan_entries_from_node(
                 "spine.close source plan cannot trust SegRef::Memory {memory_id} without MemoryRef body_hash provenance"
             ))),
         },
+        SpineTreeNode::ToolCallAsLeafNode {
+            tool_req,
+            tool_resps,
+        } => {
+            collect_source_plan_entry_from_seg(
+                tool_req,
+                false,
+                suffix_start,
+                raw_context_items,
+                entries,
+            )?;
+            for tool_resp in tool_resps {
+                collect_source_plan_entry_from_seg(
+                    tool_resp,
+                    false,
+                    suffix_start,
+                    raw_context_items,
+                    entries,
+                )?;
+            }
+            Ok(())
+        }
         SpineTreeNode::SpineTree { memory, .. } => {
             let context_index = memory.source_context_range.start;
             let source_ordinal = context_index.checked_sub(suffix_start).ok_or_else(|| {
@@ -2275,6 +2297,54 @@ fn collect_source_plan_entries_from_node(
             Ok(())
         }
     }
+}
+
+fn collect_source_plan_entry_from_seg(
+    seg: &SegRef,
+    from_user: bool,
+    suffix_start: usize,
+    raw_context_items: &[ResponseItem],
+    entries: &mut Vec<SpineCompactSourcePlanEntry>,
+) -> Result<(), SpineError> {
+    let SegRef::ResponseItem {
+        raw_ordinal,
+        context_index,
+    } = seg
+    else {
+        let SegRef::Memory { memory_id, .. } = seg else {
+            unreachable!("SegRef enum is exhaustive")
+        };
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan cannot trust SegRef::Memory {memory_id} without MemoryRef body_hash provenance"
+        )));
+    };
+    let context_index = *context_index;
+    let source_ordinal = context_index.checked_sub(suffix_start).ok_or_else(|| {
+        SpineError::CompactFailure(format!(
+            "spine.close source plan raw item context_index {context_index} precedes suffix start {suffix_start}"
+        ))
+    })?;
+    let item = raw_context_items
+        .get(context_index)
+        .cloned()
+        .ok_or_else(|| {
+            SpineError::CompactFailure(format!(
+                "spine.close source plan raw item context_index {context_index} exceeds host history length {}",
+                raw_context_items.len()
+            ))
+        })?;
+    let source_hash = hash_response_items(std::slice::from_ref(&item))?;
+    entries.push(SpineCompactSourcePlanEntry {
+        context_index,
+        source_ordinal,
+        source_hash,
+        kind: SpineCompactSourceEntryKind::RawResponseItem {
+            item,
+            raw_ordinal: *raw_ordinal,
+            from_user,
+        },
+    });
+    Ok(())
 }
 
 fn is_current_close_like_carrier(item: &ResponseItem, close_call_id: &str) -> bool {

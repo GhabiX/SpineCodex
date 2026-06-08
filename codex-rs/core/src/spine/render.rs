@@ -65,33 +65,19 @@ fn render_node_to_context(
     out: &mut Vec<ResponseItem>,
 ) -> Result<(), SpineError> {
     match node {
-        SpineTreeNode::MsgAsLeafNode { msg, .. } => match msg {
-            SegRef::ResponseItem {
-                raw_ordinal,
-                context_index: _,
-            } => {
-                let raw_index = usize::try_from(*raw_ordinal)
-                    .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-                let item = raw_items
-                    .get(raw_index)
-                    .and_then(Option::as_ref)
-                    .ok_or_else(|| {
-                        SpineError::InvalidEvent(format!(
-                            "missing raw item for visible Msg raw ordinal {raw_ordinal}"
-                        ))
-                    })?;
-                out.push(item.clone());
-                Ok(())
+        SpineTreeNode::MsgAsLeafNode { msg, .. } => {
+            render_seg_ref_to_context(msg, raw_items, "visible Msg", out)
+        }
+        SpineTreeNode::ToolCallAsLeafNode {
+            tool_req,
+            tool_resps,
+        } => {
+            render_seg_ref_to_context(tool_req, raw_items, "visible toolcall", out)?;
+            for tool_resp in tool_resps {
+                render_seg_ref_to_context(tool_resp, raw_items, "visible toolcall", out)?;
             }
-            SegRef::Memory {
-                memory_id,
-                body_path,
-            } => {
-                let body = read_memory_body(memory_id, body_path, None)?;
-                out.push(memory_response_item(&body));
-                Ok(())
-            }
-        },
+            Ok(())
+        }
         SpineTreeNode::SpineTree { memory, .. } => {
             let memory_seg = SegRef::from_memory_ref(memory);
             if memory_ref_is_live(memory, raw_items)? {
@@ -110,6 +96,41 @@ fn render_node_to_context(
                     memory.compact_id
                 )))
             }
+        }
+    }
+}
+
+fn render_seg_ref_to_context(
+    seg: &SegRef,
+    raw_items: &[Option<ResponseItem>],
+    missing_label: &str,
+    out: &mut Vec<ResponseItem>,
+) -> Result<(), SpineError> {
+    match seg {
+        SegRef::ResponseItem {
+            raw_ordinal,
+            context_index: _,
+        } => {
+            let raw_index = usize::try_from(*raw_ordinal)
+                .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+            let item = raw_items
+                .get(raw_index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent(format!(
+                        "missing raw item for {missing_label} raw ordinal {raw_ordinal}"
+                    ))
+                })?;
+            out.push(item.clone());
+            Ok(())
+        }
+        SegRef::Memory {
+            memory_id,
+            body_path,
+        } => {
+            let body = read_memory_body(memory_id, body_path, None)?;
+            out.push(memory_response_item(&body));
+            Ok(())
         }
     }
 }

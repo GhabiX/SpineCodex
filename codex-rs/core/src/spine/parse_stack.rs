@@ -69,6 +69,13 @@ impl ParseStack {
                     from_user,
                 })
             }
+            SpineToken::ToolCall {
+                tool_req,
+                tool_resps,
+            } => Symbol::SpineTreeNode(SpineTreeNode::ToolCallAsLeafNode {
+                tool_req,
+                tool_resps,
+            }),
         };
         self.symbols.push(symbol);
         self.reduce_fixpoint(archive)
@@ -396,7 +403,7 @@ fn root_epoch_from_nodes(nodes: &[SpineTreeNode]) -> Option<NodeId> {
 
 fn root_epoch_from_node(node: &SpineTreeNode) -> Option<NodeId> {
     match node {
-        SpineTreeNode::MsgAsLeafNode { .. } => None,
+        SpineTreeNode::MsgAsLeafNode { .. } | SpineTreeNode::ToolCallAsLeafNode { .. } => None,
         SpineTreeNode::SpineTree { meta, .. } => meta.id.0.first().copied().map(NodeId::root_epoch),
     }
 }
@@ -496,7 +503,7 @@ fn collect_tree_render_node(
     rows: &mut Vec<TreeRenderRow>,
 ) -> Result<(), SpineError> {
     match node {
-        SpineTreeNode::MsgAsLeafNode { .. } => {}
+        SpineTreeNode::MsgAsLeafNode { .. } | SpineTreeNode::ToolCallAsLeafNode { .. } => {}
         SpineTreeNode::SpineTree {
             memory,
             meta,
@@ -537,6 +544,7 @@ pub(super) fn parse_stack_msg_leaf_count(symbols: &[Symbol]) -> usize {
 fn spine_tree_node_msg_leaf_count(node: &SpineTreeNode) -> usize {
     match node {
         SpineTreeNode::MsgAsLeafNode { .. } => 1,
+        SpineTreeNode::ToolCallAsLeafNode { .. } => 0,
         SpineTreeNode::SpineTree { children, .. } => {
             children.iter().map(spine_tree_node_msg_leaf_count).sum()
         }

@@ -328,6 +328,10 @@ pub(super) enum SpineToken {
         seg: SegRef,
         from_user: bool,
     },
+    ToolCall {
+        tool_req: SegRef,
+        tool_resps: Vec<SegRef>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -352,6 +356,10 @@ pub(super) enum SpineTreeNode {
     MsgAsLeafNode {
         msg: SegRef,
         from_user: bool,
+    },
+    ToolCallAsLeafNode {
+        tool_req: SegRef,
+        tool_resps: Vec<SegRef>,
     },
     SpineTree {
         memory: MemoryRef,

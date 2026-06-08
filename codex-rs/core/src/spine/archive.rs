@@ -279,6 +279,19 @@ fn render_trajs_node(out: &mut String, node: &SpineTreeNode) -> Result<(), Spine
                 ));
             }
         },
+        SpineTreeNode::ToolCallAsLeafNode {
+            tool_req,
+            tool_resps,
+        } => {
+            out.push_str("- toolcall request ");
+            render_trajs_seg_ref(out, tool_req)?;
+            out.push('\n');
+            for tool_resp in tool_resps {
+                out.push_str("- toolcall response ");
+                render_trajs_seg_ref(out, tool_resp)?;
+                out.push('\n');
+            }
+        }
         SpineTreeNode::SpineTree {
             meta,
             memory,
@@ -295,6 +308,29 @@ fn render_trajs_node(out: &mut String, node: &SpineTreeNode) -> Result<(), Spine
                 memory.body_path.display(),
                 memory_path.display(),
                 trajs_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn render_trajs_seg_ref(out: &mut String, seg: &SegRef) -> Result<(), SpineError> {
+    match seg {
+        SegRef::ResponseItem {
+            raw_ordinal,
+            context_index,
+        } => {
+            out.push_str(&format!(
+                "raw_ordinal={raw_ordinal} context_index={context_index}"
+            ));
+        }
+        SegRef::Memory {
+            memory_id,
+            body_path,
+        } => {
+            out.push_str(&format!(
+                "compact_id={memory_id} body_path={}",
+                body_path.display()
             ));
         }
     }
