@@ -3,6 +3,7 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
+use super::model::OutputPreviewEntry;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::plain_lines;
@@ -110,9 +111,7 @@ pub(crate) fn output_lines(
         include_angle_pipe,
         include_prefix,
     } = params;
-    let CommandOutput {
-        aggregated_output, ..
-    } = match output {
+    let output = match output {
         Some(output) if only_err && output.exit_code == 0 => {
             return OutputLines {
                 lines: Vec::new(),
@@ -128,53 +127,35 @@ pub(crate) fn output_lines(
         }
     };
 
-    let src = aggregated_output;
-    let lines: Vec<&str> = src.lines().collect();
-    let total = lines.len();
     let mut out: Vec<Line<'static>> = Vec::new();
-
-    let head_end = total.min(line_limit);
-    for (i, raw) in lines[..head_end].iter().enumerate() {
-        let mut line = ansi_escape_line(raw);
-        let prefix = if !include_prefix {
-            ""
-        } else if i == 0 && include_angle_pipe {
-            "  └ "
-        } else {
-            "    "
-        };
-        line.spans.insert(0, prefix.into());
-        line.spans.iter_mut().for_each(|span| {
-            span.style = span.style.add_modifier(Modifier::DIM);
-        });
-        out.push(line);
-    }
-
-    let show_ellipsis = total > 2 * line_limit;
-    let omitted = if show_ellipsis {
-        Some(total - 2 * line_limit)
-    } else {
-        None
-    };
-    if show_ellipsis {
-        let omitted = total - 2 * line_limit;
-        out.push(ExecCell::output_ellipsis_line(omitted));
-    }
-
-    let tail_start = if show_ellipsis {
-        total - line_limit
-    } else {
-        head_end
-    };
-    for raw in lines[tail_start..].iter() {
-        let mut line = ansi_escape_line(raw);
-        if include_prefix {
-            line.spans.insert(0, "    ".into());
+    let mut omitted = None;
+    let mut visible_index = 0usize;
+    for entry in output.preview().display_entries(line_limit) {
+        match entry {
+            OutputPreviewEntry::Line(raw) => {
+                let mut line = ansi_escape_line(raw.text());
+                if raw.is_truncated() {
+                    line.spans.push("…".into());
+                }
+                let prefix = if !include_prefix {
+                    ""
+                } else if visible_index == 0 && include_angle_pipe {
+                    "  └ "
+                } else {
+                    "    "
+                };
+                line.spans.insert(0, prefix.into());
+                line.spans.iter_mut().for_each(|span| {
+                    span.style = span.style.add_modifier(Modifier::DIM);
+                });
+                out.push(line);
+                visible_index += 1;
+            }
+            OutputPreviewEntry::Omitted(count) => {
+                omitted = Some(count);
+                out.push(ExecCell::output_ellipsis_line(count));
+            }
         }
-        line.spans.iter_mut().for_each(|span| {
-            span.style = span.style.add_modifier(Modifier::DIM);
-        });
-        out.push(line);
     }
 
     OutputLines {
@@ -733,11 +714,7 @@ mod tests {
 
         // Baseline: how many screen lines would we get if we simply wrapped
         // all logical lines without any truncation?
-        let output = CommandOutput {
-            exit_code: 0,
-            aggregated_output,
-            formatted_output: String::new(),
-        };
+        let output = CommandOutput::new(0, aggregated_output, String::new());
         let width = 20;
         let layout = EXEC_DISPLAY_LAYOUT;
         let raw_output = output_lines(
@@ -859,11 +836,8 @@ mod tests {
 
     #[test]
     fn output_lines_ellipsis_includes_transcript_hint() {
-        let output = CommandOutput {
-            exit_code: 0,
-            aggregated_output: (1..=7).map(|n| n.to_string()).join("\n"),
-            formatted_output: String::new(),
-        };
+        let output =
+            CommandOutput::new(0, (1..=7).map(|n| n.to_string()).join("\n"), String::new());
 
         let rendered: Vec<String> = output_lines(
             Some(&output),
@@ -1034,11 +1008,7 @@ mod tests {
             call_id: "call-id".to_string(),
             command: vec!["bash".into(), "-lc".into(), "echo done".into()],
             parsed: Vec::new(),
-            output: Some(CommandOutput {
-                exit_code: 0,
-                formatted_output: String::new(),
-                aggregated_output: url.to_string(),
-            }),
+            output: Some(CommandOutput::new(0, url.to_string(), String::new())),
             source: ExecCommandSource::UserShell,
             start_time: None,
             duration: None,
@@ -1071,11 +1041,7 @@ mod tests {
             call_id: "call-id".to_string(),
             command: vec!["bash".into(), "-lc".into(), "echo done".into()],
             parsed: Vec::new(),
-            output: Some(CommandOutput {
-                exit_code: 0,
-                formatted_output: url.to_string(),
-                aggregated_output: url.to_string(),
-            }),
+            output: Some(CommandOutput::new(0, url.to_string(), url.to_string())),
             source: ExecCommandSource::Agent,
             start_time: None,
             duration: None,

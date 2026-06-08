@@ -1799,11 +1799,7 @@ fn stderr_tail_more_than_five_lines_snapshot() {
         .join("\n");
     cell.complete_call(
         &call_id,
-        CommandOutput {
-            exit_code: 1,
-            formatted_output: String::new(),
-            aggregated_output: stderr,
-        },
+        CommandOutput::new(1, stderr, String::new()),
         Duration::from_millis(1),
     );
 
@@ -1847,11 +1843,7 @@ fn ran_cell_multiline_with_stderr_snapshot() {
     let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();
     cell.complete_call(
         &call_id,
-        CommandOutput {
-            exit_code: 1,
-            formatted_output: String::new(),
-            aggregated_output: stderr,
-        },
+        CommandOutput::new(1, stderr, String::new()),
         Duration::from_millis(5),
     );
 
