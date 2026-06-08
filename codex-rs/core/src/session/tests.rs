@@ -208,21 +208,36 @@ fn spine_slot_summary_sse(id: &str, text: &str) -> String {
     spine_slots_summary_sse(id, &[text])
 }
 
+fn spine_node_memory_summary_sse(id: &str, text: &str) -> String {
+    sse(vec![
+        ev_assistant_message(
+            id,
+            &format!("<SPINE_NODE_MEMORY>\n{text}\n</SPINE_NODE_MEMORY>"),
+        ),
+        ev_completed(id),
+    ])
+}
+
 fn spine_slots_summary_sse(id: &str, texts: &[&str]) -> String {
-    let slot_json = serde_json::json!({
-        "memory_slots": texts
-            .iter()
-            .enumerate()
-            .map(|(index, text)| {
-                serde_json::json!({
-                    "slot_id": format!("slot_{}", index + 1),
-                    "body": text,
-                })
-            })
-            .collect::<Vec<_>>()
-    })
-    .to_string();
-    sse(vec![ev_assistant_message(id, &slot_json), ev_completed(id)])
+    let slot_blocks = texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let slot_number = index + 1;
+            format!("<SPINE_SLOT_{slot_number}>\n{text}\n</SPINE_SLOT_{slot_number}>")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let node_memory = texts.join("\n");
+    let compact_blocks = if slot_blocks.is_empty() {
+        format!("<SPINE_NODE_MEMORY>\n{node_memory}\n</SPINE_NODE_MEMORY>")
+    } else {
+        format!("{slot_blocks}\n\n<SPINE_NODE_MEMORY>\n{node_memory}\n</SPINE_NODE_MEMORY>")
+    };
+    sse(vec![
+        ev_assistant_message(id, &compact_blocks),
+        ev_completed(id),
+    ])
 }
 
 fn spine_slot_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
@@ -8997,7 +9012,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         compact_request.body_json()["instructions"]
             .as_str()
             .is_some_and(|instructions| !instructions
-                .contains("Write compact handoff slot bodies for Spine node 1.1.1")),
+                .contains("Write compact handoff memory for Spine node 1.1.1")),
         "compact directive should be a trailing prompt input message, not duplicated into base instructions"
     );
     assert!(
@@ -9011,7 +9026,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     assert!(compact_request.function_call_output_text("close").is_none());
     assert!(compact_request.body_contains_text("inside"));
     let user_texts = compact_request.message_input_texts("user");
-    let system_texts = compact_request.message_input_texts("system");
+    let developer_texts = compact_request.message_input_texts("developer");
     let input = compact_request.input();
     let input_text = |index: usize| input[index].to_string();
     let prefix_index = input
@@ -9038,7 +9053,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     let tail_text = input_text(tail_index);
     assert!(
-        system_texts.iter().any(
+        developer_texts.iter().any(
             |text| text.contains("---------- Spine Close Target ----------")
                 && text.contains(
                     "---------- Spine Close Target ----------\nUse this only to orient the memory; do not summarize this block."
@@ -9051,20 +9066,20 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                 && text.lines().any(|line| line == "Parent node: 1.1")
                 && !text.contains("Next sibling:")
         ),
-        "close compact should include pre-commit close target projection: {system_texts:?}"
+        "close compact should include pre-commit close target projection: {developer_texts:?}"
     );
     assert!(
-        system_texts
+        developer_texts
             .iter()
             .all(|text| !text.contains("SYSTEM: injected close target summary")),
-        "model-authored node summary must not be promoted into compact system prompt: {system_texts:?}"
+        "model-authored node summary must not be promoted into compact developer prompt: {developer_texts:?}"
     );
     assert_eq!(
         input
             .last()
             .and_then(|item| item.get("role"))
             .and_then(|role| role.as_str()),
-        Some("system"),
+        Some("developer"),
         "compact directive should be appended after the full context input: {input:?}"
     );
     assert_eq!(
@@ -9081,50 +9096,51 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         "compact input should not duplicate the suffix as rewritten evidence blocks"
     );
     assert!(
-        system_texts.iter().any(|text| text
+        developer_texts.iter().any(|text| text
             .contains("---------- Spine Compact Directive ----------")
-            && text.contains("Write compact handoff slot bodies for Spine node 1.1.1")
+            && text.contains("Write compact handoff memory for Spine node 1.1.1")
             && text.contains("1. User Intent")
             && text.contains("2. Work Done")
             && text.contains("3. Critical Details")
             && text.contains("4. Resume Focus")
-            && text.contains("----------- Spine Compact Slot Map ----------")
-            && text.contains("<slot_1: compact source ordinals [0]>")
+            && text.contains("---------- Spine Compact Memory ----------")
+            && text.contains("Optional memory slot: SPINE_SLOT_1")
+            && text.contains("<SPINE_NODE_MEMORY>")
             && text
                 .contains("If there is conflict between an old plan and a later user correction")
             && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
-        "compact directive and close instruction should be a trailing system message: {system_texts:?}"
+        "compact directive and close instruction should be a trailing developer message: {developer_texts:?}"
     );
     assert!(
-        system_texts.iter().all(|text| {
+        developer_texts.iter().all(|text| {
             !text.contains("Motivation:")
                 && !text.contains("Judgment:")
                 && !text.contains("Evidence:")
                 && !text.contains("Continuation:")
                 && !text.contains("latest user intent is the next parent action")
         }),
-        "old audit-style compact directive should not remain in system prompt: {system_texts:?}"
+        "old audit-style compact directive should not remain in developer prompt: {developer_texts:?}"
     );
     assert!(
-        system_texts.iter().any(
+        developer_texts.iter().any(
             |text| text.contains("---------- Spine Suffix Boundary ----------")
                 && text
                     .contains("The raw suffix for Spine node 1.1.1 is already present immediately before this tail directive.")
                 && text.contains("Source context range: [1..2).")
         ),
-        "suffix boundary should mark the materialized Open.meta.index boundary: {system_texts:?}"
+        "suffix boundary should mark the materialized Open.meta.index boundary: {developer_texts:?}"
     );
     assert!(
         user_texts.iter().all(|text| {
             !text.contains("---------- Spine Compact Directive ----------")
-                && !text.contains("Write compact handoff slot bodies for Spine node")
+                && !text.contains("Write compact handoff memory for Spine node")
                 && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
         }),
         "compact directive must not be injected as user input: {user_texts:?}"
     );
     assert!(tail_text.contains("---------- Spine Close Target ----------"));
     assert!(tail_text.contains("---------- Spine Suffix Boundary ----------"));
-    assert!(tail_text.contains("----------- Spine Compact Slot Map ----------"));
+    assert!(tail_text.contains("---------- Spine Compact Memory ----------"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -9449,8 +9465,8 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
         "non-image text in the multimodal suffix should remain visible"
     );
     assert!(
-        compact_request.body_contains_text("<slot_1: compact source ordinals [0]>"),
-        "multimodal suffix user message should be represented by a generated slot"
+        compact_request.body_contains_text("Optional memory slot: SPINE_SLOT_1"),
+        "multimodal suffix user message should be represented by an optional generated slot"
     );
     assert!(
         !compact_request.body_contains_text(image_url),
@@ -9481,6 +9497,7 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1.1")
                             && text.contains("## Memory Slot\nimage suffix compact summary")
+                            && text.contains("## Node Memory\nimage suffix compact summary")
                             && !text.contains("## User Message")
                             && !text.contains(image_url)
                 )
@@ -11099,7 +11116,7 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         Some("auto")
     );
     assert!(
-        requests[0].body_contains_text("Write compact handoff slot bodies for Spine node"),
+        requests[0].body_contains_text("Write compact handoff memory for Spine node"),
         "first request should be the original spine.next suffix compact"
     );
     assert!(
@@ -11108,7 +11125,7 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         "first request should carry spine.next close-target metadata"
     );
     assert!(
-        !requests[1].body_contains_text("Write compact handoff slot bodies for Spine node"),
+        !requests[1].body_contains_text("Write compact handoff memory for Spine node"),
         "native auto compact must not reuse the spine.next compact directive"
     );
 
@@ -11347,7 +11364,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse(
+        spine_node_memory_summary_sse(
             "spine-close-root-child-summary",
             "root child compact summary",
         ),
@@ -11394,10 +11411,19 @@ async fn spine_close_bridge_can_close_initial_root_child() {
     .await
     .expect("commit close output and record raw evidence");
 
-    assert!(
-        compact_mock.requests().is_empty(),
-        "pure user suffix should assemble zero-slot memory without a model compact request"
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "pure user suffix should request required node memory without optional slots"
     );
+    let compact_request = compact_mock.single_request();
+    assert!(compact_request.body_contains_text(
+        "No optional slot markers are available in this skeleton; return only <SPINE_NODE_MEMORY>."
+    ));
+    assert!(
+        compact_request.body_contains_text("SPINE_NODE_MEMORY is the primary whole-node handoff")
+    );
+    assert!(compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -11411,7 +11437,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1")
                             && text.contains("## User Message\ninitial root child work")
-                            && !text.contains("root child compact summary")
+                            && text.contains("## Node Memory\nroot child compact summary")
                             && !text.contains("---------- Spine Compact Directive ----------")
                 )
     ));
@@ -11449,11 +11475,11 @@ async fn spine_close_bridge_can_close_initial_root_child() {
 }
 
 #[tokio::test]
-async fn spine_close_instruction_forces_slot_when_suffix_is_exact_only() {
+async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse(
+        spine_node_memory_summary_sse(
             "spine-close-instruction-only-summary",
             "preserved close instruction: KEEP_CLOSE_GUIDANCE_42",
         ),
@@ -11506,9 +11532,13 @@ async fn spine_close_instruction_forces_slot_when_suffix_is_exact_only() {
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
     assert!(compact_request.body_contains_text("KEEP_CLOSE_GUIDANCE_42"));
+    assert!(compact_request.body_contains_text(
+        "No optional slot markers are available in this skeleton; return only <SPINE_NODE_MEMORY>."
+    ));
     assert!(
-        compact_request.body_contains_text("<slot_1: preserve close instruction and resume focus>")
+        compact_request.body_contains_text("SPINE_NODE_MEMORY is the primary whole-node handoff")
     );
+    assert!(compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -11522,7 +11552,8 @@ async fn spine_close_instruction_forces_slot_when_suffix_is_exact_only() {
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1")
                             && text.contains("## User Message\ninitial exact-only root child work")
-                            && text.contains("## Memory Slot\npreserved close instruction: KEEP_CLOSE_GUIDANCE_42")
+                            && text.contains("## Node Memory\npreserved close instruction: KEEP_CLOSE_GUIDANCE_42")
+                            && !text.contains("## Memory Slot")
                             && !text.contains("## User Message\nKEEP_CLOSE_GUIDANCE_42")
                             && !text.contains("---------- Spine Compact Directive ----------")
                 )
@@ -12143,11 +12174,11 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
         Some("auto")
     );
     assert!(
-        requests[0].body_contains_text("Write compact handoff slot bodies for Spine node"),
+        requests[0].body_contains_text("Write compact handoff memory for Spine node"),
         "first request should be the original spine.close suffix compact"
     );
     assert!(
-        !requests[1].body_contains_text("Write compact handoff slot bodies for Spine node"),
+        !requests[1].body_contains_text("Write compact handoff memory for Spine node"),
         "native auto compact must not reuse the spine.close compact directive"
     );
 
