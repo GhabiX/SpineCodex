@@ -102,12 +102,12 @@ fn pretty_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> 
     let mut lines = vec![pretty_header(snapshot)];
     let root_nodes = child_nodes(snapshot, None);
     if root_nodes.is_empty() {
-        lines.push(vec!["  └ ".dim(), "(empty)".dim().italic()].into());
+        lines.push(vec!["  └─ ".dim(), "(empty)".dim().italic()].into());
         return lines;
     }
 
     let active_path = active_path_ids(snapshot);
-    render_pretty_nodes(snapshot, &root_nodes, &active_path, 0, width, &mut lines);
+    render_pretty_nodes(snapshot, &root_nodes, &active_path, "  ", width, &mut lines);
     lines
 }
 
@@ -137,7 +137,7 @@ fn debug_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> V
 fn pretty_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from("Spine Tree")];
     let active_path = active_path_ids(snapshot);
-    append_pretty_raw_children(snapshot, None, &active_path, 0, &mut lines);
+    append_pretty_raw_children(snapshot, None, &active_path, "  ", &mut lines);
     lines
 }
 
@@ -171,18 +171,21 @@ fn render_pretty_node(
     snapshot: &SpineTreeUpdatedNotification,
     node: &SpineTreeNode,
     active_path: &HashSet<&str>,
-    depth: usize,
+    prefix: &str,
+    is_last: bool,
     width: u16,
     out: &mut Vec<Line<'static>>,
 ) {
     let children = child_nodes(snapshot, Some(node.node_id.as_str()));
     let active = node.node_id == snapshot.active_node_id;
     if should_elide_pretty_node(node, active, !children.is_empty()) {
-        render_pretty_nodes(snapshot, &children, active_path, depth, width, out);
+        render_pretty_nodes(snapshot, &children, active_path, prefix, width, out);
         return;
     }
+    let line_prefix = format!("{}{}", prefix, pretty_branch(is_last));
+    let child_prefix = format!("{}{}", prefix, pretty_child_prefix(is_last));
     let mut spans = vec![
-        Span::from(format!("  {}", "  ".repeat(depth))).dim(),
+        Span::from(line_prefix).dim(),
         pretty_marker(node, active, !children.is_empty()),
         Span::from(" "),
     ];
@@ -192,39 +195,42 @@ fn render_pretty_node(
     let wrapped = adaptive_wrap_line(
         &line,
         RtOptions::new(width.saturating_sub(2).max(1) as usize)
-            .subsequent_indent(format!("{}  ", "  ".repeat(depth + 1)).into()),
+            .subsequent_indent(format!("{child_prefix}  ").into()),
     );
     push_owned_lines(&wrapped, out);
 
-    render_pretty_nodes(snapshot, &children, active_path, depth + 1, width, out);
+    render_pretty_nodes(snapshot, &children, active_path, &child_prefix, width, out);
 }
 
 fn append_pretty_raw_children(
     snapshot: &SpineTreeUpdatedNotification,
     parent_id: Option<&str>,
     active_path: &HashSet<&str>,
-    depth: usize,
+    prefix: &str,
     out: &mut Vec<Line<'static>>,
 ) {
     let nodes = child_nodes(snapshot, parent_id);
-    append_pretty_raw_nodes(snapshot, &nodes, active_path, depth, out);
+    append_pretty_raw_nodes(snapshot, &nodes, active_path, prefix, out);
 }
 
 fn render_pretty_nodes(
     snapshot: &SpineTreeUpdatedNotification,
     nodes: &[&SpineTreeNode],
     active_path: &HashSet<&str>,
-    depth: usize,
+    prefix: &str,
     width: u16,
     out: &mut Vec<Line<'static>>,
 ) {
-    for item in pretty_sibling_items(nodes, active_path) {
+    let items = pretty_render_items(snapshot, nodes, active_path);
+    let item_count = items.len();
+    for (index, item) in items.into_iter().enumerate() {
+        let is_last = index + 1 == item_count;
         match item {
             PrettySiblingItem::PreviousTasks(count) => {
-                render_previous_tasks_group(count, depth, width, out);
+                render_previous_tasks_group(count, prefix, is_last, width, out);
             }
             PrettySiblingItem::Node(node) => {
-                render_pretty_node(snapshot, node, active_path, depth, width, out);
+                render_pretty_node(snapshot, node, active_path, prefix, is_last, width, out);
             }
         }
     }
@@ -234,34 +240,65 @@ fn append_pretty_raw_nodes(
     snapshot: &SpineTreeUpdatedNotification,
     nodes: &[&SpineTreeNode],
     active_path: &HashSet<&str>,
-    depth: usize,
+    prefix: &str,
     out: &mut Vec<Line<'static>>,
 ) {
-    for item in pretty_sibling_items(nodes, active_path) {
+    let items = pretty_render_items(snapshot, nodes, active_path);
+    let item_count = items.len();
+    for (index, item) in items.into_iter().enumerate() {
+        let is_last = index + 1 == item_count;
         match item {
             PrettySiblingItem::PreviousTasks(count) => out.push(Line::from(format!(
-                "{}◌ {}",
-                "  ".repeat(depth + 1),
+                "{}{}◌ {}",
+                prefix,
+                pretty_branch(is_last),
                 previous_tasks_group_label(count)
             ))),
             PrettySiblingItem::Node(node) => {
                 let children = child_nodes(snapshot, Some(node.node_id.as_str()));
                 let active = node.node_id == snapshot.active_node_id;
                 if should_elide_pretty_node(node, active, !children.is_empty()) {
-                    append_pretty_raw_nodes(snapshot, &children, active_path, depth, out);
+                    append_pretty_raw_nodes(snapshot, &children, active_path, prefix, out);
                     continue;
                 }
                 let marker = pretty_marker_text(node, active, !children.is_empty());
                 out.push(Line::from(format!(
-                    "{}{} {}",
-                    "  ".repeat(depth + 1),
+                    "{}{}{} {}",
+                    prefix,
+                    pretty_branch(is_last),
                     marker,
                     pretty_node_label_text(node, active)
                 )));
-                append_pretty_raw_nodes(snapshot, &children, active_path, depth + 1, out);
+                let child_prefix = format!("{}{}", prefix, pretty_child_prefix(is_last));
+                append_pretty_raw_nodes(snapshot, &children, active_path, &child_prefix, out);
             }
         }
     }
+}
+
+fn pretty_render_items<'a>(
+    snapshot: &'a SpineTreeUpdatedNotification,
+    nodes: &[&'a SpineTreeNode],
+    active_path: &HashSet<&str>,
+) -> Vec<PrettySiblingItem<'a>> {
+    let mut items = Vec::new();
+    for item in pretty_sibling_items(nodes, active_path) {
+        match item {
+            PrettySiblingItem::PreviousTasks(count) => {
+                items.push(PrettySiblingItem::PreviousTasks(count));
+            }
+            PrettySiblingItem::Node(node) => {
+                let children = child_nodes(snapshot, Some(node.node_id.as_str()));
+                let active = node.node_id == snapshot.active_node_id;
+                if should_elide_pretty_node(node, active, !children.is_empty()) {
+                    items.extend(pretty_render_items(snapshot, &children, active_path));
+                } else {
+                    items.push(PrettySiblingItem::Node(node));
+                }
+            }
+        }
+    }
+    items
 }
 
 enum PrettySiblingItem<'a> {
@@ -342,12 +379,15 @@ fn pretty_marker_text(node: &SpineTreeNode, active: bool, has_children: bool) ->
 
 fn render_previous_tasks_group(
     count: usize,
-    depth: usize,
+    prefix: &str,
+    is_last: bool,
     width: u16,
     out: &mut Vec<Line<'static>>,
 ) {
+    let line_prefix = format!("{}{}", prefix, pretty_branch(is_last));
+    let child_prefix = format!("{}{}", prefix, pretty_child_prefix(is_last));
     let line = Line::from(vec![
-        Span::from(format!("  {}", "  ".repeat(depth))).dim(),
+        Span::from(line_prefix).dim(),
         "◌".yellow().bold(),
         " ".into(),
         Span::from(previous_tasks_group_label(count)),
@@ -355,7 +395,7 @@ fn render_previous_tasks_group(
     let wrapped = adaptive_wrap_line(
         &line,
         RtOptions::new(width.saturating_sub(2).max(1) as usize)
-            .subsequent_indent(format!("{}  ", "  ".repeat(depth + 1)).into()),
+            .subsequent_indent(format!("{child_prefix}  ").into()),
     );
     push_owned_lines(&wrapped, out);
 }
@@ -573,6 +613,14 @@ fn child_nodes<'a>(
         .collect()
 }
 
+fn pretty_branch(is_last: bool) -> &'static str {
+    if is_last { "└─ " } else { "├─ " }
+}
+
+fn pretty_child_prefix(is_last: bool) -> &'static str {
+    if is_last { "   " } else { "│  " }
+}
+
 #[cfg(debug_assertions)]
 fn branch(is_last: bool) -> &'static str {
     if is_last { "└ " } else { "├ " }
@@ -691,9 +739,9 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ✓ earlier work
-          ▾ current scope
-            ◉ focused task
+          ├─ ✓ earlier work
+          └─ ▾ current scope
+             └─ ◉ focused task
         "###);
         assert!(rendered.contains("Spine Tree"));
         assert!(!rendered.contains("1 earlier work"));
@@ -768,8 +816,8 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ◌ Previous task
-          ◉ active
+          ├─ ◌ Previous task
+          └─ ◉ active
         "###);
         assert!(!rendered.contains("Previous context"));
     }
@@ -794,10 +842,10 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ◌ 3 previous tasks
-          ✓ recent 1
-          ✓ recent 2
-          ◉ active work
+          ├─ ◌ 3 previous tasks
+          ├─ ✓ recent 1
+          ├─ ✓ recent 2
+          └─ ◉ active work
         "###);
         assert!(!rendered.contains("old 1"));
         assert!(!rendered.contains("old 2"));
@@ -807,10 +855,10 @@ mod tests {
         let raw = render_lines(&cell.raw_lines()).join("\n");
         insta::assert_snapshot!(raw, @r###"
         Spine Tree
-          ◌ 3 previous tasks
-          ✓ recent 1
-          ✓ recent 2
-          ◉ active work
+          ├─ ◌ 3 previous tasks
+          ├─ ✓ recent 1
+          ├─ ✓ recent 2
+          └─ ◉ active work
         "###);
     }
 
@@ -870,11 +918,11 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ▾ current scope
-            ◌ 3 previous tasks
-            ✓ child 4
-            ✓ child 5
-            ◉ active child
+          └─ ▾ current scope
+             ├─ ◌ 3 previous tasks
+             ├─ ✓ child 4
+             ├─ ✓ child 5
+             └─ ◉ active child
         "###);
         assert!(!rendered.contains("child 1"));
         assert!(!rendered.contains("child 2"));
@@ -893,8 +941,8 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ◌ previous
-          ◉ active
+          ├─ ◌ previous
+          └─ ◉ active
         "###);
         assert!(!rendered.contains("inclusive context"));
         assert!(!rendered.contains("raw"));
@@ -904,8 +952,8 @@ mod tests {
         let raw = render_lines(&cell.raw_lines()).join("\n");
         insta::assert_snapshot!(raw, @r###"
         Spine Tree
-          ◌ previous
-          ◉ active
+          ├─ ◌ previous
+          └─ ◉ active
         "###);
         assert!(!raw.contains("inclusive context"));
         assert!(!raw.contains("raw"));
