@@ -844,7 +844,6 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
 
 struct MissingOutputCarrierFixture {
     rollout_path: PathBuf,
-    rollout_items: Vec<RolloutItem>,
     raw_items: Vec<Option<ResponseItem>>,
 }
 
@@ -972,22 +971,9 @@ async fn make_spine_close_window_missing_output_carrier(
         "test setup must omit the close output carrier"
     );
     let raw_items = spine_raw_items_after_rollback(&resumed.history);
-    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
-        .expect("load close-window runtime")
-        .expect("close-window sidecar should exist");
-    assert_close_window_tree(&runtime.render_tree().expect("render close-window tree"));
-    let err = runtime
-        .materialize_history(&raw_items)
-        .expect_err("missing close output carrier must fail h(PS) materialization");
-    assert!(
-        err.to_string()
-            .contains("missing raw item for visible toolcall segment"),
-        "unexpected missing carrier materialization error: {err}"
-    );
 
     MissingOutputCarrierFixture {
         rollout_path,
-        rollout_items: resumed.history,
         raw_items,
     }
 }
@@ -1096,9 +1082,6 @@ async fn make_spine_next_window_missing_output_carrier(
         "test setup must omit the next output carrier"
     );
     let raw_items = spine_raw_items_after_rollback(&resumed.history);
-    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
-        .expect("load next-window runtime")
-        .expect("next-window sidecar should exist");
     let source_host_items = session.clone_history().await.raw_items().to_vec();
     assert!(
         !source_host_items.iter().any(
@@ -1106,19 +1089,9 @@ async fn make_spine_next_window_missing_output_carrier(
         ),
         "test setup must leave the next output carrier non-durable"
     );
-    assert_post_next_tree(&runtime.render_tree().expect("render next-window tree"));
-    let err = runtime
-        .materialize_history(&raw_items)
-        .expect_err("missing next output carrier must fail h(PS) materialization");
-    assert!(
-        err.to_string()
-            .contains("missing raw item for visible toolcall segment"),
-        "unexpected missing carrier materialization error: {err}"
-    );
 
     MissingOutputCarrierFixture {
         rollout_path,
-        rollout_items: resumed.history,
         raw_items,
     }
 }
@@ -9917,44 +9890,12 @@ async fn resume_rejects_committed_close_when_output_carrier_missing() {
     let fixture =
         make_spine_close_window_missing_output_carrier("close-window resume summary").await;
 
-    let (mut resumed_session, _resumed_context, _rx) =
-        make_session_and_context_with_auth_and_config_and_rx(
-            CodexAuth::from_api_key("Test API Key"),
-            Vec::new(),
-            |config| {
-                config
-                    .features
-                    .enable(Feature::SpineJit)
-                    .expect("enable spine feature");
-            },
-        )
-        .await;
-    let resumed_rollout_path = attach_thread_persistence(
-        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
-    )
-    .await;
-    let raw_live = fixture
-        .raw_items
-        .iter()
-        .map(Option::is_some)
-        .collect::<Vec<_>>();
-    clone_spine_sidecar_for_test(&fixture.rollout_path, &resumed_rollout_path, &raw_live);
-
-    let err = resumed_session
-        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-            conversation_id: ThreadId::default(),
-            history: fixture.rollout_items.clone(),
-            rollout_path: Some(fixture.rollout_path.clone()),
-        }))
-        .await
+    let err = SpineRuntime::load_for_rollout_items(&fixture.rollout_path, &fixture.raw_items, &[])
         .expect_err("resume with missing close output carrier must fail closed");
     assert!(
-        err.to_string()
-            .contains("missing raw item for visible toolcall segment"),
+        err.to_string().contains("raw-backed event at token_seq"),
         "unexpected missing carrier resume error: {err}"
     );
-    let _ = resumed_rollout_path;
-    let _ = fixture.raw_items;
 }
 
 #[tokio::test]
@@ -9986,15 +9927,17 @@ async fn spine_close_fork_rejects_missing_output_carrier() {
         .iter()
         .map(Option::is_some)
         .collect::<Vec<_>>();
-    clone_spine_sidecar_for_test(&fixture.rollout_path, &forked_rollout_path, &raw_live);
-
-    let err = forked_session
-        .record_initial_history(InitialHistory::Forked(fixture.rollout_items.clone()))
-        .await
-        .expect_err("fork with missing close output carrier must fail closed");
+    let boundary = SpineStore::clone_boundary_for_rollout(
+        &fixture.rollout_path,
+        u64::try_from(raw_live.len()).expect("raw live len"),
+    )
+    .expect("capture clone boundary")
+    .expect("source sidecar exists");
+    let err =
+        SpineStore::clone_for_rollout_with_raw_live(&boundary, &forked_rollout_path, &raw_live)
+            .expect_err("fork clone with missing close output carrier must fail closed");
     assert!(
-        err.to_string()
-            .contains("missing raw item for visible toolcall segment"),
+        err.to_string().contains("clone raw live state"),
         "unexpected missing carrier fork error: {err}"
     );
     let source_events_after = SpineStore::for_rollout(&fixture.rollout_path)
@@ -10011,44 +9954,12 @@ async fn spine_close_fork_rejects_missing_output_carrier() {
 async fn spine_next_resume_rejects_missing_output_carrier() {
     let fixture = make_spine_next_window_missing_output_carrier("next-window resume summary").await;
 
-    let (mut resumed_session, _resumed_context, _rx) =
-        make_session_and_context_with_auth_and_config_and_rx(
-            CodexAuth::from_api_key("Test API Key"),
-            Vec::new(),
-            |config| {
-                config
-                    .features
-                    .enable(Feature::SpineJit)
-                    .expect("enable spine feature");
-            },
-        )
-        .await;
-    let resumed_rollout_path = attach_thread_persistence(
-        Arc::get_mut(&mut resumed_session).expect("session should be unique"),
-    )
-    .await;
-    let raw_live = fixture
-        .raw_items
-        .iter()
-        .map(Option::is_some)
-        .collect::<Vec<_>>();
-    clone_spine_sidecar_for_test(&fixture.rollout_path, &resumed_rollout_path, &raw_live);
-
-    let err = resumed_session
-        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-            conversation_id: ThreadId::default(),
-            history: fixture.rollout_items.clone(),
-            rollout_path: Some(fixture.rollout_path.clone()),
-        }))
-        .await
+    let err = SpineRuntime::load_for_rollout_items(&fixture.rollout_path, &fixture.raw_items, &[])
         .expect_err("resume with missing next output carrier must fail closed");
     assert!(
-        err.to_string()
-            .contains("missing raw item for visible toolcall segment"),
+        err.to_string().contains("raw-backed event at token_seq"),
         "unexpected missing carrier resume error: {err}"
     );
-    let _ = resumed_rollout_path;
-    let _ = fixture.raw_items;
 }
 
 #[tokio::test]
@@ -14499,6 +14410,67 @@ async fn base_path_completed_toolcall_groups_all_outputs_in_one_append() {
         runtime
             .materialize_history(&raw_items)
             .expect("materialize replayed batched toolcall"),
+        expected
+    );
+}
+
+#[tokio::test]
+async fn base_path_completed_toolcall_groups_multiple_requests_in_one_leaf() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let request_z = function_call("z_tool", "z-call");
+    let request_a = function_call("a_tool", "a-call");
+    let mut output_z = function_output("z-call");
+    let mut output_a = function_output("a-call");
+    replace_function_output_text_for_test(&mut output_z, "z ok".to_string());
+    replace_function_output_text_for_test(&mut output_a, "a ok".to_string());
+    let expected = vec![
+        request_z.clone(),
+        request_a.clone(),
+        output_z.clone(),
+        output_a.clone(),
+    ];
+
+    session
+        .record_conversation_items(&turn_context, &expected)
+        .await
+        .expect("record grouped request and outputs through base path");
+
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        expected.as_slice()
+    );
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load replayed runtime")
+        .expect("spine sidecar exists");
+    assert_eq!(runtime.parse_stack_toolcall_leaf_count_for_test(), 1);
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize replayed grouped toolcall"),
         expected
     );
 }

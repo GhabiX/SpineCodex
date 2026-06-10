@@ -34,6 +34,7 @@ use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
+use crate::spine::model::commit_marker_structural_event_seqs;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -348,6 +349,10 @@ fn clone_for_rollout_into_store(
     let source_checkpoints = source.checkpoints()?;
     let source_compact_checkpoints = source.compact_checkpoints()?;
     let source_commit_markers = source.commit_markers()?;
+    let source_events_by_seq = source_events
+        .iter()
+        .map(|event| (event.seq, event))
+        .collect::<BTreeMap<_, _>>();
     let mut cloned_checkpoints = Vec::new();
     for checkpoint in source_checkpoints {
         let checkpoint_boundary = usize::try_from(checkpoint.raw_ordinal)
@@ -374,25 +379,56 @@ fn clone_for_rollout_into_store(
             cloned_compact_checkpoints.push(checkpoint);
         }
     }
+    let mut all_marker_structural_event_seqs = BTreeSet::new();
     let mut cloned_commit_markers = Vec::new();
     for marker in source_commit_markers {
-        if marker.token_seq_end <= boundary.structural_seq_limit
-            && marker.raw_boundary <= boundary.raw_ordinal_limit
-            && commit_marker_allowed_by_source_live(&marker, source_raw_live)?
-        {
-            cloned_commit_markers.push(marker);
+        validate_commit_marker_record(&marker)?;
+        validate_commit_marker_events(&marker, &source_events_by_seq)?;
+        let structural_event_seqs = commit_marker_structural_event_seqs(&marker)?;
+        all_marker_structural_event_seqs.extend(structural_event_seqs.iter().copied());
+        let marker_in_clone_boundary = marker.token_seq_end <= boundary.structural_seq_limit
+            && marker.raw_boundary <= boundary.raw_ordinal_limit;
+        if !marker_in_clone_boundary {
+            continue;
         }
+        if !commit_marker_allowed_by_source_live(&marker, source_raw_live)? {
+            return Err(SpineError::InvalidStore(format!(
+                "Spine commit marker {} is not proved by clone raw live state",
+                marker.op_id
+            )));
+        }
+        for seq in (marker.token_seq_start..marker.token_seq_end)
+            .filter(|seq| !structural_event_seqs.contains(seq))
+        {
+            let Some(event) = source_events_by_seq.get(&seq) else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} references missing raw-backed event at token_seq {}",
+                    marker.op_id, seq
+                )));
+            };
+            if !event.allowed_by(mask)? {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} raw-backed event at token_seq {} is not proved by clone raw live state",
+                    marker.op_id, seq
+                )));
+            }
+        }
+        cloned_commit_markers.push(marker);
     }
+    drop(source_events_by_seq);
     let mut marker_proved_event_seqs = BTreeSet::new();
     for marker in &cloned_commit_markers {
-        for seq in marker.token_seq_start..marker.token_seq_end {
-            marker_proved_event_seqs.insert(seq);
-        }
+        marker_proved_event_seqs.extend(commit_marker_structural_event_seqs(marker)?);
     }
     let mut cloned_events = Vec::new();
     for event in source_events {
-        if event.seq < boundary.structural_seq_limit
-            && (event.allowed_by(mask)? || marker_proved_event_seqs.contains(&event.seq))
+        if event.seq >= boundary.structural_seq_limit {
+            continue;
+        }
+        if marker_proved_event_seqs.contains(&event.seq) {
+            cloned_events.push(event);
+        } else if !all_marker_structural_event_seqs.contains(&event.seq)
+            && event.allowed_by(mask)?
         {
             cloned_events.push(event);
         }
@@ -893,6 +929,8 @@ impl SpineStore {
         events: &[LoggedSpineLedgerEvent],
         mems: &[MemRecord],
         raw_live: &[bool],
+        min_seq: Option<u64>,
+        max_seq: Option<u64>,
     ) -> Result<(), SpineError> {
         let markers = self.commit_markers()?;
         let events_by_seq = events
@@ -902,6 +940,9 @@ impl SpineStore {
         let mut markers_by_start = BTreeMap::new();
         for marker in &markers {
             validate_commit_marker_record(marker)?;
+            if !marker_in_replay_range(marker, min_seq, max_seq) {
+                continue;
+            }
             if markers_by_start
                 .insert(marker.token_seq_start, marker)
                 .is_some()
@@ -916,6 +957,9 @@ impl SpineStore {
         }
 
         for event in events {
+            if !event_seq_in_replay_range(event.seq, min_seq, max_seq) {
+                continue;
+            }
             match &event.event {
                 SpineLedgerEvent::Close { .. } => match markers_by_start.get(&event.seq) {
                     Some(marker)
@@ -961,6 +1005,19 @@ impl SpineStore {
     }
 }
 
+fn event_seq_in_replay_range(seq: u64, min_seq: Option<u64>, max_seq: Option<u64>) -> bool {
+    min_seq.is_none_or(|min_seq| seq >= min_seq) && max_seq.is_none_or(|max_seq| seq < max_seq)
+}
+
+fn marker_in_replay_range(
+    marker: &SpineCommitMarker,
+    min_seq: Option<u64>,
+    max_seq: Option<u64>,
+) -> bool {
+    min_seq.is_none_or(|min_seq| marker.token_seq_start >= min_seq)
+        && max_seq.is_none_or(|max_seq| marker.token_seq_end <= max_seq)
+}
+
 fn validate_commit_marker_record(marker: &SpineCommitMarker) -> Result<(), SpineError> {
     if marker.version != COMMIT_MARKER_VERSION {
         return Err(SpineError::InvalidStore(format!(
@@ -994,7 +1051,7 @@ fn validate_commit_marker_events(
 ) -> Result<(), SpineError> {
     match marker.kind {
         SpineCommitKindMarker::Close => {
-            validate_commit_marker_width_range(marker, 1, 2)?;
+            validate_commit_marker_width(marker, 2)?;
             let event = event_at_marker_start(marker, events_by_seq)?;
             let SpineLedgerEvent::Close { node, boundary, .. } = &event.event else {
                 return Err(SpineError::InvalidStore(format!(
@@ -1003,11 +1060,11 @@ fn validate_commit_marker_events(
                 )));
             };
             validate_close_marker_fields(marker, node, *boundary)?;
-            validate_optional_trailing_toolcall(marker, events_by_seq, marker.token_seq_start + 1)?;
+            validate_required_trailing_toolcall(marker, events_by_seq, marker.token_seq_start + 1)?;
             Ok(())
         }
         SpineCommitKindMarker::CloseThenOpen => {
-            validate_commit_marker_width_range(marker, 2, 3)?;
+            validate_commit_marker_width(marker, 3)?;
             let close = event_at_marker_start(marker, events_by_seq)?;
             let SpineLedgerEvent::Close { node, boundary, .. } = &close.event else {
                 return Err(SpineError::InvalidStore(format!(
@@ -1037,7 +1094,7 @@ fn validate_commit_marker_events(
                     marker.op_id, marker.raw_boundary, boundary
                 )));
             }
-            validate_optional_trailing_toolcall(marker, events_by_seq, open_seq + 1)?;
+            validate_required_trailing_toolcall(marker, events_by_seq, open_seq + 1)?;
             Ok(())
         }
         SpineCommitKindMarker::RootCompact => {
@@ -1093,40 +1150,14 @@ fn validate_commit_marker_width(marker: &SpineCommitMarker, width: u64) -> Resul
     Ok(())
 }
 
-fn validate_commit_marker_width_range(
-    marker: &SpineCommitMarker,
-    min_width: u64,
-    max_width: u64,
-) -> Result<(), SpineError> {
-    let width = marker
-        .token_seq_end
-        .checked_sub(marker.token_seq_start)
-        .ok_or_else(|| {
-            SpineError::InvalidStore(format!(
-                "Spine commit marker {} token range {}..{} is invalid",
-                marker.op_id, marker.token_seq_start, marker.token_seq_end
-            ))
-        })?;
-    if width < min_width || width > max_width {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} token range {}..{} has width {width}, expected {min_width}..={max_width}",
-            marker.op_id, marker.token_seq_start, marker.token_seq_end
-        )));
-    }
-    Ok(())
-}
-
-fn validate_optional_trailing_toolcall(
+fn validate_required_trailing_toolcall(
     marker: &SpineCommitMarker,
     events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
     seq: u64,
 ) -> Result<(), SpineError> {
-    if seq >= marker.token_seq_end {
-        return Ok(());
-    }
     if seq.checked_add(1) != Some(marker.token_seq_end) {
         return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} has unexpected extra events in token range {}..{}",
+            "Spine commit marker {} must end with exactly one trailing ToolCall in token range {}..{}",
             marker.op_id, marker.token_seq_start, marker.token_seq_end
         )));
     }

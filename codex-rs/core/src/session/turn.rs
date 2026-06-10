@@ -2167,7 +2167,7 @@ async fn drain_in_flight(
     Ok(())
 }
 
-async fn drain_deferred_spine_control_group(
+async fn drain_deferred_spine_tool_group(
     group: Vec<DeferredToolCall>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -2180,11 +2180,14 @@ async fn drain_deferred_spine_control_group(
     let control_call_id = group
         .iter()
         .find(|deferred| is_spine_parser_control_call(&deferred.call))
-        .map(|deferred| deferred.call.call_id.clone())
+        .map(|deferred| deferred.call.call_id.clone());
+    let commit_call_id = control_call_id
+        .clone()
+        .or_else(|| group.first().map(|deferred| deferred.call.call_id.clone()))
         .ok_or_else(|| {
             SamplingRequestError::Codex(CodexErr::SpineTerminalFailure {
                 operation: "commit grouped Spine toolcall".to_string(),
-                reason: "grouped Spine toolcall missing parser-control call".to_string(),
+                reason: "grouped Spine toolcall missing tool call".to_string(),
             })
         })?;
     let tool_call_ids = group
@@ -2206,9 +2209,7 @@ async fn drain_deferred_spine_control_group(
         match res {
             Ok(response_input) => response_items.push(response_input.into()),
             Err(err) => {
-                error_or_panic(format!(
-                    "in-flight grouped Spine tool future failed during drain: {err}"
-                ));
+                return Err(SamplingRequestError::Codex(err));
             }
         }
     }
@@ -2216,7 +2217,7 @@ async fn drain_deferred_spine_control_group(
         .record_spine_toolcall_group_outputs_and_commit_with_client_session(
             &turn_context,
             client_session,
-            &control_call_id,
+            &commit_call_id,
             &tool_call_ids,
             &response_items,
             close_compact_tools,
@@ -2310,7 +2311,7 @@ async fn try_run_sampling_request(
         Box<dyn ToolArgumentDiffConsumer>,
     )> = None;
     let mut deferred_tool_calls: Vec<DeferredToolCall> = Vec::new();
-    let mut deferred_spine_control_group: Option<Vec<DeferredToolCall>> = None;
+    let mut deferred_spine_tool_group: Option<Vec<DeferredToolCall>> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
     let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
@@ -2616,16 +2617,13 @@ async fn try_run_sampling_request(
                     .count();
                 match spine_control_count {
                     0 => {
-                        for deferred in deferred_tool_calls.drain(..) {
-                            in_flight.push_back(spawn_tool_call(
-                                &tool_runtime,
-                                &cancellation_token,
-                                deferred.call,
-                            ));
+                        if !deferred_tool_calls.is_empty() {
+                            deferred_spine_tool_group =
+                                Some(std::mem::take(&mut deferred_tool_calls));
                         }
                     }
                     1 => {
-                        deferred_spine_control_group = Some(std::mem::take(&mut deferred_tool_calls));
+                        deferred_spine_tool_group = Some(std::mem::take(&mut deferred_tool_calls));
                     }
                     _ => {
                         let names = deferred_tool_calls
@@ -2799,8 +2797,8 @@ async fn try_run_sampling_request(
         client_session.send_response_processed(response_id).await;
     }
 
-    if let Some(group) = deferred_spine_control_group {
-        drain_deferred_spine_control_group(
+    if let Some(group) = deferred_spine_tool_group {
+        drain_deferred_spine_tool_group(
             group,
             sess.clone(),
             turn_context.clone(),

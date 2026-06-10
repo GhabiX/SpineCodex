@@ -3,6 +3,7 @@ use crate::spine::io::hash_raw_live;
 use crate::spine::io::hash_raw_live_prefix_all_true;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -249,6 +250,27 @@ pub(super) struct SpineCommitMarker {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) raw_live_hash: Option<String>,
     pub(super) memory_refs: Vec<SpineCommitMemoryRef>,
+}
+
+pub(super) fn commit_marker_structural_event_seqs(
+    marker: &SpineCommitMarker,
+) -> Result<BTreeSet<u64>, SpineError> {
+    let mut seqs = BTreeSet::new();
+    match marker.kind {
+        SpineCommitKindMarker::Close => {
+            seqs.insert(marker.token_seq_start);
+        }
+        SpineCommitKindMarker::CloseThenOpen => {
+            seqs.insert(marker.token_seq_start);
+            seqs.insert(marker.token_seq_start.checked_add(1).ok_or_else(|| {
+                SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
+            })?);
+        }
+        SpineCommitKindMarker::RootCompact => {
+            seqs.insert(marker.token_seq_start);
+        }
+    }
+    Ok(seqs)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

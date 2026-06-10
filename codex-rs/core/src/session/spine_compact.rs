@@ -427,9 +427,7 @@ fn validate_source_plan_against_history(
         if entry.context_index < source_plan.source_context_range.start {
             return Err(SpineError::CompactFailure(format!(
                 "spine.close compact source entry ordinal {} context_index {} precedes source range start {}",
-                entry.source_ordinal,
-                entry.context_index,
-                source_plan.source_context_range.start
+                entry.source_ordinal, entry.context_index, source_plan.source_context_range.start
             )));
         }
         if entry.context_index >= source_plan.source_context_range.end {

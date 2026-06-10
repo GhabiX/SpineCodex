@@ -40,6 +40,7 @@ use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegment;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
+use crate::spine::model::commit_marker_structural_event_seqs;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::event_to_token;
 use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
@@ -531,7 +532,13 @@ impl SpineRuntime {
         let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
         let mems = store.mems()?;
         let markers = store.commit_markers()?;
-        store.validate_commit_markers_for_replay(&ledger.events, &mems, raw_live)?;
+        store.validate_commit_markers_for_replay(
+            &ledger.events,
+            &mems,
+            raw_live,
+            None,
+            Some(checkpoint.token_seq),
+        )?;
         let archive = SpineArchive::new(store.root.clone());
         let raw_ordinal = usize::try_from(checkpoint.raw_ordinal)
             .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
@@ -543,14 +550,22 @@ impl SpineRuntime {
             .filter(|event| event.seq < checkpoint.token_seq)
             .cloned()
             .collect::<Vec<_>>();
-        let prefix_forced_event_seqs =
-            forced_replay_event_seqs_from_markers(&markers, &mems, prefix_mask)?;
+        let prefix_replay_event_seqs = replay_event_seqs_from_markers(
+            &ledger.events,
+            &markers,
+            &mems,
+            prefix_mask,
+            None,
+            Some(checkpoint.token_seq),
+            true,
+        )?;
         let prefix_ps = parse_stack_from_events_with_forced_events(
             &prefix_events,
             &archive,
             &mems,
             prefix_mask,
-            &prefix_forced_event_seqs,
+            &prefix_replay_event_seqs.forced,
+            &prefix_replay_event_seqs.marker_structural,
         )?;
         if prefix_ps != checkpoint.parse_stack {
             return Err(SpineError::Invariant(format!(
@@ -569,9 +584,22 @@ impl SpineRuntime {
         let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
         let mems = store.mems()?;
         let markers = store.commit_markers()?;
-        store.validate_commit_markers_for_replay(&ledger.events, &mems, &raw_live)?;
-        let forced_event_seqs =
-            forced_replay_event_seqs_from_markers(&markers, &mems, RawMask::new(&raw_live))?;
+        store.validate_commit_markers_for_replay(
+            &ledger.events,
+            &mems,
+            &raw_live,
+            None,
+            event_limit,
+        )?;
+        let replay_event_seqs = replay_event_seqs_from_markers(
+            &ledger.events,
+            &markers,
+            &mems,
+            RawMask::new(&raw_live),
+            None,
+            event_limit,
+            true,
+        )?;
         let events = if let Some(limit) = event_limit {
             ledger
                 .events
@@ -589,7 +617,7 @@ impl SpineRuntime {
             &events,
             &mems,
             &raw_live,
-            &forced_event_seqs,
+            &replay_event_seqs,
             None,
             None,
         )?;
@@ -627,9 +655,22 @@ impl SpineRuntime {
         let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
         let mems = store.mems()?;
         let markers = store.commit_markers()?;
-        store.validate_commit_markers_for_replay(&ledger.events, &mems, &raw_live)?;
-        let forced_event_seqs =
-            forced_replay_event_seqs_from_markers(&markers, &mems, RawMask::new(&raw_live))?;
+        store.validate_commit_markers_for_replay(
+            &ledger.events,
+            &mems,
+            &raw_live,
+            Some(checkpoint.token_seq),
+            None,
+        )?;
+        let replay_event_seqs = replay_event_seqs_from_markers(
+            &ledger.events,
+            &markers,
+            &mems,
+            RawMask::new(&raw_live),
+            Some(checkpoint.token_seq),
+            None,
+            false,
+        )?;
         let archive = SpineArchive::new(store.root.clone());
         let raw_ordinal = usize::try_from(checkpoint.raw_ordinal)
             .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
@@ -641,14 +682,22 @@ impl SpineRuntime {
             .filter(|event| event.seq < checkpoint.token_seq)
             .cloned()
             .collect::<Vec<_>>();
-        let prefix_forced_event_seqs =
-            forced_replay_event_seqs_from_markers(&markers, &mems, prefix_mask)?;
+        let prefix_replay_event_seqs = replay_event_seqs_from_markers(
+            &ledger.events,
+            &markers,
+            &mems,
+            prefix_mask,
+            None,
+            Some(checkpoint.token_seq),
+            true,
+        )?;
         let prefix_ps = parse_stack_from_events_with_forced_events(
             &prefix_events,
             &archive,
             &mems,
             prefix_mask,
-            &prefix_forced_event_seqs,
+            &prefix_replay_event_seqs.forced,
+            &prefix_replay_event_seqs.marker_structural,
         )?;
         if prefix_ps != checkpoint.parse_stack {
             return Err(SpineError::Invariant(format!(
@@ -662,7 +711,7 @@ impl SpineRuntime {
             &ledger.events,
             &mems,
             &raw_live,
-            &forced_event_seqs,
+            &replay_event_seqs,
             Some(&checkpoint.parse_stack),
             Some(checkpoint.token_seq),
         )?;
@@ -999,48 +1048,78 @@ impl SpineRuntime {
         &mut self,
         toolcall: CompletedToolCall,
     ) -> Result<(), SpineError> {
-        let (event, segments) = self.completed_toolcall_parts(toolcall)?;
+        let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
         self.append_cached_event(event)?;
-        self.push_completed_toolcall_token(segments)
+        self.push_completed_toolcall_token(segments)?;
+        self.clear_completed_toolcall_anchors(&toolcall);
+        Ok(())
     }
 
-    pub(crate) fn observe_recorded_tool_outputs_as_completed_toolcall(
+    pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
         &mut self,
-        call_id: &str,
-        tool_responses: &[(u64, usize)],
+        tool_responses: &[(String, u64, usize)],
     ) -> Result<(), SpineError> {
-        if tool_responses.is_empty() {
+        let mut response_segments = Vec::new();
+        let mut request_call_ids = Vec::new();
+        for (call_id, raw_ordinal, context_index) in tool_responses {
+            if self.control_call_ids.contains(call_id)
+                || self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.call_id() == call_id)
+            {
+                continue;
+            }
+            if !request_call_ids.contains(call_id) {
+                if !self.ordinary_tool_requests.contains_key(call_id) {
+                    continue;
+                }
+                request_call_ids.push(call_id.clone());
+            }
+            response_segments.push(CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Response,
+                raw_ordinal: *raw_ordinal,
+                context_index: *context_index,
+            });
+        }
+        if request_call_ids.is_empty() || response_segments.is_empty() {
             return Ok(());
         }
-        if self.control_call_ids.contains(call_id)
-            || self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.call_id() == call_id)
-        {
-            return Ok(());
-        }
-        let Some(request) = self.ordinary_tool_requests.get(call_id).cloned() else {
-            return Ok(());
-        };
-        self.observe_completed_toolcall(CompletedToolCall {
-            call_id: call_id.to_string(),
-            request_call_ids: vec![call_id.to_string()],
-            segments: std::iter::once(CompletedToolCallSegment {
+        request_call_ids.sort_by(|left, right| {
+            let left_anchor = self.ordinary_tool_requests.get(left);
+            let right_anchor = self.ordinary_tool_requests.get(right);
+            left_anchor
+                .map(|anchor| (anchor.context_index, anchor.raw_ordinal))
+                .cmp(&right_anchor.map(|anchor| (anchor.context_index, anchor.raw_ordinal)))
+                .then_with(|| left.cmp(right))
+        });
+        let mut segments = Vec::with_capacity(request_call_ids.len() + response_segments.len());
+        for request_call_id in &request_call_ids {
+            let request = self
+                .ordinary_tool_requests
+                .get(request_call_id)
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent(format!(
+                        "missing tool request anchor for call_id={request_call_id}"
+                    ))
+                })?;
+            segments.push(CompletedToolCallSegment {
                 kind: ToolCallSegmentKind::Request,
                 raw_ordinal: request.raw_ordinal,
                 context_index: usize::try_from(request.context_index).map_err(|_| {
                     SpineError::InvalidEvent("tool request context index overflow".to_string())
                 })?,
-            })
-            .chain(tool_responses.iter().map(|(raw_ordinal, context_index)| {
-                CompletedToolCallSegment {
-                    kind: ToolCallSegmentKind::Response,
-                    raw_ordinal: *raw_ordinal,
-                    context_index: *context_index,
-                }
-            }))
-            .collect(),
+            });
+        }
+        response_segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
+        segments.extend(response_segments);
+        let call_id = request_call_ids.first().cloned().ok_or_else(|| {
+            SpineError::InvalidEvent("completed toolcall missing call id".to_string())
+        })?;
+        self.observe_completed_toolcall(CompletedToolCall {
+            call_id,
+            request_call_ids,
+            segments,
         })
     }
 
@@ -1196,10 +1275,10 @@ impl SpineRuntime {
     }
 
     fn completed_toolcall_parts(
-        &mut self,
-        toolcall: CompletedToolCall,
+        &self,
+        toolcall: &CompletedToolCall,
     ) -> Result<(SpineLedgerEvent, Vec<ToolCallSegment>), SpineError> {
-        validate_completed_toolcall(&toolcall)?;
+        validate_completed_toolcall(toolcall)?;
         let segments = toolcall
             .segments
             .iter()
@@ -1212,6 +1291,10 @@ impl SpineRuntime {
             })
             .collect::<Vec<_>>();
         let event = self.completed_toolcall_event(&segments)?;
+        Ok((event, segments))
+    }
+
+    fn clear_completed_toolcall_anchors(&mut self, toolcall: &CompletedToolCall) {
         for request_call_id in &toolcall.request_call_ids {
             self.ordinary_tool_requests.remove(request_call_id);
         }
@@ -1229,7 +1312,6 @@ impl SpineRuntime {
         }
         self.tree_call_ids.remove(&toolcall.call_id);
         self.control_call_ids.remove(&toolcall.call_id);
-        Ok((event, segments))
     }
 
     fn completed_toolcall_event(
@@ -1567,13 +1649,20 @@ impl SpineRuntime {
             },
             &self.archive(),
         )?;
-        let events = if let Some(completed_toolcall) = completed_toolcall {
-            let (toolcall_event, segments) = self.completed_toolcall_parts(completed_toolcall)?;
+        if let Some(completed_toolcall) = completed_toolcall {
+            let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
             staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
-            vec![event, toolcall_event]
-        } else {
-            vec![event]
-        };
+            let events = vec![event, toolcall_event];
+            self.append_committed_events_no_marker(events)?;
+            self.parse_stack = staged_parse_stack;
+            self.clear_completed_toolcall_anchors(&completed_toolcall);
+            return Ok(SpineCommitKind::Open {
+                open_request_index: usize::try_from(index).map_err(|_| {
+                    SpineError::InvalidEvent("spine.open context index overflow".to_string())
+                })?,
+            });
+        }
+        let events = vec![event];
         self.append_committed_events_no_marker(events)?;
         self.parse_stack = staged_parse_stack;
         Ok(SpineCommitKind::Open {
@@ -1593,27 +1682,26 @@ impl SpineRuntime {
         let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
         let mut staged_parse_stack = prepared.staged_parse_stack.clone();
         let mut events = vec![prepared.close_event.clone()];
-        let toolcall_start = if let Some(completed_toolcall) = completed_toolcall {
-            let toolcall_start =
-                completed_toolcall_first_segment(&completed_toolcall)?.context_index;
-            let completed_toolcall = self.remap_completed_toolcall_context_indices(
-                completed_toolcall,
-                prepared
-                    .suffix_start
-                    .checked_add(prepared.replacement.len())
-                    .ok_or_else(|| {
-                        SpineError::InvalidEvent(
-                            "spine.close toolcall context index overflow".to_string(),
-                        )
-                    })?,
-            )?;
-            let (toolcall_event, segments) = self.completed_toolcall_parts(completed_toolcall)?;
-            staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
-            events.push(toolcall_event);
-            Some(toolcall_start)
-        } else {
-            None
-        };
+        let completed_toolcall = completed_toolcall.ok_or_else(|| {
+            SpineError::InvalidEvent(
+                "spine.close commit requires completed toolcall evidence".to_string(),
+            )
+        })?;
+        let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
+        let completed_toolcall = self.remap_completed_toolcall_context_indices(
+            completed_toolcall,
+            prepared
+                .suffix_start
+                .checked_add(prepared.replacement.len())
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent(
+                        "spine.close toolcall context index overflow".to_string(),
+                    )
+                })?,
+        )?;
+        let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
+        staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+        events.push(toolcall_event);
         self.store
             .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
@@ -1628,10 +1716,11 @@ impl SpineRuntime {
         )?;
         self.append_committed_events(events, marker)?;
         self.parse_stack = staged_parse_stack;
+        self.clear_completed_toolcall_anchors(&completed_toolcall);
         Ok(SpineCommitKind::Close {
             suffix_start: prepared.suffix_start,
             replacement: prepared.replacement,
-            toolcall_start: toolcall_start.unwrap_or(prepared.suffix_start),
+            toolcall_start,
         })
     }
 
@@ -1682,20 +1771,19 @@ impl SpineRuntime {
             &self.archive(),
         )?;
         let mut events = vec![prepared.close_event.clone(), open_event];
-        let toolcall_start = if let Some(completed_toolcall) = completed_toolcall {
-            let toolcall_start =
-                completed_toolcall_first_segment(&completed_toolcall)?.context_index;
-            let completed_toolcall =
-                self.remap_completed_toolcall_context_indices(completed_toolcall, open_index)?;
-            let (toolcall_event, segments) = self.completed_toolcall_parts(completed_toolcall)?;
-            prepared
-                .staged_parse_stack
-                .shift(SpineToken::ToolCall { segments }, &self.archive())?;
-            events.push(toolcall_event);
-            Some(toolcall_start)
-        } else {
-            None
-        };
+        let completed_toolcall = completed_toolcall.ok_or_else(|| {
+            SpineError::InvalidEvent(
+                "spine.next commit requires completed toolcall evidence".to_string(),
+            )
+        })?;
+        let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
+        let completed_toolcall =
+            self.remap_completed_toolcall_context_indices(completed_toolcall, open_index)?;
+        let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
+        prepared
+            .staged_parse_stack
+            .shift(SpineToken::ToolCall { segments }, &self.archive())?;
+        events.push(toolcall_event);
         self.store
             .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
@@ -1710,10 +1798,11 @@ impl SpineRuntime {
         )?;
         self.append_committed_events(events, marker)?;
         self.parse_stack = prepared.staged_parse_stack;
+        self.clear_completed_toolcall_anchors(&completed_toolcall);
         Ok(SpineCommitKind::CloseThenOpen {
             suffix_start: prepared.suffix_start,
             replacement: prepared.replacement,
-            toolcall_start: toolcall_start.unwrap_or(prepared.suffix_start),
+            toolcall_start,
             open_index,
         })
     }
@@ -2654,7 +2743,7 @@ fn replay_from_events(
     events: &[LoggedSpineLedgerEvent],
     mems: &[MemRecord],
     raw_live: &[bool],
-    forced_event_seqs: &BTreeSet<u64>,
+    replay_event_seqs: &MarkerReplayEventSeqs,
     initial: Option<&ParseStack>,
     min_seq: Option<u64>,
 ) -> Result<ParseStack, SpineError> {
@@ -2670,7 +2759,8 @@ fn replay_from_events(
             archive,
             mems,
             raw_mask,
-            forced_event_seqs,
+            &replay_event_seqs.forced,
+            &replay_event_seqs.marker_structural,
         );
     };
     let mem_map = mems
@@ -2683,7 +2773,13 @@ fn replay_from_events(
         .iter()
         .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
     {
-        if !forced_event_seqs.contains(&event.seq) && !event.allowed_by(raw_mask)? {
+        if replay_event_seqs.forced.contains(&event.seq) {
+            parse_stack.shift(event_to_token(event, archive, &mem_map, raw_mask)?, archive)?;
+            continue;
+        }
+        if replay_event_seqs.marker_structural.contains(&event.seq)
+            || !event.allowed_by(raw_mask)?
+        {
             continue;
         }
         parse_stack.shift(event_to_token(event, archive, &mem_map, raw_mask)?, archive)?;
@@ -2691,31 +2787,60 @@ fn replay_from_events(
     Ok(parse_stack)
 }
 
-fn forced_replay_event_seqs_from_markers(
+struct MarkerReplayEventSeqs {
+    forced: BTreeSet<u64>,
+    marker_structural: BTreeSet<u64>,
+}
+
+fn replay_event_seqs_from_markers(
+    events: &[LoggedSpineLedgerEvent],
     markers: &[SpineCommitMarker],
     mems: &[MemRecord],
     raw_mask: RawMask<'_>,
-) -> Result<BTreeSet<u64>, SpineError> {
+    min_seq: Option<u64>,
+    max_seq: Option<u64>,
+    fail_on_unproved_raw_backed: bool,
+) -> Result<MarkerReplayEventSeqs, SpineError> {
     let mems_by_id = mems
         .iter()
         .map(|mem| (mem.compact_id.as_str(), mem))
         .collect::<BTreeMap<_, _>>();
+    let events_by_seq = events
+        .iter()
+        .map(|event| (event.seq, event))
+        .collect::<BTreeMap<_, _>>();
     let mut forced = BTreeSet::new();
+    let mut marker_structural = BTreeSet::new();
     for marker in markers {
-        if !commit_marker_live_for_replay(marker, &mems_by_id, raw_mask)? {
+        if !marker_in_replay_range(marker, min_seq, max_seq) {
             continue;
         }
-        for seq in marker.token_seq_start..marker.token_seq_end {
-            forced.insert(seq);
+        let structural_event_seqs = commit_marker_structural_event_seqs(marker)?;
+        marker_structural.extend(structural_event_seqs.iter().copied());
+        if commit_marker_transaction_live_for_replay(
+            marker,
+            &structural_event_seqs,
+            &events_by_seq,
+            &mems_by_id,
+            raw_mask,
+            fail_on_unproved_raw_backed,
+        )? {
+            forced.extend(structural_event_seqs);
         }
     }
-    Ok(forced)
+    Ok(MarkerReplayEventSeqs {
+        forced,
+        marker_structural,
+    })
 }
 
-fn commit_marker_live_for_replay(
+fn commit_marker_transaction_live_for_replay(
     marker: &SpineCommitMarker,
+    structural_event_seqs: &BTreeSet<u64>,
+    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
     mems_by_id: &BTreeMap<&str, &MemRecord>,
     raw_mask: RawMask<'_>,
+    fail_on_unproved_raw_backed: bool,
 ) -> Result<bool, SpineError> {
     for memory in &marker.memory_refs {
         let Some(mem) = mems_by_id.get(memory.compact_id.as_str()) else {
@@ -2725,7 +2850,33 @@ fn commit_marker_live_for_replay(
             return Ok(false);
         }
     }
+    for seq in marker.token_seq_start..marker.token_seq_end {
+        if structural_event_seqs.contains(&seq) {
+            continue;
+        }
+        let Some(event) = events_by_seq.get(&seq) else {
+            return Ok(false);
+        };
+        if !event.allowed_by(raw_mask)? {
+            if !fail_on_unproved_raw_backed {
+                return Ok(false);
+            }
+            return Err(SpineError::InvalidStore(format!(
+                "Spine commit marker {} raw-backed event at token_seq {} is not proved by live raw state",
+                marker.op_id, seq
+            )));
+        }
+    }
     Ok(true)
+}
+
+fn marker_in_replay_range(
+    marker: &SpineCommitMarker,
+    min_seq: Option<u64>,
+    max_seq: Option<u64>,
+) -> bool {
+    min_seq.is_none_or(|min_seq| marker.token_seq_start >= min_seq)
+        && max_seq.is_none_or(|max_seq| marker.token_seq_end <= max_seq)
 }
 
 fn mark_raw_covered(covered: &mut [bool], raw_ordinal: u64) -> Result<(), SpineError> {
@@ -2775,7 +2926,14 @@ fn validate_completed_toolcall(toolcall: &CompletedToolCall) -> Result<(), Spine
     let mut previous_raw_ordinal = None;
     for (index, segment) in segments.iter().enumerate() {
         match segment.kind {
-            ToolCallSegmentKind::Request => has_request = true,
+            ToolCallSegmentKind::Request => {
+                if has_response {
+                    return Err(SpineError::InvalidEvent(format!(
+                        "completed toolcall request segment {index} appears after a response segment"
+                    )));
+                }
+                has_request = true;
+            }
             ToolCallSegmentKind::Response => has_response = true,
         }
         if let Some(previous) = previous_context_index {

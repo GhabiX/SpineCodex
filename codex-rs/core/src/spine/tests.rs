@@ -237,6 +237,20 @@ fn function_output(call_id: &str) -> ResponseItem {
     }
 }
 
+fn manual_toolcall_event(
+    request_raw: u64,
+    request_index: u64,
+    response_raw: u64,
+    response_index: u64,
+) -> SpineLedgerEvent {
+    SpineLedgerEvent::ToolCall {
+        segments: vec![
+            event_tool_req(request_raw, request_index),
+            event_tool_resp(response_raw, response_index),
+        ],
+    }
+}
+
 fn compact_body_with_context_range(
     node_id: &str,
     source_context_range: Range<usize>,
@@ -367,6 +381,200 @@ fn spine_error_classifies_tool_use_operation_and_compact_failures() {
 }
 
 #[test]
+fn close_commit_without_completed_toolcall_evidence_does_not_write_marker_or_clear_anchor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "live suffix before close");
+    observe_spine_request(
+        &mut runtime,
+        &mut raw,
+        SPINE_TOOL_CLOSE,
+        "close-missing-carrier",
+    );
+    runtime
+        .stage_close("close-missing-carrier".to_string(), None)
+        .expect("stage close");
+    let suffix_start = match runtime
+        .pending_commit("close-missing-carrier")
+        .expect("pending close")
+    {
+        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
+        other => panic!("expected pending close, got {other:?}"),
+    };
+
+    let before_events = event_log_debug(&runtime);
+    let before_stack = runtime.parse_stack().clone();
+    let before_tree = runtime.render_tree().expect("render before failure");
+    let err = runtime
+        .maybe_commit_output(
+            "close-missing-carrier",
+            Some(compact_body_with_ranges("1.1", suffix_start..1, 0..1)),
+        )
+        .expect_err("close must not commit without completed toolcall evidence");
+    assert!(
+        err.to_string()
+            .contains("spine.close commit requires completed toolcall evidence"),
+        "unexpected close error: {err}"
+    );
+    assert!(
+        runtime
+            .store
+            .commit_markers_for_test()
+            .expect("read markers")
+            .is_empty(),
+        "failed close must not publish a commit marker"
+    );
+    assert_parse_stack_tree_and_events_unchanged(
+        &runtime,
+        &before_stack,
+        &before_tree,
+        &before_events,
+    );
+
+    let (_output, output_raw, output_index) =
+        observe_function_output(&mut runtime, &mut raw, "close-missing-carrier");
+    runtime
+        .maybe_commit_output_with_toolcall(
+            "close-missing-carrier",
+            Some(compact_body_with_ranges("1.1", suffix_start..1, 0..1)),
+            SpineTokenBaselines::default(),
+            CompletedToolCall {
+                call_id: "close-missing-carrier".to_string(),
+                request_call_ids: vec!["close-missing-carrier".to_string()],
+                segments: vec![
+                    CompletedToolCallSegment {
+                        kind: ToolCallSegmentKind::Request,
+                        raw_ordinal: 1,
+                        context_index: 1,
+                    },
+                    CompletedToolCallSegment {
+                        kind: ToolCallSegmentKind::Response,
+                        raw_ordinal: output_raw,
+                        context_index: output_index,
+                    },
+                ],
+            },
+        )
+        .expect("retry with durable carrier commits")
+        .expect("commit kind");
+
+    let markers = runtime
+        .store
+        .commit_markers_for_test()
+        .expect("read markers after retry");
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].kind, SpineCommitKindMarker::Close);
+    assert_eq!(markers[0].token_seq_end, markers[0].token_seq_start + 2);
+    assert!(matches!(
+        event_log(&runtime).last(),
+        Some(SpineLedgerEvent::ToolCall { segments })
+            if segments == &vec![event_tool_req(1, 1), event_tool_resp(output_raw, output_index as u64)]
+    ));
+}
+
+#[test]
+fn next_commit_without_completed_toolcall_evidence_does_not_write_marker_or_open_sibling() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "live suffix before next");
+    observe_spine_request(
+        &mut runtime,
+        &mut raw,
+        SPINE_TOOL_NEXT,
+        "next-missing-carrier",
+    );
+    runtime
+        .stage_next(
+            "next-missing-carrier".to_string(),
+            "retry sibling".to_string(),
+            None,
+        )
+        .expect("stage next");
+    let suffix_start = match runtime
+        .pending_commit("next-missing-carrier")
+        .expect("pending next")
+    {
+        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
+        other => panic!("expected pending close-like next, got {other:?}"),
+    };
+
+    let before_events = event_log_debug(&runtime);
+    let before_stack = runtime.parse_stack().clone();
+    let before_tree = runtime.render_tree().expect("render before failure");
+    let err = runtime
+        .maybe_commit_output(
+            "next-missing-carrier",
+            Some(compact_body_with_ranges("1.1", suffix_start..1, 0..1)),
+        )
+        .expect_err("next must not commit without completed toolcall evidence");
+    assert!(
+        err.to_string()
+            .contains("spine.next commit requires completed toolcall evidence"),
+        "unexpected next error: {err}"
+    );
+    assert!(
+        runtime
+            .store
+            .commit_markers_for_test()
+            .expect("read markers")
+            .is_empty(),
+        "failed next must not publish a commit marker"
+    );
+    assert_parse_stack_tree_and_events_unchanged(
+        &runtime,
+        &before_stack,
+        &before_tree,
+        &before_events,
+    );
+
+    let (_output, output_raw, output_index) =
+        observe_function_output(&mut runtime, &mut raw, "next-missing-carrier");
+    runtime
+        .maybe_commit_output_with_toolcall(
+            "next-missing-carrier",
+            Some(compact_body_with_ranges("1.1", suffix_start..1, 0..1)),
+            SpineTokenBaselines::default(),
+            CompletedToolCall {
+                call_id: "next-missing-carrier".to_string(),
+                request_call_ids: vec!["next-missing-carrier".to_string()],
+                segments: vec![
+                    CompletedToolCallSegment {
+                        kind: ToolCallSegmentKind::Request,
+                        raw_ordinal: 1,
+                        context_index: 1,
+                    },
+                    CompletedToolCallSegment {
+                        kind: ToolCallSegmentKind::Response,
+                        raw_ordinal: output_raw,
+                        context_index: output_index,
+                    },
+                ],
+            },
+        )
+        .expect("retry with durable carrier commits")
+        .expect("commit kind");
+
+    let markers = runtime
+        .store
+        .commit_markers_for_test()
+        .expect("read markers after retry");
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].kind, SpineCommitKindMarker::CloseThenOpen);
+    assert_eq!(markers[0].token_seq_end, markers[0].token_seq_start + 3);
+    assert!(matches!(
+        event_log(&runtime).last(),
+        Some(SpineLedgerEvent::ToolCall { segments })
+            if segments == &vec![event_tool_req(1, 1), event_tool_resp(output_raw, output_index as u64)]
+    ));
+}
+
+#[test]
 fn spine_error_classifies_missing_raw_coverage_as_sidecar_corruption() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -452,6 +660,61 @@ fn next_commit_marker_covers_close_then_open_without_next_event() {
         err.to_string()
             .contains("missing Spine commit marker for Close ledger event"),
         "unexpected resume error: {err}"
+    );
+}
+
+#[test]
+fn close_marker_does_not_replay_structural_close_without_live_toolcall_carrier() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "root child work before close");
+    close_task(&mut runtime, &mut raw, "close-carrier-live", "1.1");
+    let full_history = runtime
+        .materialize_history(&raw)
+        .expect("materialize closed history");
+    assert_eq!(full_history.len(), 3);
+
+    let err = SpineRuntime::load_with_raw_live_and_event_limit(
+        SpineStore::for_rollout(&rollout).expect("source store"),
+        vec![true, false, false],
+        None,
+    )
+    .expect_err("replay with stale close carrier raw must fail closed");
+    assert!(
+        err.to_string().contains("raw-backed event at token_seq"),
+        "unexpected stale close carrier replay error: {err}"
+    );
+}
+
+#[test]
+fn clone_does_not_copy_marker_structural_close_without_live_toolcall_carrier() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source_rollout = dir.path().join("source.jsonl");
+    let target_rollout = dir.path().join("target.jsonl");
+    let mut runtime = SpineRuntime::load_or_create(&source_rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    append_msg(&mut runtime, &mut raw, "source work before close");
+    close_task(&mut runtime, &mut raw, "close-not-cloned", "1.1");
+
+    let boundary = SpineStore::clone_boundary_for_rollout(
+        &source_rollout,
+        u64::try_from(raw.len()).expect("raw len fits u64"),
+    )
+    .expect("capture clone boundary")
+    .expect("source sidecar exists");
+    let err = SpineStore::clone_for_rollout_with_raw_live(
+        &boundary,
+        &target_rollout,
+        &[true, false, false],
+    )
+    .expect_err("clone sidecar without close carrier must fail closed");
+    assert!(
+        err.to_string().contains("clone raw live state"),
+        "unexpected stale close carrier clone error: {err}"
     );
 }
 
@@ -2267,6 +2530,66 @@ fn completed_toolcall_preserves_multiple_requests_and_clears_all_request_anchors
 }
 
 #[test]
+fn completed_toolcall_rejects_request_after_response() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let request_1 = ordinary_call("shell_command", "tool-1");
+    let output_1 = function_output("tool-1");
+    let request_2 = ordinary_call("tool_search", "tool-2");
+    let output_2 = function_output("tool-2");
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime
+        .observe_raw_items(4)
+        .expect("record interleaved raw");
+    runtime
+        .observe_context_item(0, 0, &request_1)
+        .expect("observe first request");
+    runtime
+        .observe_context_item(1, 1, &output_1)
+        .expect("observe first response");
+    runtime
+        .observe_context_item(2, 2, &request_2)
+        .expect("observe second request");
+    runtime
+        .observe_context_item(3, 3, &output_2)
+        .expect("observe second response");
+
+    let err = runtime
+        .observe_completed_toolcall(CompletedToolCall {
+            call_id: "tool-1".to_string(),
+            request_call_ids: vec!["tool-1".to_string(), "tool-2".to_string()],
+            segments: vec![
+                CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Request,
+                    raw_ordinal: 0,
+                    context_index: 0,
+                },
+                CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Response,
+                    raw_ordinal: 1,
+                    context_index: 1,
+                },
+                CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Request,
+                    raw_ordinal: 2,
+                    context_index: 2,
+                },
+                CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Response,
+                    raw_ordinal: 3,
+                    context_index: 3,
+                },
+            ],
+        })
+        .expect_err("toolcall must have all requests before responses");
+    assert!(
+        err.to_string().contains("appears after a response segment"),
+        "unexpected completed toolcall error: {err}"
+    );
+}
+
+#[test]
 fn spine_tree_toolcall_is_plain_toolcall_leaf_for_replay_coverage() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -2792,13 +3115,16 @@ fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
     let close_seq = source
         .append_event(&SpineLedgerEvent::Close {
             node: node.clone(),
-            boundary: 1,
+            boundary: 3,
             summary: "closed".to_string(),
             instruction: None,
             close_input_tokens: None,
             close_context_tokens: None,
         })
         .expect("append close");
+    source
+        .append_event(&manual_toolcall_event(1, 1, 2, 2))
+        .expect("append close carrier toolcall");
     let body = "missing body";
     let mem = MemRecord {
         compact_id: "mem-missing".to_string(),
@@ -2825,8 +3151,8 @@ fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
             op_id: "missing-body-close".to_string(),
             kind: SpineCommitKindMarker::Close,
             token_seq_start: close_seq,
-            token_seq_end: close_seq + 1,
-            raw_boundary: 1,
+            token_seq_end: close_seq + 2,
+            raw_boundary: 3,
             raw_live_hash: None,
             memory_refs: vec![SpineCommitMemoryRef {
                 compact_id: mem.compact_id.clone(),
@@ -2843,11 +3169,15 @@ fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
         })
         .expect("append close commit marker");
 
-    let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout, 1)
+    let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout, 3)
         .expect("capture clone boundary")
         .expect("source sidecar exists");
-    let err = SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true])
-        .expect_err("missing visible memory body must fail closed");
+    let err = SpineStore::clone_for_rollout_with_raw_live(
+        &boundary,
+        &target_rollout,
+        &[true, true, true],
+    )
+    .expect_err("missing visible memory body must fail closed");
     assert!(
         err.to_string().contains("No such file") || err.to_string().contains("os error 2"),
         "unexpected clone error: {err}"
@@ -2861,7 +3191,7 @@ fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
         .write_memory_body(&mem.compact_id, body)
         .expect("restore missing body");
     assert_eq!(restored_body_path, mem.body_path);
-    SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true])
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true, true, true])
         .expect("retry clone after restoring missing body");
     let target = SpineStore::for_rollout(&target_rollout).expect("target store after retry");
     let target_mems = target.mems().expect("target mems after retry");

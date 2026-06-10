@@ -875,6 +875,7 @@ pub(super) fn parse_stack_from_events_with_forced_events(
     mems: &[MemRecord],
     raw_mask: RawMask<'_>,
     forced_event_seqs: &BTreeSet<u64>,
+    marker_structural_event_seqs: &BTreeSet<u64>,
 ) -> Result<ParseStack, SpineError> {
     let mems = mems
         .iter()
@@ -883,7 +884,11 @@ pub(super) fn parse_stack_from_events_with_forced_events(
         .collect::<BTreeMap<_, _>>();
     let mut ps = ParseStack::new();
     for event in events {
-        if !forced_event_seqs.contains(&event.seq) && !event.allowed_by(raw_mask)? {
+        if forced_event_seqs.contains(&event.seq) {
+            ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;
+            continue;
+        }
+        if marker_structural_event_seqs.contains(&event.seq) || !event.allowed_by(raw_mask)? {
             continue;
         }
         ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;
