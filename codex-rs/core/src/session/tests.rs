@@ -13890,6 +13890,7 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
                     SPINE_TOOL_NEXT,
                     r#"{"summary":"must not advance"}"#,
                 ),
+                ev_shell_command_call("multi-shell", "printf multi-ordinary-tool"),
                 ev_completed("multi-spine-control-response"),
             ]),
             sse(vec![
@@ -13924,10 +13925,11 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
         "conflicting Spine control calls should produce one corrective follow-up"
     );
     let follow_up = requests[1].body_json();
-    for call_id in ["multi-open", "multi-next"] {
-        let output = follow_up["input"]
-            .as_array()
-            .expect("follow-up input")
+    let follow_up_items = follow_up["input"]
+        .as_array()
+        .expect("follow-up input should be an array");
+    for call_id in ["multi-open", "multi-next", "multi-shell"] {
+        let output = follow_up_items
             .iter()
             .find(|item| {
                 item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
@@ -13938,7 +13940,28 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
             output.to_string().contains("mutually exclusive"),
             "unexpected failure output for {call_id}: {output}"
         );
+        assert!(
+            output
+                .to_string()
+                .contains("No tool in this toolreq was executed"),
+            "rejection output must say no tool ran for {call_id}: {output}"
+        );
+        assert!(
+            output.to_string().contains("Please resend the toolreq"),
+            "rejection output must ask the model to resend for {call_id}: {output}"
+        );
     }
+    let shell_output = follow_up_items
+        .iter()
+        .find(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(serde_json::Value::as_str) == Some("multi-shell")
+        })
+        .unwrap_or_else(|| panic!("missing ordinary tool rejection output: {follow_up}"));
+    assert!(
+        !shell_output.to_string().contains("multi-ordinary-tool"),
+        "ordinary tool body from a conflicting toolreq must not execute: {shell_output}"
+    );
     assert!(
         !follow_up
             .to_string()
@@ -13951,6 +13974,30 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
             .contains("Spine will close the current node"),
         "spine.next body must not run before conflict detection: {follow_up}"
     );
+    for call_id in ["multi-open", "multi-next", "multi-shell"] {
+        let request_count = follow_up_items
+            .iter()
+            .filter(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
+                    && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+            })
+            .count();
+        let output_count = follow_up_items
+            .iter()
+            .filter(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                    && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+            })
+            .count();
+        assert_eq!(
+            request_count, 1,
+            "follow-up should carry exactly one request for {call_id}: {follow_up}"
+        );
+        assert_eq!(
+            output_count, 1,
+            "follow-up should carry exactly one output for {call_id}: {follow_up}"
+        );
+    }
 
     let rollout_path = test
         .codex
@@ -13968,6 +14015,12 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
         .expect("spine sidecar should exist");
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1.1"), "{tree}");
+    assert_eq!(runtime.parse_stack_toolcall_leaf_count_for_test(), 1);
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize conflict history");
+    let persisted_items = raw_items.iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(materialized, persisted_items);
     assert!(
         !tree.contains("must not open") && !tree.contains("must not advance"),
         "conflicting control calls must not mutate Spine tree: {tree}"

@@ -1475,6 +1475,20 @@ impl SpineControlOverlay {
         })
     }
 
+    fn remove_call_ids(&mut self, call_ids: &[String]) {
+        if !self.enabled {
+            return;
+        }
+        self.items.retain(|item| {
+            let item_call_id = match item {
+                ResponseItem::FunctionCall { call_id, .. }
+                | ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            };
+            !item_call_id.is_some_and(|call_id| call_ids.iter().any(|existing| existing == call_id))
+        });
+    }
+
     fn take_for_next_prompt(&mut self) -> Vec<ResponseItem> {
         if !self.enabled {
             return Vec::new();
@@ -1491,7 +1505,7 @@ fn is_spine_parser_control_call(call: &ToolCall) -> bool {
         )
 }
 
-fn rejected_spine_control_output(call_id: &str, message: &str) -> ResponseItem {
+fn conflicting_toolreq_rejection_output(call_id: &str, message: &str) -> ResponseItem {
     ResponseItem::FunctionCallOutput {
         call_id: call_id.to_string(),
         output: FunctionCallOutputPayload {
@@ -2250,6 +2264,53 @@ async fn drain_deferred_spine_tool_group(
     Ok(())
 }
 
+async fn commit_rejected_spine_control_tool_request(
+    group: Vec<DeferredToolCall>,
+    message: &str,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    client_session: &mut ModelClientSession,
+    spine_control_overlay: &mut SpineControlOverlay,
+    close_compact_tools: Vec<ToolSpec>,
+) -> Result<(), SamplingRequestError> {
+    let commit_call_id = group
+        .iter()
+        .find(|deferred| is_spine_parser_control_call(&deferred.call))
+        .or_else(|| group.first())
+        .map(|deferred| deferred.call.call_id.clone())
+        .ok_or_else(|| {
+            SamplingRequestError::Codex(CodexErr::SpineTerminalFailure {
+                operation: "commit rejected Spine toolcall".to_string(),
+                reason: "rejected Spine tool request missing tool call".to_string(),
+            })
+        })?;
+    let tool_call_ids = group
+        .iter()
+        .map(|deferred| deferred.call.call_id.clone())
+        .collect::<Vec<_>>();
+    let response_items = group
+        .iter()
+        .map(|deferred| conflicting_toolreq_rejection_output(&deferred.call.call_id, message))
+        .collect::<Vec<_>>();
+    sess.record_spine_toolcall_group_outputs_and_commit_with_client_session(
+        &turn_context,
+        client_session,
+        &commit_call_id,
+        &tool_call_ids,
+        &response_items,
+        close_compact_tools,
+    )
+    .await
+    .map_err(|err| {
+        SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
+            operation: "commit rejected Spine toolcall".to_string(),
+            reason: err.to_string(),
+        })
+    })?;
+    spine_control_overlay.remove_call_ids(&tool_call_ids);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -2638,26 +2699,18 @@ async fn try_run_sampling_request(
                             .collect::<Vec<_>>()
                             .join(", ");
                         let message = format!(
-                            "{SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX} received {names}. Call at most one of spine.open, spine.close, or spine.next."
+                            "{SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX} received {names}. spine.open, spine.close, and spine.next are mutually exclusive within one toolreq. No tool in this toolreq was executed. Please resend the toolreq with at most one of them."
                         );
-                        for deferred in deferred_tool_calls.drain(..) {
-                            if is_spine_parser_control_call(&deferred.call) {
-                                let response_item =
-                                    rejected_spine_control_output(&deferred.call.call_id, &message);
-                                sess.record_conversation_items_without_spine_observe(
-                                    &turn_context,
-                                    std::slice::from_ref(&response_item),
-                                )
-                                .await
-                                .map_err(SamplingRequestError::Codex)?;
-                            } else {
-                                in_flight.push_back(spawn_tool_call(
-                                    &tool_runtime,
-                                    &cancellation_token,
-                                    deferred.call,
-                                ));
-                            }
-                        }
+                        commit_rejected_spine_control_tool_request(
+                            std::mem::take(&mut deferred_tool_calls),
+                            &message,
+                            sess.clone(),
+                            turn_context.clone(),
+                            client_session,
+                            &mut spine_control_overlay,
+                            prompt.tools.clone(),
+                        )
+                        .await?;
                         needs_follow_up = true;
                     }
                 }

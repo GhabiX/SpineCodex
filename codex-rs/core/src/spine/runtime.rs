@@ -1296,8 +1296,10 @@ impl SpineRuntime {
 
     fn clear_completed_toolcall_anchors(&mut self, toolcall: &CompletedToolCall) {
         for request_call_id in &toolcall.request_call_ids {
+            self.open_requests.remove(request_call_id);
             self.ordinary_tool_requests.remove(request_call_id);
         }
+        self.open_requests.remove(&toolcall.call_id);
         self.ordinary_tool_requests.remove(&toolcall.call_id);
         #[cfg(test)]
         {
@@ -2534,15 +2536,8 @@ impl SpineRuntime {
                     )
                 },
             );
-        let rejected_spine_control_call_ids = raw_items
-            .iter()
-            .filter_map(|item| spine_control_multi_call_rejection_call_id(item.as_ref()?))
-            .filter(|call_id| spine_control_call_ids.contains(*call_id))
-            .map(ToOwned::to_owned)
-            .collect::<BTreeSet<_>>();
         let completed_tool_call_ids = tool_request_call_ids
             .intersection(&tool_response_call_ids)
-            .filter(|call_id| !rejected_spine_control_call_ids.contains(*call_id))
             .cloned()
             .collect::<BTreeSet<_>>();
         let mut covered = vec![false; raw_items.len()];
@@ -3012,20 +3007,6 @@ fn raw_item_requires_spine_coverage(
             true
         }
     }
-}
-
-fn spine_control_multi_call_rejection_call_id(item: &ResponseItem) -> Option<&str> {
-    let ResponseItem::FunctionCallOutput { call_id, output } = item else {
-        return None;
-    };
-    // `success` is internal metadata and is not persisted in rollout JSON, so
-    // replay commonly sees `None` for this host-generated rejection output.
-    if output.success == Some(true) {
-        return None;
-    }
-    let text = output.body.to_text()?;
-    text.starts_with(SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX)
-        .then_some(call_id.as_str())
 }
 
 fn tool_request_call_id(item: &ResponseItem) -> Option<&str> {
