@@ -1055,6 +1055,28 @@ impl SpineRuntime {
         Ok(())
     }
 
+    pub(crate) fn abort_pending_and_observe_completed_toolcall(
+        &mut self,
+        call_id: &str,
+        toolcall: CompletedToolCall,
+    ) -> Result<bool, SpineError> {
+        if self
+            .pending
+            .as_ref()
+            .is_none_or(|pending| pending.call_id() != call_id)
+        {
+            return Ok(false);
+        }
+        let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
+        let mut staged_parse_stack = self.parse_stack.clone();
+        staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+        self.append_cached_event(event)?;
+        self.parse_stack = staged_parse_stack;
+        self.pending = None;
+        self.clear_completed_toolcall_anchors(&toolcall);
+        Ok(true)
+    }
+
     pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
         &mut self,
         tool_responses: &[(String, u64, usize)],

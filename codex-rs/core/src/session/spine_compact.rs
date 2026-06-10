@@ -32,6 +32,25 @@ const SPINE_COMPACT_MEMORY_NODE_ID_PLACEHOLDER: &str = "{node_id}";
 const SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER: &str = "{close_instruction}";
 const SPINE_COMPACT_SLOT_MAP_BOUNDARY: &str = "---------- Spine Compact Memory ----------";
 const SPINE_CLOSE_COMPACT_MAX_FORMAT_REPAIRS: usize = 1;
+const SPINE_CLOSE_COMPACT_FIRST_LINE_CONTRACT: &str = "\
+This is an internal Spine memory compaction request, not a reply to the user; user-facing response style rules do not apply here.\n\
+The first non-empty line must be an opening <SPINE_NODE_MEMORY> tag or an allowed opening <SPINE_SLOT_N> tag, and the entire response must contain only those blocks.\n\
+Valid output shape: optional allowed <SPINE_SLOT_N>...</SPINE_SLOT_N> blocks first, then exactly one <SPINE_NODE_MEMORY>...</SPINE_NODE_MEMORY> block.\n\
+Valid output examples:\n\
+<SPINE_NODE_MEMORY>\n\
+Compact node handoff memory.\n\
+</SPINE_NODE_MEMORY>\n\
+\n\
+Or, only when returning an allowed optional slot, replace N with a listed slot number:\n\
+<SPINE_SLOT_N>\n\
+Compact durable source context for that marked span.\n\
+</SPINE_SLOT_N>\n\
+<SPINE_NODE_MEMORY>\n\
+Compact node handoff memory.\n\
+</SPINE_NODE_MEMORY>\n\
+Do not output '?' markers, headings, explanations, or a slot tag that is not listed as allowed.";
+const SPINE_CLOSE_COMPACT_BODY_TAG_CONTRACT: &str = "\
+Returned <SPINE_SLOT_N> and <SPINE_NODE_MEMORY> tags are protocol envelope only. Inside slot and node memory bodies, do not write raw XML-like control tags or slot references such as `see &lt;SPINE_SLOT_1&gt;`. Inline the fact instead. If the durable fact is about the protocol itself, use non-XML or escaped wording such as `SPINE_SLOT_N marker`, `slot marker prefix`, or `&lt;SPINE_SLOT_N&gt;`.";
 
 impl Session {
     pub(crate) async fn spine_compact_close(
@@ -341,6 +360,7 @@ fn spine_close_compact_instruction_template(
     }
 
     "---------- Spine Compact Directive ----------\n\n\
+{first_line_contract}\n\n\
 Write compact handoff memory for Spine node {node_id}. Return only XML-like <SPINE_SLOT_N> blocks for optional evidence slots you choose to preserve and exactly one <SPINE_NODE_MEMORY> block for the whole node handoff. Do not return a conversation reply, JSON, code fences, or a tool call.\n\n\
 The runtime will assemble the final Markdown memory from trusted exact user messages, trusted child memory bodies, your optional generated slot bodies, and your required node memory. The final memory will replace only this node's raw trajs in future context. Its job is to let the parent conversation continue correctly without replaying this node's raw trace.\n\n\
 For optional Memory Slots and the required Node Memory, write concise, concrete prose that preserves:\n\n\
@@ -366,7 +386,15 @@ Rules:\n\
 - If there is conflict between an old plan and a later user correction, preserve the correction as the active intent.\n\
 - If information is uncertain, say what is known and what still needs confirmation.\n\
 - User-facing final-answer markers such as `TEST_WITH_LLM_*` are evidence only; never let such a marker be the whole memory.\n\
-- Return only <SPINE_SLOT_N> and <SPINE_NODE_MEMORY> blocks. Never return USER_MSG blocks.".to_string()
+- {body_tag_contract}\n\
+- Return only <SPINE_SLOT_N> and <SPINE_NODE_MEMORY> blocks. Never return USER_MSG blocks.".replace(
+        "{first_line_contract}",
+        SPINE_CLOSE_COMPACT_FIRST_LINE_CONTRACT,
+    )
+    .replace(
+        "{body_tag_contract}",
+        SPINE_CLOSE_COMPACT_BODY_TAG_CONTRACT,
+    )
 }
 
 fn append_spine_close_compact_prompt_items(
@@ -635,6 +663,7 @@ Output contract:\n\
 - {optional_slot_contract}\n\
 - Optional slot bodies must be non-empty, not duplicated, and not nested.\n\
 - Tags must appear alone on their own line and must match exactly.\n\
+- {SPINE_CLOSE_COMPACT_BODY_TAG_CONTRACT}\n\
 - Text outside returned blocks is invalid.\n\n\
 Memory skeleton for Spine node {}:\n",
             self.node_id
@@ -702,7 +731,7 @@ Memory skeleton for Spine node {}:\n",
                         .find_map(|anchor| anchor.as_deref())
                         .unwrap_or("node end");
                     text.push_str(&format!(
-                        "\nOptional memory slot: {tag}\n\
+                        "\nOptional memory slot: <{tag}>\n\
 Span: source context not exact-preserved by runtime after {previous_anchor} and before {next_anchor}.\n\
 Purpose: preserve only durable context from this span that changed task state for the surrounding user intent, including assistant/tool/runtime work or non-exact user input such as multimodal messages.\n"
                     ));
@@ -935,6 +964,7 @@ fn spine_close_compact_repair_text(
     let required_node_memory_block = SpineCompactMemorySkeleton::required_node_memory_block();
     format!(
         "Your previous Spine compact output could not be used: {}\n\
+{}\n\
 Return only <SPINE_SLOT_N> and <SPINE_NODE_MEMORY> blocks.\n\
 SPINE_NODE_MEMORY must appear exactly once and must be non-empty.\n\
 Optional SPINE_SLOT_N blocks may all be omitted. Return a slot only if its marked span contains durable source context not exact-preserved by runtime and needed for continuation.\n\
@@ -945,10 +975,13 @@ Compact durable source context for that marked span, including non-exact user in
 </SPINE_SLOT_N>\n\
 Required output block:\n\
 {}\n\
+{}\n\
 Do not include explanations, code fences, JSON, USER_MSG blocks, or tool calls.",
         err.message(),
+        SPINE_CLOSE_COMPACT_FIRST_LINE_CONTRACT,
         optional_slot_tags,
-        required_node_memory_block
+        required_node_memory_block,
+        SPINE_CLOSE_COMPACT_BODY_TAG_CONTRACT
     )
 }
 
@@ -1259,23 +1292,7 @@ fn validate_generated_slot_body(slot_id: &str, body: &str) -> Result<(), SpineEr
             "spine.close compact produced empty memory slot {slot_id}"
         )));
     }
-    const FORBIDDEN: &[&str] = &[
-        "# Spine Memory ",
-        "---------- Spine Compact Directive ----------",
-        "---------- Spine Close Target ----------",
-        "## User Message",
-        "## Child Memory",
-        "## Memory Slot",
-        "## Node Memory",
-        "<SPINE_SLOT_",
-        "</SPINE_SLOT_",
-        "<SPINE_NODE_MEMORY>",
-        "</SPINE_NODE_MEMORY>",
-        "USER_MSG",
-        "<spine_memory>",
-        "</spine_memory>",
-    ];
-    if let Some(marker) = FORBIDDEN.iter().find(|marker| body.contains(**marker)) {
+    if let Some(marker) = forbidden_generated_body_structure_marker(body) {
         return Err(SpineError::CompactFailure(format!(
             "spine.close compact memory slot {slot_id} contains forbidden structure marker {marker:?}"
         )));
@@ -1290,7 +1307,16 @@ fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
             "spine.close compact produced empty SPINE_NODE_MEMORY".to_string(),
         ));
     }
-    const FORBIDDEN: &[&str] = &[
+    if let Some(marker) = forbidden_generated_body_structure_marker(body) {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close compact SPINE_NODE_MEMORY contains forbidden structure marker {marker:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn forbidden_generated_body_structure_marker(body: &str) -> Option<String> {
+    const FORBIDDEN_SUBSTRINGS: &[&str] = &[
         "# Spine Memory ",
         "---------- Spine Compact Directive ----------",
         "---------- Spine Close Target ----------",
@@ -1298,20 +1324,31 @@ fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
         "## Child Memory",
         "## Memory Slot",
         "## Node Memory",
-        "<SPINE_SLOT_",
-        "</SPINE_SLOT_",
-        "<SPINE_NODE_MEMORY>",
-        "</SPINE_NODE_MEMORY>",
         "USER_MSG",
-        "<spine_memory>",
-        "</spine_memory>",
     ];
-    if let Some(marker) = FORBIDDEN.iter().find(|marker| body.contains(**marker)) {
-        return Err(SpineError::CompactFailure(format!(
-            "spine.close compact SPINE_NODE_MEMORY contains forbidden structure marker {marker:?}"
-        )));
+    if let Some(marker) = FORBIDDEN_SUBSTRINGS
+        .iter()
+        .find(|marker| body.contains(**marker))
+    {
+        return Some((*marker).to_string());
     }
-    Ok(())
+
+    body.lines()
+        .map(str::trim)
+        .find(|line| is_forbidden_generated_body_tag_line(line))
+        .map(str::to_string)
+}
+
+fn is_forbidden_generated_body_tag_line(line: &str) -> bool {
+    if line == "<spine_memory>" || line == "</spine_memory>" {
+        return true;
+    }
+    matches!(
+        spine_compact_line_marker(line),
+        Some(SpineCompactLineMarker::Start(_))
+            | Some(SpineCompactLineMarker::End(_))
+            | Some(SpineCompactLineMarker::Malformed)
+    )
 }
 
 #[cfg(test)]
@@ -1455,7 +1492,7 @@ mod spine_close_slot_map_tests {
         assert!(slot_map.starts_with(SPINE_COMPACT_SLOT_MAP_BOUNDARY));
         assert!(slot_map.contains("<USER_MSG_1>\nUSER_EXACT\nline 2\n</USER_MSG_1>"));
         assert!(slot_map.contains("# Spine Memory 1.1.1"));
-        assert!(slot_map.contains("Optional memory slot: SPINE_SLOT_1"));
+        assert!(slot_map.contains("Optional memory slot: <SPINE_SLOT_1>"));
         assert!(!slot_map.contains("source ordinals"));
         assert!(slot_map.contains("<SPINE_NODE_MEMORY>"));
 
@@ -1482,6 +1519,12 @@ mod spine_close_slot_map_tests {
         let skeleton =
             SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
+        let compact_instruction =
+            spine_close_compact_instruction_text("1.1", None, Path::new("/no-codex-home"), false);
+        assert!(compact_instruction.contains(SPINE_CLOSE_COMPACT_FIRST_LINE_CONTRACT));
+        assert!(compact_instruction.contains(SPINE_CLOSE_COMPACT_BODY_TAG_CONTRACT));
+        assert!(!compact_instruction.contains("<SPINE_SLOT_N?>"));
+
         let slot_map = skeleton.prompt_slot_map().expect("slot map");
         assert!(slot_map.contains(
             "Optional slots may all be omitted; if returned, the tag must be one of: SPINE_SLOT_1, SPINE_SLOT_2."
@@ -1494,23 +1537,30 @@ mod spine_close_slot_map_tests {
         assert!(slot_map.contains(
             "Treat an optional slot as a small handoff for the active user intent around that marker"
         ));
-        assert!(slot_map.contains("Optional memory slot: SPINE_SLOT_1"));
+        assert!(slot_map.contains(SPINE_CLOSE_COMPACT_BODY_TAG_CONTRACT));
+        assert!(slot_map.contains("Optional memory slot: <SPINE_SLOT_1>"));
         assert!(
             slot_map.contains(
                 "Span: source context not exact-preserved by runtime after node start and before USER_MSG_1."
             )
         );
-        assert!(slot_map.contains("Optional memory slot: SPINE_SLOT_2"));
+        assert!(slot_map.contains("Optional memory slot: <SPINE_SLOT_2>"));
         assert!(
             slot_map.contains(
                 "Span: source context not exact-preserved by runtime after USER_MSG_1 and before node end."
             )
         );
         assert!(slot_map.contains("<USER_MSG_1>\nUSER_EXACT\n</USER_MSG_1>"));
-        assert!(!slot_map.contains("<SPINE_SLOT_1>"));
-        assert!(!slot_map.contains("</SPINE_SLOT_1>"));
-        assert!(!slot_map.contains("<SPINE_SLOT_2>"));
-        assert!(!slot_map.contains("</SPINE_SLOT_2>"));
+        assert!(
+            !slot_map
+                .lines()
+                .any(|line| matches!(line, "<SPINE_SLOT_1>" | "</SPINE_SLOT_1>"))
+        );
+        assert!(
+            !slot_map
+                .lines()
+                .any(|line| matches!(line, "<SPINE_SLOT_2>" | "</SPINE_SLOT_2>"))
+        );
         assert!(!slot_map.contains("source ordinals"));
 
         let repair = spine_close_compact_repair_text(
@@ -1519,6 +1569,9 @@ mod spine_close_slot_map_tests {
             ),
             &skeleton,
         );
+        assert!(repair.contains(SPINE_CLOSE_COMPACT_FIRST_LINE_CONTRACT));
+        assert!(repair.contains(SPINE_CLOSE_COMPACT_BODY_TAG_CONTRACT));
+        assert!(!repair.contains("<SPINE_SLOT_N?>"));
         assert!(repair.contains("SPINE_NODE_MEMORY must appear exactly once"));
         assert!(repair.contains("SPINE_SLOT_1, SPINE_SLOT_2"));
         assert!(repair.contains("<SPINE_SLOT_N>"));
@@ -1639,6 +1692,36 @@ mod spine_close_slot_map_tests {
     }
 
     #[test]
+    fn compact_xml_allows_inline_protocol_marker_discussion() {
+        let plan = source_plan(vec![source_entry(
+            2,
+            0,
+            assistant_message("assistant details"),
+            false,
+        )]);
+        let skeleton =
+            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+
+        let body = spine_close_compact_body(
+            "1.1",
+            &[assistant_message(&compact_output(
+                &[(
+                    "SPINE_SLOT_1",
+                    "The compact validator rejected <SPINE_SLOT_ markers in generated memory.",
+                )],
+                "The failure involved a literal <SPINE_SLOT_ substring in the node memory body.",
+            ))],
+            &skeleton,
+        )
+        .expect("inline protocol marker discussion should be accepted");
+
+        assert!(body.contains("## Memory Slot\nThe compact validator rejected <SPINE_SLOT_"));
+        assert!(
+            body.contains("## Node Memory\nThe failure involved a literal <SPINE_SLOT_ substring")
+        );
+    }
+
+    #[test]
     fn compact_xml_rejects_structure_pollution() {
         let plan = source_plan(vec![source_entry(
             2,
@@ -1662,6 +1745,38 @@ mod spine_close_slot_map_tests {
             err.to_string()
                 .contains("contains forbidden structure marker"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compact_xml_rejects_standalone_body_control_tags() {
+        let plan = source_plan(vec![source_entry(
+            2,
+            0,
+            assistant_message("assistant details"),
+            false,
+        )]);
+        let skeleton =
+            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+
+        let nested_slot_tag = skeleton
+            .assemble([], "before\n<SPINE_SLOT_1>\nafter")
+            .expect_err("standalone slot tag inside node memory must fail");
+        assert!(
+            nested_slot_tag
+                .to_string()
+                .contains("contains forbidden structure marker"),
+            "unexpected error: {nested_slot_tag}"
+        );
+
+        let runtime_tag = skeleton
+            .assemble([("slot_1", "before\n<spine_memory>\nafter")], "node memory")
+            .expect_err("standalone runtime memory tag inside slot body must fail");
+        assert!(
+            runtime_tag
+                .to_string()
+                .contains("contains forbidden structure marker"),
+            "unexpected error: {runtime_tag}"
         );
     }
 
@@ -1969,7 +2084,7 @@ node
             SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
         assert!(skeleton.has_generated_slots());
         let slot_map = skeleton.prompt_slot_map().expect("slot map");
-        assert!(slot_map.contains("Optional memory slot: SPINE_SLOT_1"));
+        assert!(slot_map.contains("Optional memory slot: <SPINE_SLOT_1>"));
         assert!(slot_map.contains("non-exact user inputs such as multimodal user messages"));
         assert!(slot_map.contains(
             "Purpose: preserve only durable context from this span that changed task state"

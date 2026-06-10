@@ -448,6 +448,32 @@ impl Session {
         aborted
     }
 
+    async fn abort_spine_pending_and_observe_completed_toolcall(
+        &self,
+        call_id: &str,
+        completed_toolcall: CompletedToolCall,
+        reason: &str,
+    ) -> Result<bool, SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(false);
+        };
+        let mut guard = spine_slot.lock().await;
+        guard.ensure_valid()?;
+        let Some(spine) = guard.runtime_mut() else {
+            return Ok(false);
+        };
+        let observed =
+            spine.abort_pending_and_observe_completed_toolcall(call_id, completed_toolcall)?;
+        if observed {
+            tracing::debug!(
+                call_id,
+                reason,
+                "aborted pending Spine transition and kept completed toolcall as ordinary history"
+            );
+        }
+        Ok(observed)
+    }
+
     pub(crate) async fn abort_stale_spine_pending(&self, reason: &str) -> Option<String> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return None;
@@ -929,11 +955,17 @@ impl Session {
                     match source_context {
                         Ok(source_context) => source_context,
                         Err(err) => {
-                            self.abort_spine_pending_tool(
-                                call_id,
-                                "spine close source plan failed before compact",
-                            )
-                            .await;
+                            let reason = "spine close source plan failed before compact";
+                            if tool_resp_already_recorded {
+                                self.abort_spine_pending_and_observe_completed_toolcall(
+                                    call_id,
+                                    completed_toolcall.clone(),
+                                    reason,
+                                )
+                                .await?;
+                            } else {
+                                self.abort_spine_pending_tool(call_id, reason).await;
+                            }
                             return Err(err);
                         }
                     };
@@ -966,11 +998,17 @@ impl Session {
                         return Ok(Self::skip_spine_tool_output_commit());
                     }
                     Err(err) => {
-                        self.abort_spine_pending_tool(
-                            call_id,
-                            "spine close compact failed before commit",
-                        )
-                        .await;
+                        let reason = "spine close compact failed before commit";
+                        if tool_resp_already_recorded {
+                            self.abort_spine_pending_and_observe_completed_toolcall(
+                                call_id,
+                                completed_toolcall.clone(),
+                                reason,
+                            )
+                            .await?;
+                        } else {
+                            self.abort_spine_pending_tool(call_id, reason).await;
+                        }
                         return Err(err);
                     }
                 };

@@ -9134,7 +9134,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
             && text.contains("3. Critical Details")
             && text.contains("4. Resume Focus")
             && text.contains("---------- Spine Compact Memory ----------")
-            && text.contains("Optional memory slot: SPINE_SLOT_1")
+            && text.contains("Optional memory slot: <SPINE_SLOT_1>")
             && text.contains("<SPINE_NODE_MEMORY>")
             && text
                 .contains("If there is conflict between an old plan and a later user correction")
@@ -9500,7 +9500,7 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
         "non-image text in the multimodal suffix should remain visible"
     );
     assert!(
-        compact_request.body_contains_text("Optional memory slot: SPINE_SLOT_1"),
+        compact_request.body_contains_text("Optional memory slot: <SPINE_SLOT_1>"),
         "multimodal suffix user message should be represented by an optional generated slot"
     );
     assert!(
@@ -11253,6 +11253,34 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
         &requests[0],
         &requests[1],
         "spine compact failure request should reuse sampling tools while denying tool calls",
+    );
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+    let rollout_path = test
+        .codex
+        .rollout_path()
+        .expect("test thread should have rollout persistence");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime after failed compact")
+        .expect("spine sidecar should exist");
+    assert_eq!(
+        runtime.parse_stack_toolcall_leaf_count_for_test(),
+        1,
+        "failed close/next compact must still keep the completed request/output transaction as a normal toolcall"
+    );
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS) after failed compact");
+    assert_eq!(
+        materialized,
+        raw_items.iter().flatten().cloned().collect::<Vec<_>>()
     );
 
     Ok(())
