@@ -20,6 +20,8 @@ Tools:
 - spine.close(instruction?): close the current node, compact its raw history into memory, and resume the parent.
 - spine.next(summary, instruction?): close the current node, preserve compact guidance as memory, then continue in a new sibling under the resumed parent. Write summary with the same rule as spine.open: label why the next sibling phase exists now, not a recap of the node being closed.
 
+Avoid Spine-only tool rounds: they spend an extra model/tool turn without task work. When ordinary tools are already useful, include at most one Spine control call (`spine.open`, `spine.next`, or `spine.close`) in the same assistant tool request. That control call marks the whole completed request as the Spine boundary, regardless of where it appears among ordinary tool calls.
+
 Spine summaries are user-facing labels; write them in the user's current language when reasonably clear.
 
 Let task structure emerge from coherent work objectives and natural task boundaries. After spine.open/close/next, use the returned Spine projection as the source of truth for cursor, parent, and siblings.
