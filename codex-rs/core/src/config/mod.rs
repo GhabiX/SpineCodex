@@ -151,6 +151,7 @@ pub use network_proxy_spec::StartedNetworkProxy;
 pub(crate) use permissions::resolve_permission_profile;
 pub(crate) use resolved_permission_profile::PermissionProfileState;
 
+const DEV_DEBUG_PROMPT_OVERRIDES_ENV_VAR: &str = "CODEX_DEV_DEBUG_PROMPT_OVERRIDES";
 const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
 const DEFAULT_IGNORE_LARGE_UNTRACKED_FILES: i64 = 10 * 1024 * 1024;
 
@@ -811,7 +812,7 @@ pub struct Config {
     /// When true, session is not persisted on disk. Default to `false`
     pub ephemeral: bool,
 
-    /// Dev-debug-only prompt override knob set by `debug prompt-input`.
+    /// Dev-debug-only prompt override knob set by debug tooling.
     ///
     /// This is runtime-only, not loaded from config files, and ignored by non-debug builds.
     pub dev_debug_prompt_overrides: bool,
@@ -3398,7 +3399,8 @@ impl Config {
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
-            dev_debug_prompt_overrides: false,
+            dev_debug_prompt_overrides: cfg!(debug_assertions)
+                && std::env::var_os(DEV_DEBUG_PROMPT_OVERRIDES_ENV_VAR).is_some(),
             bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_self_exe,

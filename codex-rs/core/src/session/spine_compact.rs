@@ -8,12 +8,10 @@ use crate::context_manager::normalize_prompt_items;
 use crate::session::Session;
 use crate::session::turn::run_auto_compact;
 use crate::session::turn_context::TurnContext;
-use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCloseCompact;
 use crate::spine::SpineCompactSourceEntryKind;
 use crate::spine::SpineCompactSourcePlan;
 use crate::spine::SpineError;
-use crate::spine::is_spine_close_like_tool_name;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::util::backoff;
 use codex_analytics::CompactionPhase;
@@ -156,6 +154,7 @@ impl Session {
         Ok(SpineCloseCompactOutcome::Compact(SpineCloseCompact {
             body,
             source_context_range: source_plan.source_context_range,
+            source_raw_range: source_plan.source_raw_range,
             memory_output_tokens,
         }))
     }
@@ -415,8 +414,9 @@ fn response_item_text(item: &ResponseItem) -> Option<&str> {
 fn validate_source_plan_against_history(
     source_plan: &SpineCompactSourcePlan,
     raw_items: &[ResponseItem],
-    close_call_id: &str,
+    _close_call_id: &str,
 ) -> Result<(), SpineError> {
+    let mut previous_context_index = None;
     for (expected_ordinal, entry) in source_plan.entries.iter().enumerate() {
         if entry.source_ordinal != expected_ordinal {
             return Err(SpineError::CompactFailure(format!(
@@ -424,21 +424,32 @@ fn validate_source_plan_against_history(
                 entry.source_ordinal
             )));
         }
-        let expected_context_index = source_plan
-            .source_context_range
-            .start
-            .checked_add(expected_ordinal)
-            .ok_or_else(|| {
-                SpineError::CompactFailure(
-                    "spine.close compact source context index overflow".to_string(),
-                )
-            })?;
-        if entry.context_index != expected_context_index {
+        if entry.context_index < source_plan.source_context_range.start {
             return Err(SpineError::CompactFailure(format!(
-                "spine.close compact source entry ordinal {} has context_index {}, expected {expected_context_index}",
-                entry.source_ordinal, entry.context_index
+                "spine.close compact source entry ordinal {} context_index {} precedes source range start {}",
+                entry.source_ordinal,
+                entry.context_index,
+                source_plan.source_context_range.start
             )));
         }
+        if entry.context_index >= source_plan.source_context_range.end {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close compact source entry ordinal {} context_index {} is outside source context range [{}..{})",
+                entry.source_ordinal,
+                entry.context_index,
+                source_plan.source_context_range.start,
+                source_plan.source_context_range.end
+            )));
+        }
+        if let Some(previous) = previous_context_index {
+            if entry.context_index <= previous {
+                return Err(SpineError::CompactFailure(format!(
+                    "spine.close compact source entry ordinal {} context_index {} is not strictly after previous context_index {previous}",
+                    entry.source_ordinal, entry.context_index
+                )));
+            }
+        }
+        previous_context_index = Some(entry.context_index);
         let Some(host_item) = raw_items.get(entry.context_index) else {
             return Err(SpineError::CompactFailure(format!(
                 "spine.close compact source entry ordinal {} context_index {} exceeds history length {}",
@@ -455,16 +466,10 @@ fn validate_source_plan_against_history(
             )));
         }
     }
-    for item in &raw_items[source_plan.source_context_range.end..] {
-        if !is_current_spine_close_like_carrier(item, close_call_id) {
-            return Err(SpineError::CompactFailure(format!(
-                "spine.close compact found non-carrier item after source range for call_id={close_call_id}: {item:?}"
-            )));
-        }
-    }
     Ok(())
 }
 
+#[cfg(test)]
 fn is_current_spine_close_like_carrier(item: &ResponseItem, close_call_id: &str) -> bool {
     match item {
         ResponseItem::FunctionCallOutput { call_id, .. } => call_id == close_call_id,
@@ -475,8 +480,8 @@ fn is_current_spine_close_like_carrier(item: &ResponseItem, close_call_id: &str)
             ..
         } => {
             call_id == close_call_id
-                && namespace.as_deref() == Some(SPINE_NAMESPACE)
-                && is_spine_close_like_tool_name(name)
+                && namespace.as_deref() == Some(crate::spine::SPINE_NAMESPACE)
+                && crate::spine::is_spine_close_like_tool_name(name)
         }
         _ => false,
     }
@@ -541,6 +546,7 @@ impl SpineCompactMemorySkeleton {
                     compact_id,
                     body,
                     body_hash,
+                    ..
                 } => {
                     builder.flush_slot();
                     builder.blocks.push(SpineCompactMemoryBlock::ChildMemory {
@@ -1314,6 +1320,7 @@ fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
 mod spine_close_slot_map_tests {
     use super::*;
     use crate::spine::NodeId;
+    use crate::spine::SPINE_NAMESPACE;
     use crate::spine::SPINE_TOOL_CLOSE;
     use crate::spine::SPINE_TOOL_NEXT;
     use crate::spine::SPINE_TOOL_OPEN;
@@ -1376,6 +1383,7 @@ mod spine_close_slot_map_tests {
             kind: SpineCompactSourceEntryKind::ChildMemory {
                 node_id: node_id(&[1, 1, 1]),
                 compact_id: "mem-1-1-1".to_string(),
+                source_raw_range: 2..3,
                 body: body.to_string(),
                 body_hash: "body-hash".to_string(),
             },
@@ -1388,6 +1396,21 @@ mod spine_close_slot_map_tests {
         SpineCompactSourcePlan {
             node_id: node_id(&[1, 1]),
             source_context_range: 2..2 + entries.len(),
+            source_raw_range: 2..2 + u64::try_from(entries.len()).expect("entries len fits u64"),
+            entries,
+        }
+    }
+
+    fn source_plan_with_context_range(
+        source_context_range: std::ops::Range<usize>,
+        entries: Vec<crate::spine::SpineCompactSourcePlanEntry>,
+    ) -> SpineCompactSourcePlan {
+        SpineCompactSourcePlan {
+            node_id: node_id(&[1, 1]),
+            source_raw_range: u64::try_from(source_context_range.start)
+                .expect("range start fits u64")
+                ..u64::try_from(source_context_range.end).expect("range end fits u64"),
+            source_context_range,
             entries,
         }
     }
@@ -2007,5 +2030,50 @@ node
             },
             "call-1"
         ));
+    }
+
+    #[test]
+    fn source_plan_validator_accepts_real_non_contiguous_context_indices() {
+        let raw_items = vec![
+            user_message("prefix 0"),
+            user_message("prefix 1"),
+            assistant_message("source 2"),
+            assistant_message("gap 3"),
+            assistant_message("source 4"),
+        ];
+        let plan = source_plan_with_context_range(
+            2..5,
+            vec![
+                source_entry(2, 0, raw_items[2].clone(), false),
+                source_entry(4, 1, raw_items[4].clone(), false),
+            ],
+        );
+
+        validate_source_plan_against_history(&plan, &raw_items, "close")
+            .expect("non-contiguous real context indices should validate");
+    }
+
+    #[test]
+    fn source_plan_validator_rejects_duplicate_context_indices() {
+        let raw_items = vec![
+            user_message("prefix 0"),
+            user_message("prefix 1"),
+            assistant_message("source 2"),
+        ];
+        let plan = source_plan_with_context_range(
+            2..3,
+            vec![
+                source_entry(2, 0, raw_items[2].clone(), false),
+                source_entry(2, 1, raw_items[2].clone(), false),
+            ],
+        );
+
+        let err = validate_source_plan_against_history(&plan, &raw_items, "close")
+            .expect_err("duplicate context indices must fail");
+        assert!(
+            err.to_string()
+                .contains("is not strictly after previous context_index 2"),
+            "unexpected duplicate context error: {err}"
+        );
     }
 }

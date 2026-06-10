@@ -43,6 +43,11 @@ use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::spine::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
+use crate::spine::SPINE_NAMESPACE;
+use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_NEXT;
+use crate::spine::SPINE_TOOL_OPEN;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -53,10 +58,13 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item_with_finalized_facts;
+use crate::stream_events_utils::record_deferred_tool_call;
+use crate::stream_events_utils::spawn_tool_call;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
+use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::extension_tool_executors;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -1411,6 +1419,11 @@ struct SpineControlOverlay {
     items: Vec<ResponseItem>,
 }
 
+#[derive(Debug)]
+struct DeferredToolCall {
+    call: ToolCall,
+}
+
 impl SpineControlOverlay {
     fn new(enabled: bool) -> Self {
         Self {
@@ -1470,12 +1483,27 @@ impl SpineControlOverlay {
     }
 }
 
+fn is_spine_parser_control_call(call: &ToolCall) -> bool {
+    call.tool_name.namespace.as_deref() == Some(SPINE_NAMESPACE)
+        && matches!(
+            call.tool_name.name.as_str(),
+            SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT
+        )
+}
+
+fn rejected_spine_control_output(call_id: &str, message: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text(message.to_string()),
+            success: Some(false),
+        },
+    }
+}
+
 fn replace_function_output_text(item: &mut ResponseItem, text: String) {
     if let ResponseItem::FunctionCallOutput { output, .. } = item {
-        *output = FunctionCallOutputPayload {
-            body: FunctionCallOutputBody::Text(text),
-            success: Some(true),
-        };
+        output.body = FunctionCallOutputBody::Text(text);
     }
 }
 
@@ -2031,6 +2059,18 @@ async fn drain_in_flight(
                             reason: err.to_string(),
                         })
                     })?;
+                let output_recorded_before_spine_commit =
+                    if sess.features.enabled(Feature::SpineJit) {
+                        sess.record_conversation_items_without_spine_observe(
+                            &turn_context,
+                            std::slice::from_ref(&response_item),
+                        )
+                        .await
+                        .map_err(SamplingRequestError::Codex)?;
+                        true
+                    } else {
+                        false
+                    };
                 let commit = sess
                     .maybe_commit_spine_tool_output_with_client_session(
                         &turn_context,
@@ -2045,16 +2085,31 @@ async fn drain_in_flight(
                             reason: err.to_string(),
                         })
                     })?;
-                if !commit.record_output {
+                if !commit.record_output && !output_recorded_before_spine_commit {
                     continue;
                 }
-                if let Some(text) = commit.output_text {
+                if let Some(text) = commit.output_text
+                    && !output_recorded_before_spine_commit
+                {
                     replace_function_output_text(&mut response_item, text);
                 }
-                let deferred_history_update = commit.deferred_history_update;
+                let mut deferred_history_update = commit.deferred_history_update;
                 let deferred_tree_update = commit.deferred_tree_update;
+                if let Some(update) = deferred_history_update.as_mut() {
+                    update.replace_tool_output(&response_item);
+                }
                 spine_control_overlay.push_output_if_matching(&response_item);
-                if is_pending_spine_close_like {
+                if output_recorded_before_spine_commit {
+                    if let Some(update) = deferred_history_update {
+                        sess.apply_deferred_spine_history_update(update)
+                            .await
+                            .map_err(SamplingRequestError::Codex)?;
+                    }
+                    if let Some(snapshot) = deferred_tree_update {
+                        sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
+                            .await;
+                    }
+                } else if is_pending_spine_close_like {
                     sess.record_conversation_items_raw_only_durable_without_emission(
                         &turn_context,
                         std::slice::from_ref(&response_item),
@@ -2075,6 +2130,13 @@ async fn drain_in_flight(
                         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
                             .await;
                     }
+                } else if commit.spine_context_already_observed {
+                    sess.record_conversation_items_without_spine_observe(
+                        &turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await
+                    .map_err(SamplingRequestError::Codex)?;
                 } else if spine_control_overlay.contains_matching_request(&response_item) {
                     sess.record_conversation_items_spine_control_overlay_only(
                         &turn_context,
@@ -2101,6 +2163,88 @@ async fn drain_in_flight(
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
             }
         }
+    }
+    Ok(())
+}
+
+async fn drain_deferred_spine_control_group(
+    group: Vec<DeferredToolCall>,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    client_session: &mut ModelClientSession,
+    spine_control_overlay: &mut SpineControlOverlay,
+    close_compact_tools: Vec<ToolSpec>,
+    tool_runtime: &ToolCallRuntime,
+    cancellation_token: &CancellationToken,
+) -> Result<(), SamplingRequestError> {
+    let control_call_id = group
+        .iter()
+        .find(|deferred| is_spine_parser_control_call(&deferred.call))
+        .map(|deferred| deferred.call.call_id.clone())
+        .ok_or_else(|| {
+            SamplingRequestError::Codex(CodexErr::SpineTerminalFailure {
+                operation: "commit grouped Spine toolcall".to_string(),
+                reason: "grouped Spine toolcall missing parser-control call".to_string(),
+            })
+        })?;
+    let tool_call_ids = group
+        .iter()
+        .map(|deferred| deferred.call.call_id.clone())
+        .collect::<Vec<_>>();
+    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
+        FuturesOrdered::new();
+    for deferred in group {
+        in_flight.push_back(spawn_tool_call(
+            tool_runtime,
+            cancellation_token,
+            deferred.call,
+        ));
+    }
+
+    let mut response_items = Vec::new();
+    while let Some(res) = in_flight.next().await {
+        match res {
+            Ok(response_input) => response_items.push(response_input.into()),
+            Err(err) => {
+                error_or_panic(format!(
+                    "in-flight grouped Spine tool future failed during drain: {err}"
+                ));
+            }
+        }
+    }
+    let commit = sess
+        .record_spine_toolcall_group_outputs_and_commit_with_client_session(
+            &turn_context,
+            client_session,
+            &control_call_id,
+            &tool_call_ids,
+            &response_items,
+            close_compact_tools,
+        )
+        .await
+        .map_err(|err| {
+            SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
+                operation: "commit grouped Spine toolcall".to_string(),
+                reason: err.to_string(),
+            })
+        })?;
+    for response_item in &response_items {
+        spine_control_overlay.push_output_if_matching(response_item);
+        mark_thread_memory_mode_polluted_if_external_context(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            response_item,
+        )
+        .await;
+    }
+    if let Some(update) = commit.deferred_history_update {
+        sess.apply_deferred_spine_history_update(update)
+            .await
+            .map_err(SamplingRequestError::Codex)?;
+    }
+    if let Some(snapshot) = commit.deferred_tree_update {
+        sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
+            .await;
     }
     Ok(())
 }
@@ -2165,6 +2309,8 @@ async fn try_run_sampling_request(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
     )> = None;
+    let mut deferred_tool_calls: Vec<DeferredToolCall> = Vec::new();
+    let mut deferred_spine_control_group: Option<Vec<DeferredToolCall>> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
     let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
@@ -2293,6 +2439,21 @@ async fn try_run_sampling_request(
 
                 let spine_control_item =
                     is_spine_control_function_call(&item).then(|| item.clone());
+                if sess.features.enabled(Feature::SpineJit)
+                    && let Ok(Some(call)) = ToolRouter::build_tool_call(item.clone())
+                {
+                    record_deferred_tool_call(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
+                        .await
+                        .map_err(SamplingRequestError::Codex)?;
+                    needs_follow_up = true;
+                    if is_spine_parser_control_call(&call)
+                        && let Some(item) = spine_control_item
+                    {
+                        spine_control_overlay.push_request(item.clone());
+                    }
+                    deferred_tool_calls.push(DeferredToolCall { call });
+                    continue;
+                }
                 let output_result =
                     match handle_output_item_done(&mut ctx, item, previously_streamed_item)
                         .instrument(handle_responses)
@@ -2449,6 +2610,59 @@ async fn try_run_sampling_request(
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
                 }
+                let spine_control_count = deferred_tool_calls
+                    .iter()
+                    .filter(|deferred| is_spine_parser_control_call(&deferred.call))
+                    .count();
+                match spine_control_count {
+                    0 => {
+                        for deferred in deferred_tool_calls.drain(..) {
+                            in_flight.push_back(spawn_tool_call(
+                                &tool_runtime,
+                                &cancellation_token,
+                                deferred.call,
+                            ));
+                        }
+                    }
+                    1 => {
+                        deferred_spine_control_group = Some(std::mem::take(&mut deferred_tool_calls));
+                    }
+                    _ => {
+                        let names = deferred_tool_calls
+                            .iter()
+                            .filter(|deferred| is_spine_parser_control_call(&deferred.call))
+                            .map(|deferred| {
+                                format!(
+                                    "{} ({})",
+                                    deferred.call.tool_name.name, deferred.call.call_id
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let message = format!(
+                            "{SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX} received {names}. Call at most one of spine.open, spine.close, or spine.next."
+                        );
+                        for deferred in deferred_tool_calls.drain(..) {
+                            if is_spine_parser_control_call(&deferred.call) {
+                                let response_item =
+                                    rejected_spine_control_output(&deferred.call.call_id, &message);
+                                sess.record_conversation_items_without_spine_observe(
+                                    &turn_context,
+                                    std::slice::from_ref(&response_item),
+                                )
+                                .await
+                                .map_err(SamplingRequestError::Codex)?;
+                            } else {
+                                in_flight.push_back(spawn_tool_call(
+                                    &tool_runtime,
+                                    &cancellation_token,
+                                    deferred.call,
+                                ));
+                            }
+                        }
+                        needs_follow_up = true;
+                    }
+                }
                 completed_response_id = Some(response_id);
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
@@ -2583,6 +2797,20 @@ async fn try_run_sampling_request(
         && let Some(response_id) = completed_response_id.as_deref()
     {
         client_session.send_response_processed(response_id).await;
+    }
+
+    if let Some(group) = deferred_spine_control_group {
+        drain_deferred_spine_control_group(
+            group,
+            sess.clone(),
+            turn_context.clone(),
+            client_session,
+            &mut spine_control_overlay,
+            prompt.tools.clone(),
+            &tool_runtime,
+            &cancellation_token,
+        )
+        .await?;
     }
 
     drain_in_flight(

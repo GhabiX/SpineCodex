@@ -2627,6 +2627,20 @@ impl Session {
         items: &[ResponseItem],
         emit_raw_response_items: bool,
     ) -> CodexResult<()> {
+        self.record_conversation_items_base_with_event_policy(
+            turn_context,
+            items,
+            emit_raw_response_items,
+        )
+        .await
+    }
+
+    async fn record_conversation_items_base_with_event_policy(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        emit_raw_response_items: bool,
+    ) -> CodexResult<()> {
         let (raw_ordinals, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
             let raw_start = spine_slot.lock().await.raw_len();
             match assign_spine_raw_ordinals(raw_start, items) {
@@ -2697,6 +2711,47 @@ impl Session {
         .await
     }
 
+    pub(crate) async fn record_conversation_items_without_spine_observe(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) -> CodexResult<()> {
+        let persisted_raw_count = if let Some(spine_slot) = self.spine.as_ref() {
+            let raw_start = spine_slot.lock().await.raw_len();
+            match assign_spine_raw_ordinals(raw_start, items) {
+                Ok((_, count)) => count,
+                Err(err) => {
+                    return Err(self
+                        .spine_append_fatal("assign Spine raw ordinals", err)
+                        .await);
+                }
+            }
+        } else {
+            0
+        };
+        if let Err(err) = self.try_persist_rollout_response_items(items).await {
+            return Err(self
+                .spine_append_fatal(
+                    "persist Spine raw output evidence",
+                    SpineError::InvalidStore(err.to_string()),
+                )
+                .await);
+        }
+        self.ensure_rollout_materialized_for_spine_append().await?;
+        self.record_into_history(items, turn_context).await;
+        if let Err(err) = self.ensure_spine_runtime_if_available().await {
+            return Err(self
+                .spine_append_fatal("initialize Spine runtime", err)
+                .await);
+        } else if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
+            return Err(self
+                .spine_append_fatal("observe Spine raw items", err)
+                .await);
+        }
+        self.send_raw_response_items(turn_context, items).await;
+        Ok(())
+    }
+
     async fn record_conversation_items_raw_only_durable_with_emission(
         &self,
         turn_context: &TurnContext,
@@ -2765,8 +2820,28 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
+        self.record_conversation_items_spine_control_overlay_only_with_event_policy(
+            turn_context,
+            items,
+            true, /* emit_raw_response_items */
+        )
+        .await
+    }
+
+    async fn record_conversation_items_spine_control_overlay_only_with_event_policy(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        emit_raw_response_items: bool,
+    ) -> CodexResult<()> {
         if self.spine.is_none() {
-            return self.record_conversation_items(turn_context, items).await;
+            return self
+                .record_conversation_items_base_with_event_policy(
+                    turn_context,
+                    items,
+                    emit_raw_response_items,
+                )
+                .await;
         }
         let (raw_ordinals, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
             let raw_start = spine_slot.lock().await.raw_len();
@@ -2816,7 +2891,9 @@ impl Session {
                     .await);
             }
         }
-        self.send_raw_response_items(turn_context, items).await;
+        if emit_raw_response_items {
+            self.send_raw_response_items(turn_context, items).await;
+        }
         Ok(())
     }
 
@@ -2833,10 +2910,6 @@ impl Session {
                 .await);
         }
         Ok(())
-    }
-
-    pub(crate) fn has_spine_runtime_state(&self) -> bool {
-        self.spine.is_some()
     }
 
     async fn spine_append_fatal(&self, operation: &str, err: SpineError) -> CodexErr {

@@ -126,6 +126,10 @@ fn normalize_compact_prompts(requests: &mut [Value]) {
     }
 }
 
+fn spine_node_memory_compact_body(text: &str) -> String {
+    format!("<SPINE_NODE_MEMORY>\n{text}\n</SPINE_NODE_MEMORY>")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// Scenario: compact an initial conversation, resume it, fork one turn back, and
 /// ensure the model-visible history matches expectations at each request.
@@ -744,14 +748,14 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
     let open_output = request_log
         .function_call_output_text("call-spine-open")
         .expect("missing spine open output");
-    assert!(open_output.starts_with("Spine opened."), "{open_output}");
-    assert!(open_output.contains("child scope"), "{open_output}");
+    assert!(
+        open_output.starts_with("Spine opened after this tool output is recorded."),
+        "{open_output}"
+    );
     let close_output = request_log
         .function_call_output_text("call-spine-close")
         .expect("missing spine close output");
     assert!(close_output.starts_with("Spine closed."), "{close_output}");
-    assert!(close_output.contains("Done child scope"), "{close_output}");
-    assert!(close_output.contains("Memory.md"), "{close_output}");
 
     let rolled_back_turn_request = requests
         .iter()
@@ -955,7 +959,10 @@ async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
         ev_completed("spine-close-call"),
     ]);
     let close_compact = sse(vec![
-        ev_assistant_message("spine-close-compact-summary", "spine close compact summary"),
+        ev_assistant_message(
+            "spine-close-compact-summary",
+            &spine_node_memory_compact_body("spine close compact summary"),
+        ),
         ev_completed("spine-close-compact"),
     ]);
     let close_follow_up = sse(vec![

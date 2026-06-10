@@ -69,13 +69,9 @@ impl ParseStack {
                     from_user,
                 })
             }
-            SpineToken::ToolCall {
-                tool_req,
-                tool_resps,
-            } => Symbol::SpineTreeNode(SpineTreeNode::ToolCallAsLeafNode {
-                tool_req,
-                tool_resps,
-            }),
+            SpineToken::ToolCall { segments } => {
+                Symbol::SpineTreeNode(SpineTreeNode::ToolCallAsLeafNode { segments })
+            }
         };
         self.symbols.push(symbol);
         self.reduce_fixpoint(archive)
@@ -551,6 +547,32 @@ fn spine_tree_node_msg_leaf_count(node: &SpineTreeNode) -> usize {
     }
 }
 
+#[cfg(test)]
+pub(super) fn parse_stack_toolcall_leaf_count(symbols: &[Symbol]) -> usize {
+    symbols
+        .iter()
+        .map(|symbol| match symbol {
+            Symbol::SpineTreeNode(node) => spine_tree_node_toolcall_leaf_count(node),
+            Symbol::SpineTreeNodes(nodes) => {
+                nodes.iter().map(spine_tree_node_toolcall_leaf_count).sum()
+            }
+            Symbol::Control(_) | Symbol::RootEpoches(_) => 0,
+        })
+        .sum()
+}
+
+#[cfg(test)]
+fn spine_tree_node_toolcall_leaf_count(node: &SpineTreeNode) -> usize {
+    match node {
+        SpineTreeNode::MsgAsLeafNode { .. } => 0,
+        SpineTreeNode::ToolCallAsLeafNode { .. } => 1,
+        SpineTreeNode::SpineTree { children, .. } => children
+            .iter()
+            .map(spine_tree_node_toolcall_leaf_count)
+            .sum(),
+    }
+}
+
 fn format_tree_rows(
     rows: Vec<TreeRenderRow>,
     context_annotations: &BTreeMap<NodeId, String>,
@@ -741,6 +763,22 @@ pub(super) fn event_to_token(
                     .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?,
             },
             from_user: *from_user,
+        }),
+        SpineLedgerEvent::ToolCall { segments } => Ok(SpineToken::ToolCall {
+            segments: segments
+                .iter()
+                .map(|segment| {
+                    Ok(crate::spine::model::ToolCallSegment {
+                        kind: segment.kind,
+                        seg: SegRef::ResponseItem {
+                            raw_ordinal: segment.raw_ordinal,
+                            context_index: usize::try_from(segment.context_index).map_err(
+                                |_| SpineError::InvalidEvent("context index overflow".to_string()),
+                            )?,
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>, SpineError>>()?,
         }),
         SpineLedgerEvent::Open {
             child,

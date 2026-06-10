@@ -279,16 +279,14 @@ fn render_trajs_node(out: &mut String, node: &SpineTreeNode) -> Result<(), Spine
                 ));
             }
         },
-        SpineTreeNode::ToolCallAsLeafNode {
-            tool_req,
-            tool_resps,
-        } => {
-            out.push_str("- toolcall request ");
-            render_trajs_seg_ref(out, tool_req)?;
-            out.push('\n');
-            for tool_resp in tool_resps {
-                out.push_str("- toolcall response ");
-                render_trajs_seg_ref(out, tool_resp)?;
+        SpineTreeNode::ToolCallAsLeafNode { segments } => {
+            for segment in segments {
+                out.push_str("- toolcall ");
+                out.push_str(match segment.kind {
+                    crate::spine::model::ToolCallSegmentKind::Request => "request ",
+                    crate::spine::model::ToolCallSegmentKind::Response => "response ",
+                });
+                render_trajs_seg_ref(out, &segment.seg)?;
                 out.push('\n');
             }
         }

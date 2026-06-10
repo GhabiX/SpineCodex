@@ -76,6 +76,9 @@ pub(super) enum SpineLedgerEvent {
         context_index: u64,
         from_user: bool,
     },
+    ToolCall {
+        segments: Vec<ToolCallEventSegment>,
+    },
     Open {
         child: NodeId,
         boundary: u64,
@@ -274,7 +277,28 @@ pub(super) enum SegRef {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolCallSegmentKind {
+    Request,
+    Response,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct ToolCallEventSegment {
+    pub(super) kind: ToolCallSegmentKind,
+    pub(super) raw_ordinal: u64,
+    pub(super) context_index: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct ToolCallSegment {
+    pub(super) kind: ToolCallSegmentKind,
+    pub(super) seg: SegRef,
+}
+
 impl SegRef {
+    #[cfg(test)]
     pub(super) fn from_memory_ref(memory: &MemoryRef) -> Self {
         Self::Memory {
             memory_id: memory.compact_id.clone(),
@@ -329,8 +353,7 @@ pub(super) enum SpineToken {
         from_user: bool,
     },
     ToolCall {
-        tool_req: SegRef,
-        tool_resps: Vec<SegRef>,
+        segments: Vec<ToolCallSegment>,
     },
 }
 
@@ -358,8 +381,7 @@ pub(super) enum SpineTreeNode {
         from_user: bool,
     },
     ToolCallAsLeafNode {
-        tool_req: SegRef,
-        tool_resps: Vec<SegRef>,
+        segments: Vec<ToolCallSegment>,
     },
     SpineTree {
         memory: MemoryRef,
@@ -444,6 +466,14 @@ impl SpineLedgerEvent {
         match self {
             SpineLedgerEvent::Init { .. } => Ok(true),
             SpineLedgerEvent::Msg { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
+            SpineLedgerEvent::ToolCall { segments } => {
+                for segment in segments {
+                    if !raw_mask.raw_index_live(segment.raw_ordinal)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
             SpineLedgerEvent::Open {
                 child,
                 summary,

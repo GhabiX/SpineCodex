@@ -8,9 +8,10 @@ use crate::session::spine_compact::SpineCloseCompactOutcome;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
 #[cfg(test)]
 use crate::session::turn::built_tools;
+use crate::spine::CompletedToolCall;
+use crate::spine::CompletedToolCallSegment;
 use crate::spine::LiveRootCompact;
 use crate::spine::NodeId;
-use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCloseCompact;
 use crate::spine::SpineCommitKind;
@@ -22,6 +23,7 @@ use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 use crate::spine::SpineTokenBaselines;
+use crate::spine::ToolCallSegmentKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
@@ -44,6 +46,7 @@ pub(super) struct PreparedSpineReplay {
 pub(crate) struct SpineToolCommit {
     pub(crate) output_text: Option<String>,
     pub(crate) record_output: bool,
+    pub(crate) spine_context_already_observed: bool,
     pub(crate) deferred_history_update: Option<DeferredSpineHistoryUpdate>,
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
@@ -60,9 +63,32 @@ pub(crate) struct DeferredSpineHistoryUpdate {
     reference_context_item: Option<TurnContextItem>,
 }
 
+impl DeferredSpineHistoryUpdate {
+    pub(crate) fn replace_tool_output(&mut self, item: &ResponseItem) {
+        let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
+            return;
+        };
+        if call_id != &self.call_id {
+            return;
+        }
+        if let Some(existing) = self.replacement.iter_mut().rev().find(|existing| {
+            matches!(
+                existing,
+                ResponseItem::FunctionCallOutput {
+                    call_id: existing,
+                    ..
+                } if existing == call_id
+            )
+        }) {
+            *existing = item.clone();
+        }
+    }
+}
+
 struct SpineCommitOutput {
     snapshot: Option<SpineTreeUpdateEvent>,
     output_text: Option<String>,
+    spine_context_already_observed: bool,
     history_update: Option<DeferredSpineHistoryUpdate>,
     defer_tree_update_until_raw_output: bool,
 }
@@ -78,6 +104,7 @@ impl Session {
         SpineToolCommit {
             output_text: None,
             record_output: true,
+            spine_context_already_observed: false,
             deferred_history_update: None,
             deferred_tree_update: None,
         }
@@ -87,6 +114,7 @@ impl Session {
         SpineToolCommit {
             output_text: None,
             record_output: false,
+            spine_context_already_observed: false,
             deferred_history_update: None,
             deferred_tree_update: None,
         }
@@ -461,6 +489,8 @@ impl Session {
         let Some(runtime) = guard.runtime_mut() else {
             return Ok(());
         };
+        let mut recorded_tool_outputs =
+            std::collections::BTreeMap::<String, Vec<(u64, usize)>>::new();
         for append in appends {
             let raw_ordinal = raw_ordinals
                 .get(append.input_index)
@@ -486,6 +516,16 @@ impl Session {
                 runtime.checkpoint_before_user_msg(&rollout_path, raw_ordinal, &context)?;
             }
             runtime.observe_context_item(raw_ordinal, append.context_index, item)?;
+            if let Some(call_id) = tool_response_call_id(item) {
+                recorded_tool_outputs
+                    .entry(call_id.to_string())
+                    .or_default()
+                    .push((raw_ordinal, append.context_index));
+            }
+        }
+        for (call_id, tool_responses) in recorded_tool_outputs {
+            runtime
+                .observe_recorded_tool_outputs_as_completed_toolcall(&call_id, &tool_responses)?;
         }
         Ok(())
     }
@@ -640,9 +680,180 @@ impl Session {
         item: &ResponseItem,
         close_compact_tools: Vec<ToolSpec>,
     ) -> Result<SpineToolCommit, SpineError> {
-        let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
+        let Some(call_id) = tool_response_call_id(item) else {
             return Ok(Self::no_spine_tool_commit());
         };
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(Self::no_spine_tool_commit());
+        };
+        let raw_len = {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(_spine) = guard.runtime() else {
+                return Ok(Self::no_spine_tool_commit());
+            };
+            guard.raw_len()
+        };
+        let history_for_output_anchor = self.clone_history().await;
+        let history_items_for_output_anchor = history_for_output_anchor.raw_items();
+        let (tool_resp_raw_ordinal, tool_resp_context_index, tool_resp_already_recorded) =
+            if history_items_for_output_anchor.last() == Some(item) && raw_len > 0 {
+                (
+                    raw_len - 1,
+                    history_items_for_output_anchor
+                        .len()
+                        .checked_sub(1)
+                        .ok_or_else(|| {
+                            SpineError::Invariant(
+                                "recorded tool output history length underflow".to_string(),
+                            )
+                        })?,
+                    true,
+                )
+            } else {
+                (raw_len, history_items_for_output_anchor.len(), false)
+            };
+        let request_anchor = {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(spine) = guard.runtime() else {
+                return Ok(Self::no_spine_tool_commit());
+            };
+            spine.pending_tool_request_anchor(call_id)?
+        };
+        let completed_toolcall = CompletedToolCall {
+            call_id: call_id.to_string(),
+            request_call_ids: vec![call_id.to_string()],
+            segments: vec![
+                CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Request,
+                    raw_ordinal: request_anchor.raw_ordinal,
+                    context_index: request_anchor.context_index,
+                },
+                CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Response,
+                    raw_ordinal: tool_resp_raw_ordinal,
+                    context_index: tool_resp_context_index,
+                },
+            ],
+        };
+        self.commit_spine_completed_toolcall_with_client_session(
+            turn_context,
+            client_session,
+            call_id,
+            item,
+            completed_toolcall,
+            tool_resp_already_recorded,
+            close_compact_tools,
+        )
+        .await
+    }
+
+    pub(crate) async fn record_spine_toolcall_group_outputs_and_commit_with_client_session(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        client_session: &mut ModelClientSession,
+        control_call_id: &str,
+        tool_call_ids: &[String],
+        output_items: &[ResponseItem],
+        close_compact_tools: Vec<ToolSpec>,
+    ) -> Result<SpineToolCommit, SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(Self::no_spine_tool_commit());
+        };
+        let (output_raw_ordinals, _) = {
+            let raw_start = spine_slot.lock().await.raw_len();
+            assign_spine_raw_ordinals(raw_start, output_items)?
+        };
+        let output_context_start = self.clone_history().await.raw_items().len();
+        self.record_conversation_items_without_spine_observe(turn_context, output_items)
+            .await
+            .map_err(|err| {
+                SpineError::Operation(format!(
+                    "failed to record grouped Spine tool outputs before commit: {err}"
+                ))
+            })?;
+        let request_anchors = {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(spine) = guard.runtime() else {
+                return Ok(Self::no_spine_tool_commit());
+            };
+            tool_call_ids
+                .iter()
+                .map(|call_id| spine.pending_tool_request_anchor(call_id))
+                .collect::<Result<Vec<_>, SpineError>>()?
+        };
+        let mut group_segments = request_anchors
+            .iter()
+            .map(|anchor| CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Request,
+                raw_ordinal: anchor.raw_ordinal,
+                context_index: anchor.context_index,
+            })
+            .collect::<Vec<_>>();
+        for (index, raw_ordinal) in output_raw_ordinals.iter().enumerate() {
+            let Some(raw_ordinal) = raw_ordinal else {
+                continue;
+            };
+            group_segments.push(CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Response,
+                raw_ordinal: *raw_ordinal,
+                context_index: output_context_start + index,
+            });
+        }
+        group_segments.sort_by_key(|segment| segment.context_index);
+        if !group_segments
+            .iter()
+            .any(|segment| segment.kind == ToolCallSegmentKind::Request)
+        {
+            return Err(SpineError::InvalidEvent(
+                "completed grouped toolcall must contain at least one request".to_string(),
+            ));
+        }
+        if !group_segments
+            .iter()
+            .any(|segment| segment.kind == ToolCallSegmentKind::Response)
+        {
+            return Err(SpineError::InvalidEvent(
+                "completed grouped toolcall must contain at least one response".to_string(),
+            ));
+        }
+        let completed_toolcall = CompletedToolCall {
+            call_id: control_call_id.to_string(),
+            request_call_ids: tool_call_ids.to_vec(),
+            segments: group_segments,
+        };
+        let control_output = output_items
+            .iter()
+            .find(|item| tool_response_call_id(item) == Some(control_call_id))
+            .ok_or_else(|| {
+                SpineError::InvalidEvent(format!(
+                    "grouped Spine toolcall missing output for control call_id={control_call_id}"
+                ))
+            })?;
+        self.commit_spine_completed_toolcall_with_client_session(
+            turn_context,
+            client_session,
+            control_call_id,
+            control_output,
+            completed_toolcall,
+            true,
+            close_compact_tools,
+        )
+        .await
+    }
+
+    async fn commit_spine_completed_toolcall_with_client_session(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        client_session: &mut ModelClientSession,
+        call_id: &str,
+        item: &ResponseItem,
+        completed_toolcall: CompletedToolCall,
+        tool_resp_already_recorded: bool,
+        close_compact_tools: Vec<ToolSpec>,
+    ) -> Result<SpineToolCommit, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
         };
@@ -672,7 +883,16 @@ impl Session {
             }) => {
                 let history = self.clone_history().await;
                 let expected_history = history.raw_items().to_vec();
-                let (close_target_projection, source_plan): (String, SpineCompactSourcePlan) = {
+                let toolcall_start = completed_toolcall
+                    .segments
+                    .first()
+                    .map(|segment| segment.context_index)
+                    .ok_or_else(|| {
+                        SpineError::InvalidEvent(
+                            "completed toolcall missing first segment".to_string(),
+                        )
+                    })?;
+                let source_context = {
                     let guard = spine_slot.lock().await;
                     guard.ensure_valid()?;
                     let Some(spine) = guard.runtime() else {
@@ -680,20 +900,35 @@ impl Session {
                             "spine runtime missing while building close compact source plan for call_id={call_id}"
                         )));
                     };
-                    let close_target_projection = build_spine_close_target_projection(
+                    build_spine_close_target_projection(
                         spine,
                         &node,
                         action,
                         next_summary.as_deref(),
-                    )?;
-                    let source_plan = spine.build_close_source_plan(
-                        history.raw_items(),
-                        &node,
-                        suffix_start,
-                        call_id,
-                    )?;
-                    (close_target_projection, source_plan)
+                    )
+                    .and_then(|close_target_projection| {
+                        let source_plan = spine.build_close_source_plan(
+                            history.raw_items(),
+                            &node,
+                            suffix_start,
+                            toolcall_start,
+                            call_id,
+                        )?;
+                        Ok((close_target_projection, source_plan))
+                    })
                 };
+                let (close_target_projection, source_plan): (String, SpineCompactSourcePlan) =
+                    match source_context {
+                        Ok(source_context) => source_context,
+                        Err(err) => {
+                            self.abort_spine_pending_tool(
+                                call_id,
+                                "spine close source plan failed before compact",
+                            )
+                            .await;
+                            return Err(err);
+                        }
+                    };
                 let compact = match Box::pin(self.spine_compact_close(
                     turn_context,
                     client_session,
@@ -750,8 +985,11 @@ impl Session {
             match self.try_commit_spine_tool_output_once(
                 spine_slot,
                 call_id,
+                item,
                 close_compact.clone(),
                 pre_compact_token_baselines,
+                completed_toolcall.clone(),
+                tool_resp_already_recorded,
             )? {
                 SpineCommitAttempt::Done(output) => break output,
                 SpineCommitAttempt::RuntimeMissing => {
@@ -776,6 +1014,7 @@ impl Session {
         let SpineCommitOutput {
             snapshot,
             output_text,
+            spine_context_already_observed,
             history_update,
             defer_tree_update_until_raw_output,
         } = commit_output;
@@ -796,6 +1035,7 @@ impl Session {
         Ok(SpineToolCommit {
             output_text,
             record_output: true,
+            spine_context_already_observed,
             deferred_history_update: history_update,
             deferred_tree_update,
         })
@@ -851,8 +1091,11 @@ impl Session {
         &self,
         spine_slot: &Mutex<SpineSessionState>,
         call_id: &str,
+        tool_resp_item: &ResponseItem,
         close_compact: Option<(SpineCloseCompact, Vec<ResponseItem>)>,
         pre_compact_token_baselines: Option<SpineTokenBaselines>,
+        completed_toolcall: CompletedToolCall,
+        tool_resp_already_recorded: bool,
     ) -> Result<SpineCommitAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
@@ -861,7 +1104,7 @@ impl Session {
         let Some(spine) = guard.runtime_mut() else {
             return Ok(SpineCommitAttempt::RuntimeMissing);
         };
-        let Ok(mut state) = self.state.try_lock() else {
+        let Ok(state) = self.state.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
         };
         if let Some((_, expected_history)) = close_compact.as_ref()
@@ -881,11 +1124,18 @@ impl Session {
         let close_compact = close_compact.map(|(compact, _)| compact);
         let token_baselines = pre_compact_token_baselines
             .unwrap_or_else(|| token_baselines_from_info(state.token_info().as_ref()));
-        let commit_kind = spine.maybe_commit_output_with_token_baselines(
-            call_id,
-            close_compact,
-            token_baselines,
-        )?;
+        let pending_commit = spine.pending_commit(call_id)?;
+        let commit_kind = if pending_commit.is_some() {
+            spine.maybe_commit_output_with_toolcall(
+                call_id,
+                close_compact,
+                token_baselines,
+                completed_toolcall,
+            )?
+        } else {
+            spine.observe_completed_toolcall(completed_toolcall)?;
+            None
+        };
         let defer_tree_update_until_raw_output = matches!(
             commit_kind,
             Some(SpineCommitKind::Close { .. } | SpineCommitKind::CloseThenOpen { .. })
@@ -909,35 +1159,11 @@ impl Session {
                             history_items.len()
                         )));
                     }
-                    let filtered = history_items
-                        .iter()
-                        .cloned()
-                        .enumerate()
-                        .filter_map(|(index, history_item)| {
-                            let remove = index >= *open_request_index
-                                && match &history_item {
-                                    ResponseItem::FunctionCall {
-                                        call_id: existing,
-                                        namespace,
-                                        ..
-                                    } => {
-                                        existing == call_id
-                                            && namespace.as_deref() == Some(SPINE_NAMESPACE)
-                                    }
-                                    ResponseItem::FunctionCallOutput {
-                                        call_id: existing, ..
-                                    } => existing == call_id,
-                                    _ => false,
-                                };
-                            (!remove).then_some(history_item)
-                        })
-                        .collect();
-                    let reference_context_item = state.reference_context_item();
-                    state.replace_history(filtered, reference_context_item);
                 }
                 SpineCommitKind::Close {
                     suffix_start,
                     replacement,
+                    toolcall_start,
                 } => {
                     let history = state.clone_history();
                     let history_items = history.raw_items();
@@ -947,18 +1173,29 @@ impl Session {
                             "spine.close suffix start {suffix_start} exceeds history length {suffix_end} for call_id={call_id}"
                         )));
                     }
+                    if *toolcall_start > suffix_end {
+                        return Err(SpineError::Invariant(format!(
+                            "spine.close toolcall start {toolcall_start} exceeds history length {suffix_end} for call_id={call_id}"
+                        )));
+                    }
+                    let mut replacement = replacement.clone();
+                    replacement.extend_from_slice(&history_items[*toolcall_start..]);
+                    if !tool_resp_already_recorded {
+                        replacement.push(tool_resp_item.clone());
+                    }
                     history_update = Some(DeferredSpineHistoryUpdate {
                         call_id: call_id.to_string(),
                         operation: "spine.close",
                         suffix_start: *suffix_start,
                         expected_history: history_items.to_vec(),
-                        replacement: replacement.clone(),
+                        replacement,
                         reference_context_item: state.reference_context_item(),
                     });
                 }
                 SpineCommitKind::CloseThenOpen {
                     suffix_start,
                     replacement,
+                    toolcall_start,
                     ..
                 } => {
                     let history = state.clone_history();
@@ -969,12 +1206,22 @@ impl Session {
                             "spine.next suffix start {suffix_start} exceeds history length {suffix_end} for call_id={call_id}"
                         )));
                     }
+                    if *toolcall_start > suffix_end {
+                        return Err(SpineError::Invariant(format!(
+                            "spine.next toolcall start {toolcall_start} exceeds history length {suffix_end} for call_id={call_id}"
+                        )));
+                    }
+                    let mut replacement = replacement.clone();
+                    replacement.extend_from_slice(&history_items[*toolcall_start..]);
+                    if !tool_resp_already_recorded {
+                        replacement.push(tool_resp_item.clone());
+                    }
                     history_update = Some(DeferredSpineHistoryUpdate {
                         call_id: call_id.to_string(),
                         operation: "spine.next",
                         suffix_start: *suffix_start,
                         expected_history: history_items.to_vec(),
-                        replacement: replacement.clone(),
+                        replacement,
                         reference_context_item: state.reference_context_item(),
                     });
                 }
@@ -987,6 +1234,7 @@ impl Session {
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
             snapshot,
             output_text,
+            spine_context_already_observed: true,
             history_update,
             defer_tree_update_until_raw_output,
         }))
@@ -1370,4 +1618,16 @@ pub(super) fn assign_spine_raw_ordinals(
         usize::try_from(count)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
     ))
+}
+
+fn tool_response_call_id(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, .. }
+        | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
+        ResponseItem::ToolSearchOutput {
+            call_id: Some(call_id),
+            ..
+        } => Some(call_id.as_str()),
+        _ => None,
+    }
 }

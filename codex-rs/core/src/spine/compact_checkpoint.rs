@@ -4,10 +4,9 @@ use crate::spine::checkpoint::CheckpointMemoryRef;
 use crate::spine::checkpoint::collect_checkpoint_refs;
 use crate::spine::io::hash_raw_live;
 use crate::spine::io::hash_response_items;
-use crate::spine::model::SegRef;
-use crate::spine::model::SpineTreeNode;
-use crate::spine::model::Symbol;
 use crate::spine::parse_stack::ParseStack;
+use crate::spine::render::VisibleItemSource;
+use crate::spine::render::project_parse_stack_visible_items;
 use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -71,7 +70,7 @@ pub(super) fn build_compact_checkpoint(
         &mut trajs_refs,
     );
     let (response_item_refs, memory_item_refs) =
-        collect_visible_item_refs(&parse_stack.symbols, raw_boundary_usize, raw_items, context)?;
+        collect_visible_item_refs(parse_stack, raw_boundary_usize, raw_items, context)?;
     Ok(SpineCompactCheckpoint {
         version: CHECKPOINT_VERSION,
         rollout_path: rollout_path.display().to_string(),
@@ -144,7 +143,7 @@ pub(super) fn compact_checkpoint_replacement_history_hash(
 }
 
 fn collect_visible_item_refs(
-    symbols: &[Symbol],
+    parse_stack: &ParseStack,
     raw_boundary: usize,
     raw_items: &[Option<ResponseItem>],
     context: &[ResponseItem],
@@ -157,21 +156,38 @@ fn collect_visible_item_refs(
 > {
     let mut response_item_refs = Vec::new();
     let mut memory_item_refs = Vec::new();
-    let mut next_context_index = 0usize;
-    for symbol in symbols {
-        collect_visible_item_refs_from_symbol(
-            symbol,
-            raw_boundary,
-            raw_items,
-            context,
-            &mut next_context_index,
-            &mut response_item_refs,
-            &mut memory_item_refs,
-        )?;
+    let visible_refs = project_parse_stack_visible_items(parse_stack)?;
+    for visible_ref in &visible_refs {
+        match &visible_ref.source {
+            VisibleItemSource::RawResponseItem { raw_ordinal, .. }
+            | VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
+                collect_visible_response_item_ref(
+                    *raw_ordinal,
+                    visible_ref.context_index,
+                    raw_boundary,
+                    raw_items,
+                    context,
+                    &mut response_item_refs,
+                )?;
+            }
+            VisibleItemSource::MemoryRef { memory, .. } => collect_memory_item_ref(
+                &memory.compact_id,
+                context,
+                visible_ref.context_index,
+                &mut memory_item_refs,
+            )?,
+            VisibleItemSource::MemorySeg { memory_id, .. } => collect_memory_item_ref(
+                memory_id,
+                context,
+                visible_ref.context_index,
+                &mut memory_item_refs,
+            )?,
+        }
     }
-    if next_context_index != context.len() {
+    if visible_refs.len() != context.len() {
         return Err(SpineError::InvalidEvent(format!(
-            "compact checkpoint item refs covered {next_context_index} context items but h(PS) has {}",
+            "compact checkpoint item refs covered {} context items but h(PS) has {}",
+            visible_refs.len(),
             context.len()
         )));
     }
@@ -180,137 +196,17 @@ fn collect_visible_item_refs(
     Ok((response_item_refs, memory_item_refs))
 }
 
-fn collect_visible_item_refs_from_symbol(
-    symbol: &Symbol,
-    raw_boundary: usize,
-    raw_items: &[Option<ResponseItem>],
-    context: &[ResponseItem],
-    next_context_index: &mut usize,
-    response_item_refs: &mut Vec<CompactCheckpointResponseItemRef>,
-    memory_item_refs: &mut Vec<CompactCheckpointMemoryItemRef>,
-) -> Result<(), SpineError> {
-    match symbol {
-        Symbol::Control(_) => Ok(()),
-        Symbol::SpineTreeNode(node) => collect_visible_item_refs_from_node(
-            node,
-            raw_boundary,
-            raw_items,
-            context,
-            next_context_index,
-            response_item_refs,
-            memory_item_refs,
-        ),
-        Symbol::SpineTreeNodes(nodes) => {
-            for node in nodes {
-                collect_visible_item_refs_from_node(
-                    node,
-                    raw_boundary,
-                    raw_items,
-                    context,
-                    next_context_index,
-                    response_item_refs,
-                    memory_item_refs,
-                )?;
-            }
-            Ok(())
-        }
-        Symbol::RootEpoches(root_epochs) => {
-            if let Some(root_epoch) = root_epochs.last() {
-                collect_memory_item_ref(
-                    &root_epoch.memory.compact_id,
-                    context,
-                    next_context_index,
-                    memory_item_refs,
-                )?;
-            }
-            Ok(())
-        }
-    }
-}
-
-fn collect_visible_item_refs_from_node(
-    node: &SpineTreeNode,
-    raw_boundary: usize,
-    raw_items: &[Option<ResponseItem>],
-    context: &[ResponseItem],
-    next_context_index: &mut usize,
-    response_item_refs: &mut Vec<CompactCheckpointResponseItemRef>,
-    memory_item_refs: &mut Vec<CompactCheckpointMemoryItemRef>,
-) -> Result<(), SpineError> {
-    match node {
-        SpineTreeNode::MsgAsLeafNode { msg, .. } => match msg {
-            SegRef::ResponseItem { .. } => collect_visible_response_item_ref(
-                msg,
-                raw_boundary,
-                raw_items,
-                context,
-                next_context_index,
-                response_item_refs,
-            ),
-            SegRef::Memory {
-                memory_id,
-                body_path: _,
-            } => collect_memory_item_ref(memory_id, context, next_context_index, memory_item_refs),
-        },
-        SpineTreeNode::SpineTree { memory, .. } => collect_memory_item_ref(
-            &memory.compact_id,
-            context,
-            next_context_index,
-            memory_item_refs,
-        ),
-        SpineTreeNode::ToolCallAsLeafNode {
-            tool_req,
-            tool_resps,
-        } => {
-            collect_visible_response_item_ref(
-                tool_req,
-                raw_boundary,
-                raw_items,
-                context,
-                next_context_index,
-                response_item_refs,
-            )?;
-            for tool_resp in tool_resps {
-                collect_visible_response_item_ref(
-                    tool_resp,
-                    raw_boundary,
-                    raw_items,
-                    context,
-                    next_context_index,
-                    response_item_refs,
-                )?;
-            }
-            Ok(())
-        }
-    }
-}
-
 fn collect_visible_response_item_ref(
-    seg: &SegRef,
+    raw_ordinal: u64,
+    context_index: usize,
     raw_boundary: usize,
     raw_items: &[Option<ResponseItem>],
     context: &[ResponseItem],
-    next_context_index: &mut usize,
     response_item_refs: &mut Vec<CompactCheckpointResponseItemRef>,
 ) -> Result<(), SpineError> {
-    let SegRef::ResponseItem {
-        raw_ordinal,
-        context_index,
-    } = seg
-    else {
-        return Err(SpineError::InvalidEvent(
-            "compact checkpoint expected response item SegRef".to_string(),
-        ));
-    };
-    let raw_index = usize::try_from(*raw_ordinal).map_err(|_| {
+    let raw_index = usize::try_from(raw_ordinal).map_err(|_| {
         SpineError::InvalidEvent("compact checkpoint raw ordinal overflow".to_string())
     })?;
-    if *context_index != *next_context_index {
-        return Err(SpineError::InvalidEvent(format!(
-            "compact checkpoint response item raw ordinal {raw_ordinal} has context index {context_index} but renders at {}",
-            *next_context_index
-        )));
-    }
     if raw_index >= raw_boundary {
         return Err(SpineError::InvalidEvent(format!(
             "compact checkpoint response item raw ordinal {raw_ordinal} is outside raw boundary {raw_boundary}"
@@ -324,10 +220,10 @@ fn collect_visible_response_item_ref(
                 "compact checkpoint response item raw ordinal {raw_ordinal} is not live"
             ))
         })?;
-    let context_item = context.get(*next_context_index).ok_or_else(|| {
+    let context_item = context.get(context_index).ok_or_else(|| {
         SpineError::InvalidEvent(format!(
             "compact checkpoint response item context index {} exceeds h(PS)",
-            *next_context_index
+            context_index
         ))
     })?;
     let item_hash = hash_response_item(raw_item)?;
@@ -337,32 +233,30 @@ fn collect_visible_response_item_ref(
         )));
     }
     response_item_refs.push(CompactCheckpointResponseItemRef {
-        raw_ordinal: *raw_ordinal,
-        context_index: *context_index,
+        raw_ordinal,
+        context_index,
         item_hash,
     });
-    *next_context_index += 1;
     Ok(())
 }
 
 fn collect_memory_item_ref(
     compact_id: &str,
     context: &[ResponseItem],
-    next_context_index: &mut usize,
+    context_index: usize,
     refs: &mut Vec<CompactCheckpointMemoryItemRef>,
 ) -> Result<(), SpineError> {
-    let context_item = context.get(*next_context_index).ok_or_else(|| {
+    let context_item = context.get(context_index).ok_or_else(|| {
         SpineError::InvalidEvent(format!(
             "compact checkpoint memory item context index {} exceeds h(PS)",
-            *next_context_index
+            context_index
         ))
     })?;
     refs.push(CompactCheckpointMemoryItemRef {
         compact_id: compact_id.to_string(),
-        context_index: *next_context_index,
+        context_index,
         item_hash: hash_response_item(context_item)?,
     });
-    *next_context_index += 1;
     Ok(())
 }
 

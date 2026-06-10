@@ -36,13 +36,20 @@ use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
+use crate::spine::model::ToolCallEventSegment;
+use crate::spine::model::ToolCallSegment;
+use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::event_to_token;
 use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 #[cfg(test)]
 use crate::spine::parse_stack::parse_stack_msg_leaf_count;
+#[cfg(test)]
+use crate::spine::parse_stack::parse_stack_toolcall_leaf_count;
+use crate::spine::render::VisibleItemSource;
 use crate::spine::render::memory_response_item;
+use crate::spine::render::project_spine_tree_nodes_visible_items;
 use crate::spine::render::read_memory_ref_body;
 use crate::spine::render::render_parse_stack_to_context;
 use crate::spine::render::render_parse_stack_to_context_with_memory_body;
@@ -54,6 +61,8 @@ pub(crate) const SPINE_TOOL_TREE: &str = "tree";
 pub(crate) const SPINE_TOOL_OPEN: &str = "open";
 pub(crate) const SPINE_TOOL_CLOSE: &str = "close";
 pub(crate) const SPINE_TOOL_NEXT: &str = "next";
+pub(crate) const SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX: &str =
+    "Spine parser-control tools are mutually exclusive within one model response;";
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineRuntime {
@@ -67,6 +76,10 @@ pub(crate) struct SpineRuntime {
     // are empty on resume/rollback by design and are not part of h(PS).
     open_requests: BTreeMap<String, OpenRequestAnchor>,
     control_call_ids: BTreeSet<String>,
+    tree_call_ids: BTreeSet<String>,
+    ordinary_tool_requests: BTreeMap<String, PendingToolRequest>,
+    #[cfg(test)]
+    pending_tool_responses: BTreeMap<String, Vec<PendingToolResponse>>,
     pending: Option<PendingTransition>,
     pressure_baselines: BTreeMap<NodeId, OpenContextBaseline>,
 }
@@ -99,6 +112,12 @@ impl SpineLedgerCache {
 struct OpenRequestAnchor {
     raw_ordinal: u64,
     context_index: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ToolRequestAnchor {
+    pub(crate) raw_ordinal: u64,
+    pub(crate) context_index: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -137,6 +156,33 @@ struct PendingMsg {
     from_user: bool,
 }
 
+#[derive(Clone, Debug)]
+struct PendingToolRequest {
+    raw_ordinal: u64,
+    context_index: u64,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+struct PendingToolResponse {
+    raw_ordinal: u64,
+    context_index: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CompletedToolCall {
+    pub(crate) call_id: String,
+    pub(crate) request_call_ids: Vec<String>,
+    pub(crate) segments: Vec<CompletedToolCallSegment>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CompletedToolCallSegment {
+    pub(crate) kind: ToolCallSegmentKind,
+    pub(crate) raw_ordinal: u64,
+    pub(crate) context_index: usize,
+}
+
 struct PreparedCloseCommit {
     suffix_start: usize,
     replacement: Vec<ResponseItem>,
@@ -171,10 +217,12 @@ pub(crate) enum SpineCommitKind {
     Close {
         suffix_start: usize,
         replacement: Vec<ResponseItem>,
+        toolcall_start: usize,
     },
     CloseThenOpen {
         suffix_start: usize,
         replacement: Vec<ResponseItem>,
+        toolcall_start: usize,
         open_index: usize,
     },
 }
@@ -201,6 +249,7 @@ pub(crate) enum SpinePendingCommit {
 pub(crate) struct SpineCloseCompact {
     pub(crate) body: String,
     pub(crate) source_context_range: Range<usize>,
+    pub(crate) source_raw_range: Range<u64>,
     pub(crate) memory_output_tokens: Option<i64>,
 }
 
@@ -208,6 +257,7 @@ pub(crate) struct SpineCloseCompact {
 pub(crate) struct SpineCompactSourcePlan {
     pub(crate) node_id: NodeId,
     pub(crate) source_context_range: Range<usize>,
+    pub(crate) source_raw_range: Range<u64>,
     pub(crate) entries: Vec<SpineCompactSourcePlanEntry>,
 }
 
@@ -229,6 +279,7 @@ pub(crate) enum SpineCompactSourceEntryKind {
     ChildMemory {
         node_id: NodeId,
         compact_id: String,
+        source_raw_range: Range<u64>,
         body: String,
         body_hash: String,
     },
@@ -559,6 +610,10 @@ impl SpineRuntime {
             raw_live,
             open_requests: BTreeMap::new(),
             control_call_ids: BTreeSet::new(),
+            tree_call_ids: BTreeSet::new(),
+            ordinary_tool_requests: BTreeMap::new(),
+            #[cfg(test)]
+            pending_tool_responses: BTreeMap::new(),
             pending: None,
             pressure_baselines,
         })
@@ -628,6 +683,10 @@ impl SpineRuntime {
             raw_live,
             open_requests: BTreeMap::new(),
             control_call_ids: BTreeSet::new(),
+            tree_call_ids: BTreeSet::new(),
+            ordinary_tool_requests: BTreeMap::new(),
+            #[cfg(test)]
+            pending_tool_responses: BTreeMap::new(),
             pending: None,
             pressure_baselines,
         })
@@ -747,6 +806,11 @@ impl SpineRuntime {
     }
 
     #[cfg(test)]
+    pub(crate) fn parse_stack_toolcall_leaf_count_for_test(&self) -> usize {
+        parse_stack_toolcall_leaf_count(&self.parse_stack.symbols)
+    }
+
+    #[cfg(test)]
     pub(crate) fn parse_stack_debug_for_test(&self) -> String {
         format!("{:?}", self.parse_stack)
     }
@@ -831,15 +895,27 @@ impl SpineRuntime {
             ..
         } = item
             && namespace == SPINE_NAMESPACE
-            && is_spine_control_tool_name(name)
+            && is_spine_parser_control_tool_name(name)
         {
             self.control_call_ids.insert(call_id.clone());
+            if name == SPINE_TOOL_OPEN && self.open_requests.contains_key(call_id) {
+                return Err(SpineError::InvalidEvent(format!(
+                    "duplicate spine.open request anchor for {call_id}"
+                )));
+            }
+            if self.ordinary_tool_requests.contains_key(call_id) {
+                return Err(SpineError::InvalidEvent(format!(
+                    "duplicate tool request anchor for {call_id}"
+                )));
+            }
+            self.ordinary_tool_requests.insert(
+                call_id.clone(),
+                PendingToolRequest {
+                    raw_ordinal: msg.raw_ordinal,
+                    context_index: msg.context_index,
+                },
+            );
             if name == SPINE_TOOL_OPEN {
-                if self.open_requests.contains_key(call_id) {
-                    return Err(SpineError::InvalidEvent(format!(
-                        "duplicate spine.open request anchor for {call_id}"
-                    )));
-                }
                 self.open_requests.insert(
                     call_id.clone(),
                     OpenRequestAnchor {
@@ -850,16 +926,122 @@ impl SpineRuntime {
             }
             return Ok(());
         }
-        if let ResponseItem::FunctionCallOutput { call_id, .. } = item
-            && (self.control_call_ids.contains(call_id)
+        if let ResponseItem::FunctionCall {
+            call_id,
+            name,
+            namespace: Some(namespace),
+            ..
+        } = item
+            && namespace == SPINE_NAMESPACE
+            && name == SPINE_TOOL_TREE
+        {
+            self.tree_call_ids.insert(call_id.clone());
+            if self.ordinary_tool_requests.contains_key(call_id) {
+                return Err(SpineError::InvalidEvent(format!(
+                    "duplicate tool request anchor for {call_id}"
+                )));
+            }
+            self.ordinary_tool_requests.insert(
+                call_id.clone(),
+                PendingToolRequest {
+                    raw_ordinal: msg.raw_ordinal,
+                    context_index: msg.context_index,
+                },
+            );
+            return Ok(());
+        }
+        if let Some(call_id) = tool_request_call_id(item) {
+            if self.ordinary_tool_requests.contains_key(call_id) {
+                return Err(SpineError::InvalidEvent(format!(
+                    "duplicate ordinary tool request anchor for {call_id}"
+                )));
+            }
+            self.ordinary_tool_requests.insert(
+                call_id.to_string(),
+                PendingToolRequest {
+                    raw_ordinal: msg.raw_ordinal,
+                    context_index: msg.context_index,
+                },
+            );
+            return Ok(());
+        }
+        if let Some(call_id) = tool_response_call_id(item) {
+            #[cfg(test)]
+            self.pending_tool_responses
+                .entry(call_id.to_string())
+                .or_default()
+                .push(PendingToolResponse {
+                    raw_ordinal: msg.raw_ordinal,
+                    context_index: msg.context_index,
+                });
+            if self.control_call_ids.contains(call_id)
+                || self.tree_call_ids.remove(call_id)
                 || self
                     .pending
                     .as_ref()
-                    .is_some_and(|pending| pending.call_id() == call_id.as_str()))
-        {
+                    .is_some_and(|pending| pending.call_id() == call_id)
+            {
+                return Ok(());
+            }
+            return Ok(());
+        }
+        if matches!(
+            item,
+            ResponseItem::ToolSearchOutput { call_id: None, .. }
+                | ResponseItem::ToolSearchCall { call_id: None, .. }
+        ) {
             return Ok(());
         }
         self.append_and_shift_msg(&msg)
+    }
+
+    pub(crate) fn observe_completed_toolcall(
+        &mut self,
+        toolcall: CompletedToolCall,
+    ) -> Result<(), SpineError> {
+        let (event, segments) = self.completed_toolcall_parts(toolcall)?;
+        self.append_cached_event(event)?;
+        self.push_completed_toolcall_token(segments)
+    }
+
+    pub(crate) fn observe_recorded_tool_outputs_as_completed_toolcall(
+        &mut self,
+        call_id: &str,
+        tool_responses: &[(u64, usize)],
+    ) -> Result<(), SpineError> {
+        if tool_responses.is_empty() {
+            return Ok(());
+        }
+        if self.control_call_ids.contains(call_id)
+            || self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.call_id() == call_id)
+        {
+            return Ok(());
+        }
+        let Some(request) = self.ordinary_tool_requests.get(call_id).cloned() else {
+            return Ok(());
+        };
+        self.observe_completed_toolcall(CompletedToolCall {
+            call_id: call_id.to_string(),
+            request_call_ids: vec![call_id.to_string()],
+            segments: std::iter::once(CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Request,
+                raw_ordinal: request.raw_ordinal,
+                context_index: usize::try_from(request.context_index).map_err(|_| {
+                    SpineError::InvalidEvent("tool request context index overflow".to_string())
+                })?,
+            })
+            .chain(tool_responses.iter().map(|(raw_ordinal, context_index)| {
+                CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Response,
+                    raw_ordinal: *raw_ordinal,
+                    context_index: *context_index,
+                }
+            }))
+            .collect(),
+        })
     }
 
     pub(crate) fn checkpoint_before_user_msg(
@@ -959,6 +1141,37 @@ impl SpineRuntime {
         Ok(())
     }
 
+    fn append_committed_events_no_marker(
+        &mut self,
+        events: Vec<SpineLedgerEvent>,
+    ) -> Result<(), SpineError> {
+        let seq_start = self.ledger.next_event_seq;
+        let event_count = u64::try_from(events.len())
+            .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?;
+        let seq_end = seq_start
+            .checked_add(event_count)
+            .ok_or_else(|| SpineError::InvalidEvent("spine event seq overflow".to_string()))?;
+        let logged = events
+            .into_iter()
+            .enumerate()
+            .map(|(offset, event)| {
+                let offset = u64::try_from(offset).map_err(|_| {
+                    SpineError::InvalidEvent("spine event offset overflow".to_string())
+                })?;
+                let seq = seq_start.checked_add(offset).ok_or_else(|| {
+                    SpineError::InvalidEvent("spine event seq overflow".to_string())
+                })?;
+                Ok(LoggedSpineLedgerEvent { seq, event })
+            })
+            .collect::<Result<Vec<_>, SpineError>>()?;
+        for event in &logged {
+            self.store.append_logged_event(event)?;
+        }
+        self.ledger.events.extend(logged);
+        self.ledger.next_event_seq = seq_end;
+        Ok(())
+    }
+
     fn append_cached_pressure_event(&mut self, event: PressureEvent) -> Result<u64, SpineError> {
         let pressure_seq = self.ledger.next_pressure_seq;
         let next_pressure_seq = pressure_seq
@@ -982,6 +1195,86 @@ impl SpineRuntime {
         })
     }
 
+    fn completed_toolcall_parts(
+        &mut self,
+        toolcall: CompletedToolCall,
+    ) -> Result<(SpineLedgerEvent, Vec<ToolCallSegment>), SpineError> {
+        validate_completed_toolcall(&toolcall)?;
+        let segments = toolcall
+            .segments
+            .iter()
+            .map(|segment| ToolCallSegment {
+                kind: segment.kind,
+                seg: SegRef::ResponseItem {
+                    raw_ordinal: segment.raw_ordinal,
+                    context_index: segment.context_index,
+                },
+            })
+            .collect::<Vec<_>>();
+        let event = self.completed_toolcall_event(&segments)?;
+        for request_call_id in &toolcall.request_call_ids {
+            self.ordinary_tool_requests.remove(request_call_id);
+        }
+        self.ordinary_tool_requests.remove(&toolcall.call_id);
+        #[cfg(test)]
+        {
+            for request_call_id in &toolcall.request_call_ids {
+                self.pending_tool_responses.remove(request_call_id);
+            }
+            self.pending_tool_responses.remove(&toolcall.call_id);
+        }
+        for request_call_id in &toolcall.request_call_ids {
+            self.tree_call_ids.remove(request_call_id);
+            self.control_call_ids.remove(request_call_id);
+        }
+        self.tree_call_ids.remove(&toolcall.call_id);
+        self.control_call_ids.remove(&toolcall.call_id);
+        Ok((event, segments))
+    }
+
+    fn completed_toolcall_event(
+        &self,
+        segments: &[ToolCallSegment],
+    ) -> Result<SpineLedgerEvent, SpineError> {
+        let mut event_segments = Vec::with_capacity(segments.len());
+        for segment in segments {
+            let SegRef::ResponseItem {
+                raw_ordinal,
+                context_index,
+            } = &segment.seg
+            else {
+                return Err(SpineError::InvalidEvent(
+                    "toolcall segment must reference a raw ResponseItem".to_string(),
+                ));
+            };
+            event_segments.push(ToolCallEventSegment {
+                kind: segment.kind,
+                raw_ordinal: *raw_ordinal,
+                context_index: u64::try_from(*context_index).map_err(|_| {
+                    SpineError::InvalidEvent("toolcall context index overflow".to_string())
+                })?,
+            });
+        }
+        Ok(SpineLedgerEvent::ToolCall {
+            segments: event_segments,
+        })
+    }
+
+    fn remap_completed_toolcall_context_indices(
+        &self,
+        mut toolcall: CompletedToolCall,
+        toolcall_context_start: usize,
+    ) -> Result<CompletedToolCall, SpineError> {
+        let mut context_index = toolcall_context_start;
+        for segment in &mut toolcall.segments {
+            segment.context_index = context_index;
+            context_index = context_index.checked_add(1).ok_or_else(|| {
+                SpineError::InvalidEvent("toolcall context index overflow".to_string())
+            })?;
+        }
+        Ok(toolcall)
+    }
+
     fn push_msg_token(&mut self, msg: &PendingMsg) -> Result<(), SpineError> {
         self.parse_stack.shift(
             SpineToken::Msg {
@@ -997,6 +1290,14 @@ impl SpineRuntime {
         )
     }
 
+    fn push_completed_toolcall_token(
+        &mut self,
+        segments: Vec<ToolCallSegment>,
+    ) -> Result<(), SpineError> {
+        self.parse_stack
+            .shift(SpineToken::ToolCall { segments }, &self.archive())
+    }
+
     fn append_and_shift_msg(&mut self, msg: &PendingMsg) -> Result<(), SpineError> {
         self.append_msg_event(msg)?;
         self.push_msg_token(msg)
@@ -1007,6 +1308,7 @@ impl SpineRuntime {
         call_id: String,
         summary: String,
     ) -> Result<(), SpineError> {
+        self.ensure_no_pending_transition()?;
         let summary = summary.trim().to_string();
         if summary.is_empty() {
             return Err(SpineError::ToolUse(
@@ -1031,6 +1333,12 @@ impl SpineRuntime {
         call_id: String,
         instruction: Option<String>,
     ) -> Result<(), SpineError> {
+        self.ensure_no_pending_transition()?;
+        if !self.control_call_ids.contains(&call_id) {
+            return Err(SpineError::Operation(format!(
+                "missing spine.close request anchor for call_id={call_id}"
+            )));
+        }
         self.stage(PendingTransition::Close {
             call_id,
             instruction,
@@ -1043,11 +1351,17 @@ impl SpineRuntime {
         summary: String,
         instruction: Option<String>,
     ) -> Result<(), SpineError> {
+        self.ensure_no_pending_transition()?;
         let summary = summary.trim().to_string();
         if summary.is_empty() {
             return Err(SpineError::ToolUse(
                 "spine.next summary must not be empty".to_string(),
             ));
+        }
+        if !self.control_call_ids.contains(&call_id) {
+            return Err(SpineError::Operation(format!(
+                "missing spine.next request anchor for call_id={call_id}"
+            )));
         }
         self.stage(PendingTransition::NextSugar {
             call_id,
@@ -1057,6 +1371,12 @@ impl SpineRuntime {
     }
 
     fn stage(&mut self, pending: PendingTransition) -> Result<(), SpineError> {
+        self.ensure_no_pending_transition()?;
+        self.pending = Some(pending);
+        Ok(())
+    }
+
+    fn ensure_no_pending_transition(&self) -> Result<(), SpineError> {
         if self.pending.is_some() {
             let pending_call_id = self
                 .pending
@@ -1067,7 +1387,6 @@ impl SpineRuntime {
                 "another spine transition is already pending: call_id={pending_call_id}"
             )));
         }
-        self.pending = Some(pending);
         Ok(())
     }
 
@@ -1099,10 +1418,12 @@ impl SpineRuntime {
         call_id: &str,
         close_compact: Option<SpineCloseCompact>,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
-        self.maybe_commit_output_with_token_baselines(
+        let completed_toolcall = self.observed_completed_toolcall(call_id)?;
+        self.maybe_commit_output_impl(
             call_id,
             close_compact,
             SpineTokenBaselines::default(),
+            completed_toolcall,
         )
     }
 
@@ -1113,21 +1434,50 @@ impl SpineRuntime {
         close_compact: Option<SpineCloseCompact>,
         input_tokens: Option<i64>,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
-        self.maybe_commit_output_with_token_baselines(
+        let completed_toolcall = self.observed_completed_toolcall(call_id)?;
+        self.maybe_commit_output_impl(
             call_id,
             close_compact,
             SpineTokenBaselines {
                 input_tokens,
                 context_tokens: input_tokens,
             },
+            completed_toolcall,
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn maybe_commit_output_with_token_baselines(
         &mut self,
         call_id: &str,
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
+    ) -> Result<Option<SpineCommitKind>, SpineError> {
+        let completed_toolcall = self.observed_completed_toolcall(call_id)?;
+        self.maybe_commit_output_impl(call_id, close_compact, token_baselines, completed_toolcall)
+    }
+
+    pub(crate) fn maybe_commit_output_with_toolcall(
+        &mut self,
+        call_id: &str,
+        close_compact: Option<SpineCloseCompact>,
+        token_baselines: SpineTokenBaselines,
+        completed_toolcall: CompletedToolCall,
+    ) -> Result<Option<SpineCommitKind>, SpineError> {
+        self.maybe_commit_output_impl(
+            call_id,
+            close_compact,
+            token_baselines,
+            Some(completed_toolcall),
+        )
+    }
+
+    fn maybe_commit_output_impl(
+        &mut self,
+        call_id: &str,
+        close_compact: Option<SpineCloseCompact>,
+        token_baselines: SpineTokenBaselines,
+        completed_toolcall: Option<CompletedToolCall>,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         let Some(pending) = self.pending.as_ref() else {
             return Ok(None);
@@ -1142,10 +1492,19 @@ impl SpineRuntime {
                 boundary,
                 index,
                 ..
-            } => self.commit_open_pending(summary, boundary, index, token_baselines)?,
-            PendingTransition::Close { instruction, .. } => {
-                self.commit_close_pending(instruction, close_compact, token_baselines)?
-            }
+            } => self.commit_open_pending(
+                summary,
+                boundary,
+                index,
+                token_baselines,
+                completed_toolcall,
+            )?,
+            PendingTransition::Close { instruction, .. } => self.commit_close_pending(
+                instruction,
+                close_compact,
+                token_baselines,
+                completed_toolcall,
+            )?,
             PendingTransition::NextSugar {
                 summary,
                 instruction,
@@ -1155,19 +1514,31 @@ impl SpineRuntime {
                 instruction,
                 close_compact,
                 token_baselines,
+                completed_toolcall,
             )?,
         };
         self.pending = None;
+        self.control_call_ids.remove(call_id);
         Ok(Some(commit_kind))
     }
 
     fn commit_open_pending(
         &mut self,
         summary: String,
-        boundary: u64,
-        index: u64,
+        mut boundary: u64,
+        mut index: u64,
         token_baselines: SpineTokenBaselines,
+        completed_toolcall: Option<CompletedToolCall>,
     ) -> Result<SpineCommitKind, SpineError> {
+        if let Some(completed_toolcall) = completed_toolcall.as_ref() {
+            let first = completed_toolcall_first_segment(completed_toolcall)?;
+            boundary = first.raw_ordinal;
+            index = u64::try_from(first.context_index).map_err(|_| {
+                SpineError::InvalidEvent(
+                    "spine.open grouped toolcall context index overflow".to_string(),
+                )
+            })?;
+        }
         let child = self.parse_stack.next_child_id()?;
         let open_context_source = token_baselines
             .context_tokens
@@ -1196,7 +1567,14 @@ impl SpineRuntime {
             },
             &self.archive(),
         )?;
-        self.append_cached_event(event)?;
+        let events = if let Some(completed_toolcall) = completed_toolcall {
+            let (toolcall_event, segments) = self.completed_toolcall_parts(completed_toolcall)?;
+            staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+            vec![event, toolcall_event]
+        } else {
+            vec![event]
+        };
+        self.append_committed_events_no_marker(events)?;
         self.parse_stack = staged_parse_stack;
         Ok(SpineCommitKind::Open {
             open_request_index: usize::try_from(index).map_err(|_| {
@@ -1210,8 +1588,32 @@ impl SpineRuntime {
         instruction: Option<String>,
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
+        completed_toolcall: Option<CompletedToolCall>,
     ) -> Result<SpineCommitKind, SpineError> {
         let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
+        let mut staged_parse_stack = prepared.staged_parse_stack.clone();
+        let mut events = vec![prepared.close_event.clone()];
+        let toolcall_start = if let Some(completed_toolcall) = completed_toolcall {
+            let toolcall_start =
+                completed_toolcall_first_segment(&completed_toolcall)?.context_index;
+            let completed_toolcall = self.remap_completed_toolcall_context_indices(
+                completed_toolcall,
+                prepared
+                    .suffix_start
+                    .checked_add(prepared.replacement.len())
+                    .ok_or_else(|| {
+                        SpineError::InvalidEvent(
+                            "spine.close toolcall context index overflow".to_string(),
+                        )
+                    })?,
+            )?;
+            let (toolcall_event, segments) = self.completed_toolcall_parts(completed_toolcall)?;
+            staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+            events.push(toolcall_event);
+            Some(toolcall_start)
+        } else {
+            None
+        };
         self.store
             .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
@@ -1220,12 +1622,16 @@ impl SpineRuntime {
             self.ledger.next_event_seq,
             &prepared.mem,
             SpineCommitKindMarker::Close,
+            close_event_boundary(&prepared.close_event)?,
+            u64::try_from(events.len())
+                .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?,
         )?;
-        self.append_committed_events(vec![prepared.close_event], marker)?;
-        self.parse_stack = prepared.staged_parse_stack;
+        self.append_committed_events(events, marker)?;
+        self.parse_stack = staged_parse_stack;
         Ok(SpineCommitKind::Close {
             suffix_start: prepared.suffix_start,
             replacement: prepared.replacement,
+            toolcall_start: toolcall_start.unwrap_or(prepared.suffix_start),
         })
     }
 
@@ -1235,6 +1641,7 @@ impl SpineRuntime {
         instruction: Option<String>,
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
+        completed_toolcall: Option<CompletedToolCall>,
     ) -> Result<SpineCommitKind, SpineError> {
         let mut prepared =
             self.prepare_close_commit(instruction, close_compact, token_baselines)?;
@@ -1274,6 +1681,21 @@ impl SpineRuntime {
             },
             &self.archive(),
         )?;
+        let mut events = vec![prepared.close_event.clone(), open_event];
+        let toolcall_start = if let Some(completed_toolcall) = completed_toolcall {
+            let toolcall_start =
+                completed_toolcall_first_segment(&completed_toolcall)?.context_index;
+            let completed_toolcall =
+                self.remap_completed_toolcall_context_indices(completed_toolcall, open_index)?;
+            let (toolcall_event, segments) = self.completed_toolcall_parts(completed_toolcall)?;
+            prepared
+                .staged_parse_stack
+                .shift(SpineToken::ToolCall { segments }, &self.archive())?;
+            events.push(toolcall_event);
+            Some(toolcall_start)
+        } else {
+            None
+        };
         self.store
             .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
@@ -1282,12 +1704,16 @@ impl SpineRuntime {
             self.ledger.next_event_seq,
             &prepared.mem,
             SpineCommitKindMarker::CloseThenOpen,
+            close_event_boundary(&prepared.close_event)?,
+            u64::try_from(events.len())
+                .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?,
         )?;
-        self.append_committed_events(vec![prepared.close_event, open_event], marker)?;
+        self.append_committed_events(events, marker)?;
         self.parse_stack = prepared.staged_parse_stack;
         Ok(SpineCommitKind::CloseThenOpen {
             suffix_start: prepared.suffix_start,
             replacement: prepared.replacement,
+            toolcall_start: toolcall_start.unwrap_or(prepared.suffix_start),
             open_index,
         })
     }
@@ -1325,6 +1751,19 @@ impl SpineRuntime {
             return Err(SpineError::CompactFailure(format!(
                 "spine.close compact context range starts at {}, expected suffix start {suffix_start} for node {}",
                 close_compact.source_context_range.start, open_meta.id
+            )));
+        }
+        let expected_raw_start = self.open_raw_start(&open_meta.id)?;
+        if close_compact.source_raw_range.start != expected_raw_start {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close compact raw range starts at {}, expected raw start {expected_raw_start} for node {}",
+                close_compact.source_raw_range.start, open_meta.id
+            )));
+        }
+        if close_compact.source_raw_range.end > self.raw_len {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close compact raw range end {} exceeds raw_len {} for node {}",
+                close_compact.source_raw_range.end, self.raw_len, open_meta.id
             )));
         }
         let body = close_compact.body.clone();
@@ -1403,11 +1842,74 @@ impl SpineRuntime {
         }))
     }
 
+    pub(crate) fn pending_tool_request_anchor(
+        &self,
+        call_id: &str,
+    ) -> Result<ToolRequestAnchor, SpineError> {
+        if let Some(anchor) = self.open_requests.get(call_id) {
+            return Ok(ToolRequestAnchor {
+                raw_ordinal: anchor.raw_ordinal,
+                context_index: usize::try_from(anchor.context_index).map_err(|_| {
+                    SpineError::InvalidEvent("spine.open context index overflow".to_string())
+                })?,
+            });
+        }
+        let Some(request) = self.ordinary_tool_requests.get(call_id) else {
+            return Err(SpineError::Operation(format!(
+                "missing tool request anchor for call_id={call_id}"
+            )));
+        };
+        Ok(ToolRequestAnchor {
+            raw_ordinal: request.raw_ordinal,
+            context_index: usize::try_from(request.context_index).map_err(|_| {
+                SpineError::InvalidEvent("tool request context index overflow".to_string())
+            })?,
+        })
+    }
+
+    #[cfg(test)]
+    fn observed_completed_toolcall(
+        &self,
+        call_id: &str,
+    ) -> Result<Option<CompletedToolCall>, SpineError> {
+        let Some(responses) = self.pending_tool_responses.get(call_id) else {
+            return Ok(None);
+        };
+        if responses.is_empty() {
+            return Ok(None);
+        }
+        let request = self.pending_tool_request_anchor(call_id)?;
+        let mut response_context_indices = Vec::with_capacity(responses.len());
+        for response in responses {
+            response_context_indices.push(usize::try_from(response.context_index).map_err(
+                |_| SpineError::InvalidEvent("tool response context index overflow".to_string()),
+            )?);
+        }
+        Ok(Some(CompletedToolCall {
+            call_id: call_id.to_string(),
+            request_call_ids: vec![call_id.to_string()],
+            segments: std::iter::once(CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Request,
+                raw_ordinal: request.raw_ordinal,
+                context_index: request.context_index,
+            })
+            .chain(responses.iter().zip(response_context_indices).map(
+                |(response, context_index)| CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Response,
+                    raw_ordinal: response.raw_ordinal,
+                    context_index,
+                },
+            ))
+            .collect(),
+        }))
+    }
+
     pub(crate) fn build_close_source_plan(
         &self,
         raw_context_items: &[ResponseItem],
         node: &NodeId,
         suffix_start: usize,
+        toolcall_start: usize,
         close_call_id: &str,
     ) -> Result<SpineCompactSourcePlan, SpineError> {
         let open_meta = self.current_close_open_meta()?;
@@ -1435,10 +1937,7 @@ impl SpineRuntime {
             )));
         }
 
-        let close_context_end = raw_context_items
-            .iter()
-            .position(|item| is_current_close_like_carrier(item, close_call_id))
-            .unwrap_or(raw_context_items.len());
+        let close_context_end = toolcall_start;
         if close_context_end < suffix_start {
             return Err(SpineError::Operation(format!(
                 "spine.close request index {close_context_end} precedes suffix start {suffix_start} for node {node} call_id={close_call_id}"
@@ -1449,24 +1948,24 @@ impl SpineRuntime {
                 "spine.close requires non-empty live suffix for node {node} call_id={close_call_id}"
             )));
         }
-        for item in &raw_context_items[close_context_end..] {
-            if !is_current_close_like_carrier(item, close_call_id) {
-                return Err(SpineError::CompactFailure(format!(
-                    "spine.close source plan found non-carrier host history item after close request for node {node} call_id={close_call_id}: {item:?}"
-                )));
-            }
-        }
 
         let suffix_nodes = self.current_open_suffix_nodes()?;
-        let mut entries = Vec::new();
-        for node in suffix_nodes {
-            collect_source_plan_entries_from_node(
-                node,
-                suffix_start,
-                raw_context_items,
-                &mut entries,
-            )?;
+        let visible_refs = project_spine_tree_nodes_visible_items(suffix_nodes, suffix_start)?;
+        let projected_context_end =
+            suffix_start
+                .checked_add(visible_refs.len())
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent(
+                        "spine.close source plan context range overflow".to_string(),
+                    )
+                })?;
+        if projected_context_end != close_context_end {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close h(PS) suffix projects to [{suffix_start}..{projected_context_end}) but source context range is [{suffix_start}..{close_context_end}) for node {node} call_id={close_call_id}"
+            )));
         }
+        let entries =
+            collect_source_plan_entries_from_visible_refs(&visible_refs, raw_context_items)?;
 
         if entries.is_empty() {
             return Err(SpineError::Operation(format!(
@@ -1475,6 +1974,7 @@ impl SpineRuntime {
             )));
         }
 
+        let mut previous_context_index = None;
         for (expected_ordinal, entry) in entries.iter().enumerate() {
             if entry.source_ordinal != expected_ordinal {
                 return Err(SpineError::Invariant(format!(
@@ -1482,18 +1982,13 @@ impl SpineRuntime {
                     entry.source_ordinal
                 )));
             }
-            let expected_context_index =
-                suffix_start.checked_add(expected_ordinal).ok_or_else(|| {
-                    SpineError::InvalidEvent(
-                        "spine.close source plan context index overflow".to_string(),
-                    )
-                })?;
-            if entry.context_index != expected_context_index {
-                return Err(SpineError::CompactFailure(format!(
-                    "spine.close source plan entry ordinal {} has context_index {}, expected {expected_context_index}",
-                    entry.source_ordinal, entry.context_index
-                )));
-            }
+            validate_source_plan_context_index(
+                entry.source_ordinal,
+                entry.context_index,
+                suffix_start,
+                close_context_end,
+                &mut previous_context_index,
+            )?;
             let host_item = raw_context_items.get(entry.context_index).ok_or_else(|| {
                 SpineError::CompactFailure(format!(
                     "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
@@ -1512,19 +2007,28 @@ impl SpineRuntime {
             }
         }
 
-        let source_context_end = suffix_start.checked_add(entries.len()).ok_or_else(|| {
-            SpineError::InvalidEvent("spine.close source plan context range overflow".to_string())
-        })?;
-        if source_context_end != close_context_end {
-            return Err(SpineError::CompactFailure(format!(
-                "spine.close source plan covers context range [{suffix_start}..{source_context_end}), but close request begins at {close_context_end} for node {}",
-                open_meta.id
-            )));
-        }
+        let source_raw_start = self.open_raw_start(&open_meta.id)?;
+        let source_raw_end =
+            entries
+                .iter()
+                .try_fold(source_raw_start, |end, entry| -> Result<u64, SpineError> {
+                    Ok(match &entry.kind {
+                        SpineCompactSourceEntryKind::RawResponseItem { raw_ordinal, .. } => end
+                            .max(raw_ordinal.checked_add(1).ok_or_else(|| {
+                                SpineError::InvalidEvent(
+                                    "spine.close source plan raw ordinal overflow".to_string(),
+                                )
+                            })?),
+                        SpineCompactSourceEntryKind::ChildMemory {
+                            source_raw_range, ..
+                        } => end.max(source_raw_range.end),
+                    })
+                })?;
 
         Ok(SpineCompactSourcePlan {
             node_id: open_meta.id.clone(),
-            source_context_range: suffix_start..source_context_end,
+            source_context_range: suffix_start..close_context_end,
+            source_raw_range: source_raw_start..source_raw_end,
             entries,
         })
     }
@@ -1780,8 +2284,8 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
     ) -> Result<MemRecord, SpineError> {
         let node_id = open_meta.id.clone();
-        let raw_start = self.open_raw_start(&node_id)?;
-        let end = self.raw_len;
+        let raw_start = close_compact.source_raw_range.start;
+        let end = close_compact.source_raw_range.end;
         let compact_id = format!(
             "mem-{}-{}-{}",
             node_id.as_path().replace('.', "-"),
@@ -1872,7 +2376,12 @@ impl SpineRuntime {
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        let (spine_control_call_ids, function_call_ids) = raw_items
+        let (
+            spine_control_call_ids,
+            spine_tree_call_ids,
+            tool_request_call_ids,
+            tool_response_call_ids,
+        ) = raw_items
             .iter()
             .filter_map(|item| match item.as_ref()? {
                 ResponseItem::FunctionCall {
@@ -1880,22 +2389,73 @@ impl SpineRuntime {
                     namespace: Some(namespace),
                     name,
                     ..
-                } if namespace == SPINE_NAMESPACE && is_spine_control_tool_name(name) => {
-                    Some((call_id.clone(), true))
+                } if namespace == SPINE_NAMESPACE && is_spine_parser_control_tool_name(name) => {
+                    Some((call_id.clone(), ToolRawItemKind::SpineControlRequest))
                 }
-                ResponseItem::FunctionCall { call_id, .. } => Some((call_id.clone(), false)),
-                _ => None,
+                ResponseItem::FunctionCall {
+                    call_id,
+                    namespace: Some(namespace),
+                    name,
+                    ..
+                } if namespace == SPINE_NAMESPACE && name == SPINE_TOOL_TREE => {
+                    Some((call_id.clone(), ToolRawItemKind::SpineTreeRequest))
+                }
+                item => tool_request_call_id(item)
+                    .map(|call_id| (call_id.to_string(), ToolRawItemKind::Request))
+                    .or_else(|| {
+                        tool_response_call_id(item)
+                            .map(|call_id| (call_id.to_string(), ToolRawItemKind::Response))
+                    }),
             })
             .fold(
-                (BTreeSet::new(), BTreeSet::new()),
-                |(mut spine_call_ids, mut all_call_ids), (call_id, is_spine)| {
-                    if is_spine {
-                        spine_call_ids.insert(call_id.clone());
+                (
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+                |(
+                    mut spine_call_ids,
+                    mut spine_tree_call_ids,
+                    mut request_call_ids,
+                    mut response_call_ids,
+                ),
+                 (call_id, kind)| {
+                    match kind {
+                        ToolRawItemKind::SpineControlRequest => {
+                            spine_call_ids.insert(call_id.clone());
+                            request_call_ids.insert(call_id);
+                        }
+                        ToolRawItemKind::SpineTreeRequest => {
+                            spine_tree_call_ids.insert(call_id.clone());
+                            request_call_ids.insert(call_id);
+                        }
+                        ToolRawItemKind::Request => {
+                            request_call_ids.insert(call_id);
+                        }
+                        ToolRawItemKind::Response => {
+                            response_call_ids.insert(call_id);
+                        }
                     }
-                    all_call_ids.insert(call_id);
-                    (spine_call_ids, all_call_ids)
+                    (
+                        spine_call_ids,
+                        spine_tree_call_ids,
+                        request_call_ids,
+                        response_call_ids,
+                    )
                 },
             );
+        let rejected_spine_control_call_ids = raw_items
+            .iter()
+            .filter_map(|item| spine_control_multi_call_rejection_call_id(item.as_ref()?))
+            .filter(|call_id| spine_control_call_ids.contains(*call_id))
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+        let completed_tool_call_ids = tool_request_call_ids
+            .intersection(&tool_response_call_ids)
+            .filter(|call_id| !rejected_spine_control_call_ids.contains(*call_id))
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let mut covered = vec![false; raw_items.len()];
         for event in &self.ledger.events {
             if !event.allowed_by(RawMask::new(&self.raw_live))? {
@@ -1904,6 +2464,11 @@ impl SpineRuntime {
             match &event.event {
                 SpineLedgerEvent::Msg { raw_ordinal, .. } => {
                     mark_raw_covered(&mut covered, *raw_ordinal)?;
+                }
+                SpineLedgerEvent::ToolCall { segments } => {
+                    for segment in segments {
+                        mark_raw_covered(&mut covered, segment.raw_ordinal)?;
+                    }
                 }
                 SpineLedgerEvent::Open {
                     child,
@@ -1926,7 +2491,12 @@ impl SpineRuntime {
         }
         for (index, item) in raw_items.iter().enumerate() {
             if item.as_ref().is_some_and(|item| {
-                raw_item_requires_spine_coverage(item, &spine_control_call_ids, &function_call_ids)
+                raw_item_requires_spine_coverage(
+                    item,
+                    &spine_control_call_ids,
+                    &spine_tree_call_ids,
+                    &completed_tool_call_ids,
+                )
             }) && !covered[index]
             {
                 return Err(SpineError::SidecarCorruption(format!(
@@ -2176,10 +2746,85 @@ fn mark_raw_prefix_covered(covered: &mut [bool], boundary: u64) -> Result<(), Sp
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum ToolRawItemKind {
+    SpineControlRequest,
+    SpineTreeRequest,
+    Request,
+    Response,
+}
+
+fn completed_toolcall_first_segment(
+    toolcall: &CompletedToolCall,
+) -> Result<&CompletedToolCallSegment, SpineError> {
+    toolcall.segments.first().ok_or_else(|| {
+        SpineError::InvalidEvent("completed toolcall must contain at least one segment".to_string())
+    })
+}
+
+fn validate_completed_toolcall(toolcall: &CompletedToolCall) -> Result<(), SpineError> {
+    let segments = &toolcall.segments;
+    if segments.is_empty() {
+        return Err(SpineError::InvalidEvent(
+            "completed toolcall must contain at least one segment".to_string(),
+        ));
+    }
+    let mut has_request = false;
+    let mut has_response = false;
+    let mut previous_context_index = None;
+    let mut previous_raw_ordinal = None;
+    for (index, segment) in segments.iter().enumerate() {
+        match segment.kind {
+            ToolCallSegmentKind::Request => has_request = true,
+            ToolCallSegmentKind::Response => has_response = true,
+        }
+        if let Some(previous) = previous_context_index {
+            if segment.context_index <= previous {
+                return Err(SpineError::InvalidEvent(format!(
+                    "completed toolcall segment {index} context_index {} is not strictly after previous context_index {previous}",
+                    segment.context_index
+                )));
+            }
+        }
+        if let Some(previous) = previous_raw_ordinal {
+            if segment.raw_ordinal <= previous {
+                return Err(SpineError::InvalidEvent(format!(
+                    "completed toolcall segment {index} raw_ordinal {} is not strictly after previous raw_ordinal {previous}",
+                    segment.raw_ordinal
+                )));
+            }
+        }
+        previous_context_index = Some(segment.context_index);
+        previous_raw_ordinal = Some(segment.raw_ordinal);
+    }
+    if !has_request {
+        return Err(SpineError::InvalidEvent(
+            "completed toolcall must include at least one request segment".to_string(),
+        ));
+    }
+    if !has_response {
+        return Err(SpineError::InvalidEvent(
+            "completed toolcall must include at least one response segment".to_string(),
+        ));
+    }
+    let request_segment_count = segments
+        .iter()
+        .filter(|segment| segment.kind == ToolCallSegmentKind::Request)
+        .count();
+    if request_segment_count != toolcall.request_call_ids.len() {
+        return Err(SpineError::InvalidEvent(format!(
+            "completed toolcall request segment count {request_segment_count} does not match request call id count {}",
+            toolcall.request_call_ids.len()
+        )));
+    }
+    Ok(())
+}
+
 fn raw_item_requires_spine_coverage(
     item: &ResponseItem,
-    spine_control_call_ids: &BTreeSet<String>,
-    function_call_ids: &BTreeSet<String>,
+    _spine_control_call_ids: &BTreeSet<String>,
+    _spine_tree_call_ids: &BTreeSet<String>,
+    completed_tool_call_ids: &BTreeSet<String>,
 ) -> bool {
     match item {
         ResponseItem::FunctionCall {
@@ -2187,14 +2832,65 @@ fn raw_item_requires_spine_coverage(
             namespace: Some(namespace),
             name,
             ..
-        } if namespace == SPINE_NAMESPACE && is_spine_control_tool_name(name) => {
-            !spine_control_call_ids.contains(call_id)
+        } if namespace == SPINE_NAMESPACE && is_spine_parser_control_tool_name(name) => {
+            completed_tool_call_ids.contains(call_id)
         }
-        ResponseItem::FunctionCallOutput { call_id, .. } => {
-            function_call_ids.contains(call_id) && !spine_control_call_ids.contains(call_id)
+        ResponseItem::FunctionCall {
+            call_id,
+            namespace: Some(namespace),
+            name,
+            ..
+        } if namespace == SPINE_NAMESPACE && name == SPINE_TOOL_TREE => {
+            completed_tool_call_ids.contains(call_id)
         }
         ResponseItem::Other | ResponseItem::CompactionTrigger => false,
-        _ => true,
+        item => {
+            if let Some(call_id) = tool_response_call_id(item) {
+                return completed_tool_call_ids.contains(call_id);
+            }
+            if let Some(call_id) = tool_request_call_id(item) {
+                return completed_tool_call_ids.contains(call_id);
+            }
+            true
+        }
+    }
+}
+
+fn spine_control_multi_call_rejection_call_id(item: &ResponseItem) -> Option<&str> {
+    let ResponseItem::FunctionCallOutput { call_id, output } = item else {
+        return None;
+    };
+    // `success` is internal metadata and is not persisted in rollout JSON, so
+    // replay commonly sees `None` for this host-generated rejection output.
+    if output.success == Some(true) {
+        return None;
+    }
+    let text = output.body.to_text()?;
+    text.starts_with(SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX)
+        .then_some(call_id.as_str())
+}
+
+fn tool_request_call_id(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCall { call_id, .. }
+        | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.as_str()),
+        ResponseItem::ToolSearchCall {
+            call_id: Some(call_id),
+            ..
+        } => Some(call_id.as_str()),
+        _ => None,
+    }
+}
+
+fn tool_response_call_id(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, .. }
+        | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
+        ResponseItem::ToolSearchOutput {
+            call_id: Some(call_id),
+            ..
+        } => Some(call_id.as_str()),
+        _ => None,
     }
 }
 
@@ -2207,123 +2903,69 @@ impl SpineCompactSourcePlanEntry {
     }
 }
 
-fn collect_source_plan_entries_from_node(
-    node: &SpineTreeNode,
-    suffix_start: usize,
+fn collect_source_plan_entries_from_visible_refs(
+    visible_refs: &[crate::spine::render::VisibleItemRef],
     raw_context_items: &[ResponseItem],
-    entries: &mut Vec<SpineCompactSourcePlanEntry>,
-) -> Result<(), SpineError> {
-    match node {
-        SpineTreeNode::MsgAsLeafNode { msg, from_user } => match msg {
-            SegRef::ResponseItem {
+) -> Result<Vec<SpineCompactSourcePlanEntry>, SpineError> {
+    let mut entries = Vec::with_capacity(visible_refs.len());
+    for visible_ref in visible_refs {
+        match &visible_ref.source {
+            VisibleItemSource::RawResponseItem {
                 raw_ordinal,
-                context_index,
-            } => {
-                let context_index = *context_index;
-                let source_ordinal = context_index.checked_sub(suffix_start).ok_or_else(|| {
-                    SpineError::CompactFailure(format!(
-                        "spine.close source plan raw item context_index {context_index} precedes suffix start {suffix_start}"
-                    ))
-                })?;
-                let item = raw_context_items
-                    .get(context_index)
-                    .cloned()
-                    .ok_or_else(|| {
-                        SpineError::CompactFailure(format!(
-                            "spine.close source plan raw item context_index {context_index} exceeds host history length {}",
-                            raw_context_items.len()
-                        ))
-                    })?;
-                let source_hash = hash_response_items(std::slice::from_ref(&item))?;
-                entries.push(SpineCompactSourcePlanEntry {
-                    context_index,
-                    source_ordinal,
-                    source_hash,
-                    kind: SpineCompactSourceEntryKind::RawResponseItem {
-                        item,
-                        raw_ordinal: *raw_ordinal,
-                        from_user: *from_user,
-                    },
-                });
-                Ok(())
-            }
-            SegRef::Memory { memory_id, .. } => Err(SpineError::CompactFailure(format!(
-                "spine.close source plan cannot trust SegRef::Memory {memory_id} without MemoryRef body_hash provenance"
-            ))),
-        },
-        SpineTreeNode::ToolCallAsLeafNode {
-            tool_req,
-            tool_resps,
-        } => {
-            collect_source_plan_entry_from_seg(
-                tool_req,
-                false,
-                suffix_start,
+                from_user,
+            } => collect_source_plan_entry_from_response_item(
+                *raw_ordinal,
+                visible_ref.context_index,
+                *from_user,
                 raw_context_items,
-                entries,
-            )?;
-            for tool_resp in tool_resps {
-                collect_source_plan_entry_from_seg(
-                    tool_resp,
+                &mut entries,
+            )?,
+            VisibleItemSource::ToolCallSegment { raw_ordinal, kind } => {
+                let _ = kind;
+                collect_source_plan_entry_from_response_item(
+                    *raw_ordinal,
+                    visible_ref.context_index,
                     false,
-                    suffix_start,
                     raw_context_items,
-                    entries,
+                    &mut entries,
                 )?;
             }
-            Ok(())
-        }
-        SpineTreeNode::SpineTree { memory, .. } => {
-            let context_index = memory.source_context_range.start;
-            let source_ordinal = context_index.checked_sub(suffix_start).ok_or_else(|| {
-                SpineError::CompactFailure(format!(
-                    "spine.close source plan child memory context_index {context_index} precedes suffix start {suffix_start}"
-                ))
-            })?;
-            let body = read_memory_ref_body(memory)?;
-            let visible_item = memory_response_item(&body);
-            let source_hash = hash_response_items(std::slice::from_ref(&visible_item))?;
-            entries.push(SpineCompactSourcePlanEntry {
-                context_index,
-                source_ordinal,
-                source_hash,
-                kind: SpineCompactSourceEntryKind::ChildMemory {
-                    node_id: memory.node_id.clone(),
-                    compact_id: memory.compact_id.clone(),
-                    body,
-                    body_hash: memory.body_hash.clone(),
-                },
-            });
-            Ok(())
+            VisibleItemSource::MemoryRef { memory, .. } => {
+                let source_ordinal = entries.len();
+                let body = read_memory_ref_body(memory)?;
+                let visible_item = memory_response_item(&body);
+                let source_hash = hash_response_items(std::slice::from_ref(&visible_item))?;
+                entries.push(SpineCompactSourcePlanEntry {
+                    context_index: visible_ref.context_index,
+                    source_ordinal,
+                    source_hash,
+                    kind: SpineCompactSourceEntryKind::ChildMemory {
+                        node_id: memory.node_id.clone(),
+                        compact_id: memory.compact_id.clone(),
+                        source_raw_range: memory.source_raw_range.clone(),
+                        body,
+                        body_hash: memory.body_hash.clone(),
+                    },
+                });
+            }
+            VisibleItemSource::MemorySeg { memory_id, .. } => {
+                return Err(SpineError::CompactFailure(format!(
+                    "spine.close source plan cannot trust SegRef::Memory {memory_id} without MemoryRef body_hash provenance"
+                )));
+            }
         }
     }
+    Ok(entries)
 }
 
-fn collect_source_plan_entry_from_seg(
-    seg: &SegRef,
+fn collect_source_plan_entry_from_response_item(
+    raw_ordinal: u64,
+    context_index: usize,
     from_user: bool,
-    suffix_start: usize,
     raw_context_items: &[ResponseItem],
     entries: &mut Vec<SpineCompactSourcePlanEntry>,
 ) -> Result<(), SpineError> {
-    let SegRef::ResponseItem {
-        raw_ordinal,
-        context_index,
-    } = seg
-    else {
-        let SegRef::Memory { memory_id, .. } = seg else {
-            unreachable!("SegRef enum is exhaustive")
-        };
-        return Err(SpineError::CompactFailure(format!(
-            "spine.close source plan cannot trust SegRef::Memory {memory_id} without MemoryRef body_hash provenance"
-        )));
-    };
-    let context_index = *context_index;
-    let source_ordinal = context_index.checked_sub(suffix_start).ok_or_else(|| {
-        SpineError::CompactFailure(format!(
-            "spine.close source plan raw item context_index {context_index} precedes suffix start {suffix_start}"
-        ))
-    })?;
+    let source_ordinal = entries.len();
     let item = raw_context_items
         .get(context_index)
         .cloned()
@@ -2340,44 +2982,62 @@ fn collect_source_plan_entry_from_seg(
         source_hash,
         kind: SpineCompactSourceEntryKind::RawResponseItem {
             item,
-            raw_ordinal: *raw_ordinal,
+            raw_ordinal,
             from_user,
         },
     });
     Ok(())
 }
 
-fn is_current_close_like_carrier(item: &ResponseItem, close_call_id: &str) -> bool {
-    matches!(
-        item,
-        ResponseItem::FunctionCall {
-            call_id,
-            namespace,
-            name,
-            ..
-        } if call_id == close_call_id
-            && namespace.as_deref() == Some(SPINE_NAMESPACE)
-            && is_spine_close_like_tool_name(name)
-    ) || matches!(
-        item,
-        ResponseItem::FunctionCallOutput { call_id, .. } if call_id == close_call_id
-    )
+fn validate_source_plan_context_index(
+    source_ordinal: usize,
+    context_index: usize,
+    suffix_start: usize,
+    source_context_end: usize,
+    previous_context_index: &mut Option<usize>,
+) -> Result<(), SpineError> {
+    if context_index < suffix_start {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} precedes suffix start {suffix_start}"
+        )));
+    }
+    if context_index >= source_context_end {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is outside source context range [{suffix_start}..{source_context_end})"
+        )));
+    }
+    if let Some(previous) = *previous_context_index {
+        if context_index <= previous {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is not strictly after previous context_index {previous}"
+            )));
+        }
+    }
+    *previous_context_index = Some(context_index);
+    Ok(())
+}
+
+fn close_event_boundary(event: &SpineLedgerEvent) -> Result<u64, SpineError> {
+    match event {
+        SpineLedgerEvent::Close { boundary, .. } => Ok(*boundary),
+        _ => Err(SpineError::Invariant(
+            "close commit marker requested for non-close event".to_string(),
+        )),
+    }
 }
 
 fn close_commit_marker(
     seq: u64,
     mem: &MemRecord,
     kind: SpineCommitKindMarker,
+    raw_boundary: u64,
+    width: u64,
 ) -> Result<SpineCommitMarker, SpineError> {
-    let width = match kind {
-        SpineCommitKindMarker::Close => 1,
-        SpineCommitKindMarker::CloseThenOpen => 2,
-        SpineCommitKindMarker::RootCompact => {
-            return Err(SpineError::Invariant(
-                "root compact marker requested from close marker builder".to_string(),
-            ));
-        }
-    };
+    if kind == SpineCommitKindMarker::RootCompact {
+        return Err(SpineError::Invariant(
+            "root compact marker requested from close marker builder".to_string(),
+        ));
+    }
     Ok(SpineCommitMarker {
         version: COMMIT_MARKER_VERSION,
         op_id: format!("{}:{}", commit_marker_kind_label(kind), mem.compact_id),
@@ -2386,7 +3046,7 @@ fn close_commit_marker(
         token_seq_end: seq.checked_add(width).ok_or_else(|| {
             SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
         })?,
-        raw_boundary: mem.raw_end,
+        raw_boundary,
         raw_live_hash: None,
         memory_refs: vec![commit_memory_ref(mem)],
     })
@@ -2454,13 +3114,11 @@ pub(crate) fn is_user_message(item: &ResponseItem) -> bool {
     matches!(item, ResponseItem::Message { role, .. } if role == "user")
 }
 
-pub(crate) fn is_spine_control_tool_name(name: &str) -> bool {
-    matches!(
-        name,
-        SPINE_TOOL_TREE | SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT
-    )
+fn is_spine_parser_control_tool_name(name: &str) -> bool {
+    matches!(name, SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT)
 }
 
+#[cfg(test)]
 pub(crate) fn is_spine_close_like_tool_name(name: &str) -> bool {
     matches!(name, SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT)
 }

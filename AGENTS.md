@@ -1,5 +1,21 @@
 # Rust/codex-rs
 
+## Project Layout Quick Reference
+
+- Outer repo: `/data/swe/FramePilot/cachetree`
+- Spine formal authority: `/data/swe/FramePilot/cachetree/doc/FormularDef.md`
+- Inner Codex repo/submodule:
+  `/data/swe/FramePilot/cachetree/scaffold/codex-home/codex`
+- Rust workspace:
+  `/data/swe/FramePilot/cachetree/scaffold/codex-home/codex/codex-rs`
+- Codex local docs: `codex-rs/docs/`; these are not the Spine semantic
+  authority.
+
+When working from `codex-rs`, do not infer that a missing local
+`doc/FormularDef.md` or `docs/FormularDef.md` means the formal definition is
+absent.
+It lives in the outer CacheTree repo at the path above.
+
 ## Local CacheTree Spine Boundary
 
 This checkout is the inner Codex git repository/submodule for outer CacheTree:
@@ -12,7 +28,7 @@ Commit and push this repo separately, then update the outer submodule pointer
 when needed. Current Spine semantics are defined only by:
 
 ```text
-/data/swe/FramePilot/cachetree/doc/FormalDef.md
+/data/swe/FramePilot/cachetree/doc/FormularDef.md
 ```
 
 Older Open/Close, mini-spine, SpineJIT, and `taskctx` designs are not

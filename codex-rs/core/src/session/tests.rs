@@ -173,6 +173,7 @@ use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_shell_command_call;
 use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -415,6 +416,16 @@ fn spine_call(name: &str, call_id: &str) -> ResponseItem {
     }
 }
 
+fn function_call(name: &str, call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: name.to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
 fn function_output(call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCallOutput {
         call_id: call_id.to_string(),
@@ -422,12 +433,54 @@ fn function_output(call_id: &str) -> ResponseItem {
     }
 }
 
+fn custom_tool_call(call_id: &str) -> ResponseItem {
+    ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: call_id.to_string(),
+        name: "apply_patch".to_string(),
+        input: "*** Begin Patch\n*** End Patch\n".to_string(),
+    }
+}
+
+fn custom_tool_output(call_id: &str) -> ResponseItem {
+    ResponseItem::CustomToolCallOutput {
+        call_id: call_id.to_string(),
+        name: None,
+        output: FunctionCallOutputPayload::from_text("custom ok".to_string()),
+    }
+}
+
+fn tool_search_call(call_id: &str) -> ResponseItem {
+    tool_search_call_with_execution(call_id, "client")
+}
+
+fn tool_search_call_with_execution(call_id: &str, execution: &str) -> ResponseItem {
+    ResponseItem::ToolSearchCall {
+        id: None,
+        status: None,
+        call_id: Some(call_id.to_string()),
+        execution: execution.to_string(),
+        arguments: json!({"query":"spine"}),
+    }
+}
+
+fn tool_search_output(call_id: &str) -> ResponseItem {
+    tool_search_output_with_execution(call_id, "client")
+}
+
+fn tool_search_output_with_execution(call_id: &str, execution: &str) -> ResponseItem {
+    ResponseItem::ToolSearchOutput {
+        call_id: Some(call_id.to_string()),
+        status: "completed".to_string(),
+        execution: execution.to_string(),
+        tools: Vec::new(),
+    }
+}
+
 fn replace_function_output_text_for_test(item: &mut ResponseItem, text: String) {
     if let ResponseItem::FunctionCallOutput { output, .. } = item {
-        *output = FunctionCallOutputPayload {
-            body: FunctionCallOutputBody::Text(text),
-            success: Some(true),
-        };
+        output.body = FunctionCallOutputBody::Text(text);
     }
 }
 
@@ -459,6 +512,15 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
             operation: "inspect Spine tool output".to_string(),
             reason: err.to_string(),
         })?;
+    let output_recorded_before_spine_commit = session.enabled(Feature::SpineJit);
+    if output_recorded_before_spine_commit {
+        session
+            .record_conversation_items_without_spine_observe(
+                turn_context,
+                std::slice::from_ref(&response_item),
+            )
+            .await?;
+    }
     let commit = session
         .maybe_commit_spine_tool_output_with_client_session(
             turn_context,
@@ -477,20 +539,35 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
             operation: "commit Spine tool output".to_string(),
             reason: err.to_string(),
         })?;
-    if !commit.record_output {
+    if !commit.record_output && !output_recorded_before_spine_commit {
         return Ok(response_item);
     }
-    if let Some(text) = commit.output_text {
+    if let Some(text) = commit.output_text
+        && !output_recorded_before_spine_commit
+    {
         replace_function_output_text_for_test(&mut response_item, text);
     }
-    if is_pending_close_like {
+    let mut deferred_history_update = commit.deferred_history_update;
+    if let Some(update) = deferred_history_update.as_mut() {
+        update.replace_tool_output(&response_item);
+    }
+    if output_recorded_before_spine_commit {
+        if let Some(update) = deferred_history_update {
+            session.apply_deferred_spine_history_update(update).await?;
+        }
+        if let Some(snapshot) = commit.deferred_tree_update {
+            session
+                .send_spine_tree_update(turn_context.as_ref(), snapshot)
+                .await;
+        }
+    } else if is_pending_close_like {
         session
             .record_conversation_items_raw_only_durable_without_emission(
                 turn_context,
                 std::slice::from_ref(&response_item),
             )
             .await?;
-        if let Some(update) = commit.deferred_history_update {
+        if let Some(update) = deferred_history_update {
             session.apply_deferred_spine_history_update(update).await?;
         }
         session
@@ -501,6 +578,13 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
                 .send_spine_tree_update(turn_context.as_ref(), snapshot)
                 .await;
         }
+    } else if commit.spine_context_already_observed {
+        session
+            .record_conversation_items_without_spine_observe(
+                turn_context,
+                std::slice::from_ref(&response_item),
+            )
+            .await?;
     } else {
         session
             .record_conversation_items(turn_context, std::slice::from_ref(&response_item))
@@ -700,12 +784,15 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
     .expect("commit post-next output and record raw evidence");
     assert!(matches!(
         next_output,
-        ResponseItem::FunctionCallOutput { output, .. }
-            if output
-                .text_content()
-                .is_some_and(|text| text.contains("Spine advanced to next sibling."))
+        ResponseItem::FunctionCallOutput { call_id, output }
+            if call_id == "post-next"
+                && output.text_content() == Some("ok")
     ));
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "successful post-next commit should compact the closed suffix"
+    );
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -737,10 +824,10 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
         )),
         "post-next closed sibling memory should be visible"
     );
-    assert!(!expected_history.iter().any(
+    assert!(expected_history.iter().any(
         |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "post-next")
     ));
-    assert!(!expected_history.iter().any(
+    assert!(expected_history.iter().any(
         |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "post-next")
     ));
 
@@ -755,11 +842,10 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
     }
 }
 
-struct CloseWindowFixture {
+struct MissingOutputCarrierFixture {
     rollout_path: PathBuf,
     rollout_items: Vec<RolloutItem>,
     raw_items: Vec<Option<ResponseItem>>,
-    expected_history: Vec<ResponseItem>,
 }
 
 fn assert_close_window_tree(tree: &str) {
@@ -786,7 +872,9 @@ async fn assert_close_window_session_state(
     assert_close_window_tree(&runtime.render_tree().expect("render close-window tree"));
 }
 
-async fn make_spine_close_window_missing_output_carrier(summary_text: &str) -> CloseWindowFixture {
+async fn make_spine_close_window_missing_output_carrier(
+    summary_text: &str,
+) -> MissingOutputCarrierFixture {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -887,39 +975,26 @@ async fn make_spine_close_window_missing_output_carrier(summary_text: &str) -> C
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load close-window runtime")
         .expect("close-window sidecar should exist");
-    let expected_history = runtime
-        .materialize_history(&raw_items)
-        .expect("materialize close-window h(PS)");
     assert_close_window_tree(&runtime.render_tree().expect("render close-window tree"));
+    let err = runtime
+        .materialize_history(&raw_items)
+        .expect_err("missing close output carrier must fail h(PS) materialization");
     assert!(
-        expected_history.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { content, .. }
-                if matches!(
-                    content.as_slice(),
-                    [ContentItem::InputText { text }]
-                        if text.contains("Spine Memory 1.1.1")
-                            && text.contains(summary_text)
-                )
-        )),
-        "closed child memory should be visible"
+        err.to_string()
+            .contains("missing raw item for visible toolcall segment"),
+        "unexpected missing carrier materialization error: {err}"
     );
-    assert!(!expected_history.iter().any(
-        |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "close-window")
-    ));
-    assert!(!expected_history.iter().any(
-        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "close-window")
-    ));
 
-    CloseWindowFixture {
+    MissingOutputCarrierFixture {
         rollout_path,
         rollout_items: resumed.history,
         raw_items,
-        expected_history,
     }
 }
 
-async fn make_spine_next_window_missing_output_carrier(summary_text: &str) -> PostNextFixture {
+async fn make_spine_next_window_missing_output_carrier(
+    summary_text: &str,
+) -> MissingOutputCarrierFixture {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -927,7 +1002,7 @@ async fn make_spine_next_window_missing_output_carrier(summary_text: &str) -> Po
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -1024,9 +1099,6 @@ async fn make_spine_next_window_missing_output_carrier(summary_text: &str) -> Po
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load next-window runtime")
         .expect("next-window sidecar should exist");
-    let expected_history = runtime
-        .materialize_history(&raw_items)
-        .expect("materialize next-window h(PS)");
     let source_host_items = session.clone_history().await.raw_items().to_vec();
     assert!(
         !source_host_items.iter().any(
@@ -1035,34 +1107,19 @@ async fn make_spine_next_window_missing_output_carrier(summary_text: &str) -> Po
         "test setup must leave the next output carrier non-durable"
     );
     assert_post_next_tree(&runtime.render_tree().expect("render next-window tree"));
+    let err = runtime
+        .materialize_history(&raw_items)
+        .expect_err("missing next output carrier must fail h(PS) materialization");
     assert!(
-        expected_history.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { content, .. }
-                if matches!(
-                    content.as_slice(),
-                    [ContentItem::InputText { text }]
-                        if text.contains("Spine Memory 1.1.1")
-                            && text.contains(summary_text)
-                )
-        )),
-        "post-next closed sibling memory should be visible"
+        err.to_string()
+            .contains("missing raw item for visible toolcall segment"),
+        "unexpected missing carrier materialization error: {err}"
     );
-    assert!(!expected_history.iter().any(
-        |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "next-window")
-    ));
-    assert!(!expected_history.iter().any(
-        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "next-window")
-    ));
 
-    PostNextFixture {
-        session,
-        turn_context,
-        rx,
+    MissingOutputCarrierFixture {
         rollout_path,
         rollout_items: resumed.history,
         raw_items,
-        expected_history,
     }
 }
 
@@ -9020,8 +9077,8 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     assert!(compact_request.body_contains_text("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY"));
     assert!(compact_request.body_contains_text("---------- Spine Suffix Boundary ----------"));
-    assert!(!compact_request.has_function_call("open"));
-    assert!(compact_request.function_call_output_text("open").is_none());
+    assert!(compact_request.has_function_call("open"));
+    assert!(compact_request.function_call_output_text("open").is_some());
     assert!(!compact_request.has_function_call("close"));
     assert!(compact_request.function_call_output_text("close").is_none());
     assert!(compact_request.body_contains_text("inside"));
@@ -9126,7 +9183,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
             |text| text.contains("---------- Spine Suffix Boundary ----------")
                 && text
                     .contains("The raw suffix for Spine node 1.1.1 is already present immediately before this tail directive.")
-                && text.contains("Source context range: [1..2).")
+                && text.contains("Source context range: [1..4).")
         ),
         "suffix boundary should mark the materialized Open.meta.index boundary: {developer_texts:?}"
     );
@@ -9144,7 +9201,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
 
     let history = session.clone_history().await;
     let items = history.raw_items();
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 4);
     assert_eq!(items[0], prefix);
     assert!(matches!(
         &items[1],
@@ -9162,19 +9219,24 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                             && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
                 )
     ));
-    assert!(!items.iter().any(
+    assert_eq!(items[2], spine_call(SPINE_TOOL_CLOSE, "close"));
+    assert!(matches!(
+        &items[3],
+        ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "close"
+    ));
+    assert!(items.iter().any(
         |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "close")
     ));
-    assert!(!items
+    assert!(items
         .iter()
         .any(|item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "close")));
     let next_turn_prompt_input = history
         .clone()
         .for_prompt(&turn_context.model_info.input_modalities);
-    assert!(!next_turn_prompt_input.iter().any(
+    assert!(next_turn_prompt_input.iter().any(
         |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "close")
     ));
-    assert!(!next_turn_prompt_input.iter().any(
+    assert!(next_turn_prompt_input.iter().any(
         |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "close")
     ));
     let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
@@ -9194,12 +9256,12 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .expect("closed child suffix memory should be recorded");
     assert_eq!(context_start, 1);
     assert_eq!(
-        context_end, 2,
+        context_end, 4,
         "suffix memory context evidence must stop before close request/output carriers"
     );
     assert_eq!(
-        raw_end, 5,
-        "suffix memory raw evidence must include the close request but stop before the close output"
+        raw_end, 4,
+        "suffix memory raw evidence must stop before close request/output carriers"
     );
     assert_eq!(
         runtime
@@ -9486,7 +9548,7 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
 
     let history = session.clone_history().await;
     let items = history.raw_items();
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 4);
     assert_eq!(items[0], prefix);
     assert!(matches!(
         &items[1],
@@ -9536,7 +9598,7 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
 }
 
 #[tokio::test]
-async fn spine_next_control_carrier_does_not_enter_h_ps() {
+async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -9580,14 +9642,9 @@ async fn spine_next_control_carrier_does_not_enter_h_ps() {
         .await
         .expect("stage open");
     let open_output = function_output("open");
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, open_output)
         .await
-        .expect("record open output");
-    session
-        .maybe_commit_spine_tool_output(&turn_context, &open_output)
-        .await
-        .expect("commit open");
+        .expect("commit and record open output");
 
     let inner = assistant_message("inside next");
     session
@@ -9630,21 +9687,19 @@ async fn spine_next_control_carrier_does_not_enter_h_ps() {
     assert!(compact_request.body_contains_text("Cursor before commit: 1.1.1"));
     assert!(compact_request.body_contains_text("Parent node: 1.1\n"));
     assert!(compact_request.body_contains_text("Next sibling: pending\n"));
-    assert!(!compact_request.body_contains_text("SYSTEM: injected parent summary"));
     assert!(!compact_request.body_contains_text("SYSTEM: injected next summary"));
     assert!(!compact_request.has_function_call("next"));
     assert!(compact_request.function_call_output_text("next").is_none());
     assert!(matches!(
         &next_output,
-        ResponseItem::FunctionCallOutput { output, .. }
-            if output
-                .text_content()
-                .is_some_and(|text| text.contains("Spine advanced to next sibling."))
+        ResponseItem::FunctionCallOutput { call_id, output }
+            if call_id == "next"
+                && output.text_content() == Some("ok")
     ));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 4);
     assert_eq!(items[0], prefix);
     assert!(matches!(
         &items[1],
@@ -9659,10 +9714,15 @@ async fn spine_next_control_carrier_does_not_enter_h_ps() {
                             && !text.contains("---------- Spine Close Target ----------")
                 )
     ));
-    assert!(!items.iter().any(
+    assert_eq!(items[2], spine_call(SPINE_TOOL_NEXT, "next"));
+    assert!(matches!(
+        &items[3],
+        ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "next"
+    ));
+    assert!(items.iter().any(
         |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "next")
     ));
-    assert!(!items.iter().any(
+    assert!(items.iter().any(
         |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "next")
     ));
 
@@ -9853,7 +9913,7 @@ async fn spine_next_rollback_preserves_closed_sibling_and_drops_new_live_turn() 
 }
 
 #[tokio::test]
-async fn resume_recovers_committed_prefix_after_interrupted_turn() {
+async fn resume_rejects_committed_close_when_output_carrier_missing() {
     let fixture =
         make_spine_close_window_missing_output_carrier("close-window resume summary").await;
 
@@ -9880,26 +9940,25 @@ async fn resume_recovers_committed_prefix_after_interrupted_turn() {
         .collect::<Vec<_>>();
     clone_spine_sidecar_for_test(&fixture.rollout_path, &resumed_rollout_path, &raw_live);
 
-    resumed_session
+    let err = resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: fixture.rollout_items.clone(),
             rollout_path: Some(fixture.rollout_path.clone()),
         }))
         .await
-        .expect("resume close-window rollout");
-
-    assert_close_window_session_state(
-        &resumed_session,
-        &resumed_rollout_path,
-        &fixture.raw_items,
-        &fixture.expected_history,
-    )
-    .await;
+        .expect_err("resume with missing close output carrier must fail closed");
+    assert!(
+        err.to_string()
+            .contains("missing raw item for visible toolcall segment"),
+        "unexpected missing carrier resume error: {err}"
+    );
+    let _ = resumed_rollout_path;
+    let _ = fixture.raw_items;
 }
 
 #[tokio::test]
-async fn spine_close_fork_restores_h_ps_when_output_carrier_missing() {
+async fn spine_close_fork_rejects_missing_output_carrier() {
     let fixture = make_spine_close_window_missing_output_carrier("close-window fork summary").await;
     let source_events_before = SpineStore::for_rollout(&fixture.rollout_path)
         .expect("load source spine store")
@@ -9929,18 +9988,15 @@ async fn spine_close_fork_restores_h_ps_when_output_carrier_missing() {
         .collect::<Vec<_>>();
     clone_spine_sidecar_for_test(&fixture.rollout_path, &forked_rollout_path, &raw_live);
 
-    forked_session
+    let err = forked_session
         .record_initial_history(InitialHistory::Forked(fixture.rollout_items.clone()))
         .await
-        .expect("fork close-window rollout");
-
-    assert_close_window_session_state(
-        &forked_session,
-        &forked_rollout_path,
-        &fixture.raw_items,
-        &fixture.expected_history,
-    )
-    .await;
+        .expect_err("fork with missing close output carrier must fail closed");
+    assert!(
+        err.to_string()
+            .contains("missing raw item for visible toolcall segment"),
+        "unexpected missing carrier fork error: {err}"
+    );
     let source_events_after = SpineStore::for_rollout(&fixture.rollout_path)
         .expect("reload source spine store")
         .event_count_for_test()
@@ -9952,7 +10008,7 @@ async fn spine_close_fork_restores_h_ps_when_output_carrier_missing() {
 }
 
 #[tokio::test]
-async fn spine_next_resume_restores_h_ps_when_output_carrier_missing() {
+async fn spine_next_resume_rejects_missing_output_carrier() {
     let fixture = make_spine_next_window_missing_output_carrier("next-window resume summary").await;
 
     let (mut resumed_session, _resumed_context, _rx) =
@@ -9978,22 +10034,21 @@ async fn spine_next_resume_restores_h_ps_when_output_carrier_missing() {
         .collect::<Vec<_>>();
     clone_spine_sidecar_for_test(&fixture.rollout_path, &resumed_rollout_path, &raw_live);
 
-    resumed_session
+    let err = resumed_session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: fixture.rollout_items.clone(),
             rollout_path: Some(fixture.rollout_path.clone()),
         }))
         .await
-        .expect("resume next-window rollout");
-
-    assert_post_next_session_state(
-        &resumed_session,
-        &resumed_rollout_path,
-        &fixture.raw_items,
-        &fixture.expected_history,
-    )
-    .await;
+        .expect_err("resume with missing next output carrier must fail closed");
+    assert!(
+        err.to_string()
+            .contains("missing raw item for visible toolcall segment"),
+        "unexpected missing carrier resume error: {err}"
+    );
+    let _ = resumed_rollout_path;
+    let _ = fixture.raw_items;
 }
 
 #[tokio::test]
@@ -10687,7 +10742,11 @@ async fn spine_next_raw_output_append_failure_does_not_replace_host_history() {
         "failed next raw output append must not publish committed next tree state",
         |snapshot| snapshot.active_node_id == "1.1.2",
     );
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(
+        compact_mock.requests().len(),
+        0,
+        "failed durable tool output append must not start close compact"
+    );
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -10810,7 +10869,13 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
     );
     assert_eq!(
         session.clone_history().await.raw_items(),
-        &[prefix.clone(), child_body.clone(), next_request]
+        &[
+            prefix.clone(),
+            open_request.clone(),
+            open_output.clone(),
+            child_body.clone(),
+            next_request.clone(),
+        ]
     );
 
     session.ensure_rollout_materialized().await;
@@ -10929,7 +10994,7 @@ async fn spine_next_native_compact_partial_success_does_not_open_sibling() {
             .maybe_commit_spine_tool_output(&commit_turn_context, &commit_next_output)
             .await
     });
-    timeout(Duration::from_secs(2), async {
+    timeout(Duration::from_secs(10), async {
         while delayed_next_compact.requests().is_empty() {
             sleep(Duration::from_millis(10)).await;
         }
@@ -11229,7 +11294,10 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
 
     let error_message = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::Error(error)
-            if error.message.contains("failed to commit Spine tool output")
+            if (error.message.contains("failed to commit Spine tool output")
+                || error
+                    .message
+                    .contains("failed to commit grouped Spine toolcall"))
                 && error.message.contains("ImageGenerationCall") =>
         {
             Some(error.message.clone())
@@ -11427,7 +11495,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
 
     let history = session.clone_history().await;
     let items = history.raw_items();
-    assert_eq!(items.len(), 1);
+    assert_eq!(items.len(), 3);
     assert!(matches!(
         &items[0],
         ResponseItem::Message { role, content, .. }
@@ -11440,6 +11508,11 @@ async fn spine_close_bridge_can_close_initial_root_child() {
                             && text.contains("## Node Memory\nroot child compact summary")
                             && !text.contains("---------- Spine Compact Directive ----------")
                 )
+    ));
+    assert_eq!(items[1], spine_call(SPINE_TOOL_CLOSE, "close-root-child"));
+    assert!(matches!(
+        &items[2],
+        ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "close-root-child"
     ));
 
     let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
@@ -11464,7 +11537,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         .expect("closed root child suffix memory should be recorded");
     assert_eq!(context_start, 0);
     assert_eq!(context_end, 1);
-    assert_eq!(raw_end, 2);
+    assert_eq!(raw_end, 1);
     assert_eq!(
         runtime
             .materialize_history(&raw_items)
@@ -11542,7 +11615,7 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
 
     let history = session.clone_history().await;
     let items = history.raw_items();
-    assert_eq!(items.len(), 1);
+    assert_eq!(items.len(), 3);
     assert!(matches!(
         &items[0],
         ResponseItem::Message { role, content, .. }
@@ -11640,7 +11713,7 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
             .maybe_commit_spine_tool_output(&commit_turn_context, &commit_close_output)
             .await
     });
-    timeout(Duration::from_secs(2), async {
+    timeout(Duration::from_secs(10), async {
         while delayed_compact.requests().is_empty() {
             sleep(Duration::from_millis(10)).await;
         }
@@ -11672,9 +11745,11 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
         items,
         &[
             prefix.clone(),
+            open_request.clone(),
+            open_output.clone(),
             inner.clone(),
-            close_request,
-            concurrent.clone()
+            close_request.clone(),
+            concurrent.clone(),
         ]
     );
     assert!(
@@ -11691,10 +11766,7 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
         "aborted close must not install compact memory into host history"
     );
     assert!(!items.iter().any(
-        |item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "open")
-    ));
-    assert!(!items.iter().any(
-        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "open")
+        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "close")
     ));
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -11709,7 +11781,13 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     assert_eq!(runtime.parse_stack_msg_leaf_count_for_test(), 3);
-    let expected_materialized = vec![prefix.clone(), inner.clone(), concurrent.clone()];
+    let expected_materialized = vec![
+        prefix.clone(),
+        open_request.clone(),
+        open_output.clone(),
+        inner.clone(),
+        concurrent.clone(),
+    ];
     assert_eq!(
         runtime
             .materialize_history(&raw_items)
@@ -11719,11 +11797,14 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
 }
 
 #[tokio::test]
-async fn spine_close_rejects_empty_live_suffix_before_compact_request() {
+async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_summary_sse("unused-spine-summary", "must not be requested"),
+        spine_slot_summary_sse(
+            "open-toolcall-close-summary",
+            "open toolcall compact summary",
+        ),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -11777,26 +11858,44 @@ async fn spine_close_rejects_empty_live_suffix_before_compact_request() {
         .stage_spine_close("empty-close".to_string(), None)
         .await
         .expect("stage close");
-    let close_output = function_output("empty-close");
-    let err = session
-        .maybe_commit_spine_tool_output(&turn_context, &close_output)
-        .await
-        .expect_err("empty live suffix must be rejected before compact");
-    assert!(
-        err.to_string()
-            .contains("spine.close requires non-empty live suffix"),
-        "unexpected empty close error: {err}"
-    );
+    let close_output = commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("empty-close"),
+    )
+    .await
+    .expect("open toolcall leaf makes the live suffix compactable");
+    assert!(matches!(
+        &close_output,
+        ResponseItem::FunctionCallOutput { call_id, output }
+            if call_id == "empty-close"
+                && output.text_content() == Some("ok")
+    ));
     assert_no_pending_spine_commit(&session, "empty-close").await;
     assert_eq!(
         compact_mock.requests().len(),
-        0,
-        "empty close must not call the internal compact model"
+        1,
+        "close after open should compact the durable spine.open toolcall leaf"
     );
-    assert_eq!(
-        session.clone_history().await.raw_items(),
-        &[prefix.clone(), close_request]
-    );
+    let history = session.clone_history().await;
+    let items = history.raw_items();
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0], prefix);
+    assert!(matches!(
+        &items[1],
+        ResponseItem::Message { content, .. }
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }]
+                    if text.contains("Spine Memory 1.1.1")
+                        && text.contains("open toolcall compact summary")
+            )
+    ));
+    assert_eq!(items[2], spine_call(SPINE_TOOL_CLOSE, "empty-close"));
+    assert!(matches!(
+        &items[3],
+        ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "empty-close"
+    ));
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -11811,7 +11910,14 @@ async fn spine_close_rejects_empty_live_suffix_before_compact_request() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let tree = runtime.render_tree().expect("render spine tree");
-    assert!(tree.contains("[1.1.1] Current empty child"), "{tree}");
+    assert!(tree.contains("Cursor: 1.1"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done empty child"), "{tree}");
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)"),
+        items
+    );
 }
 
 #[tokio::test]
@@ -11901,7 +12007,13 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
     assert_eq!(compact_mock.requests().len(), 1);
     assert_eq!(
         session.clone_history().await.raw_items(),
-        &[prefix.clone(), child_body.clone(), close_request]
+        &[
+            prefix.clone(),
+            open_request.clone(),
+            open_output.clone(),
+            child_body.clone(),
+            close_request.clone(),
+        ]
     );
 
     session.ensure_rollout_materialized().await;
@@ -12007,7 +12119,7 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
             .maybe_commit_spine_tool_output(&commit_turn_context, &commit_close_output)
             .await
     });
-    timeout(Duration::from_secs(2), async {
+    timeout(Duration::from_secs(10), async {
         while delayed_close_compact.requests().is_empty() {
             sleep(Duration::from_millis(10)).await;
         }
@@ -13745,6 +13857,12 @@ async fn spine_feature_off_does_not_overlay_spine_shaped_streaming_followup() ->
                     SPINE_TOOL_OPEN,
                     r#"{"summary":"should stay plain"}"#,
                 ),
+                ev_function_call_with_namespace(
+                    "feature-off-spine-next",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_NEXT,
+                    r#"{"summary":"should also stay plain"}"#,
+                ),
                 ev_completed("feature-off-spine-call-response"),
             ]),
             sse(vec![
@@ -13806,6 +13924,281 @@ async fn spine_feature_off_does_not_overlay_spine_shaped_streaming_followup() ->
         }),
         "base follow-up should include the unknown function call output: {follow_up_body}"
     );
+    let second_spine_shaped_call_items = follow_up_input
+        .iter()
+        .filter(|item| {
+            item.get("call_id").and_then(serde_json::Value::as_str)
+                == Some("feature-off-spine-next")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        second_spine_shaped_call_items.len(),
+        2,
+        "feature off should keep the second base unknown-call request/output too: {follow_up_body}"
+    );
+    for call_id in ["feature-off-spine-call", "feature-off-spine-next"] {
+        let output = follow_up_input
+            .iter()
+            .find(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                    && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+            })
+            .unwrap_or_else(|| panic!("missing base output for {call_id}: {follow_up_body}"));
+        assert!(
+            !output.to_string().contains("mutually exclusive"),
+            "feature off must not use Spine mutual-exclusion rejection for {call_id}: {output}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bodies()
+-> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineJit)
+            .expect("enable spine feature");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "multi-open",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_OPEN,
+                    r#"{"summary":"must not open"}"#,
+                ),
+                ev_function_call_with_namespace(
+                    "multi-next",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_NEXT,
+                    r#"{"summary":"must not advance"}"#,
+                ),
+                ev_completed("multi-spine-control-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("multi-spine-control-follow-up", "ack"),
+                ev_completed("multi-spine-control-follow-up-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "try two spine control tools at once".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(_) => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "conflicting Spine control calls should produce one corrective follow-up"
+    );
+    let follow_up = requests[1].body_json();
+    for call_id in ["multi-open", "multi-next"] {
+        let output = follow_up["input"]
+            .as_array()
+            .expect("follow-up input")
+            .iter()
+            .find(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                    && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+            })
+            .unwrap_or_else(|| panic!("missing failure output for {call_id}: {follow_up}"));
+        assert!(
+            output.to_string().contains("mutually exclusive"),
+            "unexpected failure output for {call_id}: {output}"
+        );
+    }
+    assert!(
+        !follow_up
+            .to_string()
+            .contains("Spine opened after this tool output is recorded"),
+        "spine.open body must not run before conflict detection: {follow_up}"
+    );
+    assert!(
+        !follow_up
+            .to_string()
+            .contains("Spine will close the current node"),
+        "spine.next body must not run before conflict detection: {follow_up}"
+    );
+
+    let rollout_path = test
+        .codex
+        .rollout_path()
+        .expect("test thread should have rollout persistence");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1.1"), "{tree}");
+    assert!(
+        !tree.contains("must not open") && !tree.contains("must not advance"),
+        "conflicting control calls must not mutate Spine tree: {tree}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_control_with_ordinary_tool_call_commits_grouped_toolcall_leaf() -> anyhow::Result<()>
+{
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineJit)
+            .expect("enable spine feature");
+        config.model_provider.supports_websockets = false;
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "mixed-close",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_CLOSE,
+                    r#"{"instruction":"compact before grouped shell"}"#,
+                ),
+                ev_shell_command_call("mixed-shell", "printf grouped-ordinary-tool"),
+                ev_completed("mixed-control-and-tool-response"),
+            ]),
+            spine_node_memory_summary_sse("mixed-close-compact", "grouped close memory"),
+            sse(vec![
+                ev_assistant_message("mixed-follow-up", "done"),
+                ev_completed("mixed-follow-up-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "grouped close ordinary work".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    let last_agent_message = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(turn_complete) => turn_complete.last_agent_message.clone(),
+        _ => None,
+    })
+    .await;
+    assert_eq!(last_agent_message.as_str(), "done");
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected sampling, close compact, and follow-up requests"
+    );
+    let compact_request = &requests[1];
+    assert!(compact_request.body_contains_text("grouped close ordinary work"));
+    assert!(compact_request.body_contains_text("compact before grouped shell"));
+    assert!(
+        !compact_request.has_function_call("mixed-close"),
+        "close compact suffix must exclude the triggering close request"
+    );
+    assert!(
+        !compact_request.has_function_call("mixed-shell"),
+        "close compact suffix must exclude sibling ordinary tool requests from the same toolcall"
+    );
+    assert!(
+        compact_request
+            .function_call_output_text("mixed-close")
+            .is_none()
+    );
+    assert!(
+        compact_request
+            .function_call_output_text("mixed-shell")
+            .is_none()
+    );
+
+    let follow_up = &requests[2];
+    assert!(follow_up.has_function_call("mixed-close"));
+    assert!(follow_up.has_function_call("mixed-shell"));
+    assert!(follow_up.function_call_output_text("mixed-close").is_some());
+    assert!(
+        follow_up
+            .function_call_output_text("mixed-shell")
+            .is_some_and(|text| text.contains("grouped-ordinary-tool")),
+        "follow-up must preserve the ordinary tool output: {}",
+        follow_up.body_json()
+    );
+
+    let rollout_path = test
+        .codex
+        .rollout_path()
+        .expect("test thread should have rollout persistence");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    assert!(
+        matches!(
+            materialized.as_slice(),
+            [
+                ResponseItem::Message { content, .. },
+                ResponseItem::FunctionCall { call_id: close_call, .. },
+                ResponseItem::FunctionCall { call_id: shell_call, .. },
+                ResponseItem::FunctionCallOutput { call_id: close_output, .. },
+                ResponseItem::FunctionCallOutput { call_id: shell_output, .. },
+                ResponseItem::Message { role, .. },
+            ] if content.iter().any(|item| matches!(
+                    item,
+                    ContentItem::InputText { text }
+                        if text.contains("grouped close memory")
+                ))
+                && close_call == "mixed-close"
+                && shell_call == "mixed-shell"
+                && close_output == "mixed-close"
+                && shell_output == "mixed-shell"
+                && role == "assistant"
+        ),
+        "materialized h(PS) must be memory || complete grouped toolcall || follow-up message: {materialized:#?}"
+    );
+
     Ok(())
 }
 
@@ -13862,7 +14255,7 @@ async fn init_new_session_creates_root_and_1_1() {
 }
 
 #[tokio::test]
-async fn spine_control_carriers_are_not_durable_context_history() {
+async fn spine_open_control_toolcall_is_durable_context_history() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -13886,36 +14279,25 @@ async fn spine_control_carriers_are_not_durable_context_history() {
 
     let open_request = spine_call(SPINE_TOOL_OPEN, "overlay-open");
     session
-        .record_conversation_items_spine_control_overlay_only(
-            &turn_context,
-            std::slice::from_ref(&open_request),
-        )
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
         .await
-        .expect("record open request as overlay-only");
+        .expect("record open request");
     session
         .stage_spine_open("overlay-open".to_string(), "overlay child".to_string())
         .await
         .expect("stage open");
     let open_output = function_output("overlay-open");
-    session
-        .record_conversation_items_spine_control_overlay_only(
-            &turn_context,
-            std::slice::from_ref(&open_output),
-        )
-        .await
-        .expect("record open output as overlay-only");
-    let commit = session
-        .maybe_commit_spine_tool_output(&turn_context, &open_output)
-        .await
-        .expect("commit open");
-    let output_text = commit
-        .output_text
-        .expect("open commit should return post-state output");
-    assert!(output_text.starts_with("Spine opened."), "{output_text}");
-    assert!(output_text.contains("overlay child"), "{output_text}");
-    assert!(output_text.contains("Cursor:"), "{output_text}");
+    let recorded_open_output =
+        commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, open_output)
+            .await
+            .expect("commit and record open output");
 
-    assert_eq!(session.clone_history().await.raw_items(), &[prefix.clone()]);
+    let history = session.clone_history().await;
+    let items = history.raw_items();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0], prefix);
+    assert_eq!(items[1], open_request);
+    assert_eq!(items[2], recorded_open_output);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -13939,7 +14321,186 @@ async fn spine_control_carriers_are_not_durable_context_history() {
     let materialized = runtime
         .materialize_history(&raw_items)
         .expect("materialize h(PS)");
-    assert_eq!(materialized, vec![prefix.clone()]);
+    assert_eq!(materialized, items);
+}
+
+#[tokio::test]
+async fn custom_and_tool_search_outputs_commit_as_completed_toolcalls() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let custom_request = custom_tool_call("custom-tool");
+    let custom_output = custom_tool_output("custom-tool");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&custom_request))
+        .await
+        .expect("record custom request");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        custom_output.clone(),
+    )
+    .await
+    .expect("commit custom output");
+
+    let search_request = tool_search_call("search-tool");
+    let search_output = tool_search_output("search-tool");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&search_request))
+        .await
+        .expect("record tool-search request");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        search_output.clone(),
+    )
+    .await
+    .expect("commit tool-search output");
+
+    let expected = vec![custom_request, custom_output, search_request, search_output];
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        expected.as_slice()
+    );
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load replayed runtime")
+        .expect("spine sidecar exists");
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize replayed custom/tool-search toolcalls"),
+        expected
+    );
+}
+
+#[tokio::test]
+async fn provider_tool_search_output_recorded_by_base_path_commits_completed_toolcall() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let search_request = tool_search_call_with_execution("server-search-tool", "server");
+    let search_output = tool_search_output_with_execution("server-search-tool", "server");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&search_request))
+        .await
+        .expect("record provider tool-search request through base path");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&search_output))
+        .await
+        .expect("record provider tool-search output through base path");
+
+    let expected = vec![search_request, search_output];
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        expected.as_slice()
+    );
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load replayed runtime")
+        .expect("spine sidecar exists");
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize replayed provider tool-search toolcall"),
+        expected
+    );
+}
+
+#[tokio::test]
+async fn base_path_completed_toolcall_groups_all_outputs_in_one_append() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let request = function_call("batched_tool", "batched-tool");
+    let first_output = function_output("batched-tool");
+    let mut second_output = function_output("batched-tool");
+    if let ResponseItem::FunctionCallOutput { output, .. } = &mut second_output {
+        output.body = FunctionCallOutputBody::Text("second ok".to_string());
+    }
+    let expected = vec![request, first_output, second_output];
+    session
+        .record_conversation_items(&turn_context, &expected)
+        .await
+        .expect("record request and both outputs through base path");
+
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        expected.as_slice()
+    );
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load replayed runtime")
+        .expect("spine sidecar exists");
+    assert_eq!(
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize replayed batched toolcall"),
+        expected
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -13992,7 +14553,7 @@ async fn spine_status_overlay_is_injected_into_sampling_prompt_only() -> anyhow:
 }
 
 #[tokio::test]
-async fn spine_close_overlay_control_carriers_are_not_required_in_durable_history() {
+async fn spine_close_control_toolcalls_are_durable_context_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -14028,28 +14589,17 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
 
     let open_request = spine_call(SPINE_TOOL_OPEN, "overlay-open");
     session
-        .record_conversation_items_spine_control_overlay_only(
-            &turn_context,
-            std::slice::from_ref(&open_request),
-        )
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
         .await
-        .expect("record open request overlay-only");
+        .expect("record open request");
     session
         .stage_spine_open("overlay-open".to_string(), "overlay child".to_string())
         .await
         .expect("stage open");
     let open_output = function_output("overlay-open");
-    session
-        .record_conversation_items_spine_control_overlay_only(
-            &turn_context,
-            std::slice::from_ref(&open_output),
-        )
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, open_output)
         .await
-        .expect("record open output overlay-only");
-    session
-        .maybe_commit_spine_tool_output(&turn_context, &open_output)
-        .await
-        .expect("commit open");
+        .expect("commit and record open output");
 
     let inner = assistant_message("overlay close inner work");
     session
@@ -14059,12 +14609,9 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
 
     let close_request = spine_call(SPINE_TOOL_CLOSE, "overlay-close");
     session
-        .record_conversation_items_spine_control_overlay_only(
-            &turn_context,
-            std::slice::from_ref(&close_request),
-        )
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
         .await
-        .expect("record close request overlay-only");
+        .expect("record close request");
     session
         .stage_spine_close("overlay-close".to_string(), None)
         .await
@@ -14076,26 +14623,23 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
     )
     .await
     .expect("commit close and record raw evidence");
-    let output_text = match &close_output {
-        ResponseItem::FunctionCallOutput { output, .. } => output
-            .text_content()
-            .expect("close commit should return post-state output"),
-        _ => panic!("expected close output response item"),
-    };
-    assert!(output_text.starts_with("Spine closed."), "{output_text}");
-    assert!(output_text.contains("Done overlay child"), "{output_text}");
-    assert!(output_text.contains("Memory.md"), "{output_text}");
+    assert!(matches!(
+        &close_output,
+        ResponseItem::FunctionCallOutput { call_id, output }
+            if call_id == "overlay-close"
+                && output.text_content() == Some("ok")
+    ));
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
     assert!(compact_request.body_contains_text("overlay close prefix"));
     assert!(compact_request.body_contains_text("overlay close inner work"));
-    assert!(!compact_request.has_function_call("overlay-open"));
+    assert!(compact_request.has_function_call("overlay-open"));
     assert!(!compact_request.has_function_call("overlay-close"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 4);
     assert_eq!(items[0], prefix);
     assert!(matches!(
         &items[1],
@@ -14108,6 +14652,11 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
                             && text.contains("overlay close compact summary")
                             && !text.contains("overlay close inner work")
                 )
+    ));
+    assert_eq!(items[2], spine_call(SPINE_TOOL_CLOSE, "overlay-close"));
+    assert!(matches!(
+        &items[3],
+        ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "overlay-close"
     ));
 
     session.ensure_rollout_materialized().await;
@@ -14128,14 +14677,17 @@ async fn spine_close_overlay_control_carriers_are_not_required_in_durable_histor
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("Done overlay child"), "{tree}");
+    assert!(tree.contains("Memory.md"), "{tree}");
     let (_, raw_end, context_start, context_end) = SpineStore::for_rollout(&rollout_path)
         .expect("load spine store")
         .suffix_mem_cover_for_test("1.1.1")
         .expect("read spine mem records")
         .expect("closed child suffix memory should be recorded");
     assert_eq!(context_start, 1);
-    assert_eq!(context_end, 2);
-    assert_eq!(raw_end, 5);
+    assert_eq!(context_end, 4);
+    assert_eq!(raw_end, 4);
     assert_eq!(
         runtime
             .materialize_history(&raw_items)

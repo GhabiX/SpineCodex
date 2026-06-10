@@ -311,17 +311,19 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     session.services.extensions = Arc::new(builder.build());
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
-    let router = Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
-        crate::tools::router::ToolRouterParams {
-            mcp_tools: None,
-            deferred_mcp_tools: None,
-            discoverable_tools: None,
-            extension_tool_executors: Vec::new(),
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
-        },
-    )
-    .expect("build tool router"));
+    let router = Arc::new(
+        ToolRouter::from_config(
+            &turn_context.tools_config,
+            crate::tools::router::ToolRouterParams {
+                mcp_tools: None,
+                deferred_mcp_tools: None,
+                discoverable_tools: None,
+                extension_tool_executors: Vec::new(),
+                dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            },
+        )
+        .expect("build tool router"),
+    );
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let tool_runtime = ToolCallRuntime::new(
         router,

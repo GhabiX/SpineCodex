@@ -953,6 +953,7 @@ impl SpineStore {
                 },
                 SpineLedgerEvent::Init { .. }
                 | SpineLedgerEvent::Msg { .. }
+                | SpineLedgerEvent::ToolCall { .. }
                 | SpineLedgerEvent::Open { .. } => {}
             }
         }
@@ -993,7 +994,7 @@ fn validate_commit_marker_events(
 ) -> Result<(), SpineError> {
     match marker.kind {
         SpineCommitKindMarker::Close => {
-            validate_commit_marker_width(marker, 1)?;
+            validate_commit_marker_width_range(marker, 1, 2)?;
             let event = event_at_marker_start(marker, events_by_seq)?;
             let SpineLedgerEvent::Close { node, boundary, .. } = &event.event else {
                 return Err(SpineError::InvalidStore(format!(
@@ -1001,10 +1002,12 @@ fn validate_commit_marker_events(
                     marker.op_id, marker.token_seq_start
                 )));
             };
-            validate_close_marker_fields(marker, node, *boundary)
+            validate_close_marker_fields(marker, node, *boundary)?;
+            validate_optional_trailing_toolcall(marker, events_by_seq, marker.token_seq_start + 1)?;
+            Ok(())
         }
         SpineCommitKindMarker::CloseThenOpen => {
-            validate_commit_marker_width(marker, 2)?;
+            validate_commit_marker_width_range(marker, 2, 3)?;
             let close = event_at_marker_start(marker, events_by_seq)?;
             let SpineLedgerEvent::Close { node, boundary, .. } = &close.event else {
                 return Err(SpineError::InvalidStore(format!(
@@ -1034,6 +1037,7 @@ fn validate_commit_marker_events(
                     marker.op_id, marker.raw_boundary, boundary
                 )));
             }
+            validate_optional_trailing_toolcall(marker, events_by_seq, open_seq + 1)?;
             Ok(())
         }
         SpineCommitKindMarker::RootCompact => {
@@ -1089,6 +1093,58 @@ fn validate_commit_marker_width(marker: &SpineCommitMarker, width: u64) -> Resul
     Ok(())
 }
 
+fn validate_commit_marker_width_range(
+    marker: &SpineCommitMarker,
+    min_width: u64,
+    max_width: u64,
+) -> Result<(), SpineError> {
+    let width = marker
+        .token_seq_end
+        .checked_sub(marker.token_seq_start)
+        .ok_or_else(|| {
+            SpineError::InvalidStore(format!(
+                "Spine commit marker {} token range {}..{} is invalid",
+                marker.op_id, marker.token_seq_start, marker.token_seq_end
+            ))
+        })?;
+    if width < min_width || width > max_width {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} token range {}..{} has width {width}, expected {min_width}..={max_width}",
+            marker.op_id, marker.token_seq_start, marker.token_seq_end
+        )));
+    }
+    Ok(())
+}
+
+fn validate_optional_trailing_toolcall(
+    marker: &SpineCommitMarker,
+    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
+    seq: u64,
+) -> Result<(), SpineError> {
+    if seq >= marker.token_seq_end {
+        return Ok(());
+    }
+    if seq.checked_add(1) != Some(marker.token_seq_end) {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} has unexpected extra events in token range {}..{}",
+            marker.op_id, marker.token_seq_start, marker.token_seq_end
+        )));
+    }
+    let Some(event) = events_by_seq.get(&seq) else {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} references missing trailing ToolCall at token_seq {}",
+            marker.op_id, seq
+        )));
+    };
+    if !matches!(event.event, SpineLedgerEvent::ToolCall { .. }) {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} trailing event at token_seq {} is not ToolCall",
+            marker.op_id, seq
+        )));
+    }
+    Ok(())
+}
+
 fn event_at_marker_start<'a>(
     marker: &SpineCommitMarker,
     events_by_seq: &'a BTreeMap<u64, &LoggedSpineLedgerEvent>,
@@ -1128,9 +1184,9 @@ fn validate_close_marker_fields(
             marker.op_id, memory.node, node
         )));
     }
-    if memory.raw_end != marker.raw_boundary {
+    if memory.raw_end > marker.raw_boundary {
         return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} memory raw_end {} does not match raw boundary {}",
+            "Spine commit marker {} memory raw_end {} exceeds raw boundary {}",
             marker.op_id, memory.raw_end, marker.raw_boundary
         )));
     }
@@ -1526,6 +1582,7 @@ fn required_memory_ids_for_cloned_events(
             }
             SpineLedgerEvent::Init { .. }
             | SpineLedgerEvent::Msg { .. }
+            | SpineLedgerEvent::ToolCall { .. }
             | SpineLedgerEvent::Open { .. } => {}
         }
     }
@@ -1655,13 +1712,13 @@ fn rewrite_checkpoint_node_for_target(
         SpineTreeNode::MsgAsLeafNode { msg, .. } => {
             rewrite_checkpoint_seg_ref_for_target(msg, target_root, cloned_memory_paths)
         }
-        SpineTreeNode::ToolCallAsLeafNode {
-            tool_req,
-            tool_resps,
-        } => {
-            rewrite_checkpoint_seg_ref_for_target(tool_req, target_root, cloned_memory_paths)?;
-            for tool_resp in tool_resps {
-                rewrite_checkpoint_seg_ref_for_target(tool_resp, target_root, cloned_memory_paths)?;
+        SpineTreeNode::ToolCallAsLeafNode { segments } => {
+            for segment in segments {
+                rewrite_checkpoint_seg_ref_for_target(
+                    &mut segment.seg,
+                    target_root,
+                    cloned_memory_paths,
+                )?;
             }
             Ok(())
         }

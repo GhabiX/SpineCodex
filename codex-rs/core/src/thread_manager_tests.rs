@@ -122,13 +122,18 @@ async fn inject_response_items_rejects_pending_spine_control_output_when_spine_j
     };
     assert!(message.contains("items[0]"));
     assert!(message.contains("Spine control tool outputs"));
-    assert!(!session.clone_history().await.raw_items().iter().any(
-        |item| matches!(
-            item,
-            ResponseItem::FunctionCallOutput { call_id, .. }
-                if call_id == "injected-spine-output"
-        )
-    ));
+    assert!(
+        !session
+            .clone_history()
+            .await
+            .raw_items()
+            .iter()
+            .any(|item| matches!(
+                item,
+                ResponseItem::FunctionCallOutput { call_id, .. }
+                    if call_id == "injected-spine-output"
+            ))
+    );
 
     thread
         .thread

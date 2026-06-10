@@ -21,6 +21,7 @@ use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
 use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
@@ -151,16 +152,8 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     item: &ResponseItem,
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) -> Result<()> {
-    if sess.has_spine_runtime_state() && is_spine_control_function_call(item) {
-        sess.record_conversation_items_spine_control_overlay_only(
-            turn_context,
-            std::slice::from_ref(item),
-        )
+    sess.record_conversation_items(turn_context, std::slice::from_ref(item))
         .await?;
-    } else {
-        sess.record_conversation_items(turn_context, std::slice::from_ref(item))
-            .await?;
-    }
     let defers_mailbox_delivery = finalized_facts.map_or_else(
         || {
             completed_item_defers_mailbox_delivery_to_next_turn(
@@ -287,6 +280,30 @@ pub(crate) struct HandleOutputCtx {
     pub cancellation_token: CancellationToken,
 }
 
+pub(crate) async fn record_deferred_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    item: &ResponseItem,
+) -> Result<()> {
+    sess.accept_mailbox_delivery_for_current_turn(&turn_context.sub_id)
+        .await;
+    sess.record_conversation_items(turn_context, std::slice::from_ref(item))
+        .await
+}
+
+pub(crate) fn spawn_tool_call(
+    tool_runtime: &ToolCallRuntime,
+    cancellation_token: &CancellationToken,
+    call: ToolCall,
+) -> InFlightFuture<'static> {
+    let cancellation_token = cancellation_token.child_token();
+    Box::pin(
+        tool_runtime
+            .clone()
+            .handle_tool_call(call, cancellation_token),
+    )
+}
+
 async fn apply_turn_item_contributors(
     sess: &Session,
     turn_store: &ExtensionData,
@@ -397,15 +414,12 @@ pub(crate) async fn handle_output_item_done(
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await?;
 
-            let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future: InFlightFuture<'static> = Box::pin(
-                ctx.tool_runtime
-                    .clone()
-                    .handle_tool_call(call, cancellation_token),
-            );
-
             output.needs_follow_up = true;
-            output.tool_future = Some(tool_future);
+            output.tool_future = Some(spawn_tool_call(
+                &ctx.tool_runtime,
+                &ctx.cancellation_token,
+                call,
+            ));
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {

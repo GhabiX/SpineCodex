@@ -10,7 +10,11 @@ mod runtime;
 mod store;
 
 pub(crate) use model::NodeId;
+pub(crate) use model::ToolCallSegmentKind;
+pub(crate) use runtime::CompletedToolCall;
+pub(crate) use runtime::CompletedToolCallSegment;
 pub(crate) use runtime::LiveRootCompact;
+pub(crate) use runtime::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 pub(crate) use runtime::SPINE_NAMESPACE;
 pub(crate) use runtime::SPINE_TOOL_CLOSE;
 pub(crate) use runtime::SPINE_TOOL_NEXT;
@@ -31,6 +35,7 @@ pub(crate) use runtime::SpineRootCompactTokenMetadata;
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::SpineTokenBaselines;
+#[cfg(test)]
 pub(crate) use runtime::is_spine_close_like_tool_name;
 pub(crate) use runtime::is_user_message;
 pub use store::SpineCloneBoundary;
