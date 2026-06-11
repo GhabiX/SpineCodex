@@ -12,6 +12,7 @@ use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
+use crate::spine::SPINE_TOOL_TREE;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
@@ -14233,7 +14234,7 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
     let follow_up_items = follow_up["input"]
         .as_array()
         .expect("follow-up input should be an array");
-    for call_id in ["multi-open", "multi-next", "multi-shell"] {
+    for call_id in ["multi-open", "multi-next"] {
         let output = follow_up_items
             .iter()
             .find(|item| {
@@ -14248,12 +14249,26 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
         assert!(
             output
                 .to_string()
-                .contains("No tool in this toolreq was executed"),
-            "rejection output must say no tool ran for {call_id}: {output}"
+                .contains("No Spine control action was applied"),
+            "rejection output must say no Spine control action was applied for {call_id}: {output}"
         );
         assert!(
-            output.to_string().contains("Please resend the toolreq"),
-            "rejection output must ask the model to resend for {call_id}: {output}"
+            output
+                .to_string()
+                .contains("no Spine control token was emitted"),
+            "rejection output must say no Spine control token was emitted for {call_id}: {output}"
+        );
+        assert!(
+            output
+                .to_string()
+                .contains("Please resend at most one Spine control request"),
+            "rejection output must ask the model to resend one control for {call_id}: {output}"
+        );
+        assert!(
+            !output
+                .to_string()
+                .contains("No tool in this toolreq was executed"),
+            "rejection output must not claim ordinary tools were skipped for {call_id}: {output}"
         );
     }
     let shell_output = follow_up_items
@@ -14262,10 +14277,14 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
             item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
                 && item.get("call_id").and_then(serde_json::Value::as_str) == Some("multi-shell")
         })
-        .unwrap_or_else(|| panic!("missing ordinary tool rejection output: {follow_up}"));
+        .unwrap_or_else(|| panic!("missing ordinary tool output: {follow_up}"));
     assert!(
-        !shell_output.to_string().contains("multi-ordinary-tool"),
-        "ordinary tool body from a conflicting toolreq must not execute: {shell_output}"
+        shell_output.to_string().contains("multi-ordinary-tool"),
+        "ordinary tool body from a conflicting toolreq must execute normally: {shell_output}"
+    );
+    assert!(
+        !shell_output.to_string().contains("mutually exclusive"),
+        "ordinary tool output must not be replaced by Spine mutual-exclusion rejection: {shell_output}"
     );
     assert!(
         !follow_up
@@ -14364,12 +14383,12 @@ async fn conflicting_spine_controls_preserve_custom_and_tool_search_output_carri
                 ev_custom_tool_call(
                     "carrier-custom",
                     "exec",
-                    r#"{"cmd":"printf should-not-run"}"#,
+                    r#"{"cmd":"printf ordinary-custom-tool"}"#,
                 ),
                 ev_tool_search_call(
                     "carrier-search",
                     &json!({
-                        "query": "must not run",
+                        "query": "ordinary tool search",
                         "limit": 1,
                     }),
                 ),
@@ -14431,12 +14450,16 @@ async fn conflicting_spine_controls_preserve_custom_and_tool_search_output_carri
     }
     let custom_output = item_with_type_and_call_id("custom_tool_call_output", "carrier-custom");
     assert!(
-        custom_output.to_string().contains("mutually exclusive"),
-        "custom rejection output should carry the conflict message: {custom_output}"
+        !custom_output.to_string().contains("mutually exclusive"),
+        "ordinary custom output must not be replaced by Spine conflict rejection: {custom_output}"
     );
     let search_output = item_with_type_and_call_id("tool_search_output", "carrier-search");
     assert_eq!(search_output["execution"], "client");
     assert_eq!(search_output["status"], "completed");
+    assert!(
+        !search_output.to_string().contains("mutually exclusive"),
+        "ordinary tool-search output must not be replaced by Spine conflict rejection: {search_output}"
+    );
     assert!(
         input.iter().all(|item| {
             !(item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
@@ -14445,8 +14468,147 @@ async fn conflicting_spine_controls_preserve_custom_and_tool_search_output_carri
                     Some("carrier-custom" | "carrier-search")
                 ))
         }),
-        "custom/tool-search rejection outputs must not be downgraded to function_call_output: {follow_up}"
+        "custom/tool-search outputs must not be downgraded to function_call_output: {follow_up}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_tree_runs_normally_with_conflicting_spine_controls() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineJit)
+            .expect("enable spine feature");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "tree-conflict-open",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_OPEN,
+                    r#"{"summary":"must not open from tree conflict"}"#,
+                ),
+                ev_function_call_with_namespace(
+                    "tree-conflict-next",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_NEXT,
+                    r#"{"summary":"must not advance from tree conflict"}"#,
+                ),
+                ev_function_call_with_namespace(
+                    "tree-conflict-tree",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_TREE,
+                    "{}",
+                ),
+                ev_completed("tree-conflict-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("tree-conflict-follow-up", "ack"),
+                ev_completed("tree-conflict-follow-up-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "try conflicting spine controls with tree".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(_) => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "conflicting controls plus spine.tree should produce one corrective follow-up"
+    );
+    let follow_up = requests[1].body_json();
+    let follow_up_items = follow_up["input"]
+        .as_array()
+        .expect("follow-up input should be an array");
+    let output_with_call_id = |call_id: &str| {
+        follow_up_items
+            .iter()
+            .find(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                    && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+            })
+            .unwrap_or_else(|| panic!("missing function output for {call_id}: {follow_up}"))
+    };
+
+    for call_id in ["tree-conflict-open", "tree-conflict-next"] {
+        let output = output_with_call_id(call_id);
+        assert!(
+            output.to_string().contains("mutually exclusive"),
+            "conflicting Spine control must receive rejection for {call_id}: {output}"
+        );
+    }
+    let tree_output = output_with_call_id("tree-conflict-tree");
+    assert!(
+        tree_output.to_string().contains("Cursor: 1.1"),
+        "spine.tree must execute normally and return the current tree: {tree_output}"
+    );
+    assert!(
+        !tree_output.to_string().contains("mutually exclusive"),
+        "spine.tree output must not be replaced by conflict rejection: {tree_output}"
+    );
+    assert!(
+        !follow_up
+            .to_string()
+            .contains("Spine opened after this tool output is recorded"),
+        "spine.open body must not run before conflict detection: {follow_up}"
+    );
+    assert!(
+        !follow_up
+            .to_string()
+            .contains("Spine will close the current node"),
+        "spine.next body must not run before conflict detection: {follow_up}"
+    );
+
+    let rollout_path = test
+        .codex
+        .rollout_path()
+        .expect("test thread should have rollout persistence");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("Cursor: 1.1"), "{tree}");
+    assert_eq!(runtime.parse_stack_toolcall_leaf_count_for_test(), 1);
+    assert!(
+        !tree.contains("must not open from tree conflict")
+            && !tree.contains("must not advance from tree conflict"),
+        "conflicting control calls must not mutate Spine tree: {tree}"
+    );
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize conflict history");
+    let persisted_items = raw_items.iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(materialized, persisted_items);
 
     Ok(())
 }
