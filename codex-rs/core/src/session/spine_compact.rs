@@ -444,7 +444,15 @@ fn validate_source_plan_against_history(
     raw_items: &[ResponseItem],
     _close_call_id: &str,
 ) -> Result<(), SpineError> {
-    let mut previous_context_index = None;
+    let expected_len = source_plan.source_context_range.len();
+    if source_plan.entries.len() != expected_len {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close compact source entry count {} does not match source context range length {expected_len} for [{}..{})",
+            source_plan.entries.len(),
+            source_plan.source_context_range.start,
+            source_plan.source_context_range.end
+        )));
+    }
     for (expected_ordinal, entry) in source_plan.entries.iter().enumerate() {
         if entry.source_ordinal != expected_ordinal {
             return Err(SpineError::CompactFailure(format!(
@@ -452,30 +460,24 @@ fn validate_source_plan_against_history(
                 entry.source_ordinal
             )));
         }
-        if entry.context_index < source_plan.source_context_range.start {
+        let expected_context_index = source_plan
+            .source_context_range
+            .start
+            .checked_add(expected_ordinal)
+            .ok_or_else(|| {
+                SpineError::CompactFailure(
+                    "spine.close compact source context index overflow".to_string(),
+                )
+            })?;
+        if entry.context_index != expected_context_index {
             return Err(SpineError::CompactFailure(format!(
-                "spine.close compact source entry ordinal {} context_index {} precedes source range start {}",
-                entry.source_ordinal, entry.context_index, source_plan.source_context_range.start
-            )));
-        }
-        if entry.context_index >= source_plan.source_context_range.end {
-            return Err(SpineError::CompactFailure(format!(
-                "spine.close compact source entry ordinal {} context_index {} is outside source context range [{}..{})",
+                "spine.close compact source entry ordinal {} has context_index {}, expected {expected_context_index} for contiguous source context range [{}..{})",
                 entry.source_ordinal,
                 entry.context_index,
                 source_plan.source_context_range.start,
                 source_plan.source_context_range.end
             )));
         }
-        if let Some(previous) = previous_context_index {
-            if entry.context_index <= previous {
-                return Err(SpineError::CompactFailure(format!(
-                    "spine.close compact source entry ordinal {} context_index {} is not strictly after previous context_index {previous}",
-                    entry.source_ordinal, entry.context_index
-                )));
-            }
-        }
-        previous_context_index = Some(entry.context_index);
         let Some(host_item) = raw_items.get(entry.context_index) else {
             return Err(SpineError::CompactFailure(format!(
                 "spine.close compact source entry ordinal {} context_index {} exceeds history length {}",
@@ -2146,7 +2148,7 @@ node
     }
 
     #[test]
-    fn source_plan_validator_accepts_real_non_contiguous_context_indices() {
+    fn source_plan_validator_rejects_non_contiguous_context_indices() {
         let raw_items = vec![
             user_message("prefix 0"),
             user_message("prefix 1"),
@@ -2162,8 +2164,13 @@ node
             ],
         );
 
-        validate_source_plan_against_history(&plan, &raw_items, "close")
-            .expect("non-contiguous real context indices should validate");
+        let err = validate_source_plan_against_history(&plan, &raw_items, "close")
+            .expect_err("non-contiguous real context indices must fail");
+        assert!(
+            err.to_string()
+                .contains("source entry count 2 does not match source context range length 3"),
+            "unexpected non-contiguous context error: {err}"
+        );
     }
 
     #[test]
@@ -2172,9 +2179,10 @@ node
             user_message("prefix 0"),
             user_message("prefix 1"),
             assistant_message("source 2"),
+            assistant_message("source 3"),
         ];
         let plan = source_plan_with_context_range(
-            2..3,
+            2..4,
             vec![
                 source_entry(2, 0, raw_items[2].clone(), false),
                 source_entry(2, 1, raw_items[2].clone(), false),
@@ -2184,8 +2192,7 @@ node
         let err = validate_source_plan_against_history(&plan, &raw_items, "close")
             .expect_err("duplicate context indices must fail");
         assert!(
-            err.to_string()
-                .contains("is not strictly after previous context_index 2"),
+            err.to_string().contains("has context_index 2, expected 3"),
             "unexpected duplicate context error: {err}"
         );
     }

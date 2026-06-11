@@ -1077,6 +1077,27 @@ impl SpineRuntime {
         Ok(true)
     }
 
+    pub(crate) fn commit_completed_toolcall_as_ordinary(
+        &mut self,
+        call_id: &str,
+        toolcall: CompletedToolCall,
+    ) -> Result<bool, SpineError> {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.call_id() == call_id)
+        {
+            return self.abort_pending_and_observe_completed_toolcall(call_id, toolcall);
+        }
+        let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
+        let mut staged_parse_stack = self.parse_stack.clone();
+        staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+        self.append_cached_event(event)?;
+        self.parse_stack = staged_parse_stack;
+        self.clear_completed_toolcall_anchors(&toolcall);
+        Ok(false)
+    }
+
     pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
         &mut self,
         tool_responses: &[(String, u64, usize)],
@@ -1726,10 +1747,9 @@ impl SpineRuntime {
         let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
         staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
         events.push(toolcall_event);
-        self.store
-            .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
+        self.write_prepared_memory_body(&prepared.mem, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
-        self.store.append_mem(&prepared.mem)?;
+        self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body)?;
         let marker = close_commit_marker(
             self.ledger.next_event_seq,
             &prepared.mem,
@@ -1808,10 +1828,9 @@ impl SpineRuntime {
             .staged_parse_stack
             .shift(SpineToken::ToolCall { segments }, &self.archive())?;
         events.push(toolcall_event);
-        self.store
-            .write_memory_body(&prepared.mem.compact_id, &prepared.memory_body)?;
+        self.write_prepared_memory_body(&prepared.mem, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
-        self.store.append_mem(&prepared.mem)?;
+        self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body)?;
         let marker = close_commit_marker(
             self.ledger.next_event_seq,
             &prepared.mem,
@@ -2208,7 +2227,8 @@ impl SpineRuntime {
             token_metadata,
             checkpoint_rollout_path,
         )?;
-        self.commit_root_compact_memory(&prepared.mem, &prepared.memory_body)?;
+        self.write_prepared_memory_body(&prepared.mem, &prepared.memory_body)?;
+        self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body)?;
         if let Some(checkpoint) = prepared.compact_checkpoint.as_ref() {
             self.store.append_compact_checkpoint(checkpoint)?;
         }
@@ -2219,35 +2239,37 @@ impl SpineRuntime {
         Ok(prepared.result)
     }
 
-    fn commit_root_compact_memory(&self, mem: &MemRecord, body: &str) -> Result<(), SpineError> {
+    fn write_prepared_memory_body(&self, mem: &MemRecord, body: &str) -> Result<(), SpineError> {
+        self.store.write_memory_body(&mem.compact_id, body)?;
+        Ok(())
+    }
+
+    fn commit_prepared_memory_record(&self, mem: &MemRecord, body: &str) -> Result<(), SpineError> {
         let existing_mems = self.store.mems()?;
         let matching_mems = existing_mems
             .iter()
             .filter(|existing| existing.compact_id == mem.compact_id)
             .collect::<Vec<_>>();
         match matching_mems.as_slice() {
-            [] => {
-                self.store.write_memory_body(&mem.compact_id, body)?;
-                self.store.append_mem(mem)
-            }
-            [existing] if root_compact_mem_matches(existing, mem) => {
+            [] => self.store.append_mem(mem),
+            [existing] if mem_record_matches(existing, mem) => {
                 let existing_body = self.store.read_memory_body(existing)?;
                 let existing_body_hash = sha1_hex(existing_body.as_bytes());
                 let body_hash = sha1_hex(body.as_bytes());
                 if existing_body_hash != body_hash || existing_body_hash != mem.body_hash {
                     return Err(SpineError::InvalidStore(format!(
-                        "existing root compact memory body mismatch for {}",
+                        "existing prepared memory body mismatch for {}",
                         mem.compact_id
                     )));
                 }
                 Ok(())
             }
             [_] => Err(SpineError::InvalidStore(format!(
-                "existing root compact memory record mismatch for {}",
+                "existing prepared memory record mismatch for {}",
                 mem.compact_id
             ))),
             _ => Err(SpineError::InvalidStore(format!(
-                "ambiguous existing root compact memory record for {}",
+                "ambiguous existing prepared memory record for {}",
                 mem.compact_id
             ))),
         }
@@ -3251,10 +3273,9 @@ fn commit_memory_ref(mem: &MemRecord) -> SpineCommitMemoryRef {
     }
 }
 
-fn root_compact_mem_matches(existing: &MemRecord, expected: &MemRecord) -> bool {
+fn mem_record_matches(existing: &MemRecord, expected: &MemRecord) -> bool {
     existing.compact_id == expected.compact_id
-        && matches!(existing.kind, MemKind::RootEpoch)
-        && matches!(expected.kind, MemKind::RootEpoch)
+        && existing.kind == expected.kind
         && existing.node == expected.node
         && existing.raw_start == expected.raw_start
         && existing.raw_end == expected.raw_end

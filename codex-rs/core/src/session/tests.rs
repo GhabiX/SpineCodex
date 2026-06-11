@@ -170,10 +170,12 @@ use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call;
+use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -11151,6 +11153,281 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
     );
 }
 
+#[tokio::test]
+async fn spine_next_native_compact_keeps_durable_completed_toolcall_as_ordinary() {
+    let server = start_mock_server().await;
+    let responses_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse_failed(
+                "spine-next-durable-overflow",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            sse(vec![
+                ev_assistant_message(
+                    "native-after-durable-next-overflow",
+                    "native compact after durable next overflow",
+                ),
+                ev_completed("native-after-durable-next-overflow-response"),
+            ]),
+        ],
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.name = "non-openai test provider".to_string();
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before durable next overflow");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "durable-overflow-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "durable-overflow-next-open".to_string(),
+            "durable overflow next child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("durable-overflow-next-open");
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, open_output)
+        .await
+        .expect("commit durable open output");
+
+    let child_body = assistant_message("child work before durable next overflow");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record child body");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "durable-overflow-next");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_request))
+        .await
+        .expect("record next request");
+    session
+        .stage_spine_next(
+            "durable-overflow-next".to_string(),
+            "must not open durable sibling".to_string(),
+            None,
+        )
+        .await
+        .expect("stage next");
+    let next_output = function_output("durable-overflow-next");
+
+    let recorded_output =
+        commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, next_output)
+            .await
+            .expect("native compact invalidates control but keeps durable toolcall");
+    assert!(matches!(
+        recorded_output,
+        ResponseItem::FunctionCallOutput { ref call_id, .. } if call_id == "durable-overflow-next"
+    ));
+    assert_no_pending_spine_commit(&session, "durable-overflow-next").await;
+    assert_eq!(responses_mock.requests().len(), 2);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    assert_eq!(session.clone_history().await.raw_items(), materialized);
+    assert!(
+        materialized.iter().any(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCallOutput { call_id, .. }
+                    if call_id == "durable-overflow-next"
+            )
+        }),
+        "durable completed next toolcall must remain in ordinary h(PS)"
+    );
+    let tree = runtime.render_tree().expect("render spine tree");
+    assert!(tree.contains("[1] Done"), "{tree}");
+    assert!(tree.contains("[2.1] Current"), "{tree}");
+    assert!(
+        !tree.contains("must not open durable sibling"),
+        "native compact invalidates next control and must not open sibling: {tree}"
+    );
+}
+
+#[tokio::test]
+async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_ordinary() {
+    let server = start_mock_server().await;
+    let responses_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse_failed(
+                "grouped-spine-next-durable-overflow",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            sse(vec![
+                ev_assistant_message(
+                    "native-after-grouped-durable-next-overflow",
+                    "native compact after grouped durable next overflow",
+                ),
+                ev_completed("native-after-grouped-durable-next-overflow-response"),
+            ]),
+        ],
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.name = "non-openai test provider".to_string();
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before grouped durable next overflow");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "grouped-durable-overflow-next-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "grouped-durable-overflow-next-open".to_string(),
+            "grouped durable overflow next child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("grouped-durable-overflow-next-open");
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, open_output)
+        .await
+        .expect("commit durable open output");
+
+    let child_body = assistant_message("child work before grouped durable next overflow");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_body))
+        .await
+        .expect("record child body");
+    let ordinary_request = function_call("ordinary_tool", "grouped-durable-ordinary");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "grouped-durable-overflow-next");
+    session
+        .record_conversation_items(
+            &turn_context,
+            &[ordinary_request.clone(), next_request.clone()],
+        )
+        .await
+        .expect("record grouped requests");
+    session
+        .stage_spine_next(
+            "grouped-durable-overflow-next".to_string(),
+            "must not open grouped durable sibling".to_string(),
+            None,
+        )
+        .await
+        .expect("stage next");
+    let ordinary_output = function_output("grouped-durable-ordinary");
+    let next_output = function_output("grouped-durable-overflow-next");
+    let mut client_session = session.services.model_client.new_session();
+    let commit = session
+        .record_spine_toolcall_group_outputs_and_commit_with_client_session(
+            &turn_context,
+            &mut client_session,
+            "grouped-durable-overflow-next",
+            &[
+                "grouped-durable-ordinary".to_string(),
+                "grouped-durable-overflow-next".to_string(),
+            ],
+            &[ordinary_output.clone(), next_output.clone()],
+            session
+                .test_default_close_compact_tools(&turn_context)
+                .await
+                .expect("build close compact tools"),
+        )
+        .await
+        .expect("native compact invalidates grouped control but keeps durable toolcall");
+    assert!(commit.record_output);
+    assert!(commit.deferred_history_update.is_none());
+    assert_no_pending_spine_commit(&session, "grouped-durable-overflow-next").await;
+    assert_eq!(responses_mock.requests().len(), 2);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    assert_eq!(session.clone_history().await.raw_items(), materialized);
+    for expected_call_id in ["grouped-durable-ordinary", "grouped-durable-overflow-next"] {
+        assert!(
+            materialized.iter().any(|item| {
+                matches!(
+                    item,
+                    ResponseItem::FunctionCall { call_id, .. }
+                        | ResponseItem::FunctionCallOutput { call_id, .. }
+                        if call_id == expected_call_id
+                )
+            }),
+            "durable grouped completed toolcall must keep request/output for {expected_call_id} in ordinary h(PS): {materialized:#?}"
+        );
+    }
+    let tree = runtime.render_tree().expect("render spine tree");
+    assert!(tree.contains("[1] Done"), "{tree}");
+    assert!(tree.contains("[2.1] Current"), "{tree}");
+    assert!(
+        !tree.contains("must not open grouped durable sibling"),
+        "native compact invalidates grouped next control and must not open sibling: {tree}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Result<()> {
     let server = start_mock_server().await;
@@ -14058,6 +14335,123 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conflicting_spine_controls_preserve_custom_and_tool_search_output_carriers()
+-> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineJit)
+            .expect("enable spine feature");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "carrier-open",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_OPEN,
+                    r#"{"summary":"must not open"}"#,
+                ),
+                ev_function_call_with_namespace(
+                    "carrier-next",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_NEXT,
+                    r#"{"summary":"must not advance"}"#,
+                ),
+                ev_custom_tool_call(
+                    "carrier-custom",
+                    "exec",
+                    r#"{"cmd":"printf should-not-run"}"#,
+                ),
+                ev_tool_search_call(
+                    "carrier-search",
+                    &json!({
+                        "query": "must not run",
+                        "limit": 1,
+                    }),
+                ),
+                ev_completed("carrier-conflict-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("carrier-conflict-follow-up", "ack"),
+                ev_completed("carrier-conflict-follow-up-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "try conflicting spine controls with mixed carriers".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(_) => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "conflict should produce exactly one corrective follow-up"
+    );
+    let follow_up = requests[1].body_json();
+    let input = follow_up["input"]
+        .as_array()
+        .expect("follow-up input should be an array");
+    let item_with_type_and_call_id = |item_type: &str, call_id: &str| {
+        input
+            .iter()
+            .find(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some(item_type)
+                    && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+            })
+            .unwrap_or_else(|| {
+                panic!("missing {item_type} for {call_id} in follow-up: {follow_up}")
+            })
+    };
+
+    for call_id in ["carrier-open", "carrier-next"] {
+        let output = item_with_type_and_call_id("function_call_output", call_id);
+        assert!(
+            output.to_string().contains("mutually exclusive"),
+            "Spine control rejection must explain conflict for {call_id}: {output}"
+        );
+    }
+    let custom_output = item_with_type_and_call_id("custom_tool_call_output", "carrier-custom");
+    assert!(
+        custom_output.to_string().contains("mutually exclusive"),
+        "custom rejection output should carry the conflict message: {custom_output}"
+    );
+    let search_output = item_with_type_and_call_id("tool_search_output", "carrier-search");
+    assert_eq!(search_output["execution"], "client");
+    assert_eq!(search_output["status"], "completed");
+    assert!(
+        input.iter().all(|item| {
+            !(item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                && matches!(
+                    item.get("call_id").and_then(serde_json::Value::as_str),
+                    Some("carrier-custom" | "carrier-search")
+                ))
+        }),
+        "custom/tool-search rejection outputs must not be downgraded to function_call_output: {follow_up}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_control_with_ordinary_tool_call_commits_grouped_toolcall_leaf() -> anyhow::Result<()>
 {
     let server = start_mock_server().await;
@@ -14438,6 +14832,57 @@ async fn provider_tool_search_output_recorded_by_base_path_commits_completed_too
             .materialize_history(&raw_items)
             .expect("materialize replayed provider tool-search toolcall"),
         expected
+    );
+}
+
+#[tokio::test]
+async fn grouped_toolcall_prevalidates_request_anchors_before_recording_outputs() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let anchored_request = function_call("anchored_tool", "anchored-call");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&anchored_request))
+        .await
+        .expect("record anchored request");
+    let before_history = session.clone_history().await.raw_items().to_vec();
+    let mut client_session = session.services.model_client.new_session();
+    let err = session
+        .record_spine_toolcall_group_outputs_and_commit_with_client_session(
+            &turn_context,
+            &mut client_session,
+            "anchored-call",
+            &["anchored-call".to_string(), "missing-request".to_string()],
+            &[
+                function_output("anchored-call"),
+                function_output("missing-request"),
+            ],
+            session
+                .test_default_close_compact_tools(&turn_context)
+                .await
+                .expect("build close compact tools"),
+        )
+        .await
+        .expect_err("missing request anchor must fail before recording outputs");
+    assert!(
+        err.to_string()
+            .contains("missing tool request anchor for call_id=missing-request"),
+        "unexpected grouped prevalidation error: {err}"
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        before_history.as_slice(),
+        "failed grouped toolcall prevalidation must not append outputs to host history"
     );
 }
 

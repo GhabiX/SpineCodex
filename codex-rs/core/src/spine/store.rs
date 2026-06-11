@@ -909,7 +909,18 @@ impl SpineStore {
         let dir = self.root.join(BODY_DIR);
         std::fs::create_dir_all(&dir)?;
         let rel = format!("{BODY_DIR}/{compact_id}.md");
-        std::fs::write(self.root.join(&rel), body)?;
+        let path = self.root.join(&rel);
+        if path.exists() {
+            let existing = std::fs::read_to_string(&path)?;
+            if existing == body {
+                return Ok(rel);
+            }
+            return Err(SpineError::InvalidStore(format!(
+                "memory body {} already exists with different content",
+                path.display()
+            )));
+        }
+        std::fs::write(path, body)?;
         Ok(rel)
     }
 

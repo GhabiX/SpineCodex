@@ -62,6 +62,7 @@ use crate::stream_events_utils::record_deferred_tool_call;
 use crate::stream_events_utils::spawn_tool_call;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
@@ -1505,12 +1506,26 @@ fn is_spine_parser_control_call(call: &ToolCall) -> bool {
         )
 }
 
-fn conflicting_toolreq_rejection_output(call_id: &str, message: &str) -> ResponseItem {
-    ResponseItem::FunctionCallOutput {
-        call_id: call_id.to_string(),
-        output: FunctionCallOutputPayload {
-            body: FunctionCallOutputBody::Text(message.to_string()),
-            success: Some(false),
+fn conflicting_toolreq_rejection_output(call: &ToolCall, message: &str) -> ResponseItem {
+    let output = FunctionCallOutputPayload {
+        body: FunctionCallOutputBody::Text(message.to_string()),
+        success: Some(false),
+    };
+    match &call.payload {
+        ToolPayload::Custom { .. } => ResponseItem::CustomToolCallOutput {
+            call_id: call.call_id.clone(),
+            name: None,
+            output,
+        },
+        ToolPayload::ToolSearch { .. } => ResponseItem::ToolSearchOutput {
+            call_id: Some(call.call_id.clone()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: Vec::new(),
+        },
+        _ => ResponseItem::FunctionCallOutput {
+            call_id: call.call_id.clone(),
+            output,
         },
     }
 }
@@ -2290,7 +2305,7 @@ async fn commit_rejected_spine_control_tool_request(
         .collect::<Vec<_>>();
     let response_items = group
         .iter()
-        .map(|deferred| conflicting_toolreq_rejection_output(&deferred.call.call_id, message))
+        .map(|deferred| conflicting_toolreq_rejection_output(&deferred.call, message))
         .collect::<Vec<_>>();
     sess.record_spine_toolcall_group_outputs_and_commit_with_client_session(
         &turn_context,

@@ -120,6 +120,16 @@ impl Session {
         }
     }
 
+    fn spine_tool_commit_from_commit_output(output: SpineCommitOutput) -> SpineToolCommit {
+        SpineToolCommit {
+            output_text: output.output_text,
+            record_output: true,
+            spine_context_already_observed: output.spine_context_already_observed,
+            deferred_history_update: output.history_update,
+            deferred_tree_update: output.snapshot,
+        }
+    }
+
     pub(crate) async fn send_spine_tree_update(
         &self,
         turn_context: &TurnContext,
@@ -474,6 +484,71 @@ impl Session {
         Ok(observed)
     }
 
+    async fn commit_completed_toolcall_as_ordinary(
+        &self,
+        call_id: &str,
+        completed_toolcall: CompletedToolCall,
+        reason: &str,
+    ) -> Result<SpineCommitOutput, SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Err(SpineError::Invariant(
+                "spine slot missing during ordinary completed toolcall commit".to_string(),
+            ));
+        };
+        self.ensure_rollout_materialized().await;
+        self.flush_rollout()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+            .ok_or_else(|| {
+                SpineError::InvalidStore(
+                    "spine ordinary completed toolcall commit requires rollout path".to_string(),
+                )
+            })?;
+        let rollout_history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
+        let (aborted_pending, materialized, snapshot) = {
+            let mut guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(spine) = guard.runtime_mut() else {
+                return Err(SpineError::Invariant(
+                    "spine runtime missing during ordinary completed toolcall commit".to_string(),
+                ));
+            };
+            let aborted_pending =
+                spine.commit_completed_toolcall_as_ordinary(call_id, completed_toolcall)?;
+            let materialized = spine.materialize_history(&raw_items)?;
+            let snapshot = spine.build_tree_snapshot()?;
+            (aborted_pending, materialized, snapshot)
+        };
+        self.replace_history(materialized, self.reference_context_item().await)
+            .await;
+        tracing::debug!(
+            call_id,
+            reason,
+            aborted_pending,
+            "kept completed Spine toolcall as ordinary history"
+        );
+        Ok(SpineCommitOutput {
+            snapshot: Some(snapshot),
+            output_text: None,
+            spine_context_already_observed: true,
+            history_update: None,
+            defer_tree_update_until_raw_output: false,
+        })
+    }
+
+    async fn fail_closed_spine_toolcall_commit(&self, call_id: &str, reason: impl Into<String>) {
+        let reason = reason.into();
+        self.invalidate_spine_runtime(format!("{reason} for call_id={call_id}"))
+            .await;
+    }
+
     pub(crate) async fn abort_stale_spine_pending(&self, reason: &str) -> Option<String> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return None;
@@ -784,6 +859,36 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
         };
+        let output_call_ids = output_items
+            .iter()
+            .filter_map(|item| tool_response_call_id(item).map(str::to_string))
+            .collect::<std::collections::BTreeSet<_>>();
+        for call_id in tool_call_ids {
+            if !output_call_ids.contains(call_id) {
+                return Err(SpineError::InvalidEvent(format!(
+                    "grouped Spine toolcall missing output for call_id={call_id}"
+                )));
+            }
+        }
+        let commit_output = output_items
+            .iter()
+            .find(|item| tool_response_call_id(item) == Some(commit_call_id))
+            .ok_or_else(|| {
+                SpineError::InvalidEvent(format!(
+                    "grouped Spine toolcall missing output for commit call_id={commit_call_id}"
+                ))
+            })?;
+        let request_anchors = {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(spine) = guard.runtime() else {
+                return Ok(Self::no_spine_tool_commit());
+            };
+            tool_call_ids
+                .iter()
+                .map(|call_id| spine.pending_tool_request_anchor(call_id))
+                .collect::<Result<Vec<_>, SpineError>>()?
+        };
         let (output_raw_ordinals, _) = {
             let raw_start = spine_slot.lock().await.raw_len();
             assign_spine_raw_ordinals(raw_start, output_items)?
@@ -796,28 +901,6 @@ impl Session {
                     "failed to record grouped Spine tool outputs before commit: {err}"
                 ))
             })?;
-        let output_call_ids = output_items
-            .iter()
-            .filter_map(|item| tool_response_call_id(item).map(str::to_string))
-            .collect::<std::collections::BTreeSet<_>>();
-        for call_id in tool_call_ids {
-            if !output_call_ids.contains(call_id) {
-                return Err(SpineError::InvalidEvent(format!(
-                    "grouped Spine toolcall missing output for call_id={call_id}"
-                )));
-            }
-        }
-        let request_anchors = {
-            let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(spine) = guard.runtime() else {
-                return Ok(Self::no_spine_tool_commit());
-            };
-            tool_call_ids
-                .iter()
-                .map(|call_id| spine.pending_tool_request_anchor(call_id))
-                .collect::<Result<Vec<_>, SpineError>>()?
-        };
         let mut request_segments = request_anchors
             .iter()
             .map(|anchor| CompletedToolCallSegment {
@@ -858,14 +941,6 @@ impl Session {
             request_call_ids: tool_call_ids.to_vec(),
             segments: group_segments,
         };
-        let commit_output = output_items
-            .iter()
-            .find(|item| tool_response_call_id(item) == Some(commit_call_id))
-            .ok_or_else(|| {
-                SpineError::InvalidEvent(format!(
-                    "grouped Spine toolcall missing output for commit call_id={commit_call_id}"
-                ))
-            })?;
         self.commit_spine_completed_toolcall_with_client_session(
             turn_context,
             client_session,
@@ -957,12 +1032,8 @@ impl Session {
                         Err(err) => {
                             let reason = "spine close source plan failed before compact";
                             if tool_resp_already_recorded {
-                                self.abort_spine_pending_and_observe_completed_toolcall(
-                                    call_id,
-                                    completed_toolcall.clone(),
-                                    reason,
-                                )
-                                .await?;
+                                self.fail_closed_spine_toolcall_commit(call_id, reason)
+                                    .await;
                             } else {
                                 self.abort_spine_pending_tool(call_id, reason).await;
                             }
@@ -990,11 +1061,18 @@ impl Session {
                         if reset_client_session {
                             client_session.reset_websocket_session();
                         }
-                        self.abort_spine_pending_tool(
-                            call_id,
-                            "spine close invalidated by native compact",
-                        )
-                        .await;
+                        let reason = "spine close invalidated by native compact";
+                        if tool_resp_already_recorded {
+                            let commit_output = self
+                                .commit_completed_toolcall_as_ordinary(
+                                    call_id,
+                                    completed_toolcall.clone(),
+                                    reason,
+                                )
+                                .await?;
+                            return Ok(Self::spine_tool_commit_from_commit_output(commit_output));
+                        }
+                        self.abort_spine_pending_tool(call_id, reason).await;
                         return Ok(Self::skip_spine_tool_output_commit());
                     }
                     Err(err) => {
@@ -1019,8 +1097,13 @@ impl Session {
         if let Some((_, expected_history)) = close_compact.as_ref() {
             let history = self.clone_history().await;
             if history.raw_items() != expected_history.as_slice() {
-                self.abort_spine_pending_tool(call_id, "spine close history changed before commit")
-                    .await;
+                let reason = "spine close history changed before commit";
+                if tool_resp_already_recorded {
+                    self.fail_closed_spine_toolcall_commit(call_id, reason)
+                        .await;
+                } else {
+                    self.abort_spine_pending_tool(call_id, reason).await;
+                }
                 return Err(SpineError::Operation(format!(
                     "spine.close history changed while compacting suffix for call_id={call_id}"
                 )));
@@ -1039,6 +1122,14 @@ impl Session {
             )? {
                 SpineCommitAttempt::Done(output) => break output,
                 SpineCommitAttempt::RuntimeMissing => {
+                    let reason = "spine runtime missing during completed toolcall commit";
+                    if tool_resp_already_recorded {
+                        self.fail_closed_spine_toolcall_commit(call_id, reason)
+                            .await;
+                        return Err(SpineError::Invariant(format!(
+                            "{reason} for call_id={call_id}"
+                        )));
+                    }
                     return Ok(Self::no_spine_tool_commit());
                 }
                 SpineCommitAttempt::Retry if lock_retries < SPINE_COMMIT_LOCK_RETRY_LIMIT => {
@@ -1046,11 +1137,13 @@ impl Session {
                     tokio::task::yield_now().await;
                 }
                 SpineCommitAttempt::Retry => {
-                    self.abort_spine_pending_tool(
-                        call_id,
-                        "spine tool output commit lock retry limit exceeded before commit",
-                    )
-                    .await;
+                    let reason = "spine tool output commit lock retry limit exceeded before commit";
+                    if tool_resp_already_recorded {
+                        self.fail_closed_spine_toolcall_commit(call_id, reason)
+                            .await;
+                    } else {
+                        self.abort_spine_pending_tool(call_id, reason).await;
+                    }
                     return Err(SpineError::Operation(format!(
                         "spine tool output commit could not acquire session locks after {SPINE_COMMIT_LOCK_RETRY_LIMIT} retries for call_id={call_id}"
                     )));
