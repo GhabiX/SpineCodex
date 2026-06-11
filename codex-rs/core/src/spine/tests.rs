@@ -380,6 +380,62 @@ fn spine_error_classifies_tool_use_operation_and_compact_failures() {
     assert!(!err.should_invalidate_runtime());
 }
 
+#[cfg(debug_assertions)]
+#[test]
+fn compact_close_debug_writes_jsonl_sidecar_under_debug_dir() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+
+    store
+        .append_compact_close_debug(&serde_json::json!({
+            "event": "request",
+            "request": {
+                "input": ["full compact request"]
+            }
+        }))
+        .expect("append request debug");
+    store
+        .append_compact_close_debug(&serde_json::json!({
+            "event": "response",
+            "output": ["compact response"]
+        }))
+        .expect("append response debug");
+
+    let path = store.compact_close_debug_path_for_test();
+    assert_eq!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("compact-close.jsonl")
+    );
+    assert_eq!(
+        path.parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str()),
+        Some(".debug")
+    );
+
+    let lines = std::fs::read_to_string(path).expect("read debug jsonl");
+    let records = lines
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("debug json line"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records,
+        vec![
+            serde_json::json!({
+                "event": "request",
+                "request": {
+                    "input": ["full compact request"]
+                }
+            }),
+            serde_json::json!({
+                "event": "response",
+                "output": ["compact response"]
+            }),
+        ]
+    );
+}
+
 #[test]
 fn close_commit_without_completed_toolcall_evidence_does_not_write_marker_or_clear_anchor() {
     let dir = tempfile::tempdir().expect("tempdir");

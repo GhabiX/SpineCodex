@@ -12,6 +12,8 @@ use crate::spine::SpineCloseCompact;
 use crate::spine::SpineCompactSourceEntryKind;
 use crate::spine::SpineCompactSourcePlan;
 use crate::spine::SpineError;
+#[cfg(debug_assertions)]
+use crate::spine::SpineStore;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::util::backoff;
 use codex_analytics::CompactionPhase;
@@ -23,6 +25,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::ToolSpec;
+#[cfg(debug_assertions)]
+use codex_tools::create_tools_json_for_responses_api;
 use futures::StreamExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -133,20 +137,47 @@ impl Session {
         };
         let mut repair_attempts = 0;
         let mut memory_output_tokens = None;
+        #[cfg(debug_assertions)]
+        let compact_debug_store =
+            spine_close_compact_debug_store(self.as_ref(), turn_context.as_ref()).await;
         let body = loop {
-            let (output, token_usage) = match self
+            let compact_attempt = repair_attempts + 1;
+            #[cfg(debug_assertions)]
+            spine_close_compact_write_debug_request(
+                compact_debug_store.as_ref(),
+                turn_context.as_ref(),
+                &node_id,
+                close_call_id,
+                compact_attempt,
+                &source_plan,
+                &prompt,
+                ResponsesToolChoice::None,
+            );
+            let summary_outcome = self
                 .spine_close_summary_items(
                     turn_context,
                     native_compact_client_session,
                     prompt.clone(),
                     ResponsesToolChoice::None,
                 )
-                .await?
-            {
+                .await?;
+            let (output, token_usage) = match summary_outcome {
                 SpineCloseSummaryOutcome::Output {
                     output,
                     token_usage,
-                } => (output, token_usage),
+                } => {
+                    #[cfg(debug_assertions)]
+                    spine_close_compact_write_debug_response(
+                        compact_debug_store.as_ref(),
+                        &node_id,
+                        close_call_id,
+                        compact_attempt,
+                        &source_plan,
+                        output.clone(),
+                        token_usage.clone(),
+                    );
+                    (output, token_usage)
+                }
                 SpineCloseSummaryOutcome::NativeCompacted {
                     reset_client_session,
                 } => {
@@ -314,6 +345,142 @@ enum SpineCloseSummaryOutcome {
     NativeCompacted {
         reset_client_session: bool,
     },
+}
+
+#[cfg(debug_assertions)]
+async fn spine_close_compact_debug_store(
+    sess: &Session,
+    turn_context: &TurnContext,
+) -> Option<SpineStore> {
+    if !turn_context.config.dev_debug_prompt_overrides {
+        return None;
+    }
+    let rollout_path = match sess.current_rollout_path().await {
+        Ok(Some(path)) => path,
+        Ok(None) => return None,
+        Err(err) => {
+            tracing::debug!("skipping spine.close compact debug sidecar: {err}");
+            return None;
+        }
+    };
+    match SpineStore::for_rollout(&rollout_path) {
+        Ok(store) => Some(store),
+        Err(err) => {
+            tracing::debug!(
+                "skipping spine.close compact debug sidecar for {}: {err}",
+                rollout_path.display()
+            );
+            None
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+fn spine_close_compact_write_debug_request(
+    store: Option<&SpineStore>,
+    turn_context: &TurnContext,
+    node_id: &str,
+    call_id: &str,
+    attempt: usize,
+    source_plan: &SpineCompactSourcePlan,
+    prompt: &Prompt,
+    tool_choice: ResponsesToolChoice,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    let (tools, tools_serialization_error) =
+        match create_tools_json_for_responses_api(&prompt.tools) {
+            Ok(tools) => (Some(tools), None),
+            Err(err) => (None, Some(err.to_string())),
+        };
+    let service_tier = turn_context
+        .config
+        .service_tier
+        .clone()
+        .filter(|service_tier| turn_context.model_info.supports_service_tier(service_tier));
+    spine_close_compact_append_debug_record(
+        store,
+        &serde_json::json!({
+            "event": "request",
+            "context": spine_close_compact_debug_context(node_id, call_id, attempt, source_plan),
+            "request": {
+                "model": turn_context.model_info.slug,
+                "instructions": prompt.base_instructions.text,
+                "input": prompt.get_formatted_input(),
+                "tools": tools,
+                "tools_serialization_error": tools_serialization_error,
+                "tool_choice": spine_close_compact_debug_tool_choice(tool_choice),
+                "parallel_tool_calls": prompt.parallel_tool_calls,
+                "reasoning_effort": turn_context.reasoning_effort.map(|effort| effort.to_string()),
+                "reasoning_summary": turn_context.reasoning_summary.to_string(),
+                "service_tier": service_tier,
+                "turn_metadata_header": turn_context.turn_metadata_state.current_header_value(),
+                "personality": prompt.personality.map(|personality| personality.to_string()),
+                "output_schema": prompt.output_schema,
+                "output_schema_strict": prompt.output_schema_strict,
+            },
+        }),
+    );
+}
+
+#[cfg(debug_assertions)]
+fn spine_close_compact_write_debug_response(
+    store: Option<&SpineStore>,
+    node_id: &str,
+    call_id: &str,
+    attempt: usize,
+    source_plan: &SpineCompactSourcePlan,
+    output: Vec<ResponseItem>,
+    token_usage: Option<TokenUsage>,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    spine_close_compact_append_debug_record(
+        store,
+        &serde_json::json!({
+            "event": "response",
+            "context": spine_close_compact_debug_context(node_id, call_id, attempt, source_plan),
+            "response": {
+                "output": output,
+                "token_usage": token_usage,
+            },
+        }),
+    );
+}
+
+#[cfg(debug_assertions)]
+fn spine_close_compact_debug_context(
+    node_id: &str,
+    call_id: &str,
+    attempt: usize,
+    source_plan: &SpineCompactSourcePlan,
+) -> serde_json::Value {
+    serde_json::json!({
+        "node_id": node_id,
+        "call_id": call_id,
+        "attempt": attempt,
+        "source_context_start": source_plan.source_context_range.start,
+        "source_context_end": source_plan.source_context_range.end,
+        "source_raw_start": source_plan.source_raw_range.start,
+        "source_raw_end": source_plan.source_raw_range.end,
+    })
+}
+
+#[cfg(debug_assertions)]
+fn spine_close_compact_debug_tool_choice(tool_choice: ResponsesToolChoice) -> &'static str {
+    match tool_choice {
+        ResponsesToolChoice::Auto => "auto",
+        ResponsesToolChoice::None => "none",
+    }
+}
+
+#[cfg(debug_assertions)]
+fn spine_close_compact_append_debug_record(store: &SpineStore, record: &serde_json::Value) {
+    if let Err(err) = store.append_compact_close_debug(record) {
+        tracing::debug!("failed to write spine.close compact debug sidecar: {err}");
+    }
 }
 
 /// Builds the close directive that turns a closed Spine node into durable memory.
