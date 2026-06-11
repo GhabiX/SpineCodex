@@ -9,6 +9,7 @@ use codex_protocol::num_format::format_si_suffix;
 use std::collections::HashSet;
 
 const PRETTY_MAX_VISIBLE_SIBLINGS: usize = 3;
+const INVALID_SPINE_TREE_SNAPSHOT_LABEL: &str = "invalid Spine tree snapshot";
 
 pub(crate) fn new_spine_tree_update(
     turn_id: String,
@@ -100,6 +101,11 @@ impl HistoryCell for SpineTreeUpdateCell {
 
 fn pretty_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> Vec<Line<'static>> {
     let mut lines = vec![pretty_header(snapshot)];
+    if let Err(error) = validate_spine_tree_snapshot(snapshot) {
+        lines.push(invalid_snapshot_display_line(error));
+        return lines;
+    }
+
     let root_nodes = child_nodes(snapshot, None);
     if root_nodes.is_empty() {
         lines.push(
@@ -120,6 +126,11 @@ fn pretty_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> 
 #[cfg(debug_assertions)]
 fn debug_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> Vec<Line<'static>> {
     let mut lines = vec![debug_header(snapshot)];
+    if let Err(error) = validate_spine_tree_snapshot(snapshot) {
+        lines.push(invalid_snapshot_display_line(error));
+        return lines;
+    }
+
     let root_nodes = child_nodes(snapshot, None);
     if root_nodes.is_empty() {
         lines.push(vec!["  └ ".dim(), "(empty)".dim().italic()].into());
@@ -142,8 +153,19 @@ fn debug_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> V
 
 fn pretty_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from("Spine Tree")];
+    if let Err(error) = validate_spine_tree_snapshot(snapshot) {
+        lines.push(invalid_snapshot_raw_line(error));
+        return lines;
+    }
+
+    let root_nodes = child_nodes(snapshot, None);
+    if root_nodes.is_empty() {
+        lines.push(Line::from(format!("  {}(empty)", pretty_branch(true))));
+        return lines;
+    }
+
     let active_path = active_path_ids(snapshot);
-    append_pretty_raw_children(snapshot, None, &active_path, "  ", &mut lines);
+    append_pretty_raw_nodes(snapshot, &root_nodes, &active_path, "  ", &mut lines);
     lines
 }
 
@@ -153,6 +175,10 @@ fn debug_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static>
         "Debug Spine Tree current {}",
         snapshot.active_node_id
     ))];
+    if let Err(error) = validate_spine_tree_snapshot(snapshot) {
+        lines.push(Line::from(invalid_snapshot_message(error)));
+        return lines;
+    }
     append_debug_raw_children(snapshot, None, 0, &mut lines);
     lines
 }
@@ -184,10 +210,6 @@ fn render_pretty_node(
 ) {
     let children = child_nodes(snapshot, Some(node.node_id.as_str()));
     let active = node.node_id == snapshot.active_node_id;
-    if should_elide_pretty_node(node, !children.is_empty()) {
-        render_pretty_nodes(snapshot, &children, active_path, prefix, width, out);
-        return;
-    }
     let line_prefix = format!("{}{}", prefix, pretty_branch(is_last));
     let child_prefix = format!("{}{}", prefix, pretty_child_prefix(is_last));
     let mut spans = vec![
@@ -206,17 +228,6 @@ fn render_pretty_node(
     push_owned_lines(&wrapped, out);
 
     render_pretty_nodes(snapshot, &children, active_path, &child_prefix, width, out);
-}
-
-fn append_pretty_raw_children(
-    snapshot: &SpineTreeUpdatedNotification,
-    parent_id: Option<&str>,
-    active_path: &HashSet<&str>,
-    prefix: &str,
-    out: &mut Vec<Line<'static>>,
-) {
-    let nodes = child_nodes(snapshot, parent_id);
-    append_pretty_raw_nodes(snapshot, &nodes, active_path, prefix, out);
 }
 
 fn render_pretty_nodes(
@@ -263,10 +274,6 @@ fn append_pretty_raw_nodes(
             PrettySiblingItem::Node(node) => {
                 let children = child_nodes(snapshot, Some(node.node_id.as_str()));
                 let active = node.node_id == snapshot.active_node_id;
-                if should_elide_pretty_node(node, !children.is_empty()) {
-                    append_pretty_raw_nodes(snapshot, &children, active_path, prefix, out);
-                    continue;
-                }
                 let marker = pretty_marker_text(node, active, !children.is_empty());
                 out.push(Line::from(format!(
                     "{}{}{} {}",
@@ -287,23 +294,25 @@ fn pretty_render_items<'a>(
     nodes: &[&'a SpineTreeNode],
     active_path: &HashSet<&str>,
 ) -> Vec<PrettySiblingItem<'a>> {
-    let mut items = Vec::new();
-    for item in pretty_sibling_items(nodes, active_path) {
-        match item {
-            PrettySiblingItem::PreviousTasks(count) => {
-                items.push(PrettySiblingItem::PreviousTasks(count));
-            }
-            PrettySiblingItem::Node(node) => {
-                let children = child_nodes(snapshot, Some(node.node_id.as_str()));
-                if should_elide_pretty_node(node, !children.is_empty()) {
-                    items.extend(pretty_render_items(snapshot, &children, active_path));
-                } else {
-                    items.push(PrettySiblingItem::Node(node));
-                }
-            }
+    let mut normalized_nodes = Vec::new();
+    append_visible_pretty_nodes(snapshot, nodes, &mut normalized_nodes);
+    pretty_sibling_items(&normalized_nodes, active_path)
+}
+
+fn append_visible_pretty_nodes<'a>(
+    snapshot: &'a SpineTreeUpdatedNotification,
+    nodes: &[&'a SpineTreeNode],
+    out: &mut Vec<&'a SpineTreeNode>,
+) {
+    for node in nodes.iter().copied() {
+        let children = child_nodes(snapshot, Some(node.node_id.as_str()));
+        let active = node.node_id == snapshot.active_node_id;
+        if should_elide_pretty_node(node, !children.is_empty(), active) {
+            append_visible_pretty_nodes(snapshot, &children, out);
+        } else {
+            out.push(node);
         }
     }
-    items
 }
 
 enum PrettySiblingItem<'a> {
@@ -407,7 +416,7 @@ fn render_previous_tasks_group(
 
 fn previous_tasks_group_label(count: usize) -> String {
     if count == 1 {
-        "Previous task".to_string()
+        "1 previous task".to_string()
     } else {
         format!("{count} previous tasks")
     }
@@ -434,8 +443,8 @@ fn trimmed_summary(node: &SpineTreeNode) -> Option<&str> {
         .filter(|text| !text.is_empty())
 }
 
-fn should_elide_pretty_node(node: &SpineTreeNode, has_children: bool) -> bool {
-    has_children && trimmed_summary(node).is_none()
+fn should_elide_pretty_node(node: &SpineTreeNode, has_children: bool, active: bool) -> bool {
+    has_children && !active && trimmed_summary(node).is_none()
 }
 
 fn pretty_default_node_label(node: &SpineTreeNode, active: bool) -> &'static str {
@@ -448,6 +457,89 @@ fn pretty_default_node_label(node: &SpineTreeNode, active: bool) -> &'static str
         SpineTreeNodeStatus::Closed => "Completed task",
         SpineTreeNodeStatus::Compacted => "Previous task",
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpineTreeSnapshotValidationError {
+    DuplicateNodeId,
+    MissingActiveNode,
+    MissingParent,
+    ParentCycle,
+}
+
+impl SpineTreeSnapshotValidationError {
+    fn label(self) -> &'static str {
+        match self {
+            SpineTreeSnapshotValidationError::DuplicateNodeId => "duplicate node id",
+            SpineTreeSnapshotValidationError::MissingActiveNode => "missing active node",
+            SpineTreeSnapshotValidationError::MissingParent => "missing parent node",
+            SpineTreeSnapshotValidationError::ParentCycle => "parent cycle",
+        }
+    }
+}
+
+fn validate_spine_tree_snapshot(
+    snapshot: &SpineTreeUpdatedNotification,
+) -> Result<(), SpineTreeSnapshotValidationError> {
+    if snapshot.nodes.is_empty() {
+        return Ok(());
+    }
+
+    let mut node_ids = HashSet::new();
+    for node in &snapshot.nodes {
+        if !node_ids.insert(node.node_id.as_str()) {
+            return Err(SpineTreeSnapshotValidationError::DuplicateNodeId);
+        }
+    }
+
+    if !node_ids.contains(snapshot.active_node_id.as_str()) {
+        return Err(SpineTreeSnapshotValidationError::MissingActiveNode);
+    }
+
+    for node in &snapshot.nodes {
+        if let Some(parent_id) = node.parent_id.as_deref()
+            && !node_ids.contains(parent_id)
+        {
+            return Err(SpineTreeSnapshotValidationError::MissingParent);
+        }
+    }
+
+    for node in &snapshot.nodes {
+        let mut seen = HashSet::new();
+        let mut current_id = Some(node.node_id.as_str());
+        while let Some(node_id) = current_id {
+            if !seen.insert(node_id) {
+                return Err(SpineTreeSnapshotValidationError::ParentCycle);
+            }
+            current_id = snapshot
+                .nodes
+                .iter()
+                .find(|candidate| candidate.node_id == node_id)
+                .and_then(|candidate| candidate.parent_id.as_deref());
+        }
+    }
+
+    Ok(())
+}
+
+fn invalid_snapshot_display_line(error: SpineTreeSnapshotValidationError) -> Line<'static> {
+    vec![
+        format!("  {}", pretty_branch(true)).dim(),
+        Span::from(invalid_snapshot_message(error)).yellow().bold(),
+    ]
+    .into()
+}
+
+fn invalid_snapshot_raw_line(error: SpineTreeSnapshotValidationError) -> Line<'static> {
+    Line::from(format!(
+        "  {}{}",
+        pretty_branch(true),
+        invalid_snapshot_message(error)
+    ))
+}
+
+fn invalid_snapshot_message(error: SpineTreeSnapshotValidationError) -> String {
+    format!("{INVALID_SPINE_TREE_SNAPSHOT_LABEL}: {}", error.label())
 }
 
 #[cfg(debug_assertions)]
@@ -763,12 +855,13 @@ mod tests {
     fn pretty_uses_green_check_for_closed_nodes() {
         let cell = new_spine_tree_update(
             "turn".to_string(),
-            snapshot(vec![node(
-                "1",
-                None,
-                Some("finished"),
-                SpineTreeNodeStatus::Closed,
-            )]),
+            snapshot_with_active(
+                "2",
+                vec![
+                    node("1", None, Some("finished"), SpineTreeNodeStatus::Closed),
+                    node("2", None, Some("active"), SpineTreeNodeStatus::Live),
+                ],
+            ),
         );
 
         let lines = cell.display_lines(80);
@@ -784,12 +877,13 @@ mod tests {
     fn pretty_uses_non_success_marker_for_compacted_nodes() {
         let cell = new_spine_tree_update(
             "turn".to_string(),
-            snapshot(vec![node(
-                "1",
-                None,
-                Some("compacted"),
-                SpineTreeNodeStatus::Compacted,
-            )]),
+            snapshot_with_active(
+                "2",
+                vec![
+                    node("1", None, Some("compacted"), SpineTreeNodeStatus::Compacted),
+                    node("2", None, Some("active"), SpineTreeNodeStatus::Live),
+                ],
+            ),
         );
 
         let lines = cell.display_lines(80);
@@ -799,6 +893,99 @@ mod tests {
             .find(|span| span.content.as_ref() == "◌")
             .expect("compacted node should render a non-success marker");
         assert_eq!(marker_span.style.fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn pretty_renders_empty_snapshot_in_display_and_raw() {
+        let cell = new_spine_tree_update(
+            "turn".to_string(),
+            snapshot_with_active("missing", Vec::new()),
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          └ (empty)
+        "###);
+
+        let raw = render_lines(&cell.raw_lines()).join("\n");
+        insta::assert_snapshot!(raw, @r###"
+        Spine Tree
+          └ (empty)
+        "###);
+    }
+
+    #[test]
+    fn pretty_rejects_invalid_snapshot_in_display_and_raw() {
+        let cell = new_spine_tree_update(
+            "turn".to_string(),
+            snapshot_with_active(
+                "missing",
+                vec![node(
+                    "1",
+                    None,
+                    Some("unreachable task"),
+                    SpineTreeNodeStatus::Closed,
+                )],
+            ),
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          └ invalid Spine tree snapshot: missing active node
+        "###);
+        assert!(!rendered.contains("unreachable task"));
+
+        let raw = render_lines(&cell.raw_lines()).join("\n");
+        insta::assert_snapshot!(raw, @r###"
+        Spine Tree
+          └ invalid Spine tree snapshot: missing active node
+        "###);
+        assert!(!raw.contains("unreachable task"));
+    }
+
+    #[test]
+    fn rejects_malformed_snapshot_shapes() {
+        assert_eq!(
+            validate_spine_tree_snapshot(&snapshot_with_active(
+                "1",
+                vec![
+                    node("1", None, Some("first"), SpineTreeNodeStatus::Live),
+                    node("1", None, Some("duplicate"), SpineTreeNodeStatus::Closed),
+                ],
+            )),
+            Err(SpineTreeSnapshotValidationError::DuplicateNodeId)
+        );
+        assert_eq!(
+            validate_spine_tree_snapshot(&snapshot_with_active(
+                "missing",
+                vec![node("1", None, Some("first"), SpineTreeNodeStatus::Closed)],
+            )),
+            Err(SpineTreeSnapshotValidationError::MissingActiveNode)
+        );
+        assert_eq!(
+            validate_spine_tree_snapshot(&snapshot_with_active(
+                "1",
+                vec![node(
+                    "1",
+                    Some("missing-parent"),
+                    Some("first"),
+                    SpineTreeNodeStatus::Live,
+                )],
+            )),
+            Err(SpineTreeSnapshotValidationError::MissingParent)
+        );
+        assert_eq!(
+            validate_spine_tree_snapshot(&snapshot_with_active(
+                "1",
+                vec![
+                    node("1", Some("2"), Some("first"), SpineTreeNodeStatus::Live),
+                    node("2", Some("1"), Some("second"), SpineTreeNodeStatus::Opened),
+                ],
+            )),
+            Err(SpineTreeSnapshotValidationError::ParentCycle)
+        );
     }
 
     #[test]
@@ -822,6 +1009,32 @@ mod tests {
           └ ◉ active
         "###);
         assert!(!rendered.contains("Previous context"));
+    }
+
+    #[test]
+    fn pretty_labels_single_previous_group_distinct_from_blank_compact() {
+        let cell = new_spine_tree_update(
+            "turn".to_string(),
+            snapshot_with_active(
+                "4",
+                vec![
+                    node("1", None, Some("older"), SpineTreeNodeStatus::Closed),
+                    node("2", None, None, SpineTreeNodeStatus::Compacted),
+                    node("3", None, Some("recent"), SpineTreeNodeStatus::Closed),
+                    node("4", None, Some("active"), SpineTreeNodeStatus::Live),
+                ],
+            ),
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          ├ ◌ 1 previous task
+          ├ ◌ Previous task
+          ├ ✓ recent
+          └ ◉ active
+        "###);
+        assert!(!rendered.contains("older"));
     }
 
     #[test]
@@ -930,6 +1143,59 @@ mod tests {
         assert!(!rendered.contains("child 2"));
         assert!(!rendered.contains("child 3"));
         assert!(!rendered.contains("previous contexts"));
+    }
+
+    #[test]
+    fn pretty_folds_after_eliding_structural_nodes() {
+        let cell = new_spine_tree_update(
+            "turn".to_string(),
+            snapshot_with_active(
+                "3.3",
+                vec![
+                    node("1", None, Some("old root 1"), SpineTreeNodeStatus::Closed),
+                    node("2", None, Some("old root 2"), SpineTreeNodeStatus::Closed),
+                    node("3", None, None, SpineTreeNodeStatus::Opened),
+                    node(
+                        "3.1",
+                        Some("3"),
+                        Some("child 1"),
+                        SpineTreeNodeStatus::Closed,
+                    ),
+                    node(
+                        "3.2",
+                        Some("3"),
+                        Some("child 2"),
+                        SpineTreeNodeStatus::Closed,
+                    ),
+                    node(
+                        "3.3",
+                        Some("3"),
+                        Some("active child"),
+                        SpineTreeNodeStatus::Live,
+                    ),
+                ],
+            ),
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          ├ ◌ 2 previous tasks
+          ├ ✓ child 1
+          ├ ✓ child 2
+          └ ◉ active child
+        "###);
+        assert!(!rendered.contains("old root 1"));
+        assert!(!rendered.contains("old root 2"));
+
+        let raw = render_lines(&cell.raw_lines()).join("\n");
+        insta::assert_snapshot!(raw, @r###"
+        Spine Tree
+          ├ ◌ 2 previous tasks
+          ├ ✓ child 1
+          ├ ✓ child 2
+          └ ◉ active child
+        "###);
     }
 
     #[test]
@@ -1107,12 +1373,20 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          └ ✓ Completed task
+          └ ◉ Current task
+            └ ✓ Completed task
         "###);
         assert!(!rendered.contains("(empty)"));
         assert!(!rendered.contains(" 1"));
-        assert!(!rendered.contains("Current task"));
+        assert!(rendered.contains("Current task"));
         assert!(rendered.contains("✓ Completed task"));
         assert!(!rendered.contains("root"));
+
+        let raw = render_lines(&cell.raw_lines()).join("\n");
+        insta::assert_snapshot!(raw, @r###"
+        Spine Tree
+          └ ◉ Current task
+            └ ✓ Completed task
+        "###);
     }
 }
