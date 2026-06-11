@@ -25,6 +25,7 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
 use codex_app_server_protocol::AuthMode;
+use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -185,7 +186,10 @@ async fn run_remote_compact_task_inner_impl(
     .await?;
     let prompt = Prompt {
         input: prompt_input,
-        tools: native_compact_tools(tool_router.model_visible_specs()),
+        tools: native_compact_tools(
+            tool_router.model_visible_specs(),
+            turn_context.features.enabled(Feature::SpineJit),
+        ),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,
@@ -267,7 +271,11 @@ async fn run_remote_compact_task_inner_impl(
     Ok(())
 }
 
-pub(crate) fn native_compact_tools(tools: Vec<ToolSpec>) -> Vec<ToolSpec> {
+pub(crate) fn native_compact_tools(tools: Vec<ToolSpec>, spine_jit_enabled: bool) -> Vec<ToolSpec> {
+    if !spine_jit_enabled {
+        return tools;
+    }
+
     tools
         .into_iter()
         .filter(|tool| !matches!(tool, ToolSpec::Namespace(namespace) if namespace.name == SPINE_NAMESPACE))
@@ -460,4 +468,37 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     }
 
     deleted_items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_tools::ResponsesApiNamespace;
+
+    fn namespace_tool(name: &str) -> ToolSpec {
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: name.to_string(),
+            description: format!("Tools in the {name} namespace."),
+            tools: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn native_compact_tools_preserves_spine_namespace_when_spine_jit_disabled() {
+        let tools = vec![namespace_tool(SPINE_NAMESPACE), namespace_tool("external")];
+
+        let filtered = native_compact_tools(tools.clone(), /*spine_jit_enabled*/ false);
+
+        assert_eq!(filtered, tools);
+    }
+
+    #[test]
+    fn native_compact_tools_filters_spine_namespace_when_spine_jit_enabled() {
+        let filtered = native_compact_tools(
+            vec![namespace_tool(SPINE_NAMESPACE), namespace_tool("external")],
+            /*spine_jit_enabled*/ true,
+        );
+
+        assert_eq!(filtered, vec![namespace_tool("external")]);
+    }
 }

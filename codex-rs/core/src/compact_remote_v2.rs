@@ -191,7 +191,10 @@ async fn run_remote_compact_task_inner_impl(
     input.push(ResponseItem::CompactionTrigger);
     let prompt = Prompt {
         input,
-        tools: native_compact_tools(tool_router.model_visible_specs()),
+        tools: native_compact_tools(
+            tool_router.model_visible_specs(),
+            turn_context.features.enabled(Feature::SpineJit),
+        ),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,
