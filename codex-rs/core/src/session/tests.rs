@@ -10378,7 +10378,11 @@ async fn close_commit_is_atomic_across_sidecar_and_history() {
                 .any(|node| node.node_id == "1.1.1" && node.status == SpineTreeNodeStatus::Closed)
         },
     );
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(
+        compact_mock.requests().len(),
+        0,
+        "failed durable close output append must not start close compact"
+    );
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -10396,6 +10400,117 @@ async fn close_commit_is_atomic_across_sidecar_and_history() {
         )),
         "failed close raw output append must not persist the close output carrier"
     );
+}
+
+#[tokio::test]
+async fn close_sidecar_commit_marker_failure_invalidates_runtime() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_slot_summary_sse(
+            "spine-close-sidecar-marker-failure",
+            "close sidecar marker failure compact summary",
+        ),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before close sidecar marker failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "close-sidecar-fail-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "close-sidecar-fail-open".to_string(),
+            "close sidecar failure child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("close-sidecar-fail-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let inner = assistant_message("child body before close sidecar marker failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
+        .await
+        .expect("record inner");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "close-sidecar-fail");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .stage_spine_close("close-sidecar-fail".to_string(), None)
+        .await
+        .expect("stage close");
+    let original_history = session.clone_history().await.raw_items().to_vec();
+    while rx.try_recv().is_ok() {}
+
+    let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
+    std::fs::create_dir_all(store.commit_path_for_test())
+        .expect("block close commit marker append");
+
+    let err = session
+        .maybe_commit_spine_tool_output(&turn_context, &function_output("close-sidecar-fail"))
+        .await
+        .expect_err("close sidecar marker append failure should fail");
+    assert!(
+        err.should_invalidate_runtime(),
+        "sidecar marker failure should be invalidating: {err}"
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        original_history.as_slice(),
+        "failed close sidecar commit must not replace host history"
+    );
+    let err = session
+        .spine_tree()
+        .await
+        .expect_err("sidecar commit failure should invalidate Spine runtime");
+    assert!(
+        err.to_string().contains("spine runtime is invalid"),
+        "unexpected runtime error: {err}"
+    );
+    assert_no_pending_spine_tree_update_matching(
+        &rx,
+        "failed close sidecar commit must not publish committed close tree state",
+        |snapshot| {
+            snapshot
+                .nodes
+                .iter()
+                .any(|node| node.node_id == "1.1.1" && node.status == SpineTreeNodeStatus::Closed)
+        },
+    );
+    assert_eq!(compact_mock.requests().len(), 1);
 }
 
 #[tokio::test]
@@ -10678,6 +10793,115 @@ async fn spine_next_raw_output_append_failure_does_not_replace_host_history() {
         )),
         "failed next raw output append must not persist the next output carrier"
     );
+}
+
+#[tokio::test]
+async fn next_sidecar_commit_marker_failure_invalidates_runtime() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_slot_summary_sse(
+            "spine-next-sidecar-marker-failure",
+            "next sidecar marker failure compact summary",
+        ),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before next sidecar marker failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "next-sidecar-fail-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "next-sidecar-fail-open".to_string(),
+            "next sidecar failure child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("next-sidecar-fail-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let inner = assistant_message("child body before next sidecar marker failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
+        .await
+        .expect("record inner");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "next-sidecar-fail");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_request))
+        .await
+        .expect("record next request");
+    session
+        .stage_spine_next(
+            "next-sidecar-fail".to_string(),
+            "next sidecar failure sibling".to_string(),
+            None,
+        )
+        .await
+        .expect("stage next");
+    let original_history = session.clone_history().await.raw_items().to_vec();
+    while rx.try_recv().is_ok() {}
+
+    let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
+    std::fs::create_dir_all(store.commit_path_for_test()).expect("block next commit marker append");
+
+    let err = session
+        .maybe_commit_spine_tool_output(&turn_context, &function_output("next-sidecar-fail"))
+        .await
+        .expect_err("next sidecar marker append failure should fail");
+    assert!(
+        err.should_invalidate_runtime(),
+        "sidecar marker failure should be invalidating: {err}"
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        original_history.as_slice(),
+        "failed next sidecar commit must not replace host history"
+    );
+    let err = session
+        .spine_tree()
+        .await
+        .expect_err("sidecar commit failure should invalidate Spine runtime");
+    assert!(
+        err.to_string().contains("spine runtime is invalid"),
+        "unexpected runtime error: {err}"
+    );
+    assert_no_pending_spine_tree_update_matching(
+        &rx,
+        "failed next sidecar commit must not publish committed next tree state",
+        |snapshot| snapshot.active_node_id == "1.1.2",
+    );
+    assert_eq!(compact_mock.requests().len(), 1);
 }
 
 #[tokio::test]

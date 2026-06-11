@@ -1125,7 +1125,7 @@ impl Session {
         }
         let mut lock_retries = 0;
         let commit_output = loop {
-            match self.try_commit_spine_tool_output_once(
+            let attempt = self.try_commit_spine_tool_output_once(
                 spine_slot,
                 call_id,
                 item,
@@ -1133,7 +1133,21 @@ impl Session {
                 pre_compact_token_baselines,
                 completed_toolcall.clone(),
                 tool_resp_already_recorded,
-            )? {
+            );
+            let attempt = match attempt {
+                Ok(attempt) => attempt,
+                Err(err) => {
+                    if err.should_invalidate_runtime() {
+                        self.invalidate_spine_runtime(format!(
+                            "failed to commit completed Spine toolcall [{:?}] for call_id={call_id}: {err}",
+                            err.class()
+                        ))
+                        .await;
+                    }
+                    return Err(err);
+                }
+            };
+            match attempt {
                 SpineCommitAttempt::Done(output) => break output,
                 SpineCommitAttempt::RuntimeMissing => {
                     let reason = "spine runtime missing during completed toolcall commit";
