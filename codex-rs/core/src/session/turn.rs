@@ -1443,7 +1443,7 @@ impl SpineControlOverlay {
     }
 
     fn push_request(&mut self, item: ResponseItem) {
-        // FormalDef 3.1.4.5: this is a turn-local protocol closure overlay for
+        // FormularDef 3.1.4.5: this is a turn-local protocol closure overlay for
         // Spine tool request/output pairs. It is not ContextManager history,
         // sidecar state, or h(PS), and feature-off must be base Codex.
         if !self.enabled {
