@@ -42,6 +42,8 @@ use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use crate::spine::parse_stack::ParseStack;
+use crate::spine::parse_stack::PreparedRootEpochReduction;
+use crate::spine::parse_stack::PreparedTaskTreeReduction;
 use crate::spine::parse_stack::event_to_token;
 use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 #[cfg(test)]
@@ -191,7 +193,8 @@ struct PreparedCloseCommit {
     memory_body: String,
     archive_writes: Vec<StagedArchiveWrite>,
     close_event: SpineLedgerEvent,
-    staged_parse_stack: ParseStack,
+    memory: crate::spine::model::MemoryRef,
+    task_tree_reduction: PreparedTaskTreeReduction,
 }
 
 struct PreparedRootCompactCommit {
@@ -200,7 +203,9 @@ struct PreparedRootCompactCommit {
     memory_body: String,
     compact_checkpoint: Option<crate::spine::compact_checkpoint::SpineCompactCheckpoint>,
     root_compact_event: SpineLedgerEvent,
-    staged_parse_stack: ParseStack,
+    memory: crate::spine::model::MemoryRef,
+    root_epoch_reduction: PreparedRootEpochReduction,
+    next_open_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1725,7 +1730,6 @@ impl SpineRuntime {
         completed_toolcall: Option<CompletedToolCall>,
     ) -> Result<SpineCommitKind, SpineError> {
         let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
-        let mut staged_parse_stack = prepared.staged_parse_stack.clone();
         let mut events = vec![prepared.close_event.clone()];
         let completed_toolcall = completed_toolcall.ok_or_else(|| {
             SpineError::InvalidEvent(
@@ -1745,8 +1749,13 @@ impl SpineRuntime {
                 })?,
         )?;
         let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
-        staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
         events.push(toolcall_event);
+        self.parse_stack
+            .shift_pending_close(prepared.memory.clone(), &self.archive())?;
+        let mut final_parse_stack = self
+            .parse_stack
+            .task_tree_reduced(prepared.task_tree_reduction)?;
+        final_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
         self.write_prepared_memory_body(&prepared.mem, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
         self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body)?;
@@ -1759,7 +1768,7 @@ impl SpineRuntime {
                 .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?,
         )?;
         self.append_committed_events(events, marker)?;
-        self.parse_stack = staged_parse_stack;
+        self.parse_stack = final_parse_stack;
         self.clear_completed_toolcall_anchors(&completed_toolcall);
         Ok(SpineCommitKind::Close {
             suffix_start: prepared.suffix_start,
@@ -1776,9 +1785,12 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
     ) -> Result<SpineCommitKind, SpineError> {
-        let mut prepared =
-            self.prepare_close_commit(instruction, close_compact, token_baselines)?;
-        let child = prepared.staged_parse_stack.next_child_id()?;
+        let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
+        let mut close_reduced_parse_stack = self.parse_stack.clone();
+        close_reduced_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
+        close_reduced_parse_stack
+            .apply_prevalidated_task_tree_reduction(prepared.task_tree_reduction.clone());
+        let child = close_reduced_parse_stack.next_child_id()?;
         let open_index = prepared
             .suffix_start
             .checked_add(prepared.replacement.len())
@@ -1800,7 +1812,23 @@ impl SpineRuntime {
             open_context_tokens: token_baselines.context_tokens,
             open_context_source,
         };
-        prepared.staged_parse_stack.shift(
+        let mut events = vec![prepared.close_event.clone(), open_event];
+        let completed_toolcall = completed_toolcall.ok_or_else(|| {
+            SpineError::InvalidEvent(
+                "spine.next commit requires completed toolcall evidence".to_string(),
+            )
+        })?;
+        let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
+        let completed_toolcall =
+            self.remap_completed_toolcall_context_indices(completed_toolcall, open_index)?;
+        let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
+        events.push(toolcall_event);
+        self.parse_stack
+            .shift_pending_close(prepared.memory.clone(), &self.archive())?;
+        let mut final_parse_stack = self
+            .parse_stack
+            .task_tree_reduced(prepared.task_tree_reduction)?;
+        final_parse_stack.shift(
             SpineToken::Open {
                 meta: tree_meta_with_token_baselines(
                     &self.archive(),
@@ -1814,20 +1842,7 @@ impl SpineRuntime {
             },
             &self.archive(),
         )?;
-        let mut events = vec![prepared.close_event.clone(), open_event];
-        let completed_toolcall = completed_toolcall.ok_or_else(|| {
-            SpineError::InvalidEvent(
-                "spine.next commit requires completed toolcall evidence".to_string(),
-            )
-        })?;
-        let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
-        let completed_toolcall =
-            self.remap_completed_toolcall_context_indices(completed_toolcall, open_index)?;
-        let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
-        prepared
-            .staged_parse_stack
-            .shift(SpineToken::ToolCall { segments }, &self.archive())?;
-        events.push(toolcall_event);
+        final_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
         self.write_prepared_memory_body(&prepared.mem, &prepared.memory_body)?;
         flush_archive_writes(&prepared.archive_writes)?;
         self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body)?;
@@ -1840,7 +1855,7 @@ impl SpineRuntime {
                 .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?,
         )?;
         self.append_committed_events(events, marker)?;
-        self.parse_stack = prepared.staged_parse_stack;
+        self.parse_stack = final_parse_stack;
         self.clear_completed_toolcall_anchors(&completed_toolcall);
         Ok(SpineCommitKind::CloseThenOpen {
             suffix_start: prepared.suffix_start,
@@ -1920,8 +1935,9 @@ impl SpineRuntime {
             mem.compact_id.clone(),
             body.clone(),
         );
-        let mut staged_parse_stack = self.parse_stack.clone();
-        staged_parse_stack.shift(SpineToken::Close { memory }, &staged_archive)?;
+        let task_tree_reduction = self
+            .parse_stack
+            .prepare_current_task_tree_reduction(&staged_archive, memory.clone())?;
         let archive_writes = staged_archive.staged_writes();
         let replacement = vec![memory_response_item(&body)];
         Ok(PreparedCloseCommit {
@@ -1931,7 +1947,8 @@ impl SpineRuntime {
             memory_body: body,
             archive_writes,
             close_event,
-            staged_parse_stack,
+            memory,
+            task_tree_reduction,
         })
     }
 
@@ -2173,12 +2190,16 @@ impl SpineRuntime {
             .rposition(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Open(_))))
             .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))?;
         let suffix = &self.parse_stack.symbols[open_idx + 1..];
-        let [Symbol::SpineTreeNodes(nodes)] = suffix else {
-            return Err(SpineError::InvalidEvent(format!(
-                "spine.close source plan expected one live node list after current Open, found {suffix:?}"
-            )));
-        };
-        Ok(nodes)
+        match suffix {
+            [Symbol::SpineTreeNodes(nodes)]
+            | [
+                Symbol::SpineTreeNodes(nodes),
+                Symbol::Control(ControlSymbol::Close(_)),
+            ] => Ok(nodes),
+            _ => Err(SpineError::InvalidEvent(format!(
+                "spine.close source plan expected live node list after current Open, found {suffix:?}"
+            ))),
+        }
     }
 
     pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
@@ -2227,6 +2248,16 @@ impl SpineRuntime {
             token_metadata,
             checkpoint_rollout_path,
         )?;
+        self.parse_stack.shift_pending_compact(
+            prepared.memory.clone(),
+            prepared.next_open_index,
+            token_metadata.next_open_input_tokens,
+            token_metadata.next_open_context_tokens,
+            &self.archive(),
+        )?;
+        let final_parse_stack = self
+            .parse_stack
+            .root_epoch_reduced(prepared.root_epoch_reduction)?;
         self.write_prepared_memory_body(&prepared.mem, &prepared.memory_body)?;
         self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body)?;
         if let Some(checkpoint) = prepared.compact_checkpoint.as_ref() {
@@ -2234,7 +2265,7 @@ impl SpineRuntime {
         }
         let marker = root_compact_commit_marker(self.ledger.next_event_seq, &prepared.mem)?;
         self.append_committed_events(vec![prepared.root_compact_event], marker)?;
-        self.parse_stack = prepared.staged_parse_stack;
+        self.parse_stack = final_parse_stack;
         self.pending = None;
         Ok(prepared.result)
     }
@@ -2327,36 +2358,51 @@ impl SpineRuntime {
             mem.memory_output_tokens,
         );
 
-        // Probe first because source_context_range records the pre-compact source
-        // span, while next_open_index is the post-compact h(PS) materialized len.
-        let mut probe_parse_stack = self.parse_stack.clone();
-        probe_parse_stack.shift(
-            SpineToken::Compact {
-                memory: memory.clone(),
-                next_open_index: 0,
-                next_open_input_tokens: token_metadata.next_open_input_tokens,
-                next_open_context_tokens: token_metadata.next_open_context_tokens,
-            },
-            &self.archive(),
-        )?;
         let staged_memory_body = Some((compact_id.as_str(), body.as_str()));
-        let next_open_index = render_parse_stack_to_context_with_memory_body(
-            &probe_parse_stack,
-            raw_items,
-            staged_memory_body,
-        )?
-        .len();
+        let next_open_index_usize = match self.parse_stack.pending_compact_next_open_index(
+            &memory,
+            token_metadata.next_open_input_tokens,
+            token_metadata.next_open_context_tokens,
+        )? {
+            Some(next_open_index) => next_open_index,
+            None => {
+                // Probe first because source_context_range records the pre-compact source
+                // span, while next_open_index is the post-compact h(PS) materialized len.
+                let mut probe_parse_stack = self.parse_stack.clone();
+                probe_parse_stack.shift(
+                    SpineToken::Compact {
+                        memory: memory.clone(),
+                        next_open_index: 0,
+                        next_open_input_tokens: token_metadata.next_open_input_tokens,
+                        next_open_context_tokens: token_metadata.next_open_context_tokens,
+                    },
+                    &self.archive(),
+                )?;
+                render_parse_stack_to_context_with_memory_body(
+                    &probe_parse_stack,
+                    raw_items,
+                    staged_memory_body,
+                )?
+                .len()
+            }
+        };
 
         let mut staged_parse_stack = self.parse_stack.clone();
-        staged_parse_stack.shift(
-            SpineToken::Compact {
-                memory,
-                next_open_index,
-                next_open_input_tokens: token_metadata.next_open_input_tokens,
-                next_open_context_tokens: token_metadata.next_open_context_tokens,
-            },
+        staged_parse_stack.shift_pending_compact(
+            memory.clone(),
+            next_open_index_usize,
+            token_metadata.next_open_input_tokens,
+            token_metadata.next_open_context_tokens,
             &self.archive(),
         )?;
+        let root_epoch_reduction = staged_parse_stack.prepare_root_epoch_reduction(
+            &self.archive(),
+            memory.clone(),
+            next_open_index_usize,
+            token_metadata.next_open_input_tokens,
+            token_metadata.next_open_context_tokens,
+        )?;
+        staged_parse_stack.apply_prevalidated_root_epoch_reduction(root_epoch_reduction.clone());
         let materialized = render_parse_stack_to_context_with_memory_body(
             &staged_parse_stack,
             raw_items,
@@ -2369,7 +2415,7 @@ impl SpineRuntime {
                 materialized.len()
             )));
         }
-        let next_open_index = u64::try_from(next_open_index)
+        let next_open_index_u64 = u64::try_from(next_open_index_usize)
             .map_err(|_| SpineError::InvalidEvent("root open index overflow".to_string()))?;
         let token_seq_after = seq.checked_add(1).ok_or_else(|| {
             SpineError::InvalidEvent("root compact token seq overflow".to_string())
@@ -2397,7 +2443,7 @@ impl SpineRuntime {
             node,
             boundary: self.raw_len,
             mem: compact_id,
-            next_open_index,
+            next_open_index: next_open_index_u64,
             raw_live_hash,
             next_open_input_tokens: token_metadata.next_open_input_tokens,
             next_open_context_tokens: token_metadata.next_open_context_tokens,
@@ -2408,7 +2454,9 @@ impl SpineRuntime {
             memory_body: body,
             compact_checkpoint,
             root_compact_event,
-            staged_parse_stack,
+            memory,
+            root_epoch_reduction,
+            next_open_index: next_open_index_usize,
         })
     }
 

@@ -14974,6 +14974,109 @@ async fn spine_control_with_ordinary_tool_call_commits_grouped_toolcall_leaf() -
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_spine_control_overlay_does_not_duplicate_followup_prompt() -> anyhow::Result<()>
+{
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpineJit)
+            .expect("enable spine feature");
+        config.model_provider.supports_websockets = false;
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "overlay-open-once",
+                    SPINE_NAMESPACE,
+                    SPINE_TOOL_OPEN,
+                    r#"{"summary":"overlay child"}"#,
+                ),
+                ev_completed("overlay-open-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("overlay-follow-up", "done"),
+                ev_completed("overlay-follow-up-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "open a spine child then continue".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(_) => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2, "expected sampling and follow-up");
+    let follow_up = requests[1].body_json();
+    let follow_up_items = follow_up["input"]
+        .as_array()
+        .expect("follow-up input should be an array");
+    let request_count = follow_up_items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
+                && item.get("call_id").and_then(serde_json::Value::as_str)
+                    == Some("overlay-open-once")
+        })
+        .count();
+    let output_count = follow_up_items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(serde_json::Value::as_str)
+                    == Some("overlay-open-once")
+        })
+        .count();
+    assert_eq!(
+        request_count, 1,
+        "completed Spine control request must appear exactly once from durable h(PS), not stale overlay: {follow_up}"
+    );
+    assert_eq!(
+        output_count, 1,
+        "completed Spine control output must appear exactly once from durable h(PS), not stale overlay: {follow_up}"
+    );
+
+    let rollout_path = test
+        .codex
+        .rollout_path()
+        .expect("test thread should have rollout persistence");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(
+        runtime.parse_stack_toolcall_leaf_count_for_test(),
+        1,
+        "open control transaction must be one durable toolcall leaf"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn init_new_session_creates_root_and_1_1() {
     let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(

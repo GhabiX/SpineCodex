@@ -4307,6 +4307,59 @@ fn empty_task_tree_reduce_fails_without_archive_side_effects() {
 }
 
 #[test]
+fn task_tree_reduce_archive_failure_leaves_symbols_unchanged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let archive = SpineArchive::staged_with_memory_body(
+        dir.path().to_path_buf(),
+        "bad-memory".to_string(),
+        "wrong body".to_string(),
+    );
+    let node_id = NodeId::root_epoch(1).child(1);
+    let meta = tree_meta(&archive, node_id.clone(), 0, "child".to_string()).expect("meta");
+    let memory = memory_ref(
+        &archive,
+        "bad-memory".to_string(),
+        node_id,
+        sha1_hex(b"expected body"),
+        0..1,
+        0..1,
+        1..2,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let mut parse_stack = ParseStack {
+        symbols: vec![
+            Symbol::Control(ControlSymbol::Open(meta)),
+            Symbol::SpineTreeNodes(vec![SpineTreeNode::MsgAsLeafNode {
+                msg: SegRef::ResponseItem {
+                    raw_ordinal: 0,
+                    context_index: 0,
+                },
+                from_user: true,
+            }]),
+            Symbol::Control(ControlSymbol::Close(memory)),
+        ],
+    };
+    let before = parse_stack.symbols.clone();
+
+    let err = parse_stack
+        .shift(SpineToken::End, &archive)
+        .expect_err("archive failure must abort close reduction");
+    assert!(
+        err.to_string().contains("staged memory body hash mismatch"),
+        "unexpected archive failure: {err}"
+    );
+    assert_eq!(
+        parse_stack.symbols, before,
+        "failed close reduction must not pop/truncate the live symbols"
+    );
+}
+
+#[test]
 fn open_toolcall_leaf_makes_close_suffix_non_empty() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -4595,7 +4648,7 @@ fn close_artifact_write_failure_does_not_publish_parse_stack_or_ledger() {
 }
 
 #[test]
-fn close_persistence_failure_does_not_mutate_parse_stack() {
+fn close_persistence_failure_leaves_retryable_close_token() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
@@ -4635,7 +4688,6 @@ fn close_persistence_failure_does_not_mutate_parse_stack() {
         .observe_context_item(4, 4, &function_output("close"))
         .expect("observe close output");
 
-    let parse_stack_before = runtime.parse_stack().clone();
     let tree_before = runtime.render_tree().expect("render tree before failure");
     let events_before = event_log_debug(&runtime);
     std::fs::create_dir(runtime.store.mem_path()).expect("poison mem ledger path");
@@ -4656,17 +4708,99 @@ fn close_persistence_failure_does_not_mutate_parse_stack() {
         "unexpected close persistence failure: {err}"
     );
 
-    assert_parse_stack_tree_and_events_unchanged(
-        &runtime,
-        &parse_stack_before,
-        &tree_before,
-        &events_before,
+    assert_eq!(
+        runtime.render_tree().expect("render tree after failure"),
+        tree_before,
+        "failed close must not publish the reduced task tree"
     );
+    assert_eq!(
+        event_log_debug(&runtime),
+        events_before,
+        "failed close must not publish ledger events"
+    );
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            ..,
+            Symbol::Control(ControlSymbol::Open(_)),
+            Symbol::SpineTreeNodes(_),
+            Symbol::Control(ControlSymbol::Close(_))
+        ]
+    ));
     assert!(
         runtime
             .pending_commit("close")
             .expect("pending close")
             .is_some()
+    );
+}
+
+#[test]
+fn close_retry_reduces_existing_pending_close_token() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    open_task(&mut runtime, &mut raw, "open", "child");
+    append_msg(&mut runtime, &mut raw, "inside");
+    observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close-retry");
+    runtime
+        .stage_close("close-retry".to_string(), None)
+        .expect("stage close");
+    let suffix_start = match runtime
+        .pending_commit("close-retry")
+        .expect("pending close")
+    {
+        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
+        other => panic!("expected pending close, got {other:?}"),
+    };
+    let close_request_index = current_context_len(&runtime, &raw) - 1;
+    observe_function_output(&mut runtime, &mut raw, "close-retry");
+    let close_compact = compact_body_with_context_range("1.1.1", suffix_start..close_request_index);
+
+    let prepared = runtime
+        .prepare_close_commit(
+            None,
+            Some(close_compact.clone()),
+            SpineTokenBaselines::default(),
+        )
+        .expect("prepare close commit");
+    runtime
+        .parse_stack
+        .shift_pending_close(prepared.memory.clone(), &runtime.archive())
+        .expect("simulate retryable pending Close token");
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            ..,
+            Symbol::Control(ControlSymbol::Open(_)),
+            Symbol::SpineTreeNodes(_),
+            Symbol::Control(ControlSymbol::Close(_))
+        ]
+    ));
+
+    let commit = runtime
+        .maybe_commit_output("close-retry", Some(close_compact))
+        .expect("retry close")
+        .expect("close should commit on retry");
+    assert!(matches!(commit, SpineCommitKind::Close { .. }));
+    assert!(!matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [
+            ..,
+            Symbol::Control(ControlSymbol::Open(_)),
+            Symbol::SpineTreeNodes(_),
+            Symbol::Control(ControlSymbol::Close(_))
+        ]
+    ));
+    assert_eq!(
+        runtime
+            .store
+            .commit_markers_for_test()
+            .expect("commit markers")
+            .len(),
+        1
     );
 }
 
@@ -5978,6 +6112,10 @@ fn root_compact_checkpoint_append_failure_can_retry_without_duplicate_mem() {
             .any(|event| matches!(event, SpineLedgerEvent::RootCompact { .. })),
         "failed checkpoint append must not commit RootCompact marker"
     );
+    assert!(matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [.., Symbol::Control(ControlSymbol::Compact(..))]
+    ));
     let mems_after_failure = runtime.store.mems().expect("read mems after failure");
     assert_eq!(
         mems_after_failure.len(),
@@ -6012,6 +6150,10 @@ fn root_compact_checkpoint_append_failure_can_retry_without_duplicate_mem() {
             &result.materialized,
         )
         .expect("retry checkpoint should validate against reused mem and RootCompact marker");
+    assert!(!matches!(
+        runtime.parse_stack().symbols.as_slice(),
+        [.., Symbol::Control(ControlSymbol::Compact(..))]
+    ));
 }
 
 #[test]

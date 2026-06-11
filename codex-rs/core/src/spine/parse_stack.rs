@@ -29,6 +29,24 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+#[derive(Clone, Debug)]
+pub(super) struct PreparedTaskTreeReduction {
+    meta: TreeMeta,
+    children: Vec<SpineTreeNode>,
+    memory: MemoryRef,
+    memory_path: PathBuf,
+    trajs_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct PreparedRootEpochReduction {
+    compact_idx: usize,
+    boundary_idx: usize,
+    boundary: Symbol,
+    root_epoch: RootEpoch,
+    next_open: Symbol,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ParseStack {
     pub(super) symbols: Vec<Symbol>,
@@ -119,16 +137,21 @@ impl ParseStack {
             ) => {}
             _ => return Ok(false),
         }
-        let Some(Symbol::Control(ControlSymbol::Close(memory))) = self.symbols.pop() else {
-            unreachable!("close symbol matched by reduce pattern")
-        };
-        let Some(Symbol::SpineTreeNodes(children)) = self.symbols.pop() else {
-            unreachable!("nodes symbol matched by reduce pattern")
-        };
-        let Some(Symbol::Control(ControlSymbol::Open(meta))) = self.symbols.pop() else {
-            unreachable!("open symbol matched by reduce pattern")
+        let len = self.symbols.len();
+        let (
+            Symbol::Control(ControlSymbol::Open(meta)),
+            Symbol::SpineTreeNodes(children),
+            Symbol::Control(ControlSymbol::Close(memory)),
+        ) = (
+            self.symbols[len - 3].clone(),
+            self.symbols[len - 2].clone(),
+            self.symbols[len - 1].clone(),
+        )
+        else {
+            unreachable!("close reduction suffix was checked before clone")
         };
         let (memory_path, trajs_path) = archive_task_tree(archive, &meta, &children, &memory)?;
+        self.symbols.truncate(len - 3);
         self.symbols
             .push(Symbol::SpineTreeNode(SpineTreeNode::SpineTree {
                 memory,
@@ -138,6 +161,125 @@ impl ParseStack {
                 trajs_path,
             }));
         Ok(true)
+    }
+
+    pub(super) fn prepare_current_task_tree_reduction(
+        &self,
+        archive: &SpineArchive,
+        memory: MemoryRef,
+    ) -> Result<PreparedTaskTreeReduction, SpineError> {
+        let len = self.symbols.len();
+        let Some((meta, children)) = self.current_task_tree_suffix() else {
+            return Err(SpineError::InvalidEvent(
+                "spine.close requires a live task tree suffix".to_string(),
+            ));
+        };
+        if self
+            .symbols
+            .get(len.saturating_sub(1))
+            .is_some_and(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Close(_))))
+        {
+            let Symbol::Control(ControlSymbol::Close(existing)) = &self.symbols[len - 1] else {
+                unreachable!("close suffix checked before match")
+            };
+            if existing != &memory {
+                return Err(SpineError::InvalidEvent(format!(
+                    "pending spine.close memory {} does not match prepared memory {}",
+                    existing.compact_id, memory.compact_id
+                )));
+            }
+        }
+        let (memory_path, trajs_path) = archive_task_tree(archive, meta, children, &memory)?;
+        Ok(PreparedTaskTreeReduction {
+            meta: meta.clone(),
+            children: children.to_vec(),
+            memory,
+            memory_path,
+            trajs_path,
+        })
+    }
+
+    pub(super) fn shift_pending_close(
+        &mut self,
+        memory: MemoryRef,
+        archive: &SpineArchive,
+    ) -> Result<(), SpineError> {
+        if self.pending_close_memory()?.is_some() {
+            self.validate_pending_task_tree_reduction_memory(&memory)?;
+            return Ok(());
+        }
+        self.reduce_fixpoint(archive)?;
+        if self.current_task_tree_suffix().is_none() {
+            return Err(SpineError::InvalidEvent(
+                "spine.close requires a live task tree suffix".to_string(),
+            ));
+        }
+        self.symbols
+            .push(Symbol::Control(ControlSymbol::Close(memory)));
+        Ok(())
+    }
+
+    pub(super) fn validate_pending_task_tree_reduction(
+        &self,
+        reduction: &PreparedTaskTreeReduction,
+    ) -> Result<(), SpineError> {
+        let len = self.symbols.len();
+        let Some(
+            [
+                ..,
+                Symbol::Control(ControlSymbol::Open(meta)),
+                Symbol::SpineTreeNodes(children),
+                Symbol::Control(ControlSymbol::Close(memory)),
+            ],
+        ) = self.symbols.get(..)
+        else {
+            return Err(SpineError::InvalidEvent(
+                "spine.close reduction requires a pending Close suffix".to_string(),
+            ));
+        };
+        if len < 3 {
+            return Err(SpineError::InvalidEvent(
+                "spine.close reduction suffix underflow".to_string(),
+            ));
+        }
+        if meta != &reduction.meta || children != &reduction.children || memory != &reduction.memory
+        {
+            return Err(SpineError::InvalidEvent(
+                "pending spine.close suffix changed before reduction".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn apply_prevalidated_task_tree_reduction(
+        &mut self,
+        reduction: PreparedTaskTreeReduction,
+    ) {
+        debug_assert!(
+            self.validate_pending_task_tree_reduction(&reduction)
+                .is_ok()
+        );
+        let len = self.symbols.len();
+        self.symbols.truncate(len - 3);
+        self.symbols
+            .push(Symbol::SpineTreeNode(SpineTreeNode::SpineTree {
+                memory: reduction.memory,
+                meta: reduction.meta,
+                children: reduction.children,
+                memory_path: reduction.memory_path,
+                trajs_path: reduction.trajs_path,
+            }));
+        self.reduce_nodes_fixpoint();
+    }
+
+    pub(super) fn task_tree_reduced(
+        &self,
+        reduction: PreparedTaskTreeReduction,
+    ) -> Result<Self, SpineError> {
+        self.validate_pending_task_tree_reduction(&reduction)?;
+        let mut reduced = self.clone();
+        reduced.apply_prevalidated_task_tree_reduction(reduction);
+        Ok(reduced)
     }
 
     fn reduce_nodes_append(&mut self) -> bool {
@@ -168,6 +310,18 @@ impl ParseStack {
         };
         self.symbols.push(Symbol::SpineTreeNodes(vec![node]));
         true
+    }
+
+    fn reduce_nodes_fixpoint(&mut self) {
+        loop {
+            if self.reduce_nodes_append() {
+                continue;
+            }
+            if self.reduce_node_to_nodes() {
+                continue;
+            }
+            break;
+        }
     }
 
     fn reduce_root_epoch(&mut self, archive: &SpineArchive) -> Result<bool, SpineError> {
@@ -219,6 +373,140 @@ impl ParseStack {
         }
         self.symbols.push(next_open);
         Ok(true)
+    }
+
+    pub(super) fn prepare_root_epoch_reduction(
+        &self,
+        archive: &SpineArchive,
+        memory: MemoryRef,
+        next_open_index: usize,
+        next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
+    ) -> Result<PreparedRootEpochReduction, SpineError> {
+        let next_open = next_root_open_symbol(
+            archive,
+            &memory,
+            next_open_index,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        )?;
+        let Some(boundary_idx) = self.symbols.iter().rposition(|symbol| {
+            matches!(
+                symbol,
+                Symbol::Control(ControlSymbol::Init(_)) | Symbol::RootEpoches(_)
+            )
+        }) else {
+            return Err(SpineError::InvalidEvent(
+                "root compact has no root epoch boundary".to_string(),
+            ));
+        };
+        let compact_idx = if self
+            .pending_compact_next_open_index(
+                &memory,
+                next_open_input_tokens,
+                next_open_context_tokens,
+            )?
+            .is_some()
+        {
+            self.symbols.len() - 1
+        } else {
+            self.symbols.len()
+        };
+        Ok(PreparedRootEpochReduction {
+            compact_idx,
+            boundary_idx,
+            boundary: self.symbols[boundary_idx].clone(),
+            root_epoch: RootEpoch { memory },
+            next_open,
+        })
+    }
+
+    pub(super) fn shift_pending_compact(
+        &mut self,
+        memory: MemoryRef,
+        next_open_index: usize,
+        next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
+        archive: &SpineArchive,
+    ) -> Result<(), SpineError> {
+        if self.pending_compact_memory()?.is_some() {
+            self.validate_pending_compact_memory(&memory)?;
+            return Ok(());
+        }
+        self.reduce_fixpoint(archive)?;
+        self.symbols.push(Symbol::Control(ControlSymbol::Compact(
+            memory,
+            next_open_index,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        )));
+        Ok(())
+    }
+
+    pub(super) fn validate_pending_root_epoch_reduction(
+        &self,
+        reduction: &PreparedRootEpochReduction,
+    ) -> Result<(), SpineError> {
+        let Some(Symbol::Control(ControlSymbol::Compact(
+            memory,
+            next_open_index,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        ))) = self.symbols.get(reduction.compact_idx)
+        else {
+            return Err(SpineError::InvalidEvent(
+                "root compact reduction requires a pending Compact token".to_string(),
+            ));
+        };
+        let Symbol::Control(ControlSymbol::Open(next_open)) = &reduction.next_open else {
+            return Err(SpineError::Invariant(
+                "root compact prepared next open is not an Open symbol".to_string(),
+            ));
+        };
+        if &reduction.root_epoch.memory != memory
+            || next_open.index != *next_open_index
+            || next_open.open_input_tokens != *next_open_input_tokens
+            || next_open.open_context_tokens != *next_open_context_tokens
+        {
+            return Err(SpineError::InvalidEvent(
+                "pending root compact token changed before reduction".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn apply_prevalidated_root_epoch_reduction(
+        &mut self,
+        reduction: PreparedRootEpochReduction,
+    ) {
+        debug_assert!(
+            self.validate_pending_root_epoch_reduction(&reduction)
+                .is_ok()
+        );
+        match reduction.boundary {
+            Symbol::Control(ControlSymbol::Init(_)) => {
+                self.symbols.truncate(reduction.boundary_idx + 1);
+                self.symbols
+                    .push(Symbol::RootEpoches(vec![reduction.root_epoch]));
+            }
+            Symbol::RootEpoches(mut root_epochs) => {
+                self.symbols.truncate(reduction.boundary_idx);
+                root_epochs.push(reduction.root_epoch);
+                self.symbols.push(Symbol::RootEpoches(root_epochs));
+            }
+            _ => unreachable!("root epoch boundary was checked before prepare"),
+        }
+        self.symbols.push(reduction.next_open);
+    }
+
+    pub(super) fn root_epoch_reduced(
+        &self,
+        reduction: PreparedRootEpochReduction,
+    ) -> Result<Self, SpineError> {
+        self.validate_pending_root_epoch_reduction(&reduction)?;
+        let mut reduced = self.clone();
+        reduced.apply_prevalidated_root_epoch_reduction(reduction);
+        Ok(reduced)
     }
 
     #[cfg(test)]
@@ -297,6 +585,113 @@ impl ParseStack {
         Ok(self.symbols[open_idx + 1..]
             .iter()
             .any(|symbol| matches!(symbol, Symbol::SpineTreeNodes(nodes) if !nodes.is_empty())))
+    }
+
+    fn current_task_tree_suffix(&self) -> Option<(&TreeMeta, &[SpineTreeNode])> {
+        match self.symbols.get(..) {
+            Some(
+                [
+                    ..,
+                    Symbol::Control(ControlSymbol::Open(meta)),
+                    Symbol::SpineTreeNodes(children),
+                ],
+            ) if !children.is_empty() => Some((meta, children)),
+            Some(
+                [
+                    ..,
+                    Symbol::Control(ControlSymbol::Open(meta)),
+                    Symbol::SpineTreeNodes(children),
+                    Symbol::Control(ControlSymbol::Close(_)),
+                ],
+            ) if !children.is_empty() => Some((meta, children)),
+            _ => None,
+        }
+    }
+
+    fn pending_close_memory(&self) -> Result<Option<&MemoryRef>, SpineError> {
+        match self.symbols.get(..) {
+            Some(
+                [
+                    ..,
+                    Symbol::Control(ControlSymbol::Open(_)),
+                    Symbol::SpineTreeNodes(_),
+                    Symbol::Control(ControlSymbol::Close(memory)),
+                ],
+            ) => Ok(Some(memory)),
+            Some(
+                [
+                    ..,
+                    Symbol::Control(ControlSymbol::Open(_)),
+                    Symbol::Control(ControlSymbol::Close(_)),
+                ],
+            ) => Err(SpineError::InvalidEvent(
+                "spine.close requires non-empty live suffix".to_string(),
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    fn validate_pending_task_tree_reduction_memory(
+        &self,
+        memory: &MemoryRef,
+    ) -> Result<(), SpineError> {
+        let Some(existing) = self.pending_close_memory()? else {
+            return Ok(());
+        };
+        if existing != memory {
+            return Err(SpineError::InvalidEvent(format!(
+                "pending spine.close memory {} does not match prepared memory {}",
+                existing.compact_id, memory.compact_id
+            )));
+        }
+        Ok(())
+    }
+
+    fn pending_compact_memory(&self) -> Result<Option<&MemoryRef>, SpineError> {
+        match self.symbols.last() {
+            Some(Symbol::Control(ControlSymbol::Compact(memory, ..))) => Ok(Some(memory)),
+            _ => Ok(None),
+        }
+    }
+
+    fn validate_pending_compact_memory(&self, memory: &MemoryRef) -> Result<(), SpineError> {
+        let Some(existing) = self.pending_compact_memory()? else {
+            return Ok(());
+        };
+        if existing != memory {
+            return Err(SpineError::InvalidEvent(format!(
+                "pending root compact memory {} does not match prepared memory {}",
+                existing.compact_id, memory.compact_id
+            )));
+        }
+        Ok(())
+    }
+
+    pub(super) fn pending_compact_next_open_index(
+        &self,
+        memory: &MemoryRef,
+        next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
+    ) -> Result<Option<usize>, SpineError> {
+        let Some(Symbol::Control(ControlSymbol::Compact(
+            existing,
+            next_open_index,
+            existing_input_tokens,
+            existing_context_tokens,
+        ))) = self.symbols.last()
+        else {
+            return Ok(None);
+        };
+        if existing != memory
+            || *existing_input_tokens != next_open_input_tokens
+            || *existing_context_tokens != next_open_context_tokens
+        {
+            return Err(SpineError::InvalidEvent(format!(
+                "pending root compact memory {} does not match prepared memory {}",
+                existing.compact_id, memory.compact_id
+            )));
+        }
+        Ok(Some(*next_open_index))
     }
 
     pub(super) fn current_root_epoch_id(&self) -> Result<NodeId, SpineError> {

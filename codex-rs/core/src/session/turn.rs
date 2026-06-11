@@ -1515,6 +1515,13 @@ fn is_spine_parser_control_call(call: &ToolCall) -> bool {
         )
 }
 
+fn tool_response_call_id_for_overlay(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id.clone()),
+        _ => None,
+    }
+}
+
 fn conflicting_toolreq_rejection_output(call: &ToolCall, message: &str) -> ResponseItem {
     let output = FunctionCallOutputPayload {
         body: FunctionCallOutputBody::Text(message.to_string()),
@@ -2136,7 +2143,6 @@ async fn drain_in_flight(
                 if let Some(update) = deferred_history_update.as_mut() {
                     update.replace_tool_output(&response_item);
                 }
-                spine_control_overlay.push_output_if_matching(&response_item);
                 if output_recorded_before_spine_commit {
                     if let Some(update) = deferred_history_update {
                         sess.apply_deferred_spine_history_update(update)
@@ -2146,6 +2152,9 @@ async fn drain_in_flight(
                     if let Some(snapshot) = deferred_tree_update {
                         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
                             .await;
+                    }
+                    if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
+                        spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
                 } else if is_pending_spine_close_like {
                     sess.record_conversation_items_raw_only_durable_without_emission(
@@ -2168,6 +2177,9 @@ async fn drain_in_flight(
                         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
                             .await;
                     }
+                    if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
+                        spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
+                    }
                 } else if commit.spine_context_already_observed {
                     sess.record_conversation_items_without_spine_observe(
                         &turn_context,
@@ -2175,7 +2187,11 @@ async fn drain_in_flight(
                     )
                     .await
                     .map_err(SamplingRequestError::Codex)?;
+                    if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
+                        spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
+                    }
                 } else if spine_control_overlay.contains_matching_request(&response_item) {
+                    spine_control_overlay.push_output_if_matching(&response_item);
                     sess.record_conversation_items_spine_control_overlay_only(
                         &turn_context,
                         std::slice::from_ref(&response_item),
@@ -2268,7 +2284,6 @@ async fn drain_deferred_spine_tool_group(
             })
         })?;
     for response_item in &response_items {
-        spine_control_overlay.push_output_if_matching(response_item);
         mark_thread_memory_mode_polluted_if_external_context(
             sess.as_ref(),
             turn_context.as_ref(),
@@ -2276,6 +2291,7 @@ async fn drain_deferred_spine_tool_group(
         )
         .await;
     }
+    spine_control_overlay.remove_call_ids(&tool_call_ids);
     if let Some(update) = commit.deferred_history_update {
         sess.apply_deferred_spine_history_update(update)
             .await
