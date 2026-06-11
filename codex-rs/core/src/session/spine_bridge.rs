@@ -859,10 +859,24 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
         };
-        let output_call_ids = output_items
+        let expected_call_ids = tool_call_ids
             .iter()
-            .filter_map(|item| tool_response_call_id(item).map(str::to_string))
+            .cloned()
             .collect::<std::collections::BTreeSet<_>>();
+        let mut output_call_ids = std::collections::BTreeSet::new();
+        for item in output_items {
+            let Some(call_id) = tool_response_call_id(item) else {
+                return Err(SpineError::InvalidEvent(
+                    "grouped Spine toolcall output item is not a tool response".to_string(),
+                ));
+            };
+            if !expected_call_ids.contains(call_id) {
+                return Err(SpineError::InvalidEvent(format!(
+                    "grouped Spine toolcall unexpected output for call_id={call_id}"
+                )));
+            }
+            output_call_ids.insert(call_id.to_string());
+        }
         for call_id in tool_call_ids {
             if !output_call_ids.contains(call_id) {
                 return Err(SpineError::InvalidEvent(format!(

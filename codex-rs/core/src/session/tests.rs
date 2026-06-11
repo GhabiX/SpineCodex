@@ -14887,6 +14887,57 @@ async fn grouped_toolcall_prevalidates_request_anchors_before_recording_outputs(
 }
 
 #[tokio::test]
+async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let anchored_request = function_call("anchored_tool", "anchored-call");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&anchored_request))
+        .await
+        .expect("record anchored request");
+    let before_history = session.clone_history().await.raw_items().to_vec();
+    let mut client_session = session.services.model_client.new_session();
+    let err = session
+        .record_spine_toolcall_group_outputs_and_commit_with_client_session(
+            &turn_context,
+            &mut client_session,
+            "anchored-call",
+            &["anchored-call".to_string()],
+            &[
+                function_output("anchored-call"),
+                function_output("extra-call"),
+            ],
+            session
+                .test_default_close_compact_tools(&turn_context)
+                .await
+                .expect("build close compact tools"),
+        )
+        .await
+        .expect_err("unexpected grouped output must fail before recording outputs");
+    assert!(
+        err.to_string()
+            .contains("grouped Spine toolcall unexpected output for call_id=extra-call"),
+        "unexpected grouped prevalidation error: {err}"
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        before_history.as_slice(),
+        "failed grouped toolcall prevalidation must not append outputs to host history"
+    );
+}
+
+#[tokio::test]
 async fn base_path_completed_toolcall_groups_all_outputs_in_one_append() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
