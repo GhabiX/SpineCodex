@@ -243,8 +243,8 @@ fn render_pretty_nodes(
     for (index, item) in items.into_iter().enumerate() {
         let is_last = index + 1 == item_count;
         match item {
-            PrettySiblingItem::PreviousTasks(count) => {
-                render_previous_tasks_group(count, prefix, is_last, width, out);
+            PrettySiblingItem::HistoryBucket(count) => {
+                render_history_bucket(count, prefix, is_last, width, out);
             }
             PrettySiblingItem::Node(node) => {
                 render_pretty_node(snapshot, node, active_path, prefix, is_last, width, out);
@@ -265,11 +265,11 @@ fn append_pretty_raw_nodes(
     for (index, item) in items.into_iter().enumerate() {
         let is_last = index + 1 == item_count;
         match item {
-            PrettySiblingItem::PreviousTasks(count) => out.push(Line::from(format!(
+            PrettySiblingItem::HistoryBucket(count) => out.push(Line::from(format!(
                 "{}{}◌ {}",
                 prefix,
                 pretty_branch(is_last),
-                previous_tasks_group_label(count)
+                history_bucket_label(count)
             ))),
             PrettySiblingItem::Node(node) => {
                 let children = child_nodes(snapshot, Some(node.node_id.as_str()));
@@ -316,7 +316,7 @@ fn append_visible_pretty_nodes<'a>(
 }
 
 enum PrettySiblingItem<'a> {
-    PreviousTasks(usize),
+    HistoryBucket(usize),
     Node(&'a SpineTreeNode),
 }
 
@@ -324,30 +324,74 @@ fn pretty_sibling_items<'a>(
     nodes: &[&'a SpineTreeNode],
     active_path: &HashSet<&str>,
 ) -> Vec<PrettySiblingItem<'a>> {
-    if nodes.len() <= PRETTY_MAX_VISIBLE_SIBLINGS {
-        return nodes.iter().copied().map(PrettySiblingItem::Node).collect();
-    }
+    let mut items = nodes
+        .iter()
+        .copied()
+        .map(|node| {
+            if bucketable_history_node(node, active_path) {
+                PrettySiblingItem::HistoryBucket(1)
+            } else {
+                PrettySiblingItem::Node(node)
+            }
+        })
+        .collect::<Vec<_>>();
 
     let active_index = nodes
         .iter()
         .position(|node| active_path.contains(node.node_id.as_str()));
     let visible_end = active_index.map_or(nodes.len(), |index| index + 1);
     if visible_end < nodes.len() {
-        return nodes.iter().copied().map(PrettySiblingItem::Node).collect();
+        return merge_adjacent_history_buckets(items);
     };
+    if nodes.len() <= PRETTY_MAX_VISIBLE_SIBLINGS {
+        return merge_adjacent_history_buckets(items);
+    }
     let visible_start = visible_end.saturating_sub(PRETTY_MAX_VISIBLE_SIBLINGS);
 
-    let mut items = Vec::new();
+    let mut folded = Vec::new();
     if visible_start > 0 {
-        items.push(PrettySiblingItem::PreviousTasks(visible_start));
-    }
-    items.extend(
-        nodes[visible_start..visible_end]
+        let hidden_count = items[..visible_start]
             .iter()
-            .copied()
-            .map(PrettySiblingItem::Node),
-    );
-    items
+            .map(pretty_sibling_item_history_count)
+            .sum();
+        folded.push(PrettySiblingItem::HistoryBucket(hidden_count));
+    }
+    folded.extend(items.drain(visible_start..visible_end));
+    merge_adjacent_history_buckets(folded)
+}
+
+fn bucketable_history_node(node: &SpineTreeNode, active_path: &HashSet<&str>) -> bool {
+    matches!(
+        node.status,
+        SpineTreeNodeStatus::Closed | SpineTreeNodeStatus::Compacted
+    ) && trimmed_summary(node).is_none()
+        && !active_path.contains(node.node_id.as_str())
+}
+
+fn pretty_sibling_item_history_count(item: &PrettySiblingItem<'_>) -> usize {
+    match item {
+        PrettySiblingItem::HistoryBucket(count) => *count,
+        PrettySiblingItem::Node(_) => 1,
+    }
+}
+
+fn merge_adjacent_history_buckets<'a>(
+    items: Vec<PrettySiblingItem<'a>>,
+) -> Vec<PrettySiblingItem<'a>> {
+    let mut merged = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            PrettySiblingItem::HistoryBucket(count) => {
+                if let Some(PrettySiblingItem::HistoryBucket(previous)) = merged.last_mut() {
+                    *previous += count;
+                } else {
+                    merged.push(PrettySiblingItem::HistoryBucket(count));
+                }
+            }
+            PrettySiblingItem::Node(node) => merged.push(PrettySiblingItem::Node(node)),
+        }
+    }
+    merged
 }
 
 fn active_path_ids(snapshot: &SpineTreeUpdatedNotification) -> HashSet<&str> {
@@ -391,7 +435,7 @@ fn pretty_marker_text(node: &SpineTreeNode, active: bool, has_children: bool) ->
     }
 }
 
-fn render_previous_tasks_group(
+fn render_history_bucket(
     count: usize,
     prefix: &str,
     is_last: bool,
@@ -404,7 +448,7 @@ fn render_previous_tasks_group(
         Span::from(line_prefix).dim(),
         "◌".yellow().bold(),
         " ".into(),
-        Span::from(previous_tasks_group_label(count)),
+        Span::from(history_bucket_label(count)),
     ]);
     let wrapped = adaptive_wrap_line(
         &line,
@@ -414,7 +458,7 @@ fn render_previous_tasks_group(
     push_owned_lines(&wrapped, out);
 }
 
-fn previous_tasks_group_label(count: usize) -> String {
+fn history_bucket_label(count: usize) -> String {
     if count == 1 {
         "1 previous task".to_string()
     } else {
@@ -1005,14 +1049,15 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ├ ◌ Previous task
+          ├ ◌ 1 previous task
           └ ◉ active
         "###);
         assert!(!rendered.contains("Previous context"));
+        assert!(!rendered.contains("Previous task"));
     }
 
     #[test]
-    fn pretty_labels_single_previous_group_distinct_from_blank_compact() {
+    fn pretty_merges_folded_history_with_adjacent_blank_history() {
         let cell = new_spine_tree_update(
             "turn".to_string(),
             snapshot_with_active(
@@ -1029,12 +1074,100 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
-          ├ ◌ 1 previous task
-          ├ ◌ Previous task
+          ├ ◌ 2 previous tasks
           ├ ✓ recent
           └ ◉ active
         "###);
         assert!(!rendered.contains("older"));
+        assert!(!rendered.contains("Previous task"));
+        assert!(!rendered.contains("Completed task"));
+    }
+
+    #[test]
+    fn pretty_merges_blank_closed_and_compacted_history_under_budget() {
+        let cell = new_spine_tree_update(
+            "turn".to_string(),
+            snapshot_with_active(
+                "3",
+                vec![
+                    node("1", None, None, SpineTreeNodeStatus::Compacted),
+                    node("2", None, None, SpineTreeNodeStatus::Closed),
+                    node("3", None, Some("active"), SpineTreeNodeStatus::Live),
+                ],
+            ),
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          ├ ◌ 2 previous tasks
+          └ ◉ active
+        "###);
+        assert!(!rendered.contains("Previous task"));
+        assert!(!rendered.contains("Completed task"));
+
+        let raw = render_lines(&cell.raw_lines()).join("\n");
+        insta::assert_snapshot!(raw, @r###"
+        Spine Tree
+          ├ ◌ 2 previous tasks
+          └ ◉ active
+        "###);
+    }
+
+    #[test]
+    fn pretty_merges_folded_history_before_named_completed_tasks() {
+        let cell = new_spine_tree_update(
+            "turn".to_string(),
+            snapshot_with_active(
+                "16",
+                vec![
+                    node("1", None, Some("old 1"), SpineTreeNodeStatus::Closed),
+                    node("2", None, Some("old 2"), SpineTreeNodeStatus::Closed),
+                    node("3", None, Some("old 3"), SpineTreeNodeStatus::Closed),
+                    node("4", None, Some("old 4"), SpineTreeNodeStatus::Closed),
+                    node("5", None, Some("old 5"), SpineTreeNodeStatus::Closed),
+                    node("6", None, Some("old 6"), SpineTreeNodeStatus::Closed),
+                    node("7", None, Some("old 7"), SpineTreeNodeStatus::Closed),
+                    node("8", None, Some("old 8"), SpineTreeNodeStatus::Closed),
+                    node("9", None, Some("old 9"), SpineTreeNodeStatus::Closed),
+                    node("10", None, Some("old 10"), SpineTreeNodeStatus::Closed),
+                    node("11", None, Some("old 11"), SpineTreeNodeStatus::Closed),
+                    node("12", None, Some("old 12"), SpineTreeNodeStatus::Closed),
+                    node("13", None, None, SpineTreeNodeStatus::Compacted),
+                    node(
+                        "14",
+                        None,
+                        Some("Document confirmed true bugs and repair plan"),
+                        SpineTreeNodeStatus::Closed,
+                    ),
+                    node(
+                        "15",
+                        None,
+                        Some("验证 P1-E-1 POC 并复核 P1-D-1 设计意图"),
+                        SpineTreeNodeStatus::Closed,
+                    ),
+                    node(
+                        "16",
+                        None,
+                        Some("更新 P1-E/P1-D 复核结论文档"),
+                        SpineTreeNodeStatus::Live,
+                    ),
+                ],
+            ),
+        );
+
+        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          ├ ◌ 13 previous tasks
+          ├ ✓ Document confirmed true bugs and repair plan
+          ├ ✓ 验证 P1-E-1 POC 并复核 P1-D-1 设计意图
+          └ ◉ 更新 P1-E/P1-D 复核结论文档
+        "###);
+        assert!(!rendered.contains("old 1"));
+        assert!(!rendered.contains("Previous task"));
+        assert!(rendered.contains("✓ Document confirmed true bugs and repair plan"));
+        assert!(rendered.contains("✓ 验证 P1-E-1 POC 并复核 P1-D-1 设计意图"));
     }
 
     #[test]
@@ -1374,19 +1507,20 @@ mod tests {
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
           └ ◉ Current task
-            └ ✓ Completed task
+            └ ◌ 1 previous task
         "###);
         assert!(!rendered.contains("(empty)"));
-        assert!(!rendered.contains(" 1"));
+        assert!(!rendered.contains("1.1"));
         assert!(rendered.contains("Current task"));
-        assert!(rendered.contains("✓ Completed task"));
+        assert!(rendered.contains("1 previous task"));
+        assert!(!rendered.contains("Completed task"));
         assert!(!rendered.contains("root"));
 
         let raw = render_lines(&cell.raw_lines()).join("\n");
         insta::assert_snapshot!(raw, @r###"
         Spine Tree
           └ ◉ Current task
-            └ ✓ Completed task
+            └ ◌ 1 previous task
         "###);
     }
 }
