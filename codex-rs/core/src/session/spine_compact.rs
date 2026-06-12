@@ -194,7 +194,7 @@ impl Session {
                         && repair_attempts < SPINE_CLOSE_COMPACT_MAX_FORMAT_REPAIRS =>
                 {
                     repair_attempts += 1;
-                    prompt.input.push(spine_close_compact_developer_message(
+                    prompt.input.push(spine_close_compact_user_message(
                         &spine_close_compact_repair_text(&err, &skeleton),
                     ));
                 }
@@ -581,14 +581,14 @@ Source context range: [{}..{}).\n\n\
 {slot_map}",
         skeleton.source_context_range.start, skeleton.source_context_range.end
     );
-    prompt_input.push(spine_close_compact_developer_message(&tail));
+    prompt_input.push(spine_close_compact_user_message(&tail));
     Ok(())
 }
 
-fn spine_close_compact_developer_message(text: &str) -> ResponseItem {
+fn spine_close_compact_user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
-        role: "developer".to_string(),
+        role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],

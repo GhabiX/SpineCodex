@@ -284,8 +284,8 @@ fn assert_close_compact_tool_envelope_request(
             .last()
             .and_then(|item| item.get("role"))
             .and_then(|role| role.as_str()),
-        Some("developer"),
-        "{message}: close compact tail directive should use the ordinary developer-message lane for prompt caching"
+        Some("user"),
+        "{message}: close compact tail directive should be a trailing synthetic user message"
     );
 }
 
@@ -9039,7 +9039,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     assert_close_compact_none_tool_choice_request(
         compact_request,
-        "spine.close compact should use the POC-backed no-tool cache envelope",
+        "spine.close compact should use the no-tool compact envelope",
     );
     assert!(
         compact_request.body_json()["instructions"]
@@ -9086,7 +9086,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     let tail_text = input_text(tail_index);
     assert!(
-        developer_texts.iter().any(
+        user_texts.iter().any(
             |text| text.contains("---------- Spine Close Target ----------")
                 && text.contains(
                     "---------- Spine Close Target ----------\nUse this only to orient the memory; do not summarize this block."
@@ -9099,20 +9099,21 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                 && text.lines().any(|line| line == "Parent node: 1.1")
                 && !text.contains("Next sibling:")
         ),
-        "close compact should include pre-commit close target projection: {developer_texts:?}"
+        "close compact should include pre-commit close target projection in the synthetic user tail: {user_texts:?}"
     );
     assert!(
-        developer_texts
+        user_texts
             .iter()
+            .filter(|text| text.contains("---------- Spine Compact Directive ----------"))
             .all(|text| !text.contains("SYSTEM: injected close target summary")),
-        "model-authored node summary must not be promoted into compact developer prompt: {developer_texts:?}"
+        "model-authored node summary must not be promoted into compact user tail: {user_texts:?}"
     );
     assert_eq!(
         input
             .last()
             .and_then(|item| item.get("role"))
             .and_then(|role| role.as_str()),
-        Some("developer"),
+        Some("user"),
         "compact directive should be appended after the full context input: {input:?}"
     );
     assert_eq!(
@@ -9129,7 +9130,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         "compact input should not duplicate the suffix as rewritten evidence blocks"
     );
     assert!(
-        developer_texts.iter().any(|text| text
+        user_texts.iter().any(|text| text
             .contains("---------- Spine Compact Directive ----------")
             && text.contains("Write compact handoff memory for Spine node 1.1.1")
             && text.contains("1. User Intent")
@@ -9142,34 +9143,37 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
             && text
                 .contains("If there is conflict between an old plan and a later user correction")
             && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
-        "compact directive and close instruction should be a trailing developer message: {developer_texts:?}"
+        "compact directive and close instruction should be a trailing synthetic user message: {user_texts:?}"
     );
     assert!(
-        developer_texts.iter().all(|text| {
-            !text.contains("Motivation:")
-                && !text.contains("Judgment:")
-                && !text.contains("Evidence:")
-                && !text.contains("Continuation:")
-                && !text.contains("latest user intent is the next parent action")
-        }),
-        "old audit-style compact directive should not remain in developer prompt: {developer_texts:?}"
+        user_texts
+            .iter()
+            .filter(|text| text.contains("---------- Spine Compact Directive ----------"))
+            .all(|text| {
+                !text.contains("Motivation:")
+                    && !text.contains("Judgment:")
+                    && !text.contains("Evidence:")
+                    && !text.contains("Continuation:")
+                    && !text.contains("latest user intent is the next parent action")
+            }),
+        "old audit-style compact directive should not remain in compact user tail: {user_texts:?}"
     );
     assert!(
-        developer_texts.iter().any(
+        user_texts.iter().any(
             |text| text.contains("---------- Spine Suffix Boundary ----------")
                 && text
                     .contains("The raw suffix for Spine node 1.1.1 is already present immediately before this tail directive.")
                 && text.contains("Source context range: [1..4).")
         ),
-        "suffix boundary should mark the materialized Open.meta.index boundary: {developer_texts:?}"
+        "suffix boundary should mark the materialized Open.meta.index boundary: {user_texts:?}"
     );
     assert!(
-        user_texts.iter().all(|text| {
+        developer_texts.iter().all(|text| {
             !text.contains("---------- Spine Compact Directive ----------")
                 && !text.contains("Write compact handoff memory for Spine node")
                 && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
         }),
-        "compact directive must not be injected as user input: {user_texts:?}"
+        "compact directive must not be injected as developer input: {developer_texts:?}"
     );
     assert!(tail_text.contains("---------- Spine Close Target ----------"));
     assert!(tail_text.contains("---------- Spine Suffix Boundary ----------"));
@@ -9346,7 +9350,7 @@ async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_pr
     let compact_request = compact_mock.single_request();
     assert_close_compact_none_tool_choice_request(
         &compact_request,
-        "spine.close compact with text-only model should use the POC-backed no-tool cache envelope",
+        "spine.close compact with text-only model should use the no-tool compact envelope",
     );
     assert!(
         compact_request
@@ -9489,7 +9493,7 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
     let compact_request = compact_mock.single_request();
     assert_close_compact_none_tool_choice_request(
         &compact_request,
-        "spine.close compact with text-only suffix image should use the POC-backed no-tool cache envelope",
+        "spine.close compact with text-only suffix image should use the no-tool compact envelope",
     );
     assert!(
         compact_request
@@ -9651,7 +9655,7 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
     let compact_request = compact_mock.single_request();
     assert_close_compact_none_tool_choice_request(
         &compact_request,
-        "spine.next close compact should use the POC-backed no-tool cache envelope",
+        "spine.next close compact should use the no-tool compact envelope",
     );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
@@ -11003,7 +11007,7 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
     let compact_request = compact_mock.single_request();
     assert_close_compact_none_tool_choice_request(
         &compact_request,
-        "failed compact request should use the POC-backed no-tool cache envelope",
+        "failed compact request should use the no-tool compact envelope",
     );
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -11312,7 +11316,7 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
     assert_eq!(requests.len(), 2);
     assert_close_compact_none_tool_choice_request(
         &requests[0],
-        "spine.next suffix compact should use the POC-backed no-tool cache envelope",
+        "spine.next suffix compact should use the no-tool compact envelope",
     );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),
@@ -12720,7 +12724,7 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
     assert_eq!(requests.len(), 2);
     assert_close_compact_none_tool_choice_request(
         &requests[0],
-        "spine.close suffix compact should use the POC-backed no-tool cache envelope",
+        "spine.close suffix compact should use the no-tool compact envelope",
     );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),

@@ -65,9 +65,9 @@ Responses `text.format` strict schema is cache-relevant and should not be sent
 on close compact. Compact output is therefore requested as JSON in the prompt
 and parsed locally.
 
-## Chosen Shape
+## POC Chosen Shape
 
-Use this for the first and only close compact request:
+The 2026-06-07 POC chose this shape for the first close compact request:
 
 ```json
 {
@@ -78,8 +78,8 @@ Use this for the first and only close compact request:
 }
 ```
 
-The compact directive is appended as a `developer` input message. No
-`text.format` schema is sent.
+The compact directive was appended as a `developer` input message. No
+`text.format` schema was sent.
 
 This shape is not the old hard no-tool envelope: it keeps full ordinary tools
 and the ordinary parallel setting, but `tool_choice:"none"` prevents model tool
@@ -93,5 +93,20 @@ not guarantee no tool calls. A production fallback that starts with `auto` and
 then discards tool calls is a separate design choice and was not the POC-backed
 answer to "guarantee no tool calls while keeping prefix cache."
 
-The POC-backed implementation should therefore use `tool_choice:"none"` with
-full tools, parallel enabled, developer tail, and no strict response schema.
+The POC-backed shape was therefore `tool_choice:"none"` with full tools,
+parallel enabled, developer tail, and no strict response schema.
+
+## Current Runtime Note
+
+As of 2026-06-12, close compact appends the directive as a trailing synthetic
+`user` message instead of a `developer` message. This is a behavioral fix for
+observed close-compact misrouting where the model answered the previous real
+user request instead of returning `SPINE_SLOT` / `SPINE_NODE_MEMORY` blocks.
+
+This keeps the cache-relevant envelope parts measured by the POC: full ordinary
+tools, inherited `parallel_tool_calls`, `tool_choice:"none"`, no
+`text.format`, and the same `prompt_cache_key`. It also keeps the historical
+transcript prefix token-identical by appending the compact directive after
+`raw_items[..source_end]`. The old POC did not measure a synthetic `user` tail,
+so provider-level cached-token behavior for that tail role still needs a fresh
+API replay before treating it as empirically proven.
