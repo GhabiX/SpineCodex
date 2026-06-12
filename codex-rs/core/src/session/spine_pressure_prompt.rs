@@ -14,6 +14,7 @@ const SPINE_BOUNDARY_HINT_FIRST_TOKENS: i64 = 50_000;
 const SPINE_BOUNDARY_HINT_STEP_TOKENS: i64 = 25_000;
 const SPINE_CONTEXT_WARNING_RATIO_NUM: i64 = 80;
 const SPINE_CONTEXT_WARNING_RATIO_DEN: i64 = 100;
+const SPINE_PRESSURE_PROMPT_OVERLAY_ENABLED: bool = false;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SpinePressurePromptState {
@@ -94,6 +95,10 @@ impl Session {
         &self,
         mode: ModeKind,
     ) -> Option<SpinePressurePromptOverlay> {
+        if !SPINE_PRESSURE_PROMPT_OVERLAY_ENABLED {
+            return None;
+        }
+
         if !self.features.enabled(Feature::SpineJit) {
             return None;
         }

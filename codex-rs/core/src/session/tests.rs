@@ -16427,7 +16427,7 @@ async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
 }
 
 #[tokio::test]
-async fn spine_pressure_prompt_emits_boundary_hint_once_per_band() {
+async fn spine_pressure_prompt_overlay_is_temporarily_disabled() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -16484,15 +16484,14 @@ async fn spine_pressure_prompt_emits_boundary_hint_once_per_band() {
             model_context_window: Some(200_000),
         }));
     }
-    let first = session
-        .spine_pressure_prompt_overlay(ModeKind::Default)
-        .await
-        .expect("first pressure overlay");
-    let first_text = pressure_overlay_text(&first.item);
-    assert!(first_text.contains("Spine boundary hint"), "{first_text}");
+    assert!(
+        session
+            .spine_pressure_prompt_overlay(ModeKind::Default)
+            .await
+            .is_none(),
+        "pressure overlay is temporarily disabled"
+    );
     let history_before = session.clone_history().await.raw_items().to_vec();
-    session.mark_spine_pressure_prompt_overlay_sent(first).await;
-    assert_eq!(session.clone_history().await.raw_items(), history_before);
 
     assert!(
         session
@@ -16514,12 +16513,14 @@ async fn spine_pressure_prompt_emits_boundary_hint_once_per_band() {
             model_context_window: Some(200_000),
         }));
     }
-    let second = session
-        .spine_pressure_prompt_overlay(ModeKind::Default)
-        .await
-        .expect("next pressure band overlay");
-    let second_text = pressure_overlay_text(&second.item);
-    assert!(second_text.contains("Spine boundary hint"), "{second_text}");
+    assert!(
+        session
+            .spine_pressure_prompt_overlay(ModeKind::Default)
+            .await
+            .is_none(),
+        "pressure overlay remains disabled across pressure bands"
+    );
+    assert_eq!(session.clone_history().await.raw_items(), history_before);
 }
 
 #[tokio::test]
@@ -16602,7 +16603,7 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
 }
 
 #[tokio::test]
-async fn spine_pressure_prompt_context_warning_survives_missing_node_baseline() {
+async fn spine_pressure_prompt_context_warning_is_temporarily_disabled() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -16647,13 +16648,13 @@ async fn spine_pressure_prompt_context_warning_survives_missing_node_baseline() 
             model_context_window: Some(100_000),
         }));
     }
-    let overlay = session
-        .spine_pressure_prompt_overlay(ModeKind::Default)
-        .await
-        .expect("context warning overlay");
-    let text = pressure_overlay_text(&overlay.item);
-    assert!(text.contains("Spine context warning"), "{text}");
-    assert!(!text.contains("Spine boundary hint"), "{text}");
+    assert!(
+        session
+            .spine_pressure_prompt_overlay(ModeKind::Default)
+            .await
+            .is_none(),
+        "context warning overlay is temporarily disabled"
+    );
 }
 
 fn pressure_overlay_text(item: &ResponseItem) -> &str {
