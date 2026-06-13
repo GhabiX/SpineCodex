@@ -11,12 +11,9 @@ use crate::session::turn::built_tools;
 use crate::spine::CompletedToolCall;
 use crate::spine::CompletedToolCallSegment;
 use crate::spine::LiveRootCompact;
-use crate::spine::NodeId;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCloseCompact;
 use crate::spine::SpineCommitKind;
-use crate::spine::SpineCompactSourcePlan;
-use crate::spine::SpinePendingCloseAction;
 use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
@@ -24,6 +21,10 @@ use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 use crate::spine::SpineTokenBaselines;
 use crate::spine::ToolCallSegmentKind;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
@@ -198,6 +199,21 @@ impl Session {
         Ok(())
     }
 
+    pub(super) async fn spine_tools_visible(&self) -> bool {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return false;
+        };
+        let guard = spine_slot.lock().await;
+        guard.is_ready()
+    }
+
+    pub(super) async fn release_spine_runtime_for_shutdown(&self) {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return;
+        };
+        spine_slot.lock().await.release_runtime_for_shutdown();
+    }
+
     pub(super) async fn clone_spine_sidecar_for_fork(
         &self,
         boundary: &SpineCloneBoundary,
@@ -226,7 +242,7 @@ impl Session {
         if raw_ordinal_limit == raw_items.len() {
             return Ok(());
         }
-        let prefix_runtime = SpineRuntime::load_for_rollout_items(
+        let prefix_runtime = SpineRuntime::load_for_rollout_items_for_writer(
             &target_rollout_path,
             &raw_items[..raw_ordinal_limit],
             &[],
@@ -998,11 +1014,11 @@ impl Session {
             };
         let close_compact = match pending_commit {
             Some(SpinePendingCommit::Close {
-                action,
                 node,
                 suffix_start,
                 instruction,
-                next_summary,
+                action: _,
+                next_summary: _,
             }) => {
                 let history = self.clone_history().await;
                 let expected_history = history.raw_items().to_vec();
@@ -1015,7 +1031,7 @@ impl Session {
                             "completed toolcall missing first segment".to_string(),
                         )
                     })?;
-                let source_context = {
+                let source_plan = {
                     let guard = spine_slot.lock().await;
                     guard.ensure_valid()?;
                     let Some(spine) = guard.runtime() else {
@@ -1023,37 +1039,27 @@ impl Session {
                             "spine runtime missing while building close compact source plan for call_id={call_id}"
                         )));
                     };
-                    build_spine_close_target_projection(
-                        spine,
+                    spine.build_close_source_plan(
+                        history.raw_items(),
                         &node,
-                        action,
-                        next_summary.as_deref(),
+                        suffix_start,
+                        toolcall_start,
+                        call_id,
                     )
-                    .and_then(|close_target_projection| {
-                        let source_plan = spine.build_close_source_plan(
-                            history.raw_items(),
-                            &node,
-                            suffix_start,
-                            toolcall_start,
-                            call_id,
-                        )?;
-                        Ok((close_target_projection, source_plan))
-                    })
                 };
-                let (close_target_projection, source_plan): (String, SpineCompactSourcePlan) =
-                    match source_context {
-                        Ok(source_context) => source_context,
-                        Err(err) => {
-                            let reason = "spine close source plan failed before compact";
-                            if tool_resp_already_recorded {
-                                self.fail_closed_spine_toolcall_commit(call_id, reason)
-                                    .await;
-                            } else {
-                                self.abort_spine_pending_tool(call_id, reason).await;
-                            }
-                            return Err(err);
+                let source_plan = match source_plan {
+                    Ok(source_plan) => source_plan,
+                    Err(err) => {
+                        let reason = "spine close source plan failed before compact";
+                        if tool_resp_already_recorded {
+                            self.fail_closed_spine_toolcall_commit(call_id, reason)
+                                .await;
+                        } else {
+                            self.abort_spine_pending_tool(call_id, reason).await;
                         }
-                    };
+                        return Err(err);
+                    }
+                };
                 let compact = match Box::pin(self.spine_compact_close(
                     turn_context,
                     client_session,
@@ -1062,7 +1068,6 @@ impl Session {
                     suffix_start,
                     item,
                     instruction,
-                    close_target_projection,
                     source_plan,
                     close_compact_tools,
                 ))
@@ -1556,10 +1561,10 @@ impl Session {
                 return Ok(None);
             }
         }
-        let body = spine_root_compact_body(items, compacted_item).ok_or_else(|| {
+        let body = spine_root_compact_body(items).ok_or_else(|| {
             CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
-                reason: "native compact produced no model-visible Spine root memory body"
+                reason: "native compact replaced host context with no model-visible Spine root memory material"
                     .to_string(),
             }
         })?;
@@ -1653,21 +1658,210 @@ fn validate_no_live_root_compacts_without_rollout_boundaries(
     Ok(())
 }
 
-fn spine_root_compact_body(
-    replacement_history: &[ResponseItem],
-    compacted_item: &CompactedItem,
-) -> Option<String> {
-    // These carriers are Codex native compact success outputs. This is not a
-    // legacy Spine fallback or rendered-history parser.
-    let message = compacted_item.message.trim();
-    if !message.is_empty() {
-        return Some(compacted_item.message.clone());
+fn spine_root_compact_body(replaced_context: &[ResponseItem]) -> Option<String> {
+    let entries = replaced_context
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| response_item_visible_text(item).map(|text| (index + 1, text)))
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return None;
     }
-    compacted_item
-        .replacement_history
-        .as_deref()
-        .and_then(crate::compact_remote::remote_root_compact_body)
-        .or_else(|| crate::compact_remote::remote_root_compact_body(replacement_history))
+
+    let mut body = "# Spine Native Compact Memory\n\n\
+This memory is derived from the host context after native compact succeeded.\n"
+        .to_string();
+    for (index, text) in entries {
+        body.push_str("\n## Replaced Context Item ");
+        body.push_str(&index.to_string());
+        body.push_str("\n\n");
+        body.push_str(text.trim());
+        body.push('\n');
+    }
+    Some(body)
+}
+
+fn response_item_visible_text(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            let text = content_items_visible_text(content)?;
+            Some(format!("{role}: {text}"))
+        }
+        ResponseItem::Reasoning {
+            summary, content, ..
+        } => reasoning_visible_text(summary, content.as_deref()),
+        ResponseItem::LocalShellCall {
+            call_id,
+            status,
+            action,
+            ..
+        } => {
+            let call_id = call_id.as_deref().unwrap_or("<missing>");
+            Some(format!(
+                "local_shell_call {call_id} status={status:?}\n{action:?}"
+            ))
+        }
+        ResponseItem::FunctionCall {
+            name,
+            namespace,
+            arguments,
+            call_id,
+            ..
+        } => {
+            let tool_name = namespace
+                .as_deref()
+                .map(|namespace| format!("{namespace}.{name}"))
+                .unwrap_or_else(|| name.clone());
+            if arguments.trim().is_empty() {
+                Some(format!("function_call {call_id}: {tool_name}"))
+            } else {
+                Some(format!(
+                    "function_call {call_id}: {tool_name}\narguments: {arguments}"
+                ))
+            }
+        }
+        ResponseItem::ToolSearchCall {
+            call_id,
+            status,
+            execution,
+            arguments,
+            ..
+        } => {
+            let call_id = call_id.as_deref().unwrap_or("<missing>");
+            let status = status.as_deref().unwrap_or("<unknown>");
+            Some(format!(
+                "tool_search_call {call_id} status={status} execution={execution}\narguments: {arguments}"
+            ))
+        }
+        ResponseItem::FunctionCallOutput { call_id, output } => {
+            function_call_output_visible_text(output)
+                .map(|text| format!("function_call_output {call_id}: {text}"))
+        }
+        ResponseItem::CustomToolCall {
+            call_id,
+            name,
+            input,
+            status,
+            ..
+        } => {
+            let status = status.as_deref().unwrap_or("<unknown>");
+            if input.trim().is_empty() {
+                Some(format!(
+                    "custom_tool_call {call_id}: {name} status={status}"
+                ))
+            } else {
+                Some(format!(
+                    "custom_tool_call {call_id}: {name} status={status}\ninput: {input}"
+                ))
+            }
+        }
+        ResponseItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output,
+        } => function_call_output_visible_text(output).map(|text| {
+            let name = name.as_deref().unwrap_or("<unknown>");
+            format!("custom_tool_call_output {call_id}: {name}: {text}")
+        }),
+        ResponseItem::ToolSearchOutput {
+            call_id,
+            status,
+            execution,
+            tools,
+        } => {
+            let call_id = call_id.as_deref().unwrap_or("<missing>");
+            let tools_text = serde_json::to_string(tools).unwrap_or_else(|_| "[]".to_string());
+            Some(format!(
+                "tool_search_output {call_id} status={status} execution={execution}\ntools: {tools_text}"
+            ))
+        }
+        ResponseItem::WebSearchCall { status, action, .. } => {
+            let status = status.as_deref().unwrap_or("<unknown>");
+            Some(format!(
+                "web_search_call status={status}\naction: {action:?}"
+            ))
+        }
+        ResponseItem::ImageGenerationCall {
+            status,
+            revised_prompt,
+            ..
+        } => {
+            let prompt = revised_prompt
+                .as_deref()
+                .filter(|prompt| !prompt.trim().is_empty())
+                .unwrap_or("<none>");
+            Some(format!(
+                "image_generation_call status={status}\nrevised_prompt: {prompt}"
+            ))
+        }
+        ResponseItem::Compaction { encrypted_content } => {
+            non_empty_text(encrypted_content).map(|text| format!("compaction: {text}"))
+        }
+        ResponseItem::ContextCompaction {
+            encrypted_content: Some(encrypted_content),
+        } => non_empty_text(encrypted_content).map(|text| format!("context_compaction: {text}")),
+        ResponseItem::ContextCompaction {
+            encrypted_content: None,
+        }
+        | ResponseItem::CompactionTrigger
+        | ResponseItem::Other => None,
+    }
+}
+
+fn content_items_visible_text(content: &[ContentItem]) -> Option<String> {
+    let text = content
+        .iter()
+        .filter_map(|item| match item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                non_empty_text(text)
+            }
+            ContentItem::InputImage { .. } => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    non_empty_text(&text).map(str::to_string)
+}
+
+fn reasoning_visible_text(
+    summary: &[ReasoningItemReasoningSummary],
+    content: Option<&[ReasoningItemContent]>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    for item in summary {
+        let ReasoningItemReasoningSummary::SummaryText { text } = item;
+        if let Some(text) = non_empty_text(text) {
+            parts.push(format!("reasoning_summary: {text}"));
+        }
+    }
+    if let Some(content) = content {
+        for item in content {
+            match item {
+                ReasoningItemContent::ReasoningText { text }
+                | ReasoningItemContent::Text { text } => {
+                    if let Some(text) = non_empty_text(text) {
+                        parts.push(format!("reasoning_content: {text}"));
+                    }
+                }
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
+fn function_call_output_visible_text(output: &FunctionCallOutputPayload) -> Option<String> {
+    output
+        .body
+        .to_text()
+        .and_then(|text| non_empty_text(&text).map(str::to_string))
+}
+
+fn non_empty_text(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty()).then_some(text)
 }
 
 fn build_annotated_tree_snapshot(
@@ -1682,62 +1876,6 @@ fn render_spine_tree_for_model(
     token_info: Option<TokenUsageInfo>,
 ) -> Result<String, SpineError> {
     Ok(build_spine_tree_inside_view(runtime, token_info.as_ref())?.rendered_tree)
-}
-
-fn build_spine_close_target_projection(
-    runtime: &SpineRuntime,
-    node: &NodeId,
-    action: SpinePendingCloseAction,
-    _next_summary: Option<&str>,
-) -> Result<String, SpineError> {
-    let snapshot = runtime.build_tree_snapshot()?;
-    let closing_node_id = node.to_string();
-    let closing_node = snapshot
-        .nodes
-        .iter()
-        .find(|candidate| candidate.node_id == closing_node_id)
-        .ok_or_else(|| {
-            SpineError::Invariant(format!(
-                "pending Spine close target {closing_node_id} is missing from pre-commit tree"
-            ))
-        })?;
-    let parent_node = if let Some(parent_id) = closing_node.parent_id.as_deref() {
-        Some(
-            snapshot
-                .nodes
-                .iter()
-                .find(|candidate| candidate.node_id == parent_id)
-                .ok_or_else(|| {
-                    SpineError::Invariant(format!(
-                        "pending Spine close target {closing_node_id} references missing parent {parent_id} in pre-commit tree"
-                    ))
-                })?,
-        )
-    } else {
-        None
-    };
-
-    let mut text = "---------- Spine Close Target ----------\n\
-Use this only to orient the memory; do not summarize this block.\n"
-        .to_string();
-    text.push_str(match action {
-        SpinePendingCloseAction::Close => "Action: close\n",
-        SpinePendingCloseAction::Next => "Action: next\n",
-    });
-    text.push_str(&format!("Closing node: {}\n", closing_node.node_id));
-    text.push_str(&format!(
-        "Cursor before commit: {}\n",
-        snapshot.active_node_id
-    ));
-    if let Some(parent) = parent_node {
-        text.push_str(&format!("Parent node: {}\n", parent.node_id));
-    } else {
-        text.push_str("Parent node: none\n");
-    }
-    if action == SpinePendingCloseAction::Next {
-        text.push_str("Next sibling: pending\n");
-    }
-    Ok(text)
 }
 
 fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {

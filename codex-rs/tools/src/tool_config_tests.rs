@@ -281,6 +281,7 @@ fn provider_capability_methods_disable_provider_bound_tool_surfaces() {
     tools_config.image_gen_tool = true;
     tools_config.namespace_tools = true;
     tools_config.spine_jit = true;
+    tools_config.spine_tools_visible = true;
 
     let tools_config = tools_config
         .with_namespace_tools_capability(/*namespace_tools*/ false)
@@ -292,6 +293,7 @@ fn provider_capability_methods_disable_provider_bound_tool_surfaces() {
     assert!(!tools_config.image_gen_tool);
     assert!(!tools_config.namespace_tools);
     assert!(!tools_config.spine_jit);
+    assert!(!tools_config.spine_tools_visible);
     assert_eq!(tools_config.web_search_mode, None);
 }
 
@@ -326,5 +328,27 @@ fn spine_jit_requires_feature_flag() {
     });
 
     assert!(!disabled.spine_jit);
+    assert!(!disabled.spine_tools_visible);
     assert!(enabled.spine_jit);
+    assert!(enabled.spine_tools_visible);
+}
+
+#[test]
+fn spine_tools_visibility_requires_spine_jit() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let features = Features::with_defaults();
+    let mut config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    config.spine_jit = false;
+    assert!(!config.with_spine_tools_visible(true).spine_tools_visible);
 }

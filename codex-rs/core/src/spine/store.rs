@@ -57,6 +57,7 @@ const PRESSURE_FILE: &str = "pressure.jsonl";
 const MEM_FILE: &str = "mem.jsonl";
 const COMMIT_FILE: &str = "commits.jsonl";
 const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
+const WRITER_LOCK_FILE: &str = ".writer.lock";
 #[cfg(debug_assertions)]
 const DEBUG_DIR: &str = ".debug";
 #[cfg(debug_assertions)]
@@ -86,9 +87,10 @@ struct Locator {
     base: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct SpineStore {
     pub(super) root: PathBuf,
+    _writer_lock: Option<File>,
 }
 
 impl SpineStore {
@@ -101,16 +103,25 @@ impl SpineStore {
                 locator.version
             )));
         }
-        Ok(Self {
-            root: rollout_parent(rollout_path)?.join(locator.base),
-        })
+        Ok(Self::from_root(
+            rollout_parent(rollout_path)?.join(locator.base),
+        ))
     }
 
     pub(crate) fn create_for_rollout(rollout_path: &Path) -> Result<Self, SpineError> {
         let root = sidecar_root_for_rollout(rollout_path)?;
         std::fs::create_dir_all(&root)?;
         write_locator_for_root(rollout_path, &root)?;
-        Ok(Self { root })
+        Ok(Self::from_root(root))
+    }
+
+    pub(crate) fn load_or_create_for_writer(rollout_path: &Path) -> Result<Self, SpineError> {
+        let store = if Self::has_for_rollout(rollout_path)? {
+            Self::for_rollout(rollout_path)?
+        } else {
+            Self::create_for_rollout(rollout_path)?
+        };
+        store.with_writer_lock()
     }
 
     pub(crate) fn clone_boundary_for_rollout(
@@ -168,9 +179,7 @@ impl SpineStore {
         let source = Self::for_rollout(&boundary.source_rollout_path)?;
         let staging_root = create_unpublished_clone_root(target_rollout_path)?;
         let target_root = staging_root.clone();
-        let target = Self {
-            root: staging_root.clone(),
-        };
+        let target = Self::from_root(staging_root.clone());
 
         let result = clone_for_rollout_into_store(
             &source,
@@ -190,6 +199,42 @@ impl SpineStore {
 
     pub(crate) fn has_for_rollout(rollout_path: &Path) -> Result<bool, SpineError> {
         Ok(locator_path(rollout_path)?.exists())
+    }
+
+    fn from_root(root: PathBuf) -> Self {
+        Self {
+            root,
+            _writer_lock: None,
+        }
+    }
+
+    pub(crate) fn with_writer_lock(mut self) -> Result<Self, SpineError> {
+        self.ensure_writer_lock()?;
+        Ok(self)
+    }
+
+    pub(crate) fn ensure_writer_lock(&mut self) -> Result<(), SpineError> {
+        if self._writer_lock.is_some() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&self.root)?;
+        let lock_path = self.root.join(WRITER_LOCK_FILE);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&lock_path)?;
+        match lock.try_lock() {
+            Ok(()) => {
+                self._writer_lock = Some(lock);
+                Ok(())
+            }
+            Err(std::fs::TryLockError::WouldBlock) => Err(SpineError::InvalidStore(format!(
+                "Spine sidecar {} is already owned by another live Codex process",
+                self.root.display()
+            ))),
+            Err(std::fs::TryLockError::Error(err)) => Err(err.into()),
+        }
     }
 }
 

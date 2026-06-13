@@ -213,33 +213,36 @@ fn spine_slot_summary_sse(id: &str, text: &str) -> String {
 }
 
 fn spine_node_memory_summary_sse(id: &str, text: &str) -> String {
-    sse(vec![
-        ev_assistant_message(
-            id,
-            &format!("<SPINE_NODE_MEMORY>\n{text}\n</SPINE_NODE_MEMORY>"),
-        ),
-        ev_completed(id),
-    ])
+    spine_compact_json_summary_sse(id, &[], text)
 }
 
 fn spine_slots_summary_sse(id: &str, texts: &[&str]) -> String {
-    let slot_blocks = texts
+    let slots = texts
         .iter()
         .enumerate()
         .map(|(index, text)| {
-            let slot_number = index + 1;
-            format!("<SPINE_SLOT_{slot_number}>\n{text}\n</SPINE_SLOT_{slot_number}>")
+            serde_json::json!({
+                "slot_id": format!("slot_{}", index + 1),
+                "body": text,
+            })
         })
-        .collect::<Vec<_>>()
-        .join("\n\n");
+        .collect::<Vec<_>>();
     let node_memory = texts.join("\n");
-    let compact_blocks = if slot_blocks.is_empty() {
-        format!("<SPINE_NODE_MEMORY>\n{node_memory}\n</SPINE_NODE_MEMORY>")
-    } else {
-        format!("{slot_blocks}\n\n<SPINE_NODE_MEMORY>\n{node_memory}\n</SPINE_NODE_MEMORY>")
-    };
+    spine_compact_json_summary_sse(id, &slots, &node_memory)
+}
+
+fn spine_compact_json_summary_sse(
+    id: &str,
+    slots: &[serde_json::Value],
+    node_memory: &str,
+) -> String {
+    let compact_body = serde_json::json!({
+        "slots": slots,
+        "node_memory": node_memory,
+    })
+    .to_string();
     sse(vec![
-        ev_assistant_message(id, &compact_blocks),
+        ev_assistant_message(id, &compact_body),
         ev_completed(id),
     ])
 }
@@ -272,10 +275,39 @@ fn assert_close_compact_tool_envelope_request(
         "{message}: close compact must keep ordinary model-visible tools for prompt caching"
     );
     assert!(
-        body.get("text")
-            .and_then(|text| text.get("format"))
-            .is_none(),
-        "{message}: close compact must not send text.format schema because it changes the prompt-cache envelope"
+        body["text"]["format"]["type"].as_str() == Some("json_schema"),
+        "{message}: close compact must send a JSON schema text.format"
+    );
+    assert_eq!(
+        body["text"]["format"]["name"].as_str(),
+        Some("codex_output_schema"),
+        "{message}: close compact schema should use the shared output schema name"
+    );
+    assert_eq!(
+        body["text"]["format"]["strict"].as_bool(),
+        Some(true),
+        "{message}: close compact schema should be strict"
+    );
+    let schema = &body["text"]["format"]["schema"];
+    assert_eq!(
+        schema["properties"]["node_memory"]["type"].as_str(),
+        Some("string"),
+        "{message}: close compact schema must require node_memory"
+    );
+    assert_eq!(
+        schema["properties"]["slots"]["type"].as_str(),
+        Some("array"),
+        "{message}: close compact schema must define slots as an array"
+    );
+    assert_eq!(
+        schema["required"],
+        serde_json::json!(["slots", "node_memory"]),
+        "{message}: close compact schema must require slots and node_memory"
+    );
+    assert_eq!(
+        schema["additionalProperties"].as_bool(),
+        Some(false),
+        "{message}: close compact schema must reject extra top-level fields"
     );
     assert_eq!(
         body["input"]
@@ -284,8 +316,8 @@ fn assert_close_compact_tool_envelope_request(
             .last()
             .and_then(|item| item.get("role"))
             .and_then(|role| role.as_str()),
-        Some("user"),
-        "{message}: close compact tail directive should be a trailing synthetic user message"
+        Some("developer"),
+        "{message}: close compact tail directive should be a trailing developer message"
     );
 }
 
@@ -2739,6 +2771,92 @@ async fn record_initial_history_new_seeds_initial_spine_tree_snapshot() {
     assert_eq!(
         child.status,
         codex_protocol::spine_tree::SpineTreeNodeStatus::Live
+    );
+}
+
+#[tokio::test]
+async fn spine_tools_hidden_until_sidecar_runtime_ready() {
+    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+
+    let before_init = session.new_default_turn().await;
+    assert!(before_init.tools_config.spine_jit);
+    assert!(
+        !before_init.tools_config.spine_tools_visible,
+        "feature-on alone must not expose Spine parser-control tools"
+    );
+
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("record initial history");
+
+    let after_init = session.new_default_turn().await;
+    assert!(after_init.tools_config.spine_jit);
+    assert!(
+        after_init.tools_config.spine_tools_visible,
+        "Spine parser-control tools become visible after sidecar/runtime initialization"
+    );
+}
+
+#[tokio::test]
+async fn review_turn_inherits_spine_tool_visibility_from_parent_turn() {
+    let (mut session, hidden_parent_turn_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+
+    assert!(
+        !hidden_parent_turn_context.tools_config.spine_tools_visible,
+        "feature-on parent turn must stay hidden before sidecar/runtime readiness"
+    );
+    let hidden_review_tools = crate::session::review::apply_review_spine_tool_visibility(
+        hidden_parent_turn_context.tools_config.clone(),
+        hidden_parent_turn_context.tools_config.spine_tools_visible,
+    );
+    assert!(hidden_review_tools.spine_jit);
+    assert!(
+        !hidden_review_tools.spine_tools_visible,
+        "review turn must not expose Spine parser-control tools before parent readiness"
+    );
+
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("record initial history");
+
+    let ready_parent_turn_context = session.new_default_turn().await;
+    assert!(
+        ready_parent_turn_context.tools_config.spine_tools_visible,
+        "parent turn should become visible after sidecar/runtime initialization"
+    );
+    let visible_review_tools = crate::session::review::apply_review_spine_tool_visibility(
+        hidden_parent_turn_context.tools_config.clone(),
+        ready_parent_turn_context.tools_config.spine_tools_visible,
+    );
+    assert!(visible_review_tools.spine_jit);
+    assert!(
+        visible_review_tools.spine_tools_visible,
+        "review turn must inherit Spine parser-control visibility from a ready parent turn"
     );
 }
 
@@ -7146,6 +7264,43 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
 }
 
 #[tokio::test]
+async fn shutdown_releases_spine_writer_lock_without_dropping_session_arc() {
+    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("record initial history");
+
+    let err = SpineRuntime::load_for_rollout_items_for_writer(&rollout_path, &[], &[])
+        .expect_err("live session should own the writer lock before shutdown");
+    assert!(
+        err.to_string()
+            .contains("already owned by another live Codex process"),
+        "unexpected writer lock error: {err}"
+    );
+
+    assert!(handlers::shutdown(&session, "sub-1".to_string()).await);
+
+    SpineRuntime::load_for_rollout_items_for_writer(&rollout_path, &[], &[])
+        .expect("shutdown must release the Spine sidecar writer lock")
+        .expect("spine sidecar should exist");
+    drop(session);
+}
+
+#[tokio::test]
 async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
     struct SessionStopMarker;
     struct ThreadStopMarker;
@@ -9044,15 +9199,16 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     assert!(
         compact_request.body_json()["instructions"]
             .as_str()
-            .is_some_and(|instructions| !instructions
-                .contains("Write compact handoff memory for Spine node 1.1.1")),
+            .is_some_and(
+                |instructions| !instructions.contains("---------- Spine Compact ----------")
+            ),
         "compact directive should be a trailing prompt input message, not duplicated into base instructions"
     );
     assert!(
         compact_request.body_contains_text("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
     );
     assert!(compact_request.body_contains_text("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY"));
-    assert!(compact_request.body_contains_text("---------- Spine Suffix Boundary ----------"));
+    assert!(!compact_request.body_contains_text("---------- Spine Suffix Boundary ----------"));
     assert!(compact_request.has_function_call("open"));
     assert!(compact_request.function_call_output_text("open").is_some());
     assert!(!compact_request.has_function_call("close"));
@@ -9077,7 +9233,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .iter()
         .position(|item| {
             item.to_string()
-                .contains("---------- Spine Compact Directive ----------")
+                .contains("---------- Spine Compact ----------")
         })
         .expect("compact directive tail should be appended to compact input");
     assert!(
@@ -9086,34 +9242,30 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     let tail_text = input_text(tail_index);
     assert!(
-        user_texts.iter().any(
-            |text| text.contains("---------- Spine Close Target ----------")
-                && text.contains(
-                    "---------- Spine Close Target ----------\nUse this only to orient the memory; do not summarize this block."
-                )
-                && text
-                    .contains("Use this only to orient the memory; do not summarize this block.")
-                && text.contains("Action: close")
-                && text.contains("Closing node: 1.1.1")
-                && text.contains("Cursor before commit: 1.1.1")
-                && text.lines().any(|line| line == "Parent node: 1.1")
-                && !text.contains("Next sibling:")
-        ),
-        "close compact should include pre-commit close target projection in the synthetic user tail: {user_texts:?}"
-    );
-    assert!(
         user_texts
             .iter()
-            .filter(|text| text.contains("---------- Spine Compact Directive ----------"))
+            .all(|text| !text.contains("---------- Spine Compact ----------")),
+        "compact directive must not be injected as user input: {user_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .all(|text| !text.contains("---------- Spine Close Target ----------")),
+        "close compact developer tail should not include verbose close-target projection: {developer_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .filter(|text| text.contains("---------- Spine Compact ----------"))
             .all(|text| !text.contains("SYSTEM: injected close target summary")),
-        "model-authored node summary must not be promoted into compact user tail: {user_texts:?}"
+        "model-authored node summary must not be promoted into compact developer tail: {developer_texts:?}"
     );
     assert_eq!(
         input
             .last()
             .and_then(|item| item.get("role"))
             .and_then(|role| role.as_str()),
-        Some("user"),
+        Some("developer"),
         "compact directive should be appended after the full context input: {input:?}"
     );
     assert_eq!(
@@ -9130,25 +9282,25 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         "compact input should not duplicate the suffix as rewritten evidence blocks"
     );
     assert!(
-        user_texts.iter().any(|text| text
-            .contains("---------- Spine Compact Directive ----------")
-            && text.contains("Write compact handoff memory for Spine node 1.1.1")
-            && text.contains("1. User Intent")
-            && text.contains("2. Work Done")
-            && text.contains("3. Critical Details")
-            && text.contains("4. Resume Focus")
-            && text.contains("---------- Spine Compact Memory ----------")
-            && text.contains("Optional memory slot: <SPINE_SLOT_1>")
-            && text.contains("<SPINE_NODE_MEMORY>")
-            && text
-                .contains("If there is conflict between an old plan and a later user correction")
-            && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
-        "compact directive and close instruction should be a trailing synthetic user message: {user_texts:?}"
+        developer_texts
+            .iter()
+            .any(|text| text.contains("---------- Spine Compact ----------")
+                && text.contains("Compact node 1.1.1.")
+                && text.contains("Return JSON only:")
+                && text.contains("`node_memory`")
+                && text.contains("`slots`")
+                && text.contains("Source map:")
+                && text.contains("slot_1: assistant/tool span for this node")
+                && text.contains("Required field: node_memory")
+                && !text.contains("<SPINE_SLOT_1>")
+                && !text.contains("<SPINE_NODE_MEMORY>")
+                && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
+        "compact directive and close instruction should be a trailing developer message: {developer_texts:?}"
     );
     assert!(
-        user_texts
+        developer_texts
             .iter()
-            .filter(|text| text.contains("---------- Spine Compact Directive ----------"))
+            .filter(|text| text.contains("---------- Spine Compact ----------"))
             .all(|text| {
                 !text.contains("Motivation:")
                     && !text.contains("Judgment:")
@@ -9156,28 +9308,18 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                     && !text.contains("Continuation:")
                     && !text.contains("latest user intent is the next parent action")
             }),
-        "old audit-style compact directive should not remain in compact user tail: {user_texts:?}"
+        "old audit-style compact directive should not remain in compact developer tail: {developer_texts:?}"
     );
     assert!(
-        user_texts.iter().any(
-            |text| text.contains("---------- Spine Suffix Boundary ----------")
-                && text
-                    .contains("The raw suffix for Spine node 1.1.1 is already present immediately before this tail directive.")
-                && text.contains("Source context range: [1..4).")
-        ),
-        "suffix boundary should mark the materialized Open.meta.index boundary: {user_texts:?}"
+        developer_texts.iter().all(|text| !text
+            .contains("---------- Spine Suffix Boundary ----------")
+            && !text.contains("Source context range:")),
+        "compact developer tail should not expose debug suffix boundary: {developer_texts:?}"
     );
-    assert!(
-        developer_texts.iter().all(|text| {
-            !text.contains("---------- Spine Compact Directive ----------")
-                && !text.contains("Write compact handoff memory for Spine node")
-                && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
-        }),
-        "compact directive must not be injected as developer input: {developer_texts:?}"
-    );
-    assert!(tail_text.contains("---------- Spine Close Target ----------"));
-    assert!(tail_text.contains("---------- Spine Suffix Boundary ----------"));
-    assert!(tail_text.contains("---------- Spine Compact Memory ----------"));
+    assert!(tail_text.contains("---------- Spine Compact ----------"));
+    assert!(tail_text.contains("Source map:"));
+    assert!(!tail_text.contains("---------- Spine Close Target ----------"));
+    assert!(!tail_text.contains("---------- Spine Suffix Boundary ----------"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -9195,7 +9337,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                             && !text.contains("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY")
                             && !text.contains("---------- Spine Close Target ----------")
                             && !text.contains("---------- Spine Suffix Boundary ----------")
-                            && !text.contains("---------- Spine Compact Directive ----------")
+                            && !text.contains("---------- Spine Compact ----------")
                             && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
                 )
     ));
@@ -9507,7 +9649,7 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
         "non-image text in the multimodal suffix should remain visible"
     );
     assert!(
-        compact_request.body_contains_text("Optional memory slot: <SPINE_SLOT_1>"),
+        compact_request.body_contains_text("slot_1: assistant/tool span for this node"),
         "multimodal suffix user message should be represented by an optional generated slot"
     );
     assert!(
@@ -9659,14 +9801,11 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
     );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
-    assert!(compact_request.body_contains_text(
-        "---------- Spine Close Target ----------\nUse this only to orient the memory; do not summarize this block."
-    ));
-    assert!(compact_request.body_contains_text("Action: next"));
-    assert!(compact_request.body_contains_text("Closing node: 1.1.1\n"));
-    assert!(compact_request.body_contains_text("Cursor before commit: 1.1.1"));
-    assert!(compact_request.body_contains_text("Parent node: 1.1\n"));
-    assert!(compact_request.body_contains_text("Next sibling: pending\n"));
+    assert!(compact_request.body_contains_text("---------- Spine Compact ----------"));
+    assert!(compact_request.body_contains_text("Compact node 1.1.1."));
+    assert!(!compact_request.body_contains_text("---------- Spine Close Target ----------"));
+    assert!(!compact_request.body_contains_text("Action: next"));
+    assert!(!compact_request.body_contains_text("Next sibling: pending"));
     assert!(!compact_request.body_contains_text("SYSTEM: injected next summary"));
     assert!(!compact_request.has_function_call("next"));
     assert!(compact_request.function_call_output_text("next").is_none());
@@ -11323,16 +11462,18 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         Some("auto")
     );
     assert!(
-        requests[0].body_contains_text("Write compact handoff memory for Spine node"),
+        requests[0].body_contains_text("---------- Spine Compact ----------")
+            && requests[0].body_contains_text("Return JSON only:")
+            && requests[0].body_contains_text("Required field: node_memory"),
         "first request should be the original spine.next suffix compact"
     );
     assert!(
-        requests[0].body_contains_text("Action: next")
-            && requests[0].body_contains_text("Next sibling: pending"),
-        "first request should carry spine.next close-target metadata"
+        !requests[0].body_contains_text("Action: next")
+            && !requests[0].body_contains_text("Next sibling: pending"),
+        "first request should not expose verbose spine.next close-target metadata"
     );
     assert!(
-        !requests[1].body_contains_text("Write compact handoff memory for Spine node"),
+        !requests[1].body_contains_text("---------- Spine Compact ----------"),
         "native auto compact must not reuse the spine.next compact directive"
     );
 
@@ -11930,13 +12071,15 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         "pure user suffix should request required node memory without optional slots"
     );
     let compact_request = compact_mock.single_request();
-    assert!(compact_request.body_contains_text(
-        "No optional slot markers are available in this skeleton; return only <SPINE_NODE_MEMORY>."
-    ));
     assert!(
-        compact_request.body_contains_text("SPINE_NODE_MEMORY is the primary whole-node handoff")
+        compact_request.body_contains_text(
+            "No optional slot ids are available; return an empty `slots` array."
+        )
     );
-    assert!(compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
+    assert!(compact_request.body_contains_text("`node_memory`: required whole-node handoff."));
+    assert!(compact_request.body_contains_text("Return JSON only:"));
+    assert!(compact_request.body_contains_text("Required field: node_memory"));
+    assert!(!compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -11951,7 +12094,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
                         if text.contains("Spine Memory 1.1")
                             && text.contains("## User Message\ninitial root child work")
                             && text.contains("## Node Memory\nroot child compact summary")
-                            && !text.contains("---------- Spine Compact Directive ----------")
+                            && !text.contains("---------- Spine Compact ----------")
                 )
     ));
     assert_eq!(items[1], spine_call(SPINE_TOOL_CLOSE, "close-root-child"));
@@ -12050,13 +12193,15 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
     assert!(compact_request.body_contains_text("KEEP_CLOSE_GUIDANCE_42"));
-    assert!(compact_request.body_contains_text(
-        "No optional slot markers are available in this skeleton; return only <SPINE_NODE_MEMORY>."
-    ));
     assert!(
-        compact_request.body_contains_text("SPINE_NODE_MEMORY is the primary whole-node handoff")
+        compact_request.body_contains_text(
+            "No optional slot ids are available; return an empty `slots` array."
+        )
     );
-    assert!(compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
+    assert!(compact_request.body_contains_text("`node_memory`: required whole-node handoff."));
+    assert!(compact_request.body_contains_text("Return JSON only:"));
+    assert!(compact_request.body_contains_text("Required field: node_memory"));
+    assert!(!compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -12073,7 +12218,7 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
                             && text.contains("## Node Memory\npreserved close instruction: KEEP_CLOSE_GUIDANCE_42")
                             && !text.contains("## Memory Slot")
                             && !text.contains("## User Message\nKEEP_CLOSE_GUIDANCE_42")
-                            && !text.contains("---------- Spine Compact Directive ----------")
+                            && !text.contains("---------- Spine Compact ----------")
                 )
     ));
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
@@ -12731,11 +12876,13 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
         Some("auto")
     );
     assert!(
-        requests[0].body_contains_text("Write compact handoff memory for Spine node"),
+        requests[0].body_contains_text("---------- Spine Compact ----------")
+            && requests[0].body_contains_text("Return JSON only:")
+            && requests[0].body_contains_text("Required field: node_memory"),
         "first request should be the original spine.close suffix compact"
     );
     assert!(
-        !requests[1].body_contains_text("Write compact handoff memory for Spine node"),
+        !requests[1].body_contains_text("---------- Spine Compact ----------"),
         "native auto compact must not reuse the spine.close compact directive"
     );
 
@@ -12911,10 +13058,12 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     assert!(inner_compact_request.body_contains_text("inner assistant traj should be folded away"));
     let outer_compact_request = &requests[1];
     assert!(
-        outer_compact_request.body_contains_text("<spine_memory>"),
-        "outer close suffix evidence should include the rendered child memory item"
+        outer_compact_request.body_contains_text("Child memory evidence:"),
+        "outer close suffix evidence should include child memory evidence: {}",
+        outer_compact_request.body_json()
     );
-    assert!(outer_compact_request.body_contains_text("Spine Memory 1.1.1.1"));
+    assert!(outer_compact_request.body_contains_text("node_id=1.1.1.1"));
+    assert!(outer_compact_request.body_contains_text("# Spine Memory 1.1.1.1"));
     assert!(outer_compact_request.body_contains_text("inner compact summary"));
     assert!(outer_compact_request.body_contains_text("after inner in outer suffix"));
     assert!(
@@ -13077,14 +13226,103 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
         session.clone_history().await.raw_items(),
         materialized.as_slice()
     );
+    let [ResponseItem::Message { content, .. }] = materialized.as_slice() else {
+        panic!("expected one root memory item, got {materialized:#?}");
+    };
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected root memory text, got {content:#?}");
+    };
+    assert!(
+        text.contains("native root compact summary"),
+        "root memory text: {text}"
+    );
+    assert!(
+        text.contains("# Spine Native Compact Memory"),
+        "root memory text: {text}"
+    );
+    assert!(
+        text.contains(
+            "This memory is derived from the host context after native compact succeeded."
+        ),
+        "root memory text: {text}"
+    );
+    assert!(text.contains("<spine_memory>"), "root memory text: {text}");
+}
+
+#[tokio::test]
+async fn spine_native_compact_post_hook_ignores_stale_compacted_item_carrier() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("record initial history");
+
+    let replaced_context = vec![assistant_message("actual post-hook replacement summary")];
+    session
+        .replace_compacted_history(
+            &turn_context,
+            replaced_context,
+            None,
+            CompactedItem {
+                message: "stale compacted item carrier must not become Spine memory".to_string(),
+                replacement_history: Some(vec![assistant_message(
+                    "stale compacted item replacement history must not become Spine memory",
+                )]),
+            },
+            None,
+        )
+        .await
+        .expect("install root compact after native compact");
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    let replacement_history = resumed
+        .history
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::Compacted(compacted) => compacted.replacement_history.as_ref(),
+            _ => None,
+        })
+        .expect("native compact should persist replacement_history");
+
+    assert_eq!(replacement_history, &materialized);
     assert!(matches!(
         materialized.as_slice(),
         [ResponseItem::Message { content, .. }]
             if matches!(
                 content.as_slice(),
                 [ContentItem::InputText { text }]
-                    if text.contains("native root compact summary")
-                        && text.contains("<spine_memory>")
+                    if text.contains("# Spine Native Compact Memory")
+                        && text.contains("actual post-hook replacement summary")
+                        && !text.contains("stale compacted item carrier")
+                        && !text.contains("stale compacted item replacement history")
             )
     ));
 }
@@ -13164,17 +13402,25 @@ async fn spine_mid_turn_native_compact_appends_cwd_only_environment_context_suff
         .expect("native compact should persist replacement_history");
 
     assert_eq!(replacement_history.len(), 1);
-    assert!(matches!(
-        replacement_history.as_slice(),
-        [ResponseItem::Message { content, .. }]
-            if matches!(
-                content.as_slice(),
-                [ContentItem::InputText { text }]
-                    if text.contains("mid turn native root compact summary")
-                        && text.contains("<spine_memory>")
-                        && !text.contains("<environment_context>")
-            )
-    ));
+    let [ResponseItem::Message { content, .. }] = replacement_history.as_slice() else {
+        panic!("expected one root memory item, got {replacement_history:#?}");
+    };
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected root memory text, got {content:#?}");
+    };
+    assert!(
+        text.contains("mid turn native root compact summary"),
+        "root memory text: {text}"
+    );
+    assert!(
+        text.contains("# Spine Native Compact Memory"),
+        "root memory text: {text}"
+    );
+    assert!(
+        text.contains("## Replaced Context Item"),
+        "root memory text: {text}"
+    );
+    assert!(text.contains("<spine_memory>"), "root memory text: {text}");
 
     let history_items = session.clone_history().await.raw_items().to_vec();
     assert_eq!(history_items, materialized);

@@ -648,6 +648,7 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     };
     mcp_shutdown.await;
     sess.guardian_review_session.shutdown().await;
+    sess.release_spine_runtime_for_shutdown().await;
 }
 
 fn emit_thread_stop_lifecycle(sess: &Session) {

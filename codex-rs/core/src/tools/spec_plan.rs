@@ -399,7 +399,7 @@ fn collect_tool_executors(
     }
 
     executors.push(Arc::new(PlanHandler));
-    if config.spine_jit {
+    if config.spine_tools_visible {
         executors.extend(
             SpineHandler::all()
                 .into_iter()

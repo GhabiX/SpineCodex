@@ -77,6 +77,10 @@ pub(super) async fn spawn_review_thread(
     .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         &config.agent_roles,
     ));
+    let tools_config = apply_review_spine_tool_visibility(
+        tools_config,
+        parent_turn_context.tools_config.spine_tools_visible,
+    );
 
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();
@@ -189,4 +193,11 @@ pub(super) async fn spawn_review_thread(
     };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
+}
+
+pub(crate) fn apply_review_spine_tool_visibility(
+    tools_config: ToolsConfig,
+    spine_tools_visible: bool,
+) -> ToolsConfig {
+    tools_config.with_spine_tools_visible(spine_tools_visible)
 }

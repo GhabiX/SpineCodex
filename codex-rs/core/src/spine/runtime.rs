@@ -67,7 +67,7 @@ pub(crate) const SPINE_TOOL_NEXT: &str = "next";
 pub(crate) const SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX: &str =
     "Spine parser-control tools are mutually exclusive within one model response;";
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct SpineRuntime {
     store: SpineStore,
     ledger: SpineLedgerCache,
@@ -357,6 +357,10 @@ impl SpineSessionState {
         self.runtime.as_mut()
     }
 
+    pub(crate) fn is_ready(&self) -> bool {
+        self.invalid.is_none() && self.runtime.is_some()
+    }
+
     pub(crate) fn raw_len(&self) -> u64 {
         self.raw_len
     }
@@ -364,8 +368,12 @@ impl SpineSessionState {
     pub(crate) fn set_replayed(
         &mut self,
         raw_len: u64,
-        runtime: Option<SpineRuntime>,
+        mut runtime: Option<SpineRuntime>,
     ) -> Result<(), SpineError> {
+        drop(self.runtime.take());
+        if let Some(runtime) = runtime.as_mut() {
+            runtime.acquire_writer_lock()?;
+        }
         self.raw_len = raw_len;
         self.runtime = runtime;
         self.initial_tree_snapshot_emitted = false;
@@ -375,6 +383,10 @@ impl SpineSessionState {
 
     pub(crate) fn invalidate(&mut self, reason: impl Into<String>) {
         self.invalid = Some(reason.into());
+    }
+
+    pub(crate) fn release_runtime_for_shutdown(&mut self) {
+        self.runtime = None;
     }
 
     pub(crate) fn abort_pending_tool(&mut self, call_id: &str) -> bool {
@@ -450,11 +462,7 @@ impl SpineSessionState {
 
 impl SpineRuntime {
     pub(crate) fn load_or_create(rollout_path: &Path, raw_len: u64) -> Result<Self, SpineError> {
-        let store = if SpineStore::has_for_rollout(rollout_path)? {
-            SpineStore::for_rollout(rollout_path)?
-        } else {
-            SpineStore::create_for_rollout(rollout_path)?
-        };
+        let store = SpineStore::load_or_create_for_writer(rollout_path)?;
         if !store.tree_path().exists() {
             store.append_event(&SpineLedgerEvent::Init { raw_start: 0 })?;
             store.append_event(&SpineLedgerEvent::Open {
@@ -478,15 +486,47 @@ impl SpineRuntime {
         if !SpineStore::has_for_rollout(rollout_path)? {
             return Ok(None);
         }
-        let runtime = Self::load_with_raw_live_for_rollout(
+        let runtime = Self::load_for_rollout_items_from_store(
             SpineStore::for_rollout(rollout_path)?,
+            rollout_path,
+            raw_items,
+            rollback_cuts,
+        )?;
+        Ok(Some(runtime))
+    }
+
+    pub(crate) fn load_for_rollout_items_for_writer(
+        rollout_path: &Path,
+        raw_items: &[Option<ResponseItem>],
+        rollback_cuts: &[usize],
+    ) -> Result<Option<Self>, SpineError> {
+        if !SpineStore::has_for_rollout(rollout_path)? {
+            return Ok(None);
+        }
+        let runtime = Self::load_for_rollout_items_from_store(
+            SpineStore::for_rollout(rollout_path)?.with_writer_lock()?,
+            rollout_path,
+            raw_items,
+            rollback_cuts,
+        )?;
+        Ok(Some(runtime))
+    }
+
+    fn load_for_rollout_items_from_store(
+        store: SpineStore,
+        rollout_path: &Path,
+        raw_items: &[Option<ResponseItem>],
+        rollback_cuts: &[usize],
+    ) -> Result<Self, SpineError> {
+        let runtime = Self::load_with_raw_live_for_rollout(
+            store,
             raw_items.iter().map(Option::is_some).collect(),
             rollback_cuts,
             rollout_path,
             raw_items,
         )?;
         runtime.validate_raw_coverage(raw_items)?;
-        Ok(Some(runtime))
+        Ok(runtime)
     }
 
     #[cfg(test)]
@@ -504,6 +544,10 @@ impl SpineRuntime {
         let raw_len_usize = usize::try_from(raw_len)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
         Self::load_with_raw_live(store, vec![true; raw_len_usize])
+    }
+
+    pub(crate) fn acquire_writer_lock(&mut self) -> Result<(), SpineError> {
+        self.store.ensure_writer_lock()
     }
 
     fn load_with_raw_live(store: SpineStore, raw_live: Vec<bool>) -> Result<Self, SpineError> {

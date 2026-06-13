@@ -20,6 +20,8 @@ use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::WarningEvent;
@@ -127,7 +129,11 @@ fn normalize_compact_prompts(requests: &mut [Value]) {
 }
 
 fn spine_node_memory_compact_body(text: &str) -> String {
-    format!("<SPINE_NODE_MEMORY>\n{text}\n</SPINE_NODE_MEMORY>")
+    json!({
+        "slots": [],
+        "node_memory": text,
+    })
+    .to_string()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -726,11 +732,22 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
         .submit(Op::ThreadRollback { num_turns: 1 })
         .await?;
     let rollback_event = wait_for_event(&resumed_fork, |ev| {
-        matches!(ev, EventMsg::ThreadRolledBack(_))
+        matches!(
+            ev,
+            EventMsg::ThreadRolledBack(_)
+                | EventMsg::Error(ErrorEvent {
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                    ..
+                })
+        )
     })
     .await;
-    let EventMsg::ThreadRolledBack(rollback_event) = rollback_event else {
-        panic!("expected thread rolled back event");
+    let rollback_event = match rollback_event {
+        EventMsg::ThreadRolledBack(rollback_event) => rollback_event,
+        EventMsg::Error(ErrorEvent { message, .. }) => {
+            panic!("rollback failed: {message}");
+        }
+        other => panic!("expected thread rolled back event, got {other:?}"),
     };
     assert_eq!(rollback_event.num_turns, 1);
 

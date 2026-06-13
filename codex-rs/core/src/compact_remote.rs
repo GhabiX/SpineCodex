@@ -6,6 +6,7 @@ use crate::client::CompactConversationRequestSettings;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
+#[cfg(test)]
 use crate::compact::content_items_to_text;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
@@ -304,6 +305,7 @@ pub(crate) async fn process_compacted_history(
     insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
 }
 
+#[cfg(test)]
 pub(crate) fn remote_root_compact_body(replacement_history: &[ResponseItem]) -> Option<String> {
     let mut entries = Vec::new();
     for item in replacement_history {

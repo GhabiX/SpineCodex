@@ -1462,7 +1462,7 @@ fn namespace_specs_are_hidden_when_namespace_tools_are_disabled() {
 }
 
 #[test]
-fn spine_namespace_is_registered_only_when_feature_enabled() {
+fn spine_namespace_is_registered_only_when_feature_enabled_and_visible() {
     let model_info = model_info();
     let available_models = Vec::new();
     let features = Features::with_defaults();
@@ -1477,6 +1477,7 @@ fn spine_namespace_is_registered_only_when_feature_enabled() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     config.spine_jit = false;
+    config.spine_tools_visible = false;
     let (specs, registry) = build_specs(&config, None, None, &[]);
     assert!(!specs.iter().any(|spec| spec.name() == "spine"));
     assert!(
@@ -1486,6 +1487,20 @@ fn spine_namespace_is_registered_only_when_feature_enabled() {
     );
 
     config.spine_jit = true;
+    config.spine_tools_visible = false;
+    let (specs, registry) = build_specs(&config, None, None, &[]);
+    assert!(
+        !specs.iter().any(|spec| spec.name() == "spine"),
+        "feature-on before sidecar readiness must not expose Spine tools"
+    );
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "open"))
+            .is_none(),
+        "hidden Spine tools must not be executable through the registry"
+    );
+
+    config.spine_tools_visible = true;
     let (specs, registry) = build_specs(&config, None, None, &[]);
     assert!(specs.iter().any(|spec| spec.name() == "spine"));
     assert!(
@@ -1557,6 +1572,7 @@ fn spine_namespace_dynamic_tool_returns_invalid_request_when_spine_jit_is_enable
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     config.spine_jit = true;
+    config.spine_tools_visible = false;
     let dynamic_tools = vec![DynamicToolSpec {
         namespace: Some("spine".to_string()),
         name: "external_tool".to_string(),
@@ -1582,6 +1598,49 @@ fn spine_namespace_dynamic_tool_returns_invalid_request_when_spine_jit_is_enable
     };
     assert!(message.contains("dynamic tool namespace `spine`"));
     assert!(message.contains("external_tool"));
+}
+
+#[test]
+fn hidden_spine_tools_still_reserve_spine_namespace_when_feature_enabled() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let features = Features::with_defaults();
+    let mut config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    config.spine_jit = true;
+    config.spine_tools_visible = false;
+    let dynamic_tools = vec![DynamicToolSpec {
+        namespace: Some("spine".to_string()),
+        name: "external_tool".to_string(),
+        description: "External dynamic tool.".to_string(),
+        input_schema: json!({"type": "object", "properties": {}}),
+        defer_loading: true,
+    }];
+
+    let err = match build_specs_with_inputs_result_for_test(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        /*extension_tool_executors*/ &[],
+        &dynamic_tools,
+    ) {
+        Ok(_) => panic!("hidden feature-on Spine namespace must still be reserved"),
+        Err(err) => err,
+    };
+    let message = match err {
+        CodexErr::InvalidRequest(message) => message,
+        other => panic!("expected invalid request, got {other:?}"),
+    };
+    assert!(message.contains("dynamic tool namespace `spine`"));
 }
 
 #[test]

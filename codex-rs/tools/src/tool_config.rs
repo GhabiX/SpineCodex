@@ -109,6 +109,7 @@ pub struct ToolsConfig {
     pub search_tool: bool,
     pub namespace_tools: bool,
     pub spine_jit: bool,
+    pub spine_tools_visible: bool,
     pub tool_suggest: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
@@ -250,6 +251,7 @@ impl ToolsConfig {
             search_tool: include_search_tool,
             namespace_tools: true,
             spine_jit: include_spine_jit,
+            spine_tools_visible: include_spine_jit,
             tool_suggest: include_tool_suggest,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
@@ -284,7 +286,13 @@ impl ToolsConfig {
         if !namespace_tools {
             self.namespace_tools = false;
             self.spine_jit = false;
+            self.spine_tools_visible = false;
         }
+        self
+    }
+
+    pub fn with_spine_tools_visible(mut self, visible: bool) -> Self {
+        self.spine_tools_visible = self.spine_jit && visible;
         self
     }
 
