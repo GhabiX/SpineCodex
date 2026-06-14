@@ -2,6 +2,7 @@ use super::session::Session;
 use super::spine_tree_inside::SpineTreeInsideView;
 use super::spine_tree_inside::build_spine_tree_inside_view;
 use super::spine_tree_inside::node_context_tokens;
+use super::turn_context::TurnContext;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
@@ -46,8 +47,7 @@ struct SpineStatusPromptSignal {
     parent: Option<String>,
     live_node_context_tokens: Option<i64>,
     live_node_context_unavailable: Option<SpineNodeContextUnavailableReason>,
-    context_tokens: Option<i64>,
-    model_context_window: Option<i64>,
+    context_left_tokens: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,12 +63,20 @@ pub(crate) struct SpinePressurePromptSignal {
 }
 
 impl Session {
-    pub(crate) async fn spine_status_prompt_overlay(&self) -> Option<SpineStatusPromptOverlay> {
+    pub(crate) async fn spine_status_prompt_overlay(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<SpineStatusPromptOverlay> {
         if !self.features.enabled(Feature::SpineJit) {
             return None;
         }
 
         let token_info = self.token_usage_info().await;
+        let total_usage_tokens = self.get_total_token_usage().await;
+        let context_left_tokens = turn_context
+            .model_info
+            .auto_compact_token_limit()
+            .map(|limit| limit.saturating_sub(total_usage_tokens).max(0));
         let spine_slot = self.spine.as_ref()?;
         let signal = {
             let guard = spine_slot.lock().await;
@@ -77,7 +85,7 @@ impl Session {
                 return None;
             }
             let runtime = guard.runtime()?;
-            match status_prompt_signal(runtime, token_info.as_ref()) {
+            match status_prompt_signal(runtime, token_info.as_ref(), context_left_tokens) {
                 Ok(signal) => signal,
                 Err(err) => {
                     tracing::debug!("failed to build Spine status prompt signal: {err}");
@@ -147,6 +155,7 @@ impl Session {
 fn status_prompt_signal(
     runtime: &crate::spine::SpineRuntime,
     token_info: Option<&TokenUsageInfo>,
+    context_left_tokens: Option<i64>,
 ) -> Result<SpineStatusPromptSignal, crate::spine::SpineError> {
     let snapshot = runtime.build_tree_snapshot()?;
     let open_nodes = runtime.open_node_context_projections();
@@ -166,18 +175,13 @@ fn status_prompt_signal(
         },
         None => (None, None),
     };
-    let context_tokens = token_info
-        .map(|info| info.last_token_usage.tokens_in_context_window())
-        .filter(|tokens| *tokens > 0);
-    let model_context_window = token_info.and_then(|info| info.model_context_window);
     Ok(SpineStatusPromptSignal {
         cursor: snapshot.active_node_id,
         node_summary,
         parent,
         live_node_context_tokens,
         live_node_context_unavailable,
-        context_tokens,
-        model_context_window,
+        context_left_tokens,
     })
 }
 
@@ -186,16 +190,16 @@ fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> Strin
         .live_node_context_tokens
         .map(format_si_suffix)
         .unwrap_or_else(|| "unavailable".to_string());
-    let window = format_context_window_status(signal.context_tokens, signal.model_context_window)
+    let context_left = format_context_left_status(signal.context_left_tokens)
         .unwrap_or_else(|| "unavailable".to_string());
     let summary = format_spine_status_summary(signal.node_summary.as_deref());
     let mut text = format!(
-        r#"<spine_status cursor="{}" summary="{}" parent="{}" live_node="{}" window="{}""#,
+        r#"<spine_status cursor="{}" summary="{}" parent="{}" live_node="{}" context_left="{}""#,
         signal.cursor,
         summary,
         signal.parent.as_deref().unwrap_or("none"),
         live_node,
-        window,
+        context_left,
     );
     if signal.live_node_context_unavailable
         == Some(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)
@@ -213,19 +217,8 @@ fn format_spine_status_summary(summary: Option<&str>) -> String {
     escape_xml_attribute(summary)
 }
 
-fn format_context_window_status(
-    context_tokens: Option<i64>,
-    model_context_window: Option<i64>,
-) -> Option<String> {
-    let context_tokens = context_tokens?;
-    let window = model_context_window?;
-    (window > 0).then(|| {
-        let percent = context_tokens
-            .saturating_mul(100)
-            .saturating_div(window)
-            .clamp(0, 100);
-        format!("{percent}%")
-    })
+fn format_context_left_status(context_left_tokens: Option<i64>) -> Option<String> {
+    context_left_tokens.map(format_si_suffix)
 }
 
 fn pressure_prompt_signal(
@@ -453,6 +446,15 @@ mod tests {
         assert!(context_window_at_or_above_80(207_000, 258_000));
         assert!(!context_window_at_or_above_80(0, 1_000));
         assert!(!context_window_at_or_above_80(1_000, 0));
+    }
+
+    #[test]
+    fn context_left_status_uses_absolute_tokens() {
+        assert_eq!(
+            format_context_left_status(Some(158_000)).as_deref(),
+            Some("158K")
+        );
+        assert_eq!(format_context_left_status(None), None);
     }
 
     #[test]

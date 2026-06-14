@@ -48,6 +48,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -2698,6 +2699,7 @@ async fn record_initial_history_new_seeds_initial_spine_tree_snapshot() {
                 .features
                 .enable(Feature::SpineJit)
                 .expect("enable spine feature");
+            config.model_auto_compact_token_limit = Some(60_000);
         },
     )
     .await;
@@ -15777,6 +15779,11 @@ async fn spine_status_overlay_is_injected_into_sampling_prompt_only() -> anyhow:
     assert!(status.contains(r#"cursor="1.1""#), "{status}");
     assert!(status.contains(r#"parent="1""#), "{status}");
     assert!(status.contains(r#"live_node="unavailable""#), "{status}");
+    assert!(
+        status.contains(r#"context_left=""#) || status.contains(r#"context_left="unavailable""#),
+        "{status}"
+    );
+    assert!(!status.contains(r#"window=""#), "{status}");
 
     Ok(())
 }
@@ -16771,9 +16778,20 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
             model_context_window: Some(200_000),
         }));
     }
+    let pending_item = user_message("pending context left delta");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&pending_item))
+        .await
+        .expect("record pending user");
     let history_before = session.clone_history().await.raw_items().to_vec();
+    let current_usage = session.get_total_token_usage().await;
+    let auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .expect("auto compact limit");
+    let expected_left = auto_compact_limit.saturating_sub(current_usage);
     let overlay = session
-        .spine_status_prompt_overlay()
+        .spine_status_prompt_overlay(&turn_context)
         .await
         .expect("status overlay");
     let text = pressure_overlay_text(&overlay.item);
@@ -16785,7 +16803,14 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
     );
     assert!(text.contains(r#"parent="1.1""#), "{text}");
     assert!(text.contains(r#"live_node="32.0K""#), "{text}");
-    assert!(text.contains(r#"window="21%""#), "{text}");
+    assert!(
+        text.contains(&format!(
+            r#"context_left="{}""#,
+            format_si_suffix(expected_left)
+        )),
+        "{text}"
+    );
+    assert!(!text.contains(r#"window=""#), "{text}");
     assert_eq!(session.clone_history().await.raw_items(), history_before);
 }
 
