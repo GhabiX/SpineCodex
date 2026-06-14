@@ -37,6 +37,7 @@ const SPINE_COMPACT_MEMORY_NODE_ID_PLACEHOLDER: &str = "{node_id}";
 const SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER: &str = "{close_instruction}";
 const SPINE_COMPACT_SOURCE_MAP_HEADER: &str = "Source map:";
 const SPINE_CLOSE_COMPACT_MAX_FORMAT_REPAIRS: usize = 1;
+const SPINE_CLOSE_COMPACT_JSON_SHAPE: &str = "{\"slots\":[],\"node_memory\":\"...\"}";
 
 impl Session {
     pub(crate) async fn spine_compact_close(
@@ -112,8 +113,6 @@ impl Session {
             parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
             base_instructions: self.get_base_instructions().await,
             personality: turn_context.personality,
-            output_schema: Some(skeleton.output_schema()),
-            output_schema_strict: true,
             ..Default::default()
         };
         let mut repair_attempts = 0;
@@ -507,20 +506,21 @@ fn spine_close_compact_instruction_template(
         }
     }
 
-    "---------- Spine Compact ----------\n\
-Compact node {node_id}.\n\
-Write durable memory needed to continue after this node.\n\
-Do not reply to the user.\n\n\
-Return JSON only:\n\
-- `slots`: optional memories for listed slot ids.\n\
-- `node_memory`: required whole-node handoff.\n\n\
-Runtime already preserves exact user messages and child memory.\n\
-Do not copy preserved evidence wholesale.\n\
-Use older context only to understand this node's goal and constraints.\n\
-Use the optional close/next instruction as a preservation hint, not as a user message.\n\
-Skip transient tool noise unless it changed task state.\n\
-Do not include Markdown fences, salutations, TL;DR, tool calls, or fields outside the schema."
-        .to_string()
+    format!(
+        "---------- SPINE MEMORY COMPACT ----------\n\
+You are performing a CONTEXT CHECKPOINT COMPACTION for Spine node {{node_id}}.\n\
+Create handoff memory for another LLM that will continue after this node.\n\
+Do not answer the user or call tools.\n\n\
+Return exactly one JSON object and nothing else:\n\
+{SPINE_CLOSE_COMPACT_JSON_SHAPE}\n\n\
+Contract:\n\n\
+* node_memory is required. Summarize this node's progress, decisions, constraints, remaining work, and critical references.\n\
+* slots is an array. Use [] unless a listed non-preserved span contains information needed later.\n\
+* Each used slot must be exactly {{\"slot_id\":\"slot_N\",\"body\":\"...\"}}.\n\
+* slot_id must be one of the allowed slot ids below.\n\
+* Runtime already preserves exact user messages and child memory. Use them as evidence; do not copy them wholesale.\n\
+* No extra fields, Markdown fences, or prose outside JSON."
+    )
 }
 
 fn append_spine_close_compact_prompt_items(
@@ -721,6 +721,7 @@ impl SpineCompactMemorySkeleton {
             .collect()
     }
 
+    #[cfg(test)]
     fn output_schema(&self) -> serde_json::Value {
         let slot_ids = self.slot_ids();
         let slots_schema = if slot_ids.is_empty() {
@@ -767,40 +768,32 @@ impl SpineCompactMemorySkeleton {
 
     fn prompt_slot_map(&self) -> Result<String, SpineError> {
         let optional_slot_ids = self.slot_ids();
-        let optional_slot_contract = if optional_slot_ids.is_empty() {
-            "No optional slot ids are available; return an empty `slots` array.".to_string()
+        let allowed_slot_ids = if optional_slot_ids.is_empty() {
+            "none".to_string()
         } else {
-            format!(
-                "Optional slots may all be omitted; if returned, `slot_id` must be one of: {}.",
-                optional_slot_ids.join(", ")
-            )
+            optional_slot_ids.join(", ")
         };
         let mut text = format!(
-            "{SPINE_COMPACT_SOURCE_MAP_HEADER}\n\n\
-Runtime owns the node boundary. The map below only shows evidence layout inside Spine node {}.\n\n\
-Conventions:\n\
-- `Uxx user evidence` is exact text preserved by runtime. Use it as evidence; do not return it in `slots`.\n\
-- Child memory evidence is trusted memory preserved by runtime. Use it as evidence; do not copy it wholesale into slot bodies.\n\
-- Each `slot_N` is one contiguous non-preserved source span inside this node, including assistant/tool/runtime work or non-exact user inputs such as multimodal user messages.\n\
-- Return a `slots` entry only when that span contains durable user intent/details, decisions, command results, file paths, errors, partial implementation state, or unresolved work needed to continue correctly.\n\
-- Omit optional slots for routine progress updates, transient tool noise, or facts already clear from preserved evidence or `node_memory`.\n\n\
-Schema field contract:\n\
-- `node_memory` must be non-empty and useful as the whole-node handoff.\n\
-- {optional_slot_contract}\n\
-- Optional slot bodies must be non-empty and not duplicated.\n\
-- Do not emit protocol markers or extra JSON fields.\n",
+            "{SPINE_COMPACT_SOURCE_MAP_HEADER}\n\
+Node {} evidence order:\n\n",
             self.node_id
         );
+        if !self
+            .blocks
+            .iter()
+            .any(|block| matches!(block, SpineCompactMemoryBlock::UserMessage(_)))
+        {
+            text.push_str("* No preserved user messages exist in this node.\n");
+        }
         let mut user_msg_ordinal = 0usize;
         for (block_index, block) in self.blocks.iter().enumerate() {
             match block {
                 SpineCompactMemoryBlock::UserMessage(body) => {
                     user_msg_ordinal += 1;
-                    text.push_str(&format!("\nU{user_msg_ordinal:02} user evidence:\n"));
-                    text.push_str(body);
-                    if !body.ends_with('\n') {
-                        text.push('\n');
-                    }
+                    text.push_str(&format!(
+                        "* USER_MSG_{user_msg_ordinal} is preserved exactly:\n"
+                    ));
+                    push_indented_source_map_block(&mut text, body);
                 }
                 SpineCompactMemoryBlock::ChildMemory {
                     node_id,
@@ -808,14 +801,10 @@ Schema field contract:\n\
                     body_hash,
                     body,
                 } => {
-                    text.push_str("\nChild memory evidence:\n");
                     text.push_str(&format!(
-                        "node_id={node_id} compact_id={compact_id} body_hash={body_hash}\n"
+                        "* Child memory {node_id} is preserved exactly (compact_id={compact_id}, body_hash={body_hash}):\n"
                     ));
-                    text.push_str(body);
-                    if !body.ends_with('\n') {
-                        text.push('\n');
-                    }
+                    push_indented_source_map_block(&mut text, body);
                 }
                 SpineCompactMemoryBlock::MemorySlot {
                     slot_id,
@@ -823,13 +812,11 @@ Schema field contract:\n\
                     instruction_only: _,
                 } => {
                     let label = slot_context_label(&self.blocks, block_index);
-                    text.push_str(&format!("\n{slot_id}: {label}\n"));
+                    text.push_str(&format!("* {slot_id}: {label}\n"));
                 }
             }
         }
-        text.push_str(
-            "\nRequired field: node_memory\nWrite the complete handoff for this Spine node: active user intent, decisions made, work done, files/tests/errors/results, remaining work, and constraints needed to continue. This field is required even if `slots` is empty.\n",
-        );
+        text.push_str(&format!("\nAllowed slot ids: {allowed_slot_ids}.\n"));
         Ok(text)
     }
 
@@ -892,11 +879,11 @@ fn slot_context_label(blocks: &[SpineCompactMemoryBlock], slot_index: usize) -> 
         .find_map(|anchor| anchor.as_deref());
     match (previous, next) {
         (Some(previous), Some(next)) => {
-            format!("assistant/tool span after {previous} and before {next}")
+            format!("optional non-preserved span after {previous} and before {next}.")
         }
-        (Some(previous), None) => format!("assistant/tool span after {previous}"),
-        (None, Some(next)) => format!("assistant/tool span at node start before {next}"),
-        (None, None) => "assistant/tool span for this node".to_string(),
+        (Some(previous), None) => format!("optional non-preserved span after {previous}."),
+        (None, Some(next)) => format!("optional non-preserved span before {next}."),
+        (None, None) => "optional non-preserved span for the selected node body.".to_string(),
     }
 }
 
@@ -907,7 +894,7 @@ fn preserved_evidence_labels(blocks: &[SpineCompactMemoryBlock]) -> Vec<Option<S
         let label = match block {
             SpineCompactMemoryBlock::UserMessage(_) => {
                 user_ordinal += 1;
-                Some(format!("U{user_ordinal:02}"))
+                Some(format!("USER_MSG_{user_ordinal}"))
             }
             SpineCompactMemoryBlock::ChildMemory { node_id, .. } => {
                 Some(format!("child memory {node_id}"))
@@ -917,6 +904,21 @@ fn preserved_evidence_labels(blocks: &[SpineCompactMemoryBlock]) -> Vec<Option<S
         labels.push(label);
     }
     labels
+}
+
+fn push_indented_source_map_block(text: &mut String, body: &str) {
+    if body.is_empty() {
+        text.push_str("  \n");
+        return;
+    }
+    for line in body.lines() {
+        text.push_str("  ");
+        text.push_str(line);
+        text.push('\n');
+    }
+    if body.ends_with('\n') {
+        text.push_str("  \n");
+    }
 }
 
 struct SpineCompactMemorySkeletonBuilder {
@@ -1087,21 +1089,23 @@ fn spine_close_compact_repair_text(
 ) -> String {
     let optional_slot_ids = skeleton.slot_ids();
     let optional_slots = if optional_slot_ids.is_empty() {
-        "No optional slot ids are available; return `slots: []`.".to_string()
+        "Allowed slot ids: none.".to_string()
     } else {
-        format!(
-            "Allowed optional slot_id values: {}. Omit slots that are not needed.",
-            optional_slot_ids.join(", ")
-        )
+        format!("Allowed slot ids: {}.", optional_slot_ids.join(", "))
     };
     format!(
         "Your previous Spine compact output could not be used: {}\n\
-This is an internal Spine memory compaction request, not a user reply.\n\
-The API response is constrained by JSON schema.\n\
-Return only a JSON object matching the schema fields `slots` and `node_memory`.\n\
-`node_memory` must be non-empty and useful as the whole-node handoff.\n\
-{optional_slots}\n\
-Do not include explanations, Markdown fences, protocol markers, preserved evidence blocks, or tool calls.",
+Do not answer the user or call tools.\n\n\
+Return exactly one JSON object and nothing else:\n\
+{SPINE_CLOSE_COMPACT_JSON_SHAPE}\n\n\
+Contract:\n\n\
+* node_memory is required and must be a non-empty whole-node handoff.\n\
+* slots must be an array. Use [] unless a listed non-preserved span contains information needed later.\n\
+* Each used slot must be exactly {{\"slot_id\":\"slot_N\",\"body\":\"...\"}}; do not use `id` or `memory`.\n\
+* slot_id must be one of the allowed slot ids below.\n\
+* Runtime already preserves exact user messages and child memory. Use them as evidence; do not copy them wholesale.\n\
+* {optional_slots}\n\
+* No extra fields, explanations, Markdown fences, protocol markers, preserved evidence blocks, or tool calls.",
         err.message(),
     )
 }
@@ -1313,7 +1317,7 @@ fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
 fn forbidden_generated_body_structure_marker(body: &str) -> Option<String> {
     const FORBIDDEN_SUBSTRINGS: &[&str] = &[
         "# Spine Memory ",
-        "---------- Spine Compact ----------",
+        "---------- SPINE MEMORY COMPACT ----------",
         "---------- Spine Compact Directive ----------",
         "---------- Spine Close Target ----------",
         "## User Message",
@@ -1486,14 +1490,13 @@ mod spine_close_slot_map_tests {
         assert!(skeleton.has_generated_slots());
         let slot_map = skeleton.prompt_slot_map().expect("slot map");
         assert!(slot_map.starts_with(SPINE_COMPACT_SOURCE_MAP_HEADER));
-        assert!(slot_map.contains("U01 user evidence:\nUSER_EXACT\nline 2\n"));
+        assert!(slot_map.contains("* USER_MSG_1 is preserved exactly:\n  USER_EXACT\n  line 2\n"));
         assert!(slot_map.contains("# Spine Memory 1.1.1"));
         assert!(!slot_map.contains("----- BEGIN CHILD MEMORY -----"));
-        assert!(
-            slot_map
-                .contains("slot_1: assistant/tool span after U01 and before child memory 1.1.1")
-        );
-        assert!(slot_map.contains("Required field: node_memory"));
+        assert!(slot_map.contains(
+            "* slot_1: optional non-preserved span after USER_MSG_1 and before child memory 1.1.1."
+        ));
+        assert!(slot_map.contains("Allowed slot ids: slot_1."));
         assert!(!slot_map.contains("source ordinals"));
         assert!(!slot_map.contains("<SPINE_SLOT_1>"));
         assert!(!slot_map.contains("<SPINE_NODE_MEMORY>"));
@@ -1522,7 +1525,7 @@ mod spine_close_slot_map_tests {
     }
 
     #[test]
-    fn slot_map_prompt_lists_json_schema_fields_and_repair_shape() {
+    fn slot_map_preserves_source_layout_without_xml_tags() {
         let plan = source_plan(vec![
             source_entry(2, 0, assistant_message("before user"), false),
             source_entry(3, 1, user_message("USER_EXACT"), true),
@@ -1531,26 +1534,11 @@ mod spine_close_slot_map_tests {
         let skeleton =
             SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
-        let compact_instruction =
-            spine_close_compact_instruction_text("1.1", None, Path::new("/no-codex-home"), false);
-        assert!(compact_instruction.contains("Compact node 1.1."));
-        assert!(compact_instruction.contains("Return JSON only:"));
-        assert!(compact_instruction.contains("`node_memory`"));
-        assert!(compact_instruction.contains("`slots`"));
-        assert!(!compact_instruction.contains("<SPINE_SLOT_"));
-        assert!(!compact_instruction.contains("<SPINE_NODE_MEMORY>"));
-
         let slot_map = skeleton.prompt_slot_map().expect("slot map");
-        assert!(slot_map.contains(
-            "Optional slots may all be omitted; if returned, `slot_id` must be one of: slot_1, slot_2."
-        ));
-        assert!(slot_map.contains("Runtime owns the node boundary"));
-        assert!(slot_map.contains("evidence layout inside Spine node 1.1"));
-        assert!(slot_map.contains("non-exact user inputs such as multimodal user messages"));
-        assert!(slot_map.contains("Schema field contract:"));
-        assert!(slot_map.contains("slot_1: assistant/tool span at node start before U01"));
-        assert!(slot_map.contains("slot_2: assistant/tool span after U01"));
-        assert!(slot_map.contains("U01 user evidence:\nUSER_EXACT\n"));
+        assert!(slot_map.starts_with(SPINE_COMPACT_SOURCE_MAP_HEADER));
+        assert!(slot_map.contains("* slot_1: optional non-preserved span before USER_MSG_1."));
+        assert!(slot_map.contains("* slot_2: optional non-preserved span after USER_MSG_1."));
+        assert!(slot_map.contains("* USER_MSG_1 is preserved exactly:\n  USER_EXACT\n"));
         assert!(
             !slot_map
                 .lines()
@@ -1564,21 +1552,51 @@ mod spine_close_slot_map_tests {
         assert!(!slot_map.contains("source ordinals"));
         assert!(!slot_map.contains("<USER_MSG_1>"));
         assert!(!slot_map.contains("<spine_memory>"));
+    }
 
-        let repair = spine_close_compact_repair_text(
-            &SpineCloseCompactBodyError::Repairable(
-                "spine.close compact missing node_memory".to_string(),
-            ),
+    #[test]
+    fn compact_json_requires_slots_key_and_accepts_empty_slots_array() {
+        let plan = source_plan(vec![source_entry(
+            2,
+            0,
+            assistant_message("assistant details"),
+            false,
+        )]);
+        let skeleton =
+            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+
+        let missing_slots = spine_close_compact_body(
+            "1.1",
+            &[assistant_message(
+                &serde_json::json!({
+                    "node_memory": "node"
+                })
+                .to_string(),
+            )],
             &skeleton,
+        )
+        .expect_err("missing slots key must be repairable");
+        assert!(
+            missing_slots
+                .to_string()
+                .contains("produced invalid JSON memory body"),
+            "unexpected error: {missing_slots}"
         );
-        assert!(repair.contains(
-            "Return only a JSON object matching the schema fields `slots` and `node_memory`."
-        ));
-        assert!(repair.contains("`node_memory` must be non-empty"));
-        assert!(repair.contains("Allowed optional slot_id values: slot_1, slot_2."));
-        assert!(!repair.contains("<SPINE_SLOT_"));
-        assert!(!repair.contains("<SPINE_NODE_MEMORY>"));
-        assert!(!repair.contains("XML-style"));
+
+        let empty_slots = spine_close_compact_body(
+            "1.1",
+            &[assistant_message(
+                &serde_json::json!({
+                    "slots": [],
+                    "node_memory": "node"
+                })
+                .to_string(),
+            )],
+            &skeleton,
+        )
+        .expect("empty slots array should be accepted");
+        assert!(!empty_slots.contains("## Memory Slot"));
+        assert!(empty_slots.contains("## Node Memory\nnode"));
     }
 
     #[test]
@@ -1617,9 +1635,6 @@ mod spine_close_slot_map_tests {
         let slot_map = skeleton.prompt_slot_map().expect("slot map");
         assert!(!slot_map.contains("<USER_MSG_"));
         assert!(!slot_map.contains("<spine_memory>"));
-        assert!(
-            slot_map.contains("No optional slot ids are available; return an empty `slots` array.")
-        );
         let schema = skeleton.output_schema();
         assert_eq!(schema["properties"]["slots"]["maxItems"], 0);
         assert_eq!(
@@ -2007,8 +2022,10 @@ node
             SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
         assert!(skeleton.has_generated_slots());
         let slot_map = skeleton.prompt_slot_map().expect("slot map");
-        assert!(slot_map.contains("slot_1: assistant/tool span for this node"));
-        assert!(slot_map.contains("non-exact user inputs such as multimodal user messages"));
+        assert!(
+            slot_map.contains("* slot_1: optional non-preserved span for the selected node body.")
+        );
+        assert!(slot_map.contains("Allowed slot ids: slot_1."));
         assert!(
             !slot_map.contains("<USER_MSG_"),
             "multi-content user messages should be summarized by generated slots, not exact-preserved"

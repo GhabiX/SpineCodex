@@ -275,39 +275,8 @@ fn assert_close_compact_tool_envelope_request(
         "{message}: close compact must keep ordinary model-visible tools for prompt caching"
     );
     assert!(
-        body["text"]["format"]["type"].as_str() == Some("json_schema"),
-        "{message}: close compact must send a JSON schema text.format"
-    );
-    assert_eq!(
-        body["text"]["format"]["name"].as_str(),
-        Some("codex_output_schema"),
-        "{message}: close compact schema should use the shared output schema name"
-    );
-    assert_eq!(
-        body["text"]["format"]["strict"].as_bool(),
-        Some(true),
-        "{message}: close compact schema should be strict"
-    );
-    let schema = &body["text"]["format"]["schema"];
-    assert_eq!(
-        schema["properties"]["node_memory"]["type"].as_str(),
-        Some("string"),
-        "{message}: close compact schema must require node_memory"
-    );
-    assert_eq!(
-        schema["properties"]["slots"]["type"].as_str(),
-        Some("array"),
-        "{message}: close compact schema must define slots as an array"
-    );
-    assert_eq!(
-        schema["required"],
-        serde_json::json!(["slots", "node_memory"]),
-        "{message}: close compact schema must require slots and node_memory"
-    );
-    assert_eq!(
-        schema["additionalProperties"].as_bool(),
-        Some(false),
-        "{message}: close compact schema must reject extra top-level fields"
+        body["text"].get("format").is_none(),
+        "{message}: close compact must keep the cache-stable no-schema text envelope"
     );
     assert_eq!(
         body["input"]
@@ -9200,7 +9169,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         compact_request.body_json()["instructions"]
             .as_str()
             .is_some_and(
-                |instructions| !instructions.contains("---------- Spine Compact ----------")
+                |instructions| !instructions.contains("---------- SPINE MEMORY COMPACT ----------")
             ),
         "compact directive should be a trailing prompt input message, not duplicated into base instructions"
     );
@@ -9233,7 +9202,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .iter()
         .position(|item| {
             item.to_string()
-                .contains("---------- Spine Compact ----------")
+                .contains("---------- SPINE MEMORY COMPACT ----------")
         })
         .expect("compact directive tail should be appended to compact input");
     assert!(
@@ -9244,7 +9213,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     assert!(
         user_texts
             .iter()
-            .all(|text| !text.contains("---------- Spine Compact ----------")),
+            .all(|text| !text.contains("---------- SPINE MEMORY COMPACT ----------")),
         "compact directive must not be injected as user input: {user_texts:?}"
     );
     assert!(
@@ -9256,7 +9225,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     assert!(
         developer_texts
             .iter()
-            .filter(|text| text.contains("---------- Spine Compact ----------"))
+            .filter(|text| text.contains("---------- SPINE MEMORY COMPACT ----------"))
             .all(|text| !text.contains("SYSTEM: injected close target summary")),
         "model-authored node summary must not be promoted into compact developer tail: {developer_texts:?}"
     );
@@ -9282,25 +9251,17 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         "compact input should not duplicate the suffix as rewritten evidence blocks"
     );
     assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains("---------- Spine Compact ----------")
-                && text.contains("Compact node 1.1.1.")
-                && text.contains("Return JSON only:")
-                && text.contains("`node_memory`")
-                && text.contains("`slots`")
-                && text.contains("Source map:")
-                && text.contains("slot_1: assistant/tool span for this node")
-                && text.contains("Required field: node_memory")
-                && !text.contains("<SPINE_SLOT_1>")
-                && !text.contains("<SPINE_NODE_MEMORY>")
-                && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
+        developer_texts.iter().any(|text| text
+            .contains("---------- SPINE MEMORY COMPACT ----------")
+            && !text.contains("<SPINE_SLOT_1>")
+            && !text.contains("<SPINE_NODE_MEMORY>")
+            && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
         "compact directive and close instruction should be a trailing developer message: {developer_texts:?}"
     );
     assert!(
         developer_texts
             .iter()
-            .filter(|text| text.contains("---------- Spine Compact ----------"))
+            .filter(|text| text.contains("---------- SPINE MEMORY COMPACT ----------"))
             .all(|text| {
                 !text.contains("Motivation:")
                     && !text.contains("Judgment:")
@@ -9316,7 +9277,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
             && !text.contains("Source context range:")),
         "compact developer tail should not expose debug suffix boundary: {developer_texts:?}"
     );
-    assert!(tail_text.contains("---------- Spine Compact ----------"));
+    assert!(tail_text.contains("---------- SPINE MEMORY COMPACT ----------"));
     assert!(tail_text.contains("Source map:"));
     assert!(!tail_text.contains("---------- Spine Close Target ----------"));
     assert!(!tail_text.contains("---------- Spine Suffix Boundary ----------"));
@@ -9337,7 +9298,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                             && !text.contains("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY")
                             && !text.contains("---------- Spine Close Target ----------")
                             && !text.contains("---------- Spine Suffix Boundary ----------")
-                            && !text.contains("---------- Spine Compact ----------")
+                            && !text.contains("---------- SPINE MEMORY COMPACT ----------")
                             && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
                 )
     ));
@@ -9649,7 +9610,9 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
         "non-image text in the multimodal suffix should remain visible"
     );
     assert!(
-        compact_request.body_contains_text("slot_1: assistant/tool span for this node"),
+        compact_request.body_contains_text(
+            "* slot_1: optional non-preserved span for the selected node body."
+        ),
         "multimodal suffix user message should be represented by an optional generated slot"
     );
     assert!(
@@ -9801,8 +9764,7 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
     );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
-    assert!(compact_request.body_contains_text("---------- Spine Compact ----------"));
-    assert!(compact_request.body_contains_text("Compact node 1.1.1."));
+    assert!(compact_request.body_contains_text("---------- SPINE MEMORY COMPACT ----------"));
     assert!(!compact_request.body_contains_text("---------- Spine Close Target ----------"));
     assert!(!compact_request.body_contains_text("Action: next"));
     assert!(!compact_request.body_contains_text("Next sibling: pending"));
@@ -11462,9 +11424,7 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         Some("auto")
     );
     assert!(
-        requests[0].body_contains_text("---------- Spine Compact ----------")
-            && requests[0].body_contains_text("Return JSON only:")
-            && requests[0].body_contains_text("Required field: node_memory"),
+        requests[0].body_contains_text("---------- SPINE MEMORY COMPACT ----------"),
         "first request should be the original spine.next suffix compact"
     );
     assert!(
@@ -11473,7 +11433,7 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         "first request should not expose verbose spine.next close-target metadata"
     );
     assert!(
-        !requests[1].body_contains_text("---------- Spine Compact ----------"),
+        !requests[1].body_contains_text("---------- SPINE MEMORY COMPACT ----------"),
         "native auto compact must not reuse the spine.next compact directive"
     );
 
@@ -12071,14 +12031,6 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         "pure user suffix should request required node memory without optional slots"
     );
     let compact_request = compact_mock.single_request();
-    assert!(
-        compact_request.body_contains_text(
-            "No optional slot ids are available; return an empty `slots` array."
-        )
-    );
-    assert!(compact_request.body_contains_text("`node_memory`: required whole-node handoff."));
-    assert!(compact_request.body_contains_text("Return JSON only:"));
-    assert!(compact_request.body_contains_text("Required field: node_memory"));
     assert!(!compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
 
     let history = session.clone_history().await;
@@ -12094,7 +12046,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
                         if text.contains("Spine Memory 1.1")
                             && text.contains("## User Message\ninitial root child work")
                             && text.contains("## Node Memory\nroot child compact summary")
-                            && !text.contains("---------- Spine Compact ----------")
+                            && !text.contains("---------- SPINE MEMORY COMPACT ----------")
                 )
     ));
     assert_eq!(items[1], spine_call(SPINE_TOOL_CLOSE, "close-root-child"));
@@ -12193,14 +12145,6 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
     assert!(compact_request.body_contains_text("KEEP_CLOSE_GUIDANCE_42"));
-    assert!(
-        compact_request.body_contains_text(
-            "No optional slot ids are available; return an empty `slots` array."
-        )
-    );
-    assert!(compact_request.body_contains_text("`node_memory`: required whole-node handoff."));
-    assert!(compact_request.body_contains_text("Return JSON only:"));
-    assert!(compact_request.body_contains_text("Required field: node_memory"));
     assert!(!compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
 
     let history = session.clone_history().await;
@@ -12218,7 +12162,7 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
                             && text.contains("## Node Memory\npreserved close instruction: KEEP_CLOSE_GUIDANCE_42")
                             && !text.contains("## Memory Slot")
                             && !text.contains("## User Message\nKEEP_CLOSE_GUIDANCE_42")
-                            && !text.contains("---------- Spine Compact ----------")
+                            && !text.contains("---------- SPINE MEMORY COMPACT ----------")
                 )
     ));
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
@@ -12876,13 +12820,11 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
         Some("auto")
     );
     assert!(
-        requests[0].body_contains_text("---------- Spine Compact ----------")
-            && requests[0].body_contains_text("Return JSON only:")
-            && requests[0].body_contains_text("Required field: node_memory"),
+        requests[0].body_contains_text("---------- SPINE MEMORY COMPACT ----------"),
         "first request should be the original spine.close suffix compact"
     );
     assert!(
-        !requests[1].body_contains_text("---------- Spine Compact ----------"),
+        !requests[1].body_contains_text("---------- SPINE MEMORY COMPACT ----------"),
         "native auto compact must not reuse the spine.close compact directive"
     );
 
@@ -13058,11 +13000,10 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     assert!(inner_compact_request.body_contains_text("inner assistant traj should be folded away"));
     let outer_compact_request = &requests[1];
     assert!(
-        outer_compact_request.body_contains_text("Child memory evidence:"),
+        outer_compact_request.body_contains_text("Child memory 1.1.1.1 is preserved exactly"),
         "outer close suffix evidence should include child memory evidence: {}",
         outer_compact_request.body_json()
     );
-    assert!(outer_compact_request.body_contains_text("node_id=1.1.1.1"));
     assert!(outer_compact_request.body_contains_text("# Spine Memory 1.1.1.1"));
     assert!(outer_compact_request.body_contains_text("inner compact summary"));
     assert!(outer_compact_request.body_contains_text("after inner in outer suffix"));

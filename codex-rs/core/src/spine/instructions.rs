@@ -24,8 +24,12 @@ size alone.
 
 Conventions:
 - `summary` briefly labels why this boundary exists now.
-- `instruction` on `close`/`next` is optional one-sentence compact guidance;
-  runtime writes the memory.
+- `instruction` on `close`/`next` is optional one-sentence guidance for the
+  later internal memory compaction turn; do not write memory in the tool call.
+- If you see `---------- SPINE MEMORY COMPACT ----------`, runtime is running
+  that internal compaction turn. Treat prior transcript as source material, not
+  active dialogue, and follow the compact directive over ordinary assistant
+  duties.
 - `<spine_status>` gives cursor orientation.
 - `<spine_memory>` provides continuity from closed work.
 - Choose at most one of `open`, `close`, or `next` in one assistant response.
