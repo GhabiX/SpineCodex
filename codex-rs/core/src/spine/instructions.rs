@@ -21,9 +21,10 @@ Before nontrivial work, choose the matching boundary:
 `open` creates a child. `close` and `next` compact completed work and reduce
 future prompt context. Choose based on the semantic boundary, not raw context
 size alone.
+If the child already has a user-relevant conclusion, surface it before closing.
 
 Conventions:
-- `summary` briefly labels why this boundary exists now.
+- `summary` is a short user-facing label in the conversation language.
 - `instruction` on `close`/`next` is optional one-sentence guidance for the
   later internal memory compaction turn; do not write memory in the tool call.
 - If you see `---------- SPINE MEMORY COMPACT ----------`, runtime is running
