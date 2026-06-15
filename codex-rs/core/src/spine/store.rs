@@ -19,6 +19,7 @@ use crate::spine::model::COMMIT_MARKER_VERSION;
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::LoggedPressureEvent;
 use crate::spine::model::LoggedSpineLedgerEvent;
+use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::MemoryRef;
@@ -34,6 +35,7 @@ use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
+use crate::spine::model::TrimEvent;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use serde::Deserialize;
 use serde::Serialize;
@@ -54,6 +56,7 @@ use std::time::UNIX_EPOCH;
 const LOCATOR_VERSION: u32 = 1;
 const TREE_FILE: &str = "tree.jsonl";
 const PRESSURE_FILE: &str = "pressure.jsonl";
+const TRIM_FILE: &str = "trim.jsonl";
 const MEM_FILE: &str = "mem.jsonl";
 const COMMIT_FILE: &str = "commits.jsonl";
 const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
@@ -73,6 +76,7 @@ pub struct SpineCloneBoundary {
     pub(crate) raw_ordinal_limit: u64,
     pub(crate) structural_seq_limit: u64,
     pub(crate) pressure_seq_watermark: Option<u64>,
+    pub(crate) trim_seq_watermark: Option<u64>,
 }
 
 impl SpineCloneBoundary {
@@ -111,8 +115,10 @@ impl SpineStore {
     pub(crate) fn create_for_rollout(rollout_path: &Path) -> Result<Self, SpineError> {
         let root = sidecar_root_for_rollout(rollout_path)?;
         std::fs::create_dir_all(&root)?;
-        write_locator_for_root(rollout_path, &root)?;
-        Ok(Self::from_root(root))
+        let store = Self::from_root(root);
+        store.ensure_trim_ledger_exists()?;
+        write_locator_for_root(rollout_path, &store.root)?;
+        Ok(store)
     }
 
     pub(crate) fn load_or_create_for_writer(rollout_path: &Path) -> Result<Self, SpineError> {
@@ -137,6 +143,7 @@ impl SpineStore {
             raw_ordinal_limit,
             structural_seq_limit: source.next_event_seq()?,
             pressure_seq_watermark: source.next_pressure_seq()?.checked_sub(1),
+            trim_seq_watermark: source.next_trim_seq()?.checked_sub(1),
         }))
     }
 
@@ -154,6 +161,7 @@ impl SpineStore {
             raw_ordinal_limit: raw_ordinal,
             structural_seq_limit: checkpoint.token_seq,
             pressure_seq_watermark: checkpoint.pressure_seq_watermark,
+            trim_seq_watermark: checkpoint.trim_seq_watermark,
         }))
     }
 
@@ -211,6 +219,17 @@ impl SpineStore {
     pub(crate) fn with_writer_lock(mut self) -> Result<Self, SpineError> {
         self.ensure_writer_lock()?;
         Ok(self)
+    }
+
+    fn ensure_trim_ledger_exists(&self) -> Result<(), SpineError> {
+        if let Some(parent) = self.trim_path().parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.trim_path())?;
+        Ok(())
     }
 
     pub(crate) fn ensure_writer_lock(&mut self) -> Result<(), SpineError> {
@@ -393,11 +412,13 @@ fn clone_for_rollout_into_store(
 ) -> Result<(), SpineError> {
     let source_raw_live = &raw_live[..raw_ordinal_limit];
     let mask = RawMask::new(source_raw_live);
+    target.ensure_trim_ledger_exists()?;
     let source_events = source.events()?;
     let source_mems = source.mems()?;
     let source_checkpoints = source.checkpoints()?;
     let source_compact_checkpoints = source.compact_checkpoints()?;
     let source_commit_markers = source.commit_markers()?;
+    let source_trim_events = source.trim_events()?;
     let source_events_by_seq = source_events
         .iter()
         .map(|event| (event.seq, event))
@@ -511,6 +532,16 @@ fn clone_for_rollout_into_store(
             target.append_logged_pressure_event(&pressure)?;
         }
     }
+    for trim in source_trim_events {
+        if boundary
+            .trim_seq_watermark
+            .is_some_and(|watermark| trim.trim_seq <= watermark)
+            && trim.allowed_by(mask)?
+            && trim_event_within_structural_boundary(&trim, boundary.structural_seq_limit)
+        {
+            target.append_logged_trim_event(&trim)?;
+        }
+    }
     let mut cloned_memory_paths = BTreeMap::new();
     for mem in source_mems {
         if mem.allowed_by(mask)? {
@@ -550,6 +581,16 @@ fn clone_for_rollout_into_store(
     Ok(())
 }
 
+fn trim_event_within_structural_boundary(
+    event: &LoggedTrimEvent,
+    structural_seq_limit: u64,
+) -> bool {
+    match &event.event {
+        TrimEvent::Candidate { toolcall_seq, .. } => *toolcall_seq < structural_seq_limit,
+        TrimEvent::Cleared { .. } => true,
+    }
+}
+
 impl SpineStore {
     pub(super) fn tree_path(&self) -> PathBuf {
         self.root.join(TREE_FILE)
@@ -580,6 +621,15 @@ impl SpineStore {
     #[cfg(test)]
     pub(crate) fn pressure_path_for_test(&self) -> PathBuf {
         self.pressure_path()
+    }
+
+    pub(super) fn trim_path(&self) -> PathBuf {
+        self.root.join(TRIM_FILE)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn trim_path_for_test(&self) -> PathBuf {
+        self.trim_path()
     }
 
     fn compact_checkpoint_path(&self) -> PathBuf {
@@ -647,6 +697,22 @@ impl SpineStore {
         append_pressure_json_line(&self.pressure_path(), event)
     }
 
+    pub(super) fn append_trim_event(&self, event: &TrimEvent) -> Result<u64, SpineError> {
+        let trim_seq = self.next_trim_seq()?;
+        self.append_logged_trim_event(&LoggedTrimEvent {
+            trim_seq,
+            event: event.clone(),
+        })?;
+        Ok(trim_seq)
+    }
+
+    pub(super) fn append_logged_trim_event(
+        &self,
+        event: &LoggedTrimEvent,
+    ) -> Result<(), SpineError> {
+        append_json_line(&self.trim_path(), event)
+    }
+
     pub(super) fn append_mem(&self, mem: &MemRecord) -> Result<(), SpineError> {
         append_json_line(&self.mem_path(), mem)
     }
@@ -682,6 +748,16 @@ impl SpineStore {
             return Ok(Vec::new());
         }
         read_pressure_json_lines(&self.pressure_path())
+    }
+
+    pub(super) fn trim_events(&self) -> Result<Vec<LoggedTrimEvent>, SpineError> {
+        if !self.trim_path().exists() {
+            return Err(SpineError::InvalidStore(format!(
+                "missing required Spine trim ledger: {}",
+                self.trim_path().display()
+            )));
+        }
+        read_json_lines(&self.trim_path())
     }
 
     #[cfg(test)]
@@ -768,6 +844,21 @@ impl SpineStore {
                 pressure_seq.checked_add(1).ok_or_else(|| {
                     SpineError::InvalidEvent("spine pressure seq overflow".to_string())
                 })
+            })
+            .transpose()?
+            .unwrap_or(0))
+    }
+
+    pub(super) fn next_trim_seq(&self) -> Result<u64, SpineError> {
+        Ok(self
+            .trim_events()?
+            .into_iter()
+            .map(|event| event.trim_seq)
+            .max()
+            .map(|trim_seq| {
+                trim_seq
+                    .checked_add(1)
+                    .ok_or_else(|| SpineError::InvalidEvent("spine trim seq overflow".to_string()))
             })
             .transpose()?
             .unwrap_or(0))

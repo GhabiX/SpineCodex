@@ -3,12 +3,15 @@ use crate::spine::io::hash_raw_live;
 use crate::spine::io::hash_raw_live_prefix_all_true;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Range;
 use std::path::PathBuf;
 
 pub(super) const COMMIT_MARKER_VERSION: u32 = 1;
+pub(crate) const TOOL_RESPONSE_TRIM_THRESHOLD_BYTES: i64 = 500;
+pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -180,6 +183,86 @@ pub(super) struct LoggedPressureEvent {
     pub(super) pressure_seq: u64,
     #[serde(flatten)]
     pub(super) event: PressureEvent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TrimResponseKind {
+    FunctionCallOutput,
+    CustomToolCallOutput,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum TrimEvent {
+    Candidate {
+        trim_id: String,
+        toolcall_seq: u64,
+        raw_ordinal: u64,
+        context_index: usize,
+        call_id: String,
+        response_kind: TrimResponseKind,
+        original_visible_size: i64,
+    },
+    Cleared {
+        trim_id: String,
+        raw_boundary: u64,
+        raw_live_hash: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct LoggedTrimEvent {
+    pub(super) trim_seq: u64,
+    #[serde(flatten)]
+    pub(super) event: TrimEvent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TrimTarget {
+    pub(super) trim_id: String,
+    pub(super) toolcall_seq: u64,
+    pub(super) raw_ordinal: u64,
+    pub(super) context_index: usize,
+    pub(super) call_id: String,
+    pub(super) response_kind: TrimResponseKind,
+    pub(super) original_visible_size: i64,
+    pub(super) cleared: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct TrimProjection {
+    pub(super) targets_by_id: BTreeMap<String, TrimTarget>,
+    pub(super) trim_id_by_raw_ordinal: BTreeMap<u64, String>,
+}
+
+impl TrimProjection {
+    pub(super) fn target_for_raw_ordinal(&self, raw_ordinal: u64) -> Option<&TrimTarget> {
+        let trim_id = self.trim_id_by_raw_ordinal.get(&raw_ordinal)?;
+        self.targets_by_id.get(trim_id)
+    }
+
+    pub(super) fn target(&self, trim_id: &str) -> Option<&TrimTarget> {
+        self.targets_by_id.get(trim_id)
+    }
+
+    pub(super) fn insert_candidate(&mut self, target: TrimTarget) {
+        self.trim_id_by_raw_ordinal
+            .insert(target.raw_ordinal, target.trim_id.clone());
+        self.targets_by_id.insert(target.trim_id.clone(), target);
+    }
+
+    pub(super) fn mark_cleared(&mut self, trim_id: &str) {
+        if let Some(target) = self.targets_by_id.get_mut(trim_id) {
+            target.cleared = true;
+        }
+    }
+
+    pub(super) fn contains_toolcall_raw_target(&self, toolcall_seq: u64, raw_ordinal: u64) -> bool {
+        self.targets_by_id
+            .values()
+            .any(|target| target.toolcall_seq == toolcall_seq && target.raw_ordinal == raw_ordinal)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -480,6 +563,25 @@ impl<'a> RawMask<'a> {
 impl LoggedSpineLedgerEvent {
     pub(super) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         self.event.allowed_by(raw_mask)
+    }
+}
+
+impl LoggedTrimEvent {
+    pub(super) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
+        self.event.allowed_by(raw_mask)
+    }
+}
+
+impl TrimEvent {
+    pub(super) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
+        match self {
+            TrimEvent::Candidate { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
+            TrimEvent::Cleared {
+                raw_boundary,
+                raw_live_hash,
+                ..
+            } => raw_mask.prefix_hash_matches(*raw_boundary, raw_live_hash),
+        }
     }
 }
 

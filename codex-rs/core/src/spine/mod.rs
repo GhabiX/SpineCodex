@@ -20,6 +20,7 @@ pub(crate) use runtime::SPINE_TOOL_CLOSE;
 pub(crate) use runtime::SPINE_TOOL_NEXT;
 pub(crate) use runtime::SPINE_TOOL_OPEN;
 pub(crate) use runtime::SPINE_TOOL_TREE;
+pub(crate) use runtime::SPINE_TOOL_TRIM;
 pub(crate) use runtime::SpineCloseCompact;
 pub(crate) use runtime::SpineCommitKind;
 pub(crate) use runtime::SpineCompactSourceEntryKind;
@@ -34,6 +35,7 @@ pub(crate) use runtime::SpineRootCompactTokenMetadata;
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::SpineTokenBaselines;
+pub(crate) use runtime::SpineTrimOutcome;
 #[cfg(test)]
 pub(crate) use runtime::is_spine_close_like_tool_name;
 pub(crate) use runtime::is_user_message;

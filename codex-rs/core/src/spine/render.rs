@@ -5,8 +5,14 @@ use crate::spine::model::MemoryRef;
 use crate::spine::model::SegRef;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
+use crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE;
 use crate::spine::model::ToolCallSegmentKind;
+use crate::spine::model::TrimProjection;
+use crate::spine::model::TrimResponseKind;
+use crate::spine::model::TrimTarget;
 use crate::spine::parse_stack::ParseStack;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use std::path::PathBuf;
 
@@ -43,10 +49,37 @@ pub(super) fn render_parse_stack_to_context(
     render_parse_stack_to_context_with_memory_body(ps, raw_items, None)
 }
 
+pub(super) fn render_parse_stack_to_context_with_trim_projection(
+    ps: &ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    trim_projection: &TrimProjection,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    render_parse_stack_to_context_with_memory_body_and_trim_projection(
+        ps,
+        raw_items,
+        None,
+        trim_projection,
+    )
+}
+
 pub(super) fn render_parse_stack_to_context_with_memory_body(
     ps: &ParseStack,
     raw_items: &[Option<ResponseItem>],
     staged_memory_body: Option<(&str, &str)>,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    render_parse_stack_to_context_with_memory_body_and_trim_projection(
+        ps,
+        raw_items,
+        staged_memory_body,
+        &TrimProjection::default(),
+    )
+}
+
+pub(super) fn render_parse_stack_to_context_with_memory_body_and_trim_projection(
+    ps: &ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    staged_memory_body: Option<(&str, &str)>,
+    trim_projection: &TrimProjection,
 ) -> Result<Vec<ResponseItem>, SpineError> {
     let visible_refs = project_parse_stack_visible_items(ps)?;
     let mut out = Vec::with_capacity(visible_refs.len());
@@ -55,6 +88,7 @@ pub(super) fn render_parse_stack_to_context_with_memory_body(
             &visible_ref.source,
             raw_items,
             staged_memory_body,
+            trim_projection,
             &mut out,
         )?;
     }
@@ -195,6 +229,7 @@ fn render_visible_ref_to_context(
     source: &VisibleItemSource,
     raw_items: &[Option<ResponseItem>],
     staged_memory_body: Option<(&str, &str)>,
+    trim_projection: &TrimProjection,
     out: &mut Vec<ResponseItem>,
 ) -> Result<(), SpineError> {
     match source {
@@ -215,7 +250,16 @@ fn render_visible_ref_to_context(
                         "missing raw item for {missing_label} raw ordinal {raw_ordinal}"
                     ))
                 })?;
-            out.push(item.clone());
+            let mut item = item.clone();
+            if let VisibleItemSource::ToolCallSegment {
+                kind: ToolCallSegmentKind::Response,
+                raw_ordinal,
+            } = source
+                && let Some(target) = trim_projection.target_for_raw_ordinal(*raw_ordinal)
+            {
+                item = projected_tool_response_item(&item, target)?;
+            }
+            out.push(item);
             Ok(())
         }
         VisibleItemSource::MemoryRef {
@@ -241,6 +285,126 @@ fn render_visible_ref_to_context(
             Ok(())
         }
     }
+}
+
+pub(super) fn tagged_tool_response_item(
+    item: &ResponseItem,
+    target: &TrimTarget,
+) -> Result<ResponseItem, SpineError> {
+    projected_tool_response_item_with_state(item, target, false)
+}
+
+pub(super) fn cleared_tool_response_item(
+    item: &ResponseItem,
+    target: &TrimTarget,
+) -> Result<ResponseItem, SpineError> {
+    projected_tool_response_item_with_state(item, target, true)
+}
+
+fn projected_tool_response_item(
+    item: &ResponseItem,
+    target: &TrimTarget,
+) -> Result<ResponseItem, SpineError> {
+    projected_tool_response_item_with_state(item, target, target.cleared)
+}
+
+fn projected_tool_response_item_with_state(
+    item: &ResponseItem,
+    target: &TrimTarget,
+    cleared: bool,
+) -> Result<ResponseItem, SpineError> {
+    let body = if cleared {
+        FunctionCallOutputBody::Text(TOOL_RESULT_CLEARED_MESSAGE.to_string())
+    } else {
+        let text = text_body(item, target)?;
+        FunctionCallOutputBody::Text(format!("[TRIM_ID: {}]\n{text}", target.trim_id))
+    };
+    let output = FunctionCallOutputPayload {
+        body,
+        success: output_success(item, target)?,
+    };
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, .. }
+            if target.response_kind == TrimResponseKind::FunctionCallOutput
+                && call_id == &target.call_id =>
+        {
+            Ok(ResponseItem::FunctionCallOutput {
+                call_id: call_id.clone(),
+                output,
+            })
+        }
+        ResponseItem::CustomToolCallOutput { call_id, name, .. }
+            if target.response_kind == TrimResponseKind::CustomToolCallOutput
+                && call_id == &target.call_id =>
+        {
+            Ok(ResponseItem::CustomToolCallOutput {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                output,
+            })
+        }
+        _ => Err(SpineError::SidecarCorruption(format!(
+            "trim target {} does not match visible raw item for call_id={}",
+            target.trim_id, target.call_id
+        ))),
+    }
+}
+
+fn text_body(item: &ResponseItem, target: &TrimTarget) -> Result<String, SpineError> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, output }
+            if target.response_kind == TrimResponseKind::FunctionCallOutput
+                && call_id == &target.call_id =>
+        {
+            output
+                .text_content()
+                .map(str::to_string)
+                .ok_or_else(|| trim_body_error(target))
+        }
+        ResponseItem::CustomToolCallOutput {
+            call_id, output, ..
+        } if target.response_kind == TrimResponseKind::CustomToolCallOutput
+            && call_id == &target.call_id =>
+        {
+            output
+                .text_content()
+                .map(str::to_string)
+                .ok_or_else(|| trim_body_error(target))
+        }
+        _ => Err(SpineError::SidecarCorruption(format!(
+            "trim target {} does not match text body item for call_id={}",
+            target.trim_id, target.call_id
+        ))),
+    }
+}
+
+fn output_success(item: &ResponseItem, target: &TrimTarget) -> Result<Option<bool>, SpineError> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, output }
+            if target.response_kind == TrimResponseKind::FunctionCallOutput
+                && call_id == &target.call_id =>
+        {
+            Ok(output.success)
+        }
+        ResponseItem::CustomToolCallOutput {
+            call_id, output, ..
+        } if target.response_kind == TrimResponseKind::CustomToolCallOutput
+            && call_id == &target.call_id =>
+        {
+            Ok(output.success)
+        }
+        _ => Err(SpineError::SidecarCorruption(format!(
+            "trim target {} does not match output payload for call_id={}",
+            target.trim_id, target.call_id
+        ))),
+    }
+}
+
+fn trim_body_error(target: &TrimTarget) -> SpineError {
+    SpineError::SidecarCorruption(format!(
+        "trim target {} references non-text tool response body",
+        target.trim_id
+    ))
 }
 
 pub(super) fn read_memory_ref_body(memory: &MemoryRef) -> Result<String, SpineError> {

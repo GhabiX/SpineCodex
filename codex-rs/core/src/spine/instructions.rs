@@ -35,6 +35,9 @@ Conventions:
 - `<spine_memory>` provides continuity from closed work.
 - Choose at most one of `open`, `close`, or `next` in one assistant response.
 - `spine.tree` is a read-only inspector for unclear tree/cursor state.
+- When a previous tool response starts with `[TRIM_ID: ...]` and that output is
+  no longer needed verbatim, use `spine.trim` with `op: "snip"` on the next
+  turn. It only clears a tagged response from the previous completed toolcall.
 
 </spine_view>
 "#;

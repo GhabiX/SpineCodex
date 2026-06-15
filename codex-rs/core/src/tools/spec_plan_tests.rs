@@ -1514,6 +1514,20 @@ fn spine_namespace_is_registered_only_when_feature_enabled_and_visible() {
     assert_eq!(open_required, Some(&vec!["summary".to_string()]));
     assert!(open_properties.contains_key("summary"));
 
+    let trim_tool = find_namespace_function_tool(&specs, "spine", "trim");
+    let (trim_properties, trim_required) = expect_object_schema(&trim_tool.parameters);
+    assert_eq!(
+        trim_required,
+        Some(&vec!["TRIM_ID".to_string(), "op".to_string()])
+    );
+    assert!(trim_properties.contains_key("TRIM_ID"));
+    assert_eq!(
+        trim_properties
+            .get("op")
+            .and_then(|schema| schema.enum_values.as_ref()),
+        Some(&vec![json!("snip")])
+    );
+
     let close_tool = find_namespace_function_tool(&specs, "spine", "close");
     let (close_properties, close_required) = expect_object_schema(&close_tool.parameters);
     assert_eq!(close_required, Some(&Vec::new()));

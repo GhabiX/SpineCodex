@@ -20,6 +20,7 @@ use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 use crate::spine::SpineTokenBaselines;
+use crate::spine::SpineTrimOutcome;
 use crate::spine::ToolCallSegmentKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -62,10 +63,14 @@ pub(crate) struct DeferredSpineHistoryUpdate {
     expected_history: Vec<ResponseItem>,
     replacement: Vec<ResponseItem>,
     reference_context_item: Option<TurnContextItem>,
+    replace_tool_output: bool,
 }
 
 impl DeferredSpineHistoryUpdate {
     pub(crate) fn replace_tool_output(&mut self, item: &ResponseItem) {
+        if !self.replace_tool_output {
+            return;
+        }
         let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
             return;
         };
@@ -483,13 +488,17 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(false);
         };
+        let raw_items = self.current_spine_raw_items().await?;
         let mut guard = spine_slot.lock().await;
         guard.ensure_valid()?;
         let Some(spine) = guard.runtime_mut() else {
             return Ok(false);
         };
-        let observed =
-            spine.abort_pending_and_observe_completed_toolcall(call_id, completed_toolcall)?;
+        let observed = spine.abort_pending_and_observe_completed_toolcall_with_raw_items(
+            call_id,
+            completed_toolcall,
+            &raw_items,
+        )?;
         if observed {
             tracing::debug!(
                 call_id,
@@ -498,6 +507,26 @@ impl Session {
             );
         }
         Ok(observed)
+    }
+
+    async fn current_spine_raw_items(&self) -> Result<Vec<Option<ResponseItem>>, SpineError> {
+        self.ensure_rollout_materialized().await;
+        self.flush_rollout()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+            .ok_or_else(|| {
+                SpineError::InvalidStore("spine operation requires rollout path".to_string())
+            })?;
+        let rollout_history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        Ok(spine_raw_items_after_rollback(
+            &rollout_history.get_rollout_items(),
+        ))
     }
 
     async fn commit_completed_toolcall_as_ordinary(
@@ -536,8 +565,11 @@ impl Session {
                     "spine runtime missing during ordinary completed toolcall commit".to_string(),
                 ));
             };
-            let aborted_pending =
-                spine.commit_completed_toolcall_as_ordinary(call_id, completed_toolcall)?;
+            let aborted_pending = spine.commit_completed_toolcall_as_ordinary_with_raw_items(
+                call_id,
+                completed_toolcall,
+                &raw_items,
+            )?;
             let materialized = spine.materialize_history(&raw_items)?;
             let snapshot = spine.build_tree_snapshot()?;
             (aborted_pending, materialized, snapshot)
@@ -640,7 +672,10 @@ impl Session {
                 ));
             }
         }
-        runtime.observe_recorded_tool_output_group_as_completed_toolcall(&recorded_tool_outputs)?;
+        runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+            &recorded_tool_outputs,
+            &raw_items,
+        )?;
         Ok(())
     }
 
@@ -746,6 +781,21 @@ impl Session {
             ));
         };
         runtime.stage_next(call_id, summary, instruction)
+    }
+
+    pub(crate) async fn trim_spine_tool_response(
+        &self,
+        trim_id: String,
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        let spine = self.ensure_spine_runtime().await?;
+        let mut guard = spine.lock().await;
+        guard.ensure_valid()?;
+        let Some(runtime) = guard.runtime_mut() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing after initialization".to_string(),
+            ));
+        };
+        runtime.trim_tool_response(&trim_id)
     }
 
     #[cfg(test)]
@@ -1004,8 +1054,10 @@ impl Session {
             };
             spine.pending_commit(call_id)?
         };
-        let has_pending_close_commit =
-            matches!(pending_commit.as_ref(), Some(SpinePendingCommit::Close { .. }));
+        let has_pending_close_commit = matches!(
+            pending_commit.as_ref(),
+            Some(SpinePendingCommit::Close { .. })
+        );
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let pre_compact_token_baselines = if has_pending_close_commit {
             Some(token_baselines_from_info(current_turn_token_info.as_ref()))
@@ -1128,6 +1180,7 @@ impl Session {
                 )));
             }
         }
+        let raw_items = self.current_spine_raw_items().await?;
         let mut lock_retries = 0;
         let commit_output = loop {
             let attempt = self.try_commit_spine_tool_output_once(
@@ -1139,6 +1192,7 @@ impl Session {
                 current_turn_token_info.as_ref(),
                 completed_toolcall.clone(),
                 tool_resp_already_recorded,
+                &raw_items,
             );
             let attempt = match attempt {
                 Ok(attempt) => attempt,
@@ -1270,6 +1324,7 @@ impl Session {
         current_turn_token_info: Option<&TokenUsageInfo>,
         completed_toolcall: CompletedToolCall,
         tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
@@ -1298,26 +1353,23 @@ impl Session {
         let close_compact = close_compact.map(|(compact, _)| compact);
         let pending_commit = spine.pending_commit(call_id)?;
         let token_baselines = match pending_commit.as_ref() {
-            Some(SpinePendingCommit::Close { .. }) => {
-                match pre_compact_token_baselines {
-                    Some(token_baselines) => token_baselines,
-                    None => token_baselines_from_info(current_turn_token_info),
-                }
-            }
-            Some(SpinePendingCommit::Open) => {
-                token_baselines_from_info(current_turn_token_info)
-            }
+            Some(SpinePendingCommit::Close { .. }) => match pre_compact_token_baselines {
+                Some(token_baselines) => token_baselines,
+                None => token_baselines_from_info(current_turn_token_info),
+            },
+            Some(SpinePendingCommit::Open) => token_baselines_from_info(current_turn_token_info),
             None => SpineTokenBaselines::default(),
         };
         let commit_kind = if pending_commit.is_some() {
-            spine.maybe_commit_output_with_toolcall(
+            spine.maybe_commit_output_with_toolcall_and_raw_items(
                 call_id,
                 close_compact,
                 token_baselines,
                 completed_toolcall,
+                raw_items,
             )?
         } else {
-            spine.observe_completed_toolcall(completed_toolcall)?;
+            spine.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
             None
         };
         let defer_tree_update_until_raw_output = matches!(
@@ -1374,6 +1426,7 @@ impl Session {
                         expected_history: history_items.to_vec(),
                         replacement,
                         reference_context_item: state.reference_context_item(),
+                        replace_tool_output: true,
                     });
                 }
                 SpineCommitKind::CloseThenOpen {
@@ -1407,6 +1460,7 @@ impl Session {
                         expected_history: history_items.to_vec(),
                         replacement,
                         reference_context_item: state.reference_context_item(),
+                        replace_tool_output: true,
                     });
                 }
             }
@@ -1414,6 +1468,18 @@ impl Session {
             snapshot = Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?);
             let tree = render_spine_tree_for_model(spine, token_info)?;
             output_text = Some(format!("{output_prefix}\n\n{tree}"));
+        }
+        if history_update.is_none() && tool_resp_already_recorded {
+            let history = state.clone_history();
+            history_update = Some(DeferredSpineHistoryUpdate {
+                call_id: call_id.to_string(),
+                operation: "spine toolcall projection",
+                suffix_start: 0,
+                expected_history: history.raw_items().to_vec(),
+                replacement: spine.materialize_history(raw_items)?,
+                reference_context_item: state.reference_context_item(),
+                replace_tool_output: false,
+            });
         }
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
             snapshot,
@@ -1510,7 +1576,9 @@ impl Session {
                 context_tokens: Some(info.last_token_usage.tokens_in_context_window()),
             });
         let token_metadata = SpineRootCompactTokenMetadata {
-            close_input_tokens: close_baselines.as_ref().and_then(|baselines| baselines.input_tokens),
+            close_input_tokens: close_baselines
+                .as_ref()
+                .and_then(|baselines| baselines.input_tokens),
             close_context_tokens: close_baselines
                 .as_ref()
                 .and_then(|baselines| baselines.context_tokens),

@@ -6,6 +6,7 @@ use std::ops::Range;
 use std::path::Path;
 use thiserror::Error;
 
+use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::StagedArchiveWrite;
 use crate::spine::archive::flush_archive_writes;
@@ -23,6 +24,7 @@ use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::LoggedPressureEvent;
 use crate::spine::model::LoggedSpineLedgerEvent;
+use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::NodeId;
@@ -36,10 +38,15 @@ use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
+use crate::spine::model::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES;
 use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegment;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
+use crate::spine::model::TrimEvent;
+use crate::spine::model::TrimProjection;
+use crate::spine::model::TrimResponseKind;
+use crate::spine::model::TrimTarget;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::PreparedRootEpochReduction;
@@ -54,8 +61,10 @@ use crate::spine::render::VisibleItemSource;
 use crate::spine::render::memory_response_item;
 use crate::spine::render::project_spine_tree_nodes_visible_items;
 use crate::spine::render::read_memory_ref_body;
+#[cfg(test)]
 use crate::spine::render::render_parse_stack_to_context;
-use crate::spine::render::render_parse_stack_to_context_with_memory_body;
+use crate::spine::render::render_parse_stack_to_context_with_memory_body_and_trim_projection;
+use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
 use crate::spine::store::BODY_DIR;
 use crate::spine::store::SpineStore;
 
@@ -64,6 +73,7 @@ pub(crate) const SPINE_TOOL_TREE: &str = "tree";
 pub(crate) const SPINE_TOOL_OPEN: &str = "open";
 pub(crate) const SPINE_TOOL_CLOSE: &str = "close";
 pub(crate) const SPINE_TOOL_NEXT: &str = "next";
+pub(crate) const SPINE_TOOL_TRIM: &str = "trim";
 pub(crate) const SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX: &str =
     "Spine parser-control tools are mutually exclusive within one model response;";
 
@@ -91,23 +101,36 @@ pub(crate) struct SpineRuntime {
 struct SpineLedgerCache {
     events: Vec<LoggedSpineLedgerEvent>,
     pressure_events: Vec<LoggedPressureEvent>,
+    trim_events: Vec<LoggedTrimEvent>,
     next_event_seq: u64,
     next_pressure_seq: u64,
+    next_trim_seq: u64,
 }
 
 impl SpineLedgerCache {
     fn new(
         events: Vec<LoggedSpineLedgerEvent>,
         pressure_events: Vec<LoggedPressureEvent>,
+        trim_events: Vec<LoggedTrimEvent>,
     ) -> Result<Self, SpineError> {
         let next_event_seq = next_event_seq_from(&events)?;
         let next_pressure_seq = next_pressure_seq_from(&pressure_events)?;
+        let next_trim_seq = next_trim_seq_from(&trim_events)?;
         Ok(Self {
             events,
             pressure_events,
+            trim_events,
             next_event_seq,
             next_pressure_seq,
+            next_trim_seq,
         })
+    }
+
+    fn retain_trim_events_at_or_before(&mut self, watermark: Option<u64>) {
+        let next_trim_seq = self.next_trim_seq;
+        self.trim_events
+            .retain(|event| watermark.is_some_and(|watermark| event.trim_seq <= watermark));
+        self.next_trim_seq = next_trim_seq;
     }
 }
 
@@ -317,6 +340,13 @@ pub(crate) struct SpineRootCompactResult {
     pub(crate) materialized: Vec<ResponseItem>,
     pub(crate) raw_boundary: u64,
     pub(crate) token_seq_after: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SpineTrimOutcome {
+    Cleared { trim_id: String },
+    AlreadyCleared { trim_id: String },
+    Miss { trim_id: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -562,12 +592,19 @@ impl SpineRuntime {
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Self, SpineError> {
         let checkpoint = store.rollback_checkpoint(rollback_cuts)?;
+        let trim_events = store.trim_events()?;
         if let Some(checkpoint) = checkpoint.as_ref() {
-            validate_checkpoint(checkpoint, rollout_path, &raw_live, raw_items)?;
+            validate_checkpoint(checkpoint, rollout_path, &raw_live, raw_items, &trim_events)?;
             return Self::load_with_rollback_checkpoint(store, raw_live, checkpoint);
         }
         if let Some(checkpoint) = store.resume_checkpoint(raw_live.len())? {
-            validate_checkpoint(&checkpoint, rollout_path, &raw_live, raw_items)?;
+            validate_checkpoint(
+                &checkpoint,
+                rollout_path,
+                &raw_live,
+                raw_items,
+                &trim_events,
+            )?;
             Self::validate_checkpoint_parse_stack_prefix(&store, &raw_live, &checkpoint)?;
         }
         Self::load_with_raw_live(store, raw_live)
@@ -578,7 +615,11 @@ impl SpineRuntime {
         raw_live: &[bool],
         checkpoint: &SpineCheckpoint,
     ) -> Result<(), SpineError> {
-        let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
+        let ledger = SpineLedgerCache::new(
+            store.events()?,
+            store.pressure_events()?,
+            store.trim_events()?,
+        )?;
         let mems = store.mems()?;
         let markers = store.commit_markers()?;
         store.validate_commit_markers_for_replay(
@@ -630,7 +671,11 @@ impl SpineRuntime {
         raw_live: Vec<bool>,
         event_limit: Option<u64>,
     ) -> Result<Self, SpineError> {
-        let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
+        let ledger = SpineLedgerCache::new(
+            store.events()?,
+            store.pressure_events()?,
+            store.trim_events()?,
+        )?;
         let mems = store.mems()?;
         let markers = store.commit_markers()?;
         store.validate_commit_markers_for_replay(
@@ -701,7 +746,12 @@ impl SpineRuntime {
         raw_live: Vec<bool>,
         checkpoint: &SpineCheckpoint,
     ) -> Result<Self, SpineError> {
-        let ledger = SpineLedgerCache::new(store.events()?, store.pressure_events()?)?;
+        let mut ledger = SpineLedgerCache::new(
+            store.events()?,
+            store.pressure_events()?,
+            store.trim_events()?,
+        )?;
+        ledger.retain_trim_events_at_or_before(checkpoint.trim_seq_watermark);
         let mems = store.mems()?;
         let markers = store.commit_markers()?;
         store.validate_commit_markers_for_replay(
@@ -1097,9 +1147,18 @@ impl SpineRuntime {
         &mut self,
         toolcall: CompletedToolCall,
     ) -> Result<(), SpineError> {
+        self.observe_completed_toolcall_with_raw_items(toolcall, &[])
+    }
+
+    pub(crate) fn observe_completed_toolcall_with_raw_items(
+        &mut self,
+        toolcall: CompletedToolCall,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
         let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
-        self.append_cached_event(event)?;
+        let toolcall_seq = self.append_cached_event(event)?;
         self.push_completed_toolcall_token(segments)?;
+        self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
         Ok(())
     }
@@ -1108,6 +1167,15 @@ impl SpineRuntime {
         &mut self,
         call_id: &str,
         toolcall: CompletedToolCall,
+    ) -> Result<bool, SpineError> {
+        self.abort_pending_and_observe_completed_toolcall_with_raw_items(call_id, toolcall, &[])
+    }
+
+    pub(crate) fn abort_pending_and_observe_completed_toolcall_with_raw_items(
+        &mut self,
+        call_id: &str,
+        toolcall: CompletedToolCall,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<bool, SpineError> {
         if self
             .pending
@@ -1119,9 +1187,10 @@ impl SpineRuntime {
         let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
         let mut staged_parse_stack = self.parse_stack.clone();
         staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
-        self.append_cached_event(event)?;
+        let toolcall_seq = self.append_cached_event(event)?;
         self.parse_stack = staged_parse_stack;
         self.pending = None;
+        self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
         Ok(true)
     }
@@ -1131,18 +1200,30 @@ impl SpineRuntime {
         call_id: &str,
         toolcall: CompletedToolCall,
     ) -> Result<bool, SpineError> {
+        self.commit_completed_toolcall_as_ordinary_with_raw_items(call_id, toolcall, &[])
+    }
+
+    pub(crate) fn commit_completed_toolcall_as_ordinary_with_raw_items(
+        &mut self,
+        call_id: &str,
+        toolcall: CompletedToolCall,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<bool, SpineError> {
         if self
             .pending
             .as_ref()
             .is_some_and(|pending| pending.call_id() == call_id)
         {
-            return self.abort_pending_and_observe_completed_toolcall(call_id, toolcall);
+            return self.abort_pending_and_observe_completed_toolcall_with_raw_items(
+                call_id, toolcall, raw_items,
+            );
         }
         let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
         let mut staged_parse_stack = self.parse_stack.clone();
         staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
-        self.append_cached_event(event)?;
+        let toolcall_seq = self.append_cached_event(event)?;
         self.parse_stack = staged_parse_stack;
+        self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
         Ok(false)
     }
@@ -1150,6 +1231,17 @@ impl SpineRuntime {
     pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
         &mut self,
         tool_responses: &[(String, u64, usize)],
+    ) -> Result<(), SpineError> {
+        self.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+            tool_responses,
+            &[],
+        )
+    }
+
+    pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+        &mut self,
+        tool_responses: &[(String, u64, usize)],
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
         let mut response_segments = Vec::new();
         let mut request_call_ids = Vec::new();
@@ -1208,11 +1300,14 @@ impl SpineRuntime {
         let call_id = request_call_ids.first().cloned().ok_or_else(|| {
             SpineError::InvalidEvent("completed toolcall missing call id".to_string())
         })?;
-        self.observe_completed_toolcall(CompletedToolCall {
-            call_id,
-            request_call_ids,
-            segments,
-        })
+        self.observe_completed_toolcall_with_raw_items(
+            CompletedToolCall {
+                call_id,
+                request_call_ids,
+                segments,
+            },
+            raw_items,
+        )
     }
 
     pub(crate) fn checkpoint_before_user_msg(
@@ -1226,6 +1321,7 @@ impl SpineRuntime {
             raw_ordinal,
             self.ledger.next_event_seq,
             self.pressure_seq_watermark()?,
+            self.trim_seq_watermark()?,
             &self.raw_live,
             &self.parse_stack,
             context,
@@ -1243,6 +1339,7 @@ impl SpineRuntime {
             0,
             self.ledger.next_event_seq,
             self.pressure_seq_watermark()?,
+            self.trim_seq_watermark()?,
             &self.raw_live,
             &self.parse_stack,
             context,
@@ -1253,6 +1350,10 @@ impl SpineRuntime {
 
     fn pressure_seq_watermark(&self) -> Result<Option<u64>, SpineError> {
         Ok(self.ledger.next_pressure_seq.checked_sub(1))
+    }
+
+    fn trim_seq_watermark(&self) -> Result<Option<u64>, SpineError> {
+        Ok(self.ledger.next_trim_seq.checked_sub(1))
     }
 
     fn append_cached_event(&mut self, event: SpineLedgerEvent) -> Result<u64, SpineError> {
@@ -1358,6 +1459,18 @@ impl SpineRuntime {
         Ok(pressure_seq)
     }
 
+    fn append_cached_trim_event(&mut self, event: TrimEvent) -> Result<u64, SpineError> {
+        let trim_seq = self.ledger.next_trim_seq;
+        let next_trim_seq = trim_seq
+            .checked_add(1)
+            .ok_or_else(|| SpineError::InvalidEvent("spine trim seq overflow".to_string()))?;
+        let logged = LoggedTrimEvent { trim_seq, event };
+        self.store.append_logged_trim_event(&logged)?;
+        self.ledger.trim_events.push(logged);
+        self.ledger.next_trim_seq = next_trim_seq;
+        Ok(trim_seq)
+    }
+
     fn append_msg_event(&mut self, msg: &PendingMsg) -> Result<u64, SpineError> {
         self.append_cached_event(SpineLedgerEvent::Msg {
             raw_ordinal: msg.raw_ordinal,
@@ -1433,6 +1546,109 @@ impl SpineRuntime {
         }
         Ok(SpineLedgerEvent::ToolCall {
             segments: event_segments,
+        })
+    }
+
+    fn append_trim_candidates_for_completed_toolcall(
+        &mut self,
+        toolcall: &CompletedToolCall,
+        toolcall_seq: u64,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        if raw_items.is_empty() {
+            return Ok(());
+        }
+        let existing_projection = self.current_trim_projection()?;
+        for segment in &toolcall.segments {
+            if segment.kind != ToolCallSegmentKind::Response
+                || existing_projection
+                    .contains_toolcall_raw_target(toolcall_seq, segment.raw_ordinal)
+            {
+                continue;
+            }
+            let raw_index = usize::try_from(segment.raw_ordinal)
+                .map_err(|_| SpineError::InvalidEvent("trim raw ordinal overflow".to_string()))?;
+            let Some(item) = raw_items.get(raw_index).and_then(Option::as_ref) else {
+                continue;
+            };
+            let Some((response_kind, call_id)) = trimmable_text_tool_response(item) else {
+                continue;
+            };
+            let original_visible_size = estimate_response_item_model_visible_bytes(item);
+            if original_visible_size <= TOOL_RESPONSE_TRIM_THRESHOLD_BYTES {
+                continue;
+            }
+            let trim_id = format!("trim_{}", self.ledger.next_trim_seq);
+            self.append_cached_trim_event(TrimEvent::Candidate {
+                trim_id,
+                toolcall_seq,
+                raw_ordinal: segment.raw_ordinal,
+                context_index: segment.context_index,
+                call_id: call_id.to_string(),
+                response_kind,
+                original_visible_size,
+            })?;
+        }
+        Ok(())
+    }
+
+    fn current_trim_projection(&self) -> Result<TrimProjection, SpineError> {
+        trim_projection_from_events(
+            &self.ledger.trim_events,
+            &self.raw_live,
+            self.ledger.next_event_seq,
+            None,
+        )
+    }
+
+    fn latest_live_completed_toolcall_seq(&self) -> Result<Option<u64>, SpineError> {
+        let raw_mask = RawMask::new(&self.raw_live);
+        for event in self.ledger.events.iter().rev() {
+            if event.seq >= self.ledger.next_event_seq {
+                continue;
+            }
+            if matches!(event.event, SpineLedgerEvent::ToolCall { .. })
+                && event.allowed_by(raw_mask)?
+            {
+                return Ok(Some(event.seq));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn trim_tool_response(
+        &mut self,
+        trim_id: &str,
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        let trim_id = trim_id.trim();
+        if trim_id.is_empty() {
+            return Ok(SpineTrimOutcome::Miss {
+                trim_id: trim_id.to_string(),
+            });
+        }
+        let projection = self.current_trim_projection()?;
+        let Some(target) = projection.target(trim_id) else {
+            return Ok(SpineTrimOutcome::Miss {
+                trim_id: trim_id.to_string(),
+            });
+        };
+        if Some(target.toolcall_seq) != self.latest_live_completed_toolcall_seq()? {
+            return Ok(SpineTrimOutcome::Miss {
+                trim_id: trim_id.to_string(),
+            });
+        }
+        if target.cleared {
+            return Ok(SpineTrimOutcome::AlreadyCleared {
+                trim_id: trim_id.to_string(),
+            });
+        }
+        self.append_cached_trim_event(TrimEvent::Cleared {
+            trim_id: trim_id.to_string(),
+            raw_boundary: self.raw_len,
+            raw_live_hash: hash_raw_live(&self.raw_live),
+        })?;
+        Ok(SpineTrimOutcome::Cleared {
+            trim_id: trim_id.to_string(),
         })
     }
 
@@ -1600,6 +1816,7 @@ impl SpineRuntime {
             close_compact,
             SpineTokenBaselines::default(),
             completed_toolcall,
+            &[],
         )
     }
 
@@ -1619,6 +1836,7 @@ impl SpineRuntime {
                 context_tokens: input_tokens,
             },
             completed_toolcall,
+            &[],
         )
     }
 
@@ -1630,7 +1848,13 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         let completed_toolcall = self.observed_completed_toolcall(call_id)?;
-        self.maybe_commit_output_impl(call_id, close_compact, token_baselines, completed_toolcall)
+        self.maybe_commit_output_impl(
+            call_id,
+            close_compact,
+            token_baselines,
+            completed_toolcall,
+            &[],
+        )
     }
 
     pub(crate) fn maybe_commit_output_with_toolcall(
@@ -1640,11 +1864,29 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
         completed_toolcall: CompletedToolCall,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
+        self.maybe_commit_output_with_toolcall_and_raw_items(
+            call_id,
+            close_compact,
+            token_baselines,
+            completed_toolcall,
+            &[],
+        )
+    }
+
+    pub(crate) fn maybe_commit_output_with_toolcall_and_raw_items(
+        &mut self,
+        call_id: &str,
+        close_compact: Option<SpineCloseCompact>,
+        token_baselines: SpineTokenBaselines,
+        completed_toolcall: CompletedToolCall,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<SpineCommitKind>, SpineError> {
         self.maybe_commit_output_impl(
             call_id,
             close_compact,
             token_baselines,
             Some(completed_toolcall),
+            raw_items,
         )
     }
 
@@ -1654,6 +1896,7 @@ impl SpineRuntime {
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         let Some(pending) = self.pending.as_ref() else {
             return Ok(None);
@@ -1674,12 +1917,14 @@ impl SpineRuntime {
                 index,
                 token_baselines,
                 completed_toolcall,
+                raw_items,
             )?,
             PendingTransition::Close { instruction, .. } => self.commit_close_pending(
                 instruction,
                 close_compact,
                 token_baselines,
                 completed_toolcall,
+                raw_items,
             )?,
             PendingTransition::NextSugar {
                 summary,
@@ -1691,6 +1936,7 @@ impl SpineRuntime {
                 close_compact,
                 token_baselines,
                 completed_toolcall,
+                raw_items,
             )?,
         };
         self.pending = None;
@@ -1705,6 +1951,7 @@ impl SpineRuntime {
         mut index: u64,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitKind, SpineError> {
         if let Some(completed_toolcall) = completed_toolcall.as_ref() {
             let first = completed_toolcall_first_segment(completed_toolcall)?;
@@ -1746,9 +1993,17 @@ impl SpineRuntime {
         if let Some(completed_toolcall) = completed_toolcall {
             let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
             staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+            let toolcall_seq = self.ledger.next_event_seq.checked_add(1).ok_or_else(|| {
+                SpineError::InvalidEvent("spine.open toolcall seq overflow".to_string())
+            })?;
             let events = vec![event, toolcall_event];
             self.append_committed_events_no_marker(events)?;
             self.parse_stack = staged_parse_stack;
+            self.append_trim_candidates_for_completed_toolcall(
+                &completed_toolcall,
+                toolcall_seq,
+                raw_items,
+            )?;
             self.clear_completed_toolcall_anchors(&completed_toolcall);
             return Ok(SpineCommitKind::Open {
                 open_request_index: usize::try_from(index).map_err(|_| {
@@ -1772,6 +2027,7 @@ impl SpineRuntime {
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitKind, SpineError> {
         let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
         let mut events = vec![prepared.close_event.clone()];
@@ -1794,6 +2050,17 @@ impl SpineRuntime {
         )?;
         let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
         events.push(toolcall_event);
+        let event_count = u64::try_from(events.len())
+            .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?;
+        let toolcall_seq = self
+            .ledger
+            .next_event_seq
+            .checked_add(event_count.checked_sub(1).ok_or_else(|| {
+                SpineError::InvalidEvent("spine close event count underflow".to_string())
+            })?)
+            .ok_or_else(|| {
+                SpineError::InvalidEvent("spine.close toolcall seq overflow".to_string())
+            })?;
         self.parse_stack
             .shift_pending_close(prepared.memory.clone(), &self.archive())?;
         let mut final_parse_stack = self
@@ -1808,11 +2075,15 @@ impl SpineRuntime {
             &prepared.mem,
             SpineCommitKindMarker::Close,
             close_event_boundary(&prepared.close_event)?,
-            u64::try_from(events.len())
-                .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?,
+            event_count,
         )?;
         self.append_committed_events(events, marker)?;
         self.parse_stack = final_parse_stack;
+        self.append_trim_candidates_for_completed_toolcall(
+            &completed_toolcall,
+            toolcall_seq,
+            raw_items,
+        )?;
         self.clear_completed_toolcall_anchors(&completed_toolcall);
         Ok(SpineCommitKind::Close {
             suffix_start: prepared.suffix_start,
@@ -1828,6 +2099,7 @@ impl SpineRuntime {
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitKind, SpineError> {
         let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
         let mut close_reduced_parse_stack = self.parse_stack.clone();
@@ -1867,6 +2139,17 @@ impl SpineRuntime {
             self.remap_completed_toolcall_context_indices(completed_toolcall, open_index)?;
         let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
         events.push(toolcall_event);
+        let event_count = u64::try_from(events.len())
+            .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?;
+        let toolcall_seq = self
+            .ledger
+            .next_event_seq
+            .checked_add(event_count.checked_sub(1).ok_or_else(|| {
+                SpineError::InvalidEvent("spine next event count underflow".to_string())
+            })?)
+            .ok_or_else(|| {
+                SpineError::InvalidEvent("spine.next toolcall seq overflow".to_string())
+            })?;
         self.parse_stack
             .shift_pending_close(prepared.memory.clone(), &self.archive())?;
         let mut final_parse_stack = self
@@ -1895,11 +2178,15 @@ impl SpineRuntime {
             &prepared.mem,
             SpineCommitKindMarker::CloseThenOpen,
             close_event_boundary(&prepared.close_event)?,
-            u64::try_from(events.len())
-                .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?,
+            event_count,
         )?;
         self.append_committed_events(events, marker)?;
         self.parse_stack = final_parse_stack;
+        self.append_trim_candidates_for_completed_toolcall(
+            &completed_toolcall,
+            toolcall_seq,
+            raw_items,
+        )?;
         self.clear_completed_toolcall_anchors(&completed_toolcall);
         Ok(SpineCommitKind::CloseThenOpen {
             suffix_start: prepared.suffix_start,
@@ -2403,6 +2690,7 @@ impl SpineRuntime {
         );
 
         let staged_memory_body = Some((compact_id.as_str(), body.as_str()));
+        let trim_projection = self.current_trim_projection()?;
         let next_open_index_usize = match self.parse_stack.pending_compact_next_open_index(
             &memory,
             token_metadata.next_open_input_tokens,
@@ -2422,10 +2710,11 @@ impl SpineRuntime {
                     },
                     &self.archive(),
                 )?;
-                render_parse_stack_to_context_with_memory_body(
+                render_parse_stack_to_context_with_memory_body_and_trim_projection(
                     &probe_parse_stack,
                     raw_items,
                     staged_memory_body,
+                    &trim_projection,
                 )?
                 .len()
             }
@@ -2447,10 +2736,11 @@ impl SpineRuntime {
             token_metadata.next_open_context_tokens,
         )?;
         staged_parse_stack.apply_prevalidated_root_epoch_reduction(root_epoch_reduction.clone());
-        let materialized = render_parse_stack_to_context_with_memory_body(
+        let materialized = render_parse_stack_to_context_with_memory_body_and_trim_projection(
             &staged_parse_stack,
             raw_items,
             staged_memory_body,
+            &trim_projection,
         )?;
         let current_open_index = staged_parse_stack.current_open_meta()?.index;
         if current_open_index != materialized.len() {
@@ -2596,7 +2886,12 @@ impl SpineRuntime {
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        render_parse_stack_to_context(&self.parse_stack, raw_items)
+        let trim_projection = self.current_trim_projection()?;
+        render_parse_stack_to_context_with_trim_projection(
+            &self.parse_stack,
+            raw_items,
+            &trim_projection,
+        )
     }
 
     pub(crate) fn validate_raw_coverage(
@@ -2789,6 +3084,77 @@ fn next_pressure_seq_from(events: &[LoggedPressureEvent]) -> Result<u64, SpineEr
         })
         .transpose()
         .map(|seq| seq.unwrap_or(0))
+}
+
+fn next_trim_seq_from(events: &[LoggedTrimEvent]) -> Result<u64, SpineError> {
+    events
+        .iter()
+        .map(|event| event.trim_seq)
+        .max()
+        .map(|seq| {
+            seq.checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("spine trim seq overflow".to_string()))
+        })
+        .transpose()
+        .map(|seq| seq.unwrap_or(0))
+}
+
+pub(super) fn trim_projection_from_events_for_checkpoint(
+    events: &[LoggedTrimEvent],
+    raw_live: &[bool],
+    current_structural_seq: u64,
+    trim_seq_watermark: Option<u64>,
+) -> Result<TrimProjection, SpineError> {
+    trim_projection_from_events(events, raw_live, current_structural_seq, trim_seq_watermark)
+}
+
+fn trim_projection_from_events(
+    events: &[LoggedTrimEvent],
+    raw_live: &[bool],
+    current_structural_seq: u64,
+    trim_seq_watermark: Option<u64>,
+) -> Result<TrimProjection, SpineError> {
+    let raw_mask = RawMask::new(raw_live);
+    let mut projection = TrimProjection::default();
+    let mut events = events.iter().collect::<Vec<_>>();
+    events.sort_by_key(|event| event.trim_seq);
+    for event in events {
+        if trim_seq_watermark.is_some_and(|watermark| event.trim_seq > watermark) {
+            continue;
+        }
+        if !event.allowed_by(raw_mask)? {
+            continue;
+        }
+        match &event.event {
+            TrimEvent::Candidate {
+                trim_id,
+                toolcall_seq,
+                raw_ordinal,
+                context_index,
+                call_id,
+                response_kind,
+                original_visible_size,
+            } => {
+                if *toolcall_seq >= current_structural_seq {
+                    continue;
+                }
+                projection.insert_candidate(TrimTarget {
+                    trim_id: trim_id.clone(),
+                    toolcall_seq: *toolcall_seq,
+                    raw_ordinal: *raw_ordinal,
+                    context_index: *context_index,
+                    call_id: call_id.clone(),
+                    response_kind: *response_kind,
+                    original_visible_size: *original_visible_size,
+                    cleared: false,
+                });
+            }
+            TrimEvent::Cleared { trim_id, .. } => {
+                projection.mark_cleared(trim_id);
+            }
+        }
+    }
+    Ok(projection)
 }
 
 fn replay_pressure_baselines(
@@ -3165,6 +3531,20 @@ fn tool_response_call_id(item: &ResponseItem) -> Option<&str> {
             call_id: Some(call_id),
             ..
         } => Some(call_id.as_str()),
+        _ => None,
+    }
+}
+
+fn trimmable_text_tool_response(item: &ResponseItem) -> Option<(TrimResponseKind, &str)> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, output } if output.text_content().is_some() => {
+            Some((TrimResponseKind::FunctionCallOutput, call_id.as_str()))
+        }
+        ResponseItem::CustomToolCallOutput {
+            call_id, output, ..
+        } if output.text_content().is_some() => {
+            Some((TrimResponseKind::CustomToolCallOutput, call_id.as_str()))
+        }
         _ => None,
     }
 }

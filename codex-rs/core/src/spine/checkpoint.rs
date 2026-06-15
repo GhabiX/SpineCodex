@@ -3,13 +3,14 @@ use crate::spine::SpineError;
 use crate::spine::io::hash_raw_live;
 use crate::spine::io::hash_response_items;
 use crate::spine::model::ControlSymbol;
+use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::RootEpoch;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::parse_stack::ParseStack;
-use crate::spine::render::render_parse_stack_to_context;
+use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
 use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,6 +25,8 @@ pub(super) struct SpineCheckpoint {
     pub(super) token_seq: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) pressure_seq_watermark: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) trim_seq_watermark: Option<u64>,
     pub(super) raw_live_hash: String,
     pub(super) context_len: usize,
     pub(super) cursor: String,
@@ -40,6 +43,7 @@ pub(super) fn build_checkpoint(
     raw_ordinal: u64,
     token_seq: u64,
     pressure_seq_watermark: Option<u64>,
+    trim_seq_watermark: Option<u64>,
     raw_live: &[bool],
     parse_stack: &ParseStack,
     context: &[ResponseItem],
@@ -67,6 +71,7 @@ pub(super) fn build_checkpoint(
         raw_ordinal,
         token_seq,
         pressure_seq_watermark,
+        trim_seq_watermark,
         raw_live_hash: hash_raw_live(&raw_live[..raw_ordinal_usize]),
         context_len: context.len(),
         cursor: parse_stack.current_cursor_id()?.to_string(),
@@ -229,6 +234,7 @@ pub(super) fn validate_checkpoint(
     rollout_path: &Path,
     raw_live: &[bool],
     raw_items: &[Option<ResponseItem>],
+    trim_events: &[LoggedTrimEvent],
 ) -> Result<(), SpineError> {
     if checkpoint.version != CHECKPOINT_VERSION {
         return Err(SpineError::InvalidStore(format!(
@@ -256,7 +262,17 @@ pub(super) fn validate_checkpoint(
             checkpoint.checkpoint_id
         )));
     }
-    let materialized = render_parse_stack_to_context(&checkpoint.parse_stack, &raw_items[..end])?;
+    let trim_projection = crate::spine::runtime::trim_projection_from_events_for_checkpoint(
+        trim_events,
+        &raw_live[..end],
+        checkpoint.token_seq,
+        checkpoint.trim_seq_watermark,
+    )?;
+    let materialized = render_parse_stack_to_context_with_trim_projection(
+        &checkpoint.parse_stack,
+        &raw_items[..end],
+        &trim_projection,
+    )?;
     if materialized.len() != checkpoint.context_len {
         return Err(SpineError::InvalidStore(format!(
             "spine checkpoint context_len mismatch for {}",

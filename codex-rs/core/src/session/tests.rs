@@ -13,6 +13,7 @@ use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
+use crate::spine::SPINE_TOOL_TRIM;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
@@ -436,6 +437,37 @@ fn function_output(call_id: &str) -> ResponseItem {
         call_id: call_id.to_string(),
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
     }
+}
+
+fn function_output_with_text(call_id: &str, text: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload::from_text(text.to_string()),
+    }
+}
+
+fn function_output_text(item: &ResponseItem) -> &str {
+    let ResponseItem::FunctionCallOutput { output, .. } = item else {
+        panic!("expected function call output: {item:?}");
+    };
+    output
+        .text_content()
+        .expect("function call output should be text")
+}
+
+fn function_output_text_by_call_id<'a>(items: &'a [ResponseItem], target_call_id: &str) -> &'a str {
+    let output = items
+        .iter()
+        .find_map(|item| {
+            let ResponseItem::FunctionCallOutput { call_id, output } = item else {
+                return None;
+            };
+            (call_id == target_call_id).then_some(output)
+        })
+        .unwrap_or_else(|| panic!("missing function call output for {target_call_id}: {items:#?}"));
+    output
+        .text_content()
+        .expect("function call output should be text")
 }
 
 fn custom_tool_call(call_id: &str) -> ResponseItem {
@@ -14761,7 +14793,28 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
         .materialize_history(&raw_items)
         .expect("materialize conflict history");
     let persisted_items = raw_items.iter().flatten().cloned().collect::<Vec<_>>();
-    assert_eq!(materialized, persisted_items);
+    assert_eq!(materialized.len(), persisted_items.len());
+    for call_id in ["multi-open", "multi-next"] {
+        let persisted_output = function_output_text_by_call_id(&persisted_items, call_id);
+        assert!(
+            persisted_output.contains("mutually exclusive"),
+            "raw audit should keep the original conflict response for {call_id}: {persisted_output}"
+        );
+        assert!(
+            !persisted_output.contains("[TRIM_ID:"),
+            "raw audit must not be rewritten with trim tags for {call_id}: {persisted_output}"
+        );
+        let materialized_output = function_output_text_by_call_id(&materialized, call_id);
+        assert!(
+            materialized_output.starts_with("[TRIM_ID: trim_")
+                && materialized_output.contains("mutually exclusive"),
+            "visible h(PS) should tag long conflict output for next-turn trim: {materialized_output}"
+        );
+    }
+    assert_eq!(
+        function_output_text_by_call_id(&materialized, "multi-shell"),
+        function_output_text_by_call_id(&persisted_items, "multi-shell")
+    );
     assert!(
         !tree.contains("must not open") && !tree.contains("must not advance"),
         "conflicting control calls must not mutate Spine tree: {tree}"
@@ -15025,7 +15078,28 @@ async fn spine_tree_runs_normally_with_conflicting_spine_controls() -> anyhow::R
         .materialize_history(&raw_items)
         .expect("materialize conflict history");
     let persisted_items = raw_items.iter().flatten().cloned().collect::<Vec<_>>();
-    assert_eq!(materialized, persisted_items);
+    assert_eq!(materialized.len(), persisted_items.len());
+    for call_id in ["tree-conflict-open", "tree-conflict-next"] {
+        let persisted_output = function_output_text_by_call_id(&persisted_items, call_id);
+        assert!(
+            persisted_output.contains("mutually exclusive"),
+            "raw audit should keep the original conflict response for {call_id}: {persisted_output}"
+        );
+        assert!(
+            !persisted_output.contains("[TRIM_ID:"),
+            "raw audit must not be rewritten with trim tags for {call_id}: {persisted_output}"
+        );
+        let materialized_output = function_output_text_by_call_id(&materialized, call_id);
+        assert!(
+            materialized_output.starts_with("[TRIM_ID: trim_")
+                && materialized_output.contains("mutually exclusive"),
+            "visible h(PS) should tag long conflict output for next-turn trim: {materialized_output}"
+        );
+    }
+    assert_eq!(
+        function_output_text_by_call_id(&materialized, "tree-conflict-tree"),
+        function_output_text_by_call_id(&persisted_items, "tree-conflict-tree")
+    );
 
     Ok(())
 }
@@ -15390,6 +15464,112 @@ async fn spine_open_control_toolcall_is_durable_context_history() {
         .materialize_history(&raw_items)
         .expect("materialize h(PS)");
     assert_eq!(materialized, items);
+}
+
+#[tokio::test]
+async fn spine_trim_rewrites_visible_history_and_preserves_raw_tool_output() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let request = function_call("shell_command", "long-tool");
+    let long_text = "important raw output ".repeat(40);
+    let output = function_output_with_text("long-tool", &long_text);
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&request))
+        .await
+        .expect("record ordinary request");
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, output.clone())
+        .await
+        .expect("commit ordinary output");
+
+    let tagged_history = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(tagged_history[0], request);
+    assert!(
+        function_output_text(&tagged_history[1]).starts_with("[TRIM_ID: trim_0]\n"),
+        "long output should be tagged before trim: {:?}",
+        tagged_history[1]
+    );
+    assert!(
+        function_output_text(&tagged_history[1]).contains(&long_text),
+        "tagging must keep the original output visible until trim"
+    );
+
+    let trim_request = ResponseItem::FunctionCall {
+        id: None,
+        name: SPINE_TOOL_TRIM.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: json!({"TRIM_ID": "trim_0", "op": "snip"}).to_string(),
+        call_id: "trim-long".to_string(),
+    };
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&trim_request))
+        .await
+        .expect("record trim request");
+    let outcome = session
+        .trim_spine_tool_response("trim_0".to_string())
+        .await
+        .expect("trim previous tool response");
+    assert_eq!(
+        outcome,
+        crate::spine::SpineTrimOutcome::Cleared {
+            trim_id: "trim_0".to_string()
+        }
+    );
+    let trim_output = function_output_with_text("trim-long", "Trimmed tool response trim_0.");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        trim_output.clone(),
+    )
+    .await
+    .expect("commit trim output");
+
+    let visible_history = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(visible_history[0], request);
+    assert_eq!(
+        function_output_text(&visible_history[1]),
+        "[Old tool result content cleared]"
+    );
+    assert_eq!(visible_history[2], trim_request);
+    assert_eq!(visible_history[3], trim_output);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert!(resumed.history.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput { call_id, output })
+                if call_id == "long-tool" && output.text_content() == Some(long_text.as_str())
+        )
+    }));
+
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load replayed runtime")
+        .expect("spine sidecar exists");
+    assert_eq!(runtime.parse_stack_toolcall_leaf_count_for_test(), 2);
+    let replayed_visible = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize replayed trim projection");
+    assert_eq!(replayed_visible, visible_history);
 }
 
 #[tokio::test]
