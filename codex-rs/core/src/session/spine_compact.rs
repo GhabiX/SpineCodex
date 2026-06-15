@@ -31,12 +31,15 @@ use futures::StreamExt;
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::Arc;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 
 const SPINE_COMPACT_MEMORY_OVERRIDE_FILENAME: &str = "spine_compact_memory.md";
 const SPINE_COMPACT_MEMORY_NODE_ID_PLACEHOLDER: &str = "{node_id}";
 const SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER: &str = "{close_instruction}";
 const SPINE_COMPACT_SOURCE_MAP_HEADER: &str = "Source map:";
 const SPINE_CLOSE_COMPACT_MAX_FORMAT_REPAIRS: usize = 1;
+const SPINE_CLOSE_COMPACT_REPAIR_EXCERPT_MAX_TOKENS: usize = 96;
 const SPINE_CLOSE_COMPACT_JSON_SHAPE: &str = "{\"slots\":[],\"node_memory\":\"...\"}";
 
 impl Session {
@@ -96,12 +99,13 @@ impl Session {
             raw_items[..source_plan.source_context_range.end].to_vec(),
             &turn_context.model_info.input_modalities,
         );
-        let compact_instructions = spine_close_compact_instruction_text(
-            &node_id,
-            instruction.as_deref(),
-            turn_context.config.codex_home.as_path(),
-            turn_context.config.dev_debug_prompt_overrides,
-        );
+        let compact_instructions =
+            spine_close_compact_instruction_text(
+                &node_id,
+                instruction.as_deref(),
+                turn_context.config.codex_home.as_path(),
+                turn_context.config.dev_debug_prompt_overrides,
+            );
         append_spine_close_compact_prompt_items(
             &mut prompt_input,
             &compact_instructions,
@@ -174,8 +178,13 @@ impl Session {
                         && repair_attempts < SPINE_CLOSE_COMPACT_MAX_FORMAT_REPAIRS =>
                 {
                     repair_attempts += 1;
+                    let bad_output_excerpt = spine_close_compact_output_excerpt(&output);
                     prompt.input.push(spine_close_compact_developer_message(
-                        &spine_close_compact_repair_text(&err, &skeleton),
+                        &spine_close_compact_repair_text(
+                            &err,
+                            &skeleton,
+                            bad_output_excerpt.as_deref(),
+                        ),
                     ));
                 }
                 Err(err) => return Err(err.into_spine_error()),
@@ -475,14 +484,16 @@ fn spine_close_compact_instruction_text(
     codex_home: &Path,
     dev_debug_prompt_overrides: bool,
 ) -> String {
-    let mut text = spine_close_compact_instruction_template(codex_home, dev_debug_prompt_overrides);
+    let mut text = spine_close_compact_instruction_template(
+        node_id,
+        codex_home,
+        dev_debug_prompt_overrides,
+    );
     text = text.replace(SPINE_COMPACT_MEMORY_NODE_ID_PLACEHOLDER, node_id);
-    let has_close_instruction_placeholder =
-        text.contains(SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER);
     let instruction = instruction
         .map(str::trim)
         .filter(|instruction| !instruction.is_empty());
-    if has_close_instruction_placeholder {
+    if text.contains(SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER) {
         text = text.replace(
             SPINE_COMPACT_MEMORY_CLOSE_INSTRUCTION_PLACEHOLDER,
             instruction.unwrap_or(""),
@@ -495,20 +506,22 @@ fn spine_close_compact_instruction_text(
 }
 
 fn spine_close_compact_instruction_template(
+    node_id: &str,
     codex_home: &Path,
     dev_debug_prompt_overrides: bool,
 ) -> String {
     if cfg!(debug_assertions) && dev_debug_prompt_overrides {
         let override_path = codex_home.join(SPINE_COMPACT_MEMORY_OVERRIDE_FILENAME);
-        match std::fs::read_to_string(override_path) {
-            Ok(contents) if !contents.is_empty() => return contents,
-            _ => {}
+        if let Ok(contents) = std::fs::read_to_string(override_path) {
+            if !contents.is_empty() {
+                return contents;
+            }
         }
     }
 
     format!(
         "---------- SPINE MEMORY COMPACT ----------\n\
-You are performing a CONTEXT CHECKPOINT COMPACTION for Spine node {{node_id}}.\n\
+You are performing a CONTEXT CHECKPOINT COMPACTION for Spine node {node_id}.\n\
 Create handoff memory for another LLM that will continue after this node.\n\
 Do not answer the user or call tools.\n\n\
 Return exactly one JSON object and nothing else:\n\
@@ -1086,6 +1099,7 @@ impl SpineCloseCompactBodyError {
 fn spine_close_compact_repair_text(
     err: &SpineCloseCompactBodyError,
     skeleton: &SpineCompactMemorySkeleton,
+    bad_output_excerpt: Option<&str>,
 ) -> String {
     let optional_slot_ids = skeleton.slot_ids();
     let optional_slots = if optional_slot_ids.is_empty() {
@@ -1093,21 +1107,53 @@ fn spine_close_compact_repair_text(
     } else {
         format!("Allowed slot ids: {}.", optional_slot_ids.join(", "))
     };
+    let bad_output_excerpt = bad_output_excerpt
+        .map(str::trim)
+        .filter(|excerpt| !excerpt.is_empty())
+        .map(|excerpt| format!("Bad output excerpt (truncated): {excerpt}\n\n"))
+        .unwrap_or_default();
     format!(
-        "Your previous Spine compact output could not be used: {}\n\
-Do not answer the user or call tools.\n\n\
+        "Format repair only. Do not answer the user or call tools.\n\
+Rejected output: {}\n\
+{}\
 Return exactly one JSON object and nothing else:\n\
 {SPINE_CLOSE_COMPACT_JSON_SHAPE}\n\n\
-Contract:\n\n\
-* node_memory is required and must be a non-empty whole-node handoff.\n\
-* slots must be an array. Use [] unless a listed non-preserved span contains information needed later.\n\
-* Each used slot must be exactly {{\"slot_id\":\"slot_N\",\"body\":\"...\"}}; do not use `id` or `memory`.\n\
-* slot_id must be one of the allowed slot ids below.\n\
-* Runtime already preserves exact user messages and child memory. Use them as evidence; do not copy them wholesale.\n\
+* node_memory is required and must be non-empty.\n\
+* slots is an array. Use [] unless a listed non-preserved span must be carried forward.\n\
+* Each slot must be exactly {{\"slot_id\":\"slot_N\",\"body\":\"...\"}}.\n\
 * {optional_slots}\n\
-* No extra fields, explanations, Markdown fences, protocol markers, preserved evidence blocks, or tool calls.",
+* No extra fields, fences, prose, or tool calls.",
         err.message(),
+        bad_output_excerpt,
     )
+}
+
+fn spine_close_compact_output_excerpt(output: &[ResponseItem]) -> Option<String> {
+    let text = output
+        .iter()
+        .filter_map(|item| last_assistant_message_from_item(item, /*plan_mode*/ false))
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    spine_close_compact_excerpt_text(&text)
+}
+
+fn spine_close_compact_excerpt_text(text: &str) -> Option<String> {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.trim().is_empty() {
+        return None;
+    }
+    let truncated = truncate_text(
+        &collapsed,
+        TruncationPolicy::Tokens(SPINE_CLOSE_COMPACT_REPAIR_EXCERPT_MAX_TOKENS),
+    );
+    let excerpt = truncated.trim();
+    if excerpt.is_empty() {
+        None
+    } else {
+        Some(excerpt.to_string())
+    }
 }
 
 fn add_compact_output_tokens(
@@ -1478,6 +1524,89 @@ mod spine_close_slot_map_tests {
     }
 
     #[test]
+    fn spine_close_compact_instruction_uses_builtin_template_by_default() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+
+        let text = spine_close_compact_instruction_text(
+            "1.1",
+            Some("preserve this exact detail"),
+            codex_home.path(),
+            false,
+        );
+
+        assert!(text.contains("SPINE MEMORY COMPACT"));
+        assert!(text.contains("Spine node 1.1"));
+        assert!(text.ends_with("preserve this exact detail"));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn spine_close_compact_instruction_uses_dev_debug_override_with_placeholders() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            codex_home.path().join("spine_compact_memory.md"),
+            "node={node_id}\nclose={close_instruction}",
+        )
+        .expect("write override");
+
+        let text = spine_close_compact_instruction_text(
+            "1.2",
+            Some("preserve override guidance"),
+            codex_home.path(),
+            true,
+        );
+
+        assert_eq!(text, "node=1.2\nclose=preserve override guidance");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn spine_close_compact_instruction_appends_guidance_when_override_has_no_placeholder() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            codex_home.path().join("spine_compact_memory.md"),
+            "custom compact prompt for {node_id}",
+        )
+        .expect("write override");
+
+        let text = spine_close_compact_instruction_text(
+            "1.2",
+            Some("append this guidance"),
+            codex_home.path(),
+            true,
+        );
+
+        assert_eq!(text, "custom compact prompt for 1.2\n\nappend this guidance");
+    }
+
+    #[test]
+    fn spine_close_compact_instruction_ignores_override_outside_dev_debug() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            codex_home.path().join("spine_compact_memory.md"),
+            "SHOULD_NOT_APPEAR {node_id}",
+        )
+        .expect("write override");
+
+        let text = spine_close_compact_instruction_text("1.3", None, codex_home.path(), false);
+
+        assert!(text.contains("SPINE MEMORY COMPACT"));
+        assert!(!text.contains("SHOULD_NOT_APPEAR"));
+    }
+
+    #[test]
+    fn spine_close_compact_instruction_empty_override_falls_back_to_builtin() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(codex_home.path().join("spine_compact_memory.md"), "")
+            .expect("write override");
+
+        let text = spine_close_compact_instruction_text("1.4", None, codex_home.path(), true);
+
+        assert!(text.contains("SPINE MEMORY COMPACT"));
+        assert!(text.contains("Spine node 1.4"));
+    }
+
+    #[test]
     fn skeleton_preserves_exact_blocks_optional_slots_and_node_memory() {
         let plan = source_plan(vec![
             source_entry(2, 0, user_message("USER_EXACT\nline 2"), true),
@@ -1597,6 +1726,44 @@ mod spine_close_slot_map_tests {
         .expect("empty slots array should be accepted");
         assert!(!empty_slots.contains("## Memory Slot"));
         assert!(empty_slots.contains("## Node Memory\nnode"));
+    }
+
+    #[test]
+    fn compact_repair_excerpt_collapses_and_truncates_bad_output() {
+        let long_text = (0..200)
+            .map(|index| format!("token-{index}"))
+            .collect::<Vec<_>>()
+            .join(" \n ");
+        let excerpt = spine_close_compact_excerpt_text(&long_text).expect("excerpt");
+
+        assert!(excerpt.contains("token-0"));
+        assert!(excerpt.len() < long_text.len());
+        assert!(!excerpt.contains('\n'));
+    }
+
+    #[test]
+    fn compact_repair_text_includes_excerpt_and_short_shape() {
+        let plan = source_plan(vec![source_entry(
+            2,
+            0,
+            assistant_message("assistant details"),
+            false,
+        )]);
+        let skeleton =
+            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+        let text = spine_close_compact_repair_text(
+            &SpineCloseCompactBodyError::Repairable(
+                "spine.close compact produced invalid JSON memory body: expected value at line 1 column 1".to_string(),
+            ),
+            &skeleton,
+            Some("ordinary dialogue instead of JSON"),
+        );
+
+        assert!(text.contains("Format repair only."));
+        assert!(text.contains("ordinary dialogue instead of JSON"));
+        assert!(text.contains("Bad output excerpt (truncated):"));
+        assert!(text.contains("Allowed slot ids: slot_1."));
+        assert!(text.contains("{\"slots\":[],\"node_memory\":\"...\"}"));
     }
 
     #[test]

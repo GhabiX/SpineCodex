@@ -886,7 +886,7 @@ async fn make_spine_close_window_missing_output_carrier(
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -993,7 +993,7 @@ async fn make_spine_next_window_missing_output_carrier(
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -1111,7 +1111,7 @@ async fn make_spine_session_with_closed_child(
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -2747,7 +2747,7 @@ async fn record_initial_history_new_seeds_initial_spine_tree_snapshot() {
 
 #[tokio::test]
 async fn spine_tools_hidden_until_sidecar_runtime_ready() {
-    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -2782,7 +2782,7 @@ async fn spine_tools_hidden_until_sidecar_runtime_ready() {
 
 #[tokio::test]
 async fn review_turn_inherits_spine_tool_visibility_from_parent_turn() {
-    let (mut session, hidden_parent_turn_context, _rx) =
+    let (mut session, hidden_parent_turn_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -5621,7 +5621,7 @@ async fn cwd_update_does_not_rewrite_sticky_environment_cwd() {
 
 #[tokio::test]
 async fn absolute_cwd_update_with_turn_environment_is_allowed() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
     let absolute_cwd = {
         let state = session.state.lock().await;
         state.session_configuration.cwd.join("absolute-turn")
@@ -6822,7 +6822,7 @@ fn op_kind_distinguishes_turn_ops() {
 
 #[tokio::test]
 async fn user_turn_updates_approvals_reviewer() {
-    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
     let config = session.get_config().await;
 
     handlers::user_input_or_turn(
@@ -6859,7 +6859,7 @@ async fn user_turn_updates_approvals_reviewer() {
 
 #[tokio::test]
 async fn turn_environments_set_primary_environment() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
     let selected_cwd =
         AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
             .expect("absolute path");
@@ -6897,7 +6897,7 @@ async fn turn_environments_set_primary_environment() {
 
 #[tokio::test]
 async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
     let selected_cwd =
         AbsolutePathBuf::try_from(session_cwd.as_path().join("selected")).expect("absolute path");
@@ -6930,7 +6930,7 @@ async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
 
 #[tokio::test]
 async fn default_turn_honors_empty_stored_thread_environments() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
 
     {
@@ -6992,7 +6992,7 @@ async fn primary_environment_uses_first_turn_environment() {
 
 #[tokio::test]
 async fn empty_turn_environments_clear_primary_environment() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
 
     let turn_context = session
         .new_turn_with_sub_id(
@@ -7015,7 +7015,7 @@ async fn empty_turn_environments_clear_primary_environment() {
 
 #[tokio::test]
 async fn unknown_turn_environment_returns_error() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
     let original_configuration = {
         let state = session.state.lock().await;
         state.session_configuration.clone()
@@ -7050,7 +7050,7 @@ async fn unknown_turn_environment_returns_error() {
 
 #[tokio::test]
 async fn duplicate_turn_environment_returns_error_without_mutating_session() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
     let original_configuration = {
         let state = session.state.lock().await;
         state.session_configuration.clone()
@@ -7236,7 +7236,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
 
 #[tokio::test]
 async fn shutdown_releases_spine_writer_lock_without_dropping_session_arc() {
-    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -7997,7 +7997,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
 
 #[tokio::test]
 async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_tasks() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     sess.set_previous_turn_settings(/*previous_turn_settings*/ None)
         .await;
     let input = vec![UserInput::Text {
@@ -9068,7 +9068,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -9366,7 +9366,7 @@ async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_pr
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, mut turn_context, _rx) =
+    let (mut session, mut turn_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -9504,7 +9504,7 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, mut turn_context, _rx) =
+    let (mut session, mut turn_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -9693,7 +9693,7 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -9836,7 +9836,7 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
 async fn spine_next_resume_restores_closed_and_current_sibling() {
     let fixture = make_spine_session_after_next("post-next resume summary").await;
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -9885,7 +9885,7 @@ async fn spine_next_fork_restores_closed_and_current_sibling() {
         .event_count_for_test()
         .expect("source event count before fork");
 
-    let (mut forked_session, _forked_context, _rx) =
+    let (mut forked_session, _forked_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -10016,7 +10016,7 @@ async fn spine_close_fork_rejects_missing_output_carrier() {
         .event_count_for_test()
         .expect("source event count before fork");
 
-    let (mut forked_session, _forked_context, _rx) =
+    let (mut forked_session, _forked_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -10089,7 +10089,7 @@ async fn resume_corrupt_checkpoint_hash_fails_closed() {
     let raw_items = spine_raw_items_after_rollback(&rollout_items);
     let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -10227,7 +10227,7 @@ async fn assert_resumed_close_window_matches_sidecar(
     raw_items: Vec<Option<ResponseItem>>,
     expected_history: Vec<ResponseItem>,
 ) {
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -10329,7 +10329,7 @@ async fn assert_resume_base_reconstruction_metadata_survives_h_ps_override() {
         },
     )));
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -11032,7 +11032,7 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -11167,7 +11167,7 @@ async fn spine_next_native_compact_partial_success_does_not_open_sibling() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -11340,7 +11340,7 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -11507,7 +11507,7 @@ async fn spine_next_native_compact_keeps_durable_completed_toolcall_as_ordinary(
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -11635,7 +11635,7 @@ async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_o
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -11987,7 +11987,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -12101,7 +12101,7 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -12185,7 +12185,7 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -12344,7 +12344,7 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -12474,7 +12474,7 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -12591,7 +12591,7 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -12743,7 +12743,7 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -12884,7 +12884,7 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -13033,7 +13033,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -13194,7 +13194,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
 
 #[tokio::test]
 async fn spine_native_compact_post_hook_ignores_stale_compacted_item_carrier() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -13285,7 +13285,7 @@ async fn spine_mid_turn_native_compact_appends_cwd_only_environment_context_suff
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -13408,7 +13408,7 @@ async fn native_compact_commit_marker_distinguishes_prefix_recovery() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -13498,7 +13498,7 @@ async fn native_compact_rollout_append_failure_does_not_replace_host_history() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -13584,7 +13584,7 @@ async fn native_compact_metadata_failure_after_raw_append_still_replaces_host_hi
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -13648,7 +13648,7 @@ async fn native_compact_metadata_failure_after_raw_append_still_replaces_host_hi
         "persisted compact boundary must prove the replaced host history"
     );
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -13686,7 +13686,7 @@ async fn native_compact_metadata_failure_after_raw_append_still_replaces_host_hi
 
 #[tokio::test]
 async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
-    let (mut source_session, turn_context, _rx) =
+    let (mut source_session, turn_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -13733,7 +13733,7 @@ async fn spine_resume_rejects_root_compact_sidecar_without_rollout_boundary() {
         "test setup must leave rollout without native compact boundary"
     );
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -13778,7 +13778,7 @@ async fn resume_rejects_second_orphan_root_compact_after_prior_successful_compac
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut source_session, turn_context, _rx) =
+    let (mut source_session, turn_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -13845,7 +13845,7 @@ async fn resume_rejects_second_orphan_root_compact_after_prior_successful_compac
         "test setup should have exactly one persisted compact boundary"
     );
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -13887,7 +13887,7 @@ async fn resume_rejects_second_orphan_root_compact_after_prior_successful_compac
 
 #[tokio::test]
 async fn spine_root_compact_records_close_tokens_without_next_open_baseline() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -13962,7 +13962,7 @@ async fn native_compact_missing_usage_does_not_copy_stale_token_info_to_root_han
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -14033,7 +14033,7 @@ async fn replacement_history_validates_at_compact_boundary() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -14133,7 +14133,7 @@ async fn replacement_history_validates_at_compact_boundary() {
         .materialize_history(&source_raw_items)
         .expect("materialize source h(PS)");
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -14198,7 +14198,7 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -14354,7 +14354,7 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
         "post-compact close should make latest h(PS) differ from the old compact checkpoint"
     );
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -14392,7 +14392,7 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
 
 #[tokio::test]
 async fn spine_feature_off_records_spine_shaped_items_as_plain_history_without_sidecar() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15272,7 +15272,7 @@ async fn completed_spine_control_overlay_does_not_duplicate_followup_prompt() ->
 
 #[tokio::test]
 async fn init_new_session_creates_root_and_1_1() {
-    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15324,7 +15324,7 @@ async fn init_new_session_creates_root_and_1_1() {
 
 #[tokio::test]
 async fn spine_open_control_toolcall_is_durable_context_history() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15394,7 +15394,7 @@ async fn spine_open_control_toolcall_is_durable_context_history() {
 
 #[tokio::test]
 async fn custom_and_tool_search_outputs_commit_as_completed_toolcalls() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15465,7 +15465,7 @@ async fn custom_and_tool_search_outputs_commit_as_completed_toolcalls() {
 
 #[tokio::test]
 async fn provider_tool_search_output_recorded_by_base_path_commits_completed_toolcall() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15519,7 +15519,7 @@ async fn provider_tool_search_output_recorded_by_base_path_commits_completed_too
 
 #[tokio::test]
 async fn grouped_toolcall_prevalidates_request_anchors_before_recording_outputs() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15570,7 +15570,7 @@ async fn grouped_toolcall_prevalidates_request_anchors_before_recording_outputs(
 
 #[tokio::test]
 async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15621,7 +15621,7 @@ async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
 
 #[tokio::test]
 async fn base_path_completed_toolcall_groups_all_outputs_in_one_append() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15675,7 +15675,7 @@ async fn base_path_completed_toolcall_groups_all_outputs_in_one_append() {
 
 #[tokio::test]
 async fn base_path_completed_toolcall_groups_multiple_requests_in_one_leaf() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15800,7 +15800,7 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15934,7 +15934,7 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
 
 #[tokio::test]
 async fn spine_tree_tool_appends_context_pressure_from_last_usage() {
-    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -15977,7 +15977,7 @@ async fn spine_tree_tool_appends_context_pressure_from_last_usage() {
 
 #[tokio::test]
 async fn spine_tree_tool_omits_context_pressure_when_window_unknown() {
-    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -16545,7 +16545,7 @@ async fn record_token_usage_refreshes_spine_tree_cache_only_snapshot() {
 }
 
 #[tokio::test]
-async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
+async fn spine_tree_tool_defers_missing_open_baseline_to_pressure_repair() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -16573,56 +16573,58 @@ async fn spine_tree_tool_omits_node_context_when_provider_baseline_missing() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
+    let commit = session
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
-        .expect("commit open");
-    {
-        let mut state = session.state.lock().await;
-        state.set_token_info(Some(TokenUsageInfo {
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage {
-                input_tokens: 42_000,
-                total_tokens: 42_000,
-                ..TokenUsage::default()
-            },
-            model_context_window: None,
-        }));
-    }
+        .expect("commit open should defer missing token usage");
+    assert!(commit.output_text.is_some(), "expected Spine tool output text");
+    assert!(commit.spine_context_already_observed);
 
+    while rx.try_recv().is_ok() {}
+    let history_before = session.clone_history().await.raw_items().to_vec();
     let tree = session.spine_tree().await.expect("tree");
-    assert!(tree.contains("[1.1.1] Current invalid range"), "{tree}");
     assert!(
-        tree.contains("(context unavailable: missing open baseline)"),
+        tree.contains("(context unavailable: missing current usage)"),
         "{tree}"
     );
-    let mut snapshot = None;
+
     session
-        .emit_spine_tree_snapshot(&turn_context)
+        .record_token_usage_info(
+            &turn_context,
+            Some(&TokenUsage {
+                input_tokens: 90_000,
+                total_tokens: 90_000,
+                ..TokenUsage::default()
+            }),
+        )
+        .await;
+
+    let event = timeout(StdDuration::from_secs(1), rx.recv())
         .await
-        .expect("emit Spine tree snapshot");
-    while let Ok(event) = rx.try_recv() {
-        if let EventMsg::SpineTreeUpdate(update) = event.msg {
-            snapshot = Some(update);
-        }
-    }
-    let snapshot = snapshot.expect("spine tree snapshot");
+        .expect("timeout waiting for repaired Spine tree snapshot")
+        .expect("event");
+    let snapshot = match event.msg {
+        EventMsg::SpineTreeUpdate(snapshot) => snapshot,
+        msg => panic!("expected Spine tree update, got {msg:?}"),
+    };
     let active = snapshot
         .nodes
         .iter()
         .find(|node| node.node_id == snapshot.active_node_id)
         .expect("active node");
     let accounting = active.accounting.as_ref().expect("active accounting");
-    assert_eq!(accounting.current_node_context_tokens, None);
     assert_eq!(
-        accounting.current_node_context_unavailable,
-        Some(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)
+        accounting.current_node_context_baseline_source,
+        Some(SpineNodeContextBaselineSource::EstimatedFromLiveSuffix)
     );
+    assert!(accounting.current_node_context_tokens.is_some());
+    assert_eq!(accounting.current_node_context_unavailable, None);
+    assert_eq!(session.clone_history().await.raw_items(), history_before);
 }
 
 #[tokio::test]
 async fn spine_pressure_prompt_overlay_is_temporarily_disabled() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -16719,7 +16721,7 @@ async fn spine_pressure_prompt_overlay_is_temporarily_disabled() {
 
 #[tokio::test]
 async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisting() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -16816,7 +16818,7 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
 
 #[tokio::test]
 async fn spine_pressure_prompt_context_warning_is_temporarily_disabled() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -16882,7 +16884,7 @@ fn pressure_overlay_text(item: &ResponseItem) -> &str {
 
 #[tokio::test]
 async fn resume_rejects_committed_raw_without_sidecar_token() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -17080,7 +17082,7 @@ async fn init_feature_off_has_no_spine_state() {
 
 #[tokio::test]
 async fn resume_feature_off_replacement_history_unchanged() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -17127,7 +17129,7 @@ async fn resume_feature_off_replacement_history_unchanged() {
 
 #[tokio::test]
 async fn init_does_not_shift_fixed_query_as_msg() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -17182,7 +17184,7 @@ async fn init_does_not_shift_fixed_query_as_msg() {
 
 #[tokio::test]
 async fn spine_raw_ordinals_follow_persisted_rollout_items_not_input_width() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -17262,7 +17264,7 @@ async fn spine_resume_rejects_replacement_history_mismatch() {
         replacement_history: Some(stale_replacement.clone()),
     }));
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -17301,7 +17303,7 @@ async fn spine_resume_rejects_replacement_history_mismatch() {
 
 #[tokio::test]
 async fn failed_spine_replay_does_not_mutate_live_session_history() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -17364,7 +17366,7 @@ async fn resume_rejects_unprovable_rendered_memory() {
 }
 
 async fn assert_rendered_replacement_history_fails_closed() {
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -17421,7 +17423,7 @@ async fn replacement_history_missing_boundary_proof_fails_closed() {
         replacement_history: Some(expected_materialized.clone()),
     }));
 
-    let (mut resumed_session, _resumed_context, _rx) =
+    let (mut resumed_session, _resumed_context, rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -17475,7 +17477,7 @@ async fn resume_non_spine_session_in_spine_mode_fails_closed() {
 }
 
 async fn assert_spine_resume_non_spine_session_fails_closed() {
-    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -18024,7 +18026,7 @@ async fn turn_abort_clears_stale_spine_pending_transition() {
 
 #[tokio::test]
 async fn spine_user_prompt_append_creates_sidecar_coverage() {
-    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -18297,7 +18299,7 @@ async fn task_finish_pending_input_append_failure_does_not_emit_turn_complete() 
 
 #[tokio::test]
 async fn steer_input_requires_active_turn() {
-    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, _tc, rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
         text: "steer".to_string(),
         text_elements: Vec::new(),
@@ -18315,7 +18317,7 @@ async fn steer_input_requires_active_turn() {
 
 #[tokio::test]
 async fn steer_input_enforces_expected_turn_id() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
@@ -18360,7 +18362,7 @@ async fn steer_input_rejects_non_regular_turns() {
         (TaskKind::Review, NonSteerableTurnKind::Review),
         (TaskKind::Compact, NonSteerableTurnKind::Compact),
     ] {
-        let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+        let (sess, _tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
             text_elements: Vec::new(),
@@ -18397,7 +18399,7 @@ async fn steer_input_rejects_non_regular_turns() {
 
 #[tokio::test]
 async fn steer_input_returns_active_turn_id() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
@@ -18431,7 +18433,7 @@ async fn steer_input_returns_active_turn_id() {
 
 #[tokio::test]
 async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
@@ -18490,7 +18492,7 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
 
 #[tokio::test]
 async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let queued_item = ResponseInputItem::Message {
         role: "assistant".to_string(),
         content: vec![ContentItem::InputText {
@@ -18517,7 +18519,7 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 
 #[tokio::test]
 async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
-    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, _tc, rx) = make_session_and_context_with_rx().await;
     let queued_item = ResponseInputItem::Message {
         role: "assistant".to_string(),
         content: vec![ContentItem::InputText {
@@ -18537,7 +18539,7 @@ async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
 
 #[tokio::test]
 async fn abort_empty_active_turn_preserves_pending_input() {
-    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, _tc, rx) = make_session_and_context_with_rx().await;
     let pending_item = ResponseInputItem::Message {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -18566,7 +18568,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
 
 #[tokio::test]
 async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
-    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
@@ -18951,7 +18953,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_goal_mutation_accounts_active_turn_before_status_change() -> anyhow::Result<()> {
-    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
@@ -19019,7 +19021,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
-    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.spawn_task(
         Arc::clone(&tc),
         Vec::new(),
@@ -19083,7 +19085,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow::Result<()> {
-    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.spawn_task(
         Arc::clone(&tc),
         Vec::new(),
@@ -19242,7 +19244,7 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
 
 #[tokio::test]
 async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let communication = InterAgentCommunication::new(
         AgentPath::try_from("/root/worker").expect("worker path should parse"),
         AgentPath::root(),
@@ -19279,7 +19281,7 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
 
 #[tokio::test]
 async fn trigger_turn_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     sess.spawn_task(
         Arc::clone(&tc),
         Vec::new(),
@@ -19311,7 +19313,7 @@ async fn trigger_turn_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
 
 #[tokio::test]
 async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let communication = InterAgentCommunication::new(
         AgentPath::try_from("/root/worker").expect("worker path should parse"),
         AgentPath::root(),
@@ -19356,7 +19358,7 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
 
 #[tokio::test]
 async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let communication = InterAgentCommunication::new(
         AgentPath::try_from("/root/worker").expect("worker path should parse"),
         AgentPath::root(),
@@ -19403,7 +19405,7 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
 
 #[tokio::test]
 async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let communication = InterAgentCommunication::new(
         AgentPath::try_from("/root/worker").expect("worker path should parse"),
         AgentPath::root(),
@@ -19532,7 +19534,7 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
     reason = "test builds a router from session-owned MCP manager state"
 )]
 async fn fatal_tool_error_stops_turn_and_reports_error() {
-    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
     let tools = {
         session
             .services
@@ -19753,7 +19755,7 @@ async fn sample_rollout(
 
 #[tokio::test]
 async fn create_goal_tool_rejects_existing_goal() {
-    let (session, turn_context, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let (session, turn_context, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let handler = CreateGoalHandler;
 
@@ -19815,7 +19817,7 @@ async fn create_goal_tool_rejects_existing_goal() {
 
 #[tokio::test]
 async fn update_goal_tool_rejects_pausing_goal() {
-    let (session, turn_context, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let (session, turn_context, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let create_handler = CreateGoalHandler;
     let update_handler = UpdateGoalHandler;
@@ -19876,7 +19878,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
 
 #[tokio::test]
 async fn update_goal_tool_marks_goal_complete() {
-    let (session, turn_context, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let (session, turn_context, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let create_handler = CreateGoalHandler;
     let update_handler = UpdateGoalHandler;

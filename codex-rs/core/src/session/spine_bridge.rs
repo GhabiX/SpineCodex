@@ -1004,14 +1004,14 @@ impl Session {
             };
             spine.pending_commit(call_id)?
         };
-        let pre_compact_token_baselines =
-            if matches!(pending_commit, Some(SpinePendingCommit::Close { .. })) {
-                Some(token_baselines_from_info(
-                    self.token_usage_info().await.as_ref(),
-                ))
-            } else {
-                None
-            };
+        let has_pending_close_commit =
+            matches!(pending_commit.as_ref(), Some(SpinePendingCommit::Close { .. }));
+        let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
+        let pre_compact_token_baselines = if has_pending_close_commit {
+            Some(token_baselines_from_info(current_turn_token_info.as_ref()))
+        } else {
+            None
+        };
         let close_compact = match pending_commit {
             Some(SpinePendingCommit::Close {
                 node,
@@ -1136,6 +1136,7 @@ impl Session {
                 item,
                 close_compact.clone(),
                 pre_compact_token_baselines,
+                current_turn_token_info.as_ref(),
                 completed_toolcall.clone(),
                 tool_resp_already_recorded,
             );
@@ -1266,6 +1267,7 @@ impl Session {
         tool_resp_item: &ResponseItem,
         close_compact: Option<(SpineCloseCompact, Vec<ResponseItem>)>,
         pre_compact_token_baselines: Option<SpineTokenBaselines>,
+        current_turn_token_info: Option<&TokenUsageInfo>,
         completed_toolcall: CompletedToolCall,
         tool_resp_already_recorded: bool,
     ) -> Result<SpineCommitAttempt, SpineError> {
@@ -1294,9 +1296,19 @@ impl Session {
             )));
         }
         let close_compact = close_compact.map(|(compact, _)| compact);
-        let token_baselines = pre_compact_token_baselines
-            .unwrap_or_else(|| token_baselines_from_info(state.token_info().as_ref()));
         let pending_commit = spine.pending_commit(call_id)?;
+        let token_baselines = match pending_commit.as_ref() {
+            Some(SpinePendingCommit::Close { .. }) => {
+                match pre_compact_token_baselines {
+                    Some(token_baselines) => token_baselines,
+                    None => token_baselines_from_info(current_turn_token_info),
+                }
+            }
+            Some(SpinePendingCommit::Open) => {
+                token_baselines_from_info(current_turn_token_info)
+            }
+            None => SpineTokenBaselines::default(),
+        };
         let commit_kind = if pending_commit.is_some() {
             spine.maybe_commit_output_with_toolcall(
                 call_id,
@@ -1490,10 +1502,18 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&history.get_rollout_items());
-        let close_baselines = token_baselines_from_info(self.token_usage_info().await.as_ref());
+        let close_baselines = self
+            .token_usage_info()
+            .await
+            .map(|info| SpineTokenBaselines {
+                input_tokens: Some(info.last_token_usage.input_tokens),
+                context_tokens: Some(info.last_token_usage.tokens_in_context_window()),
+            });
         let token_metadata = SpineRootCompactTokenMetadata {
-            close_input_tokens: close_baselines.input_tokens,
-            close_context_tokens: close_baselines.context_tokens,
+            close_input_tokens: close_baselines.as_ref().and_then(|baselines| baselines.input_tokens),
+            close_context_tokens: close_baselines
+                .as_ref()
+                .and_then(|baselines| baselines.context_tokens),
             next_open_input_tokens: root_compact_handoff.and_then(|handoff| handoff.input_tokens),
             next_open_context_tokens: root_compact_handoff
                 .and_then(|handoff| handoff.context_tokens),
@@ -1879,12 +1899,35 @@ fn render_spine_tree_for_model(
 }
 
 fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {
-    let Some(current) = current else {
-        return SpineTokenBaselines::default();
-    };
-    SpineTokenBaselines {
-        input_tokens: Some(current.last_token_usage.input_tokens),
-        context_tokens: Some(current.last_token_usage.tokens_in_context_window()),
+    current
+        .map(|current| SpineTokenBaselines {
+            input_tokens: Some(current.last_token_usage.input_tokens),
+            context_tokens: Some(current.last_token_usage.tokens_in_context_window()),
+        })
+        .unwrap_or_default()
+}
+
+impl Session {
+    async fn current_turn_token_usage_info(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<TokenUsageInfo> {
+        let current = self.token_usage_info().await?;
+        let Some(turn_state) = self.turn_state_for_sub_id(&turn_context.sub_id).await else {
+            let total_tokens = current.total_token_usage.total_tokens;
+            let last_tokens = current.last_token_usage.total_tokens;
+            return (total_tokens > 0 || last_tokens > 0).then_some(current);
+        };
+        let token_usage_at_turn_start = {
+            let turn_state = turn_state.lock().await;
+            turn_state.token_usage_at_turn_start.clone()
+        };
+        let total_tokens = current.total_token_usage.total_tokens;
+        let last_tokens = current.last_token_usage.total_tokens;
+        let turn_started_from_zero = token_usage_at_turn_start.total_tokens == 0;
+        let has_fresh_turn_usage = total_tokens > token_usage_at_turn_start.total_tokens
+            || (turn_started_from_zero && last_tokens > 0);
+        has_fresh_turn_usage.then_some(current)
     }
 }
 
