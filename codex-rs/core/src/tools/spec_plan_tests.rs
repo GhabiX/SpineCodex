@@ -1462,7 +1462,7 @@ fn namespace_specs_are_hidden_when_namespace_tools_are_disabled() {
 }
 
 #[test]
-fn spine_namespace_is_registered_only_when_feature_enabled_and_visible() {
+fn spine_namespace_tools_follow_jit_and_trim_visibility_independently() {
     let model_info = model_info();
     let available_models = Vec::new();
     let features = Features::with_defaults();
@@ -1477,7 +1477,9 @@ fn spine_namespace_is_registered_only_when_feature_enabled_and_visible() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     config.spine_jit = false;
-    config.spine_tools_visible = false;
+    config.spine_trim = false;
+    config.spine_jit_tools_visible = false;
+    config.spine_trim_tools_visible = false;
     let (specs, registry) = build_specs(&config, None, None, &[]);
     assert!(!specs.iter().any(|spec| spec.name() == "spine"));
     assert!(
@@ -1485,13 +1487,20 @@ fn spine_namespace_is_registered_only_when_feature_enabled_and_visible() {
             .tool_exposure(&ToolName::namespaced("spine", "open"))
             .is_none()
     );
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "trim"))
+            .is_none()
+    );
 
     config.spine_jit = true;
-    config.spine_tools_visible = false;
+    config.spine_trim = true;
+    config.spine_jit_tools_visible = false;
+    config.spine_trim_tools_visible = false;
     let (specs, registry) = build_specs(&config, None, None, &[]);
     assert!(
         !specs.iter().any(|spec| spec.name() == "spine"),
-        "feature-on before sidecar readiness must not expose Spine tools"
+        "feature-on before runtime readiness must not expose Spine tools"
     );
     assert!(
         registry
@@ -1500,7 +1509,9 @@ fn spine_namespace_is_registered_only_when_feature_enabled_and_visible() {
         "hidden Spine tools must not be executable through the registry"
     );
 
-    config.spine_tools_visible = true;
+    config.spine_trim = false;
+    config.spine_jit_tools_visible = true;
+    config.spine_trim_tools_visible = false;
     let (specs, registry) = build_specs(&config, None, None, &[]);
     assert!(specs.iter().any(|spec| spec.name() == "spine"));
     assert!(
@@ -1508,11 +1519,94 @@ fn spine_namespace_is_registered_only_when_feature_enabled_and_visible() {
             .tool_exposure(&ToolName::namespaced("spine", "open"))
             .is_some()
     );
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "trim"))
+            .is_none()
+    );
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "feedback"))
+            .is_none()
+    );
+    let spine_function_names = namespace_function_names(&specs, "spine");
+    assert_eq!(
+        spine_function_names
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "tree".to_string(),
+            "open".to_string(),
+            "close".to_string(),
+            "next".to_string()
+        ])
+    );
 
     let open_tool = find_namespace_function_tool(&specs, "spine", "open");
     let (open_properties, open_required) = expect_object_schema(&open_tool.parameters);
     assert_eq!(open_required, Some(&vec!["summary".to_string()]));
     assert!(open_properties.contains_key("summary"));
+
+    config.spine_feedback_tool_visible = true;
+    let (specs, registry) = build_specs(&config, None, None, &[]);
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "feedback"))
+            .is_some()
+    );
+    let spine_function_names = namespace_function_names(&specs, "spine");
+    assert_eq!(
+        spine_function_names
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "tree".to_string(),
+            "open".to_string(),
+            "close".to_string(),
+            "next".to_string(),
+            "feedback".to_string()
+        ])
+    );
+    let feedback_tool = find_namespace_function_tool(&specs, "spine", "feedback");
+    let (feedback_properties, feedback_required) = expect_object_schema(&feedback_tool.parameters);
+    assert_eq!(feedback_required, Some(&vec!["content".to_string()]));
+    assert_eq!(
+        feedback_tool.parameters.additional_properties,
+        Some(AdditionalProperties::Boolean(false))
+    );
+    assert_eq!(
+        feedback_properties.keys().cloned().collect::<Vec<_>>(),
+        vec!["content".to_string()]
+    );
+    assert!(expect_string_description(&feedback_properties["content"]).contains("feedback"));
+
+    config.spine_feedback_tool_visible = false;
+    config.spine_jit = false;
+    config.spine_trim = true;
+    config.spine_jit_tools_visible = false;
+    config.spine_trim_tools_visible = true;
+    let (specs, registry) = build_specs(&config, None, None, &[]);
+    assert!(specs.iter().any(|spec| spec.name() == "spine"));
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "open"))
+            .is_none()
+    );
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "trim"))
+            .is_some()
+    );
+    let spine_function_names = namespace_function_names(&specs, "spine");
+    assert_eq!(
+        spine_function_names
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["trim".to_string()])
+    );
 
     let trim_tool = find_namespace_function_tool(&specs, "spine", "trim");
     let (trim_properties, trim_required) = expect_object_schema(&trim_tool.parameters);
@@ -1526,6 +1620,36 @@ fn spine_namespace_is_registered_only_when_feature_enabled_and_visible() {
             .get("op")
             .and_then(|schema| schema.enum_values.as_ref()),
         Some(&vec![json!("snip")])
+    );
+
+    config.spine_jit = true;
+    config.spine_trim = true;
+    config.spine_jit_tools_visible = true;
+    config.spine_trim_tools_visible = true;
+    let (specs, registry) = build_specs(&config, None, None, &[]);
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "open"))
+            .is_some()
+    );
+    assert!(
+        registry
+            .tool_exposure(&ToolName::namespaced("spine", "trim"))
+            .is_some()
+    );
+    let spine_function_names = namespace_function_names(&specs, "spine");
+    assert_eq!(
+        spine_function_names
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "tree".to_string(),
+            "trim".to_string(),
+            "open".to_string(),
+            "close".to_string(),
+            "next".to_string(),
+        ])
     );
 
     let close_tool = find_namespace_function_tool(&specs, "spine", "close");
@@ -1542,7 +1666,7 @@ fn spine_namespace_is_registered_only_when_feature_enabled_and_visible() {
 }
 
 #[test]
-fn spine_namespace_dynamic_tool_is_allowed_when_spine_jit_is_disabled() {
+fn spine_namespace_dynamic_tool_is_allowed_when_spine_features_are_disabled() {
     let model_info = model_info();
     let available_models = Vec::new();
     let features = Features::with_defaults();
@@ -1557,6 +1681,7 @@ fn spine_namespace_dynamic_tool_is_allowed_when_spine_jit_is_disabled() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     config.spine_jit = false;
+    config.spine_trim = false;
     let dynamic_tools = vec![DynamicToolSpec {
         namespace: Some("spine".to_string()),
         name: "external_tool".to_string(),
@@ -1571,7 +1696,7 @@ fn spine_namespace_dynamic_tool_is_allowed_when_spine_jit_is_disabled() {
 }
 
 #[test]
-fn spine_namespace_dynamic_tool_returns_invalid_request_when_spine_jit_is_enabled() {
+fn spine_namespace_dynamic_tool_returns_invalid_request_when_spine_feature_is_enabled() {
     let model_info = model_info();
     let available_models = Vec::new();
     let features = Features::with_defaults();
@@ -1586,7 +1711,9 @@ fn spine_namespace_dynamic_tool_returns_invalid_request_when_spine_jit_is_enable
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     config.spine_jit = true;
-    config.spine_tools_visible = false;
+    config.spine_trim = false;
+    config.spine_jit_tools_visible = false;
+    config.spine_trim_tools_visible = false;
     let dynamic_tools = vec![DynamicToolSpec {
         namespace: Some("spine".to_string()),
         name: "external_tool".to_string(),
@@ -1595,6 +1722,26 @@ fn spine_namespace_dynamic_tool_returns_invalid_request_when_spine_jit_is_enable
         defer_loading: true,
     }];
 
+    let err = match build_specs_with_inputs_result_for_test(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        /*extension_tool_executors*/ &[],
+        &dynamic_tools,
+    ) {
+        Ok(_) => panic!("spine namespace dynamic tool should be rejected"),
+        Err(err) => err,
+    };
+    let message = match err {
+        CodexErr::InvalidRequest(message) => message,
+        other => panic!("expected invalid request, got {other:?}"),
+    };
+    assert!(message.contains("dynamic tool namespace `spine`"));
+    assert!(message.contains("external_tool"));
+
+    config.spine_jit = false;
+    config.spine_trim = true;
     let err = match build_specs_with_inputs_result_for_test(
         &config,
         /*mcp_tools*/ None,
@@ -1630,7 +1777,9 @@ fn hidden_spine_tools_still_reserve_spine_namespace_when_feature_enabled() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     config.spine_jit = true;
-    config.spine_tools_visible = false;
+    config.spine_trim = false;
+    config.spine_jit_tools_visible = false;
+    config.spine_trim_tools_visible = false;
     let dynamic_tools = vec![DynamicToolSpec {
         namespace: Some("spine".to_string()),
         name: "external_tool".to_string(),
@@ -1658,7 +1807,7 @@ fn hidden_spine_tools_still_reserve_spine_namespace_when_feature_enabled() {
 }
 
 #[test]
-fn spine_namespace_extension_tool_is_allowed_when_spine_jit_is_disabled() {
+fn spine_namespace_extension_tool_is_allowed_when_spine_features_are_disabled() {
     let model_info = model_info();
     let available_models = Vec::new();
     let features = Features::with_defaults();
@@ -1673,6 +1822,7 @@ fn spine_namespace_extension_tool_is_allowed_when_spine_jit_is_disabled() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     config.spine_jit = false;
+    config.spine_trim = false;
     let extension_tool_executors = vec![namespaced_extension_tool_executor(
         "spine",
         "external_tool",
@@ -1692,7 +1842,7 @@ fn spine_namespace_extension_tool_is_allowed_when_spine_jit_is_disabled() {
 }
 
 #[test]
-fn spine_namespace_extension_tool_returns_invalid_request_when_spine_jit_is_enabled() {
+fn spine_namespace_extension_tool_returns_invalid_request_when_spine_feature_is_enabled() {
     let model_info = model_info();
     let available_models = Vec::new();
     let features = Features::with_defaults();
@@ -1707,12 +1857,34 @@ fn spine_namespace_extension_tool_returns_invalid_request_when_spine_jit_is_enab
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     config.spine_jit = true;
+    config.spine_trim = false;
     let extension_tool_executors = vec![namespaced_extension_tool_executor(
         "spine",
         "external_tool",
         "External extension tool.",
     )];
 
+    let err = match build_specs_with_inputs_result_for_test(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_executors,
+        &[],
+    ) {
+        Ok(_) => panic!("spine namespace extension tool should be rejected"),
+        Err(err) => err,
+    };
+    let message = match err {
+        CodexErr::InvalidRequest(message) => message,
+        other => panic!("expected invalid request, got {other:?}"),
+    };
+    assert!(message.contains("extension tool namespace `spine`"));
+    assert!(message.contains("spine"));
+    assert!(message.contains("external_tool"));
+
+    config.spine_jit = false;
+    config.spine_trim = true;
     let err = match build_specs_with_inputs_result_for_test(
         &config,
         /*mcp_tools*/ None,

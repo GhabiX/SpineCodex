@@ -206,12 +206,14 @@ fn has_model_resume_override(
 }
 
 fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
-    validate_dynamic_tools_with_spine_jit(tools, /*spine_jit_enabled*/ false)
+    validate_dynamic_tools_with_spine_namespace_reservation(
+        tools, /*spine_namespace_reserved*/ false,
+    )
 }
 
-fn validate_dynamic_tools_with_spine_jit(
+fn validate_dynamic_tools_with_spine_namespace_reservation(
     tools: &[ApiDynamicToolSpec],
-    spine_jit_enabled: bool,
+    spine_namespace_reserved: bool,
 ) -> Result<(), String> {
     const DYNAMIC_TOOL_NAME_MAX_LEN: usize = 128;
     const DYNAMIC_TOOL_NAMESPACE_MAX_LEN: usize = 64;
@@ -300,7 +302,7 @@ fn validate_dynamic_tools_with_spine_jit(
                     "dynamic tool namespace is reserved for {name}: {namespace}"
                 ));
             }
-            if spine_jit_enabled && codex_core::is_spine_reserved_tool_namespace(namespace) {
+            if spine_namespace_reserved && codex_core::is_spine_reserved_tool_namespace(namespace) {
                 return Err(format!(
                     "dynamic tool namespace is reserved for Spine for {name}: {namespace}"
                 ));
@@ -1077,9 +1079,10 @@ impl ThreadRequestProcessor {
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
-            validate_dynamic_tools_with_spine_jit(
+            validate_dynamic_tools_with_spine_namespace_reservation(
                 &dynamic_tools,
-                config.features.get().enabled(Feature::SpineJit),
+                config.features.get().enabled(Feature::SpineJit)
+                    || config.features.get().enabled(Feature::SpineTrim),
             )
             .map_err(invalid_request)?;
             dynamic_tools

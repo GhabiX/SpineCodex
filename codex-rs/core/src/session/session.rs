@@ -944,10 +944,14 @@ impl Session {
             services
                 .model_client
                 .set_window_generation(window_generation);
-            let spine = config
-                .features
-                .enabled(Feature::SpineJit)
-                .then(|| Mutex::new(SpineSessionState::new()));
+            let spine_enabled = config.features.enabled(Feature::SpineJit)
+                || config.features.enabled(Feature::SpineTrim);
+            let spine = spine_enabled.then(|| {
+                Mutex::new(SpineSessionState::new_with_features(
+                    config.features.enabled(Feature::SpineJit),
+                    config.features.enabled(Feature::SpineTrim),
+                ))
+            });
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
 
@@ -1015,7 +1019,8 @@ impl Session {
             }
 
             if let Some(boundary) = spine_fork_source_boundary.as_ref()
-                && config.features.enabled(Feature::SpineJit)
+                && (config.features.enabled(Feature::SpineJit)
+                    || config.features.enabled(Feature::SpineTrim))
                 && matches!(initial_history, InitialHistory::Forked(_))
             {
                 let raw_items =

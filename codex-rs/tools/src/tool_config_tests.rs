@@ -281,7 +281,9 @@ fn provider_capability_methods_disable_provider_bound_tool_surfaces() {
     tools_config.image_gen_tool = true;
     tools_config.namespace_tools = true;
     tools_config.spine_jit = true;
-    tools_config.spine_tools_visible = true;
+    tools_config.spine_trim = true;
+    tools_config.spine_jit_tools_visible = true;
+    tools_config.spine_trim_tools_visible = true;
 
     let tools_config = tools_config
         .with_namespace_tools_capability(/*namespace_tools*/ false)
@@ -293,7 +295,9 @@ fn provider_capability_methods_disable_provider_bound_tool_surfaces() {
     assert!(!tools_config.image_gen_tool);
     assert!(!tools_config.namespace_tools);
     assert!(!tools_config.spine_jit);
-    assert!(!tools_config.spine_tools_visible);
+    assert!(!tools_config.spine_trim);
+    assert!(!tools_config.spine_jit_tools_visible);
+    assert!(!tools_config.spine_trim_tools_visible);
     assert_eq!(tools_config.web_search_mode, None);
 }
 
@@ -328,13 +332,57 @@ fn spine_jit_requires_feature_flag() {
     });
 
     assert!(!disabled.spine_jit);
-    assert!(!disabled.spine_tools_visible);
+    assert!(!disabled.spine_jit_tools_visible);
+    assert!(!disabled.spine_trim);
+    assert!(!disabled.spine_trim_tools_visible);
     assert!(enabled.spine_jit);
-    assert!(enabled.spine_tools_visible);
+    assert!(enabled.spine_jit_tools_visible);
+    assert!(!enabled.spine_trim);
+    assert!(!enabled.spine_trim_tools_visible);
 }
 
 #[test]
-fn spine_tools_visibility_requires_spine_jit() {
+fn spine_trim_requires_feature_flag() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let mut disabled_features = Features::with_defaults();
+    disabled_features.disable(Feature::SpineTrim);
+    let mut enabled_features = Features::with_defaults();
+    enabled_features.enable(Feature::SpineTrim);
+
+    let disabled = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &disabled_features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let enabled = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &enabled_features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    assert!(!disabled.spine_trim);
+    assert!(!disabled.spine_trim_tools_visible);
+    assert!(!disabled.spine_jit);
+    assert!(!disabled.spine_jit_tools_visible);
+    assert!(enabled.spine_trim);
+    assert!(enabled.spine_trim_tools_visible);
+    assert!(!enabled.spine_jit);
+    assert!(!enabled.spine_jit_tools_visible);
+}
+
+#[test]
+fn spine_tools_visibility_requires_matching_feature() {
     let model_info = model_info();
     let available_models = Vec::new();
     let features = Features::with_defaults();
@@ -350,5 +398,54 @@ fn spine_tools_visibility_requires_spine_jit() {
     });
 
     config.spine_jit = false;
-    assert!(!config.with_spine_tools_visible(true).spine_tools_visible);
+    config.spine_trim = false;
+    let hidden = config.with_spine_tools_visible(true);
+    assert!(!hidden.spine_jit_tools_visible);
+    assert!(!hidden.spine_trim_tools_visible);
+}
+
+#[test]
+fn spine_feedback_tool_visibility_requires_jit_visibility_and_debug_gate() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::SpineJit);
+    features.enable(Feature::SpineTrim);
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    assert!(!config.spine_feedback_tool_visible);
+    assert!(
+        config
+            .clone()
+            .with_spine_feedback_tool_visible(true)
+            .spine_feedback_tool_visible
+    );
+    assert!(
+        !config
+            .clone()
+            .with_spine_feedback_tool_visible(false)
+            .spine_feedback_tool_visible
+    );
+    assert!(
+        !config
+            .clone()
+            .with_spine_tools_visible(false)
+            .with_spine_feedback_tool_visible(true)
+            .spine_feedback_tool_visible
+    );
+    assert!(
+        !config
+            .with_namespace_tools_capability(false)
+            .with_spine_feedback_tool_visible(true)
+            .spine_feedback_tool_visible
+    );
 }

@@ -574,7 +574,9 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
-        let base_instructions = if config.features.enabled(Feature::SpineJit) {
+        let base_instructions = if config.features.enabled(Feature::SpineJit)
+            || config.features.enabled(Feature::SpineTrim)
+        {
             let provider_capabilities = create_model_provider(
                 config.model_provider.clone(),
                 Some(Arc::clone(&auth_manager)),
@@ -582,7 +584,9 @@ impl Codex {
             .capabilities();
             crate::spine::append_spine_view_instructions(
                 base_instructions,
-                provider_capabilities.namespace_tools,
+                config.features.enabled(Feature::SpineJit) && provider_capabilities.namespace_tools,
+                config.features.enabled(Feature::SpineTrim)
+                    && provider_capabilities.namespace_tools,
                 config.codex_home.as_path(),
                 config.dev_debug_prompt_overrides,
             )
@@ -1315,8 +1319,10 @@ impl Session {
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
         let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
-        let spine_replay = self
-            .prepare_spine_replay_from_rollout_items(
+        let replay_raw_len = u64::try_from(reconstructed_rollout.raw_response_items.len())
+            .map_err(|_| CodexErr::Fatal("raw response item count overflow".to_string()))?;
+        let spine_replay = if self.features.enabled(Feature::SpineJit) {
+            self.prepare_spine_replay_from_rollout_items(
                 &reconstructed_rollout.raw_response_items,
                 &reconstructed_rollout.spine_rollback_cuts,
                 reconstructed_rollout.used_replacement_history,
@@ -1330,7 +1336,38 @@ impl Session {
                 CodexErr::Fatal(format!(
                     "failed to rebuild Spine runtime from rollout: {err}"
                 ))
-            })?;
+            })?
+        } else if self.features.enabled(Feature::SpineTrim) {
+            let runtime = self
+                .prepare_spine_trim_replay_from_rollout_items(
+                    replay_raw_len,
+                    &reconstructed_rollout.history,
+                )
+                .await
+                .map_err(|err| {
+                    CodexErr::Fatal(format!(
+                        "failed to rebuild Spine trim runtime from rollout: {err}"
+                    ))
+                })?;
+            let materialized = runtime
+                .as_ref()
+                .map(|runtime| {
+                    runtime.project_raw_history_with_trim(&reconstructed_rollout.history)
+                })
+                .transpose()
+                .map_err(|err| {
+                    CodexErr::Fatal(format!(
+                        "failed to apply Spine trim projection from rollout: {err}"
+                    ))
+                })?;
+            Some(spine_bridge::PreparedSpineReplay::new(
+                replay_raw_len,
+                runtime,
+                materialized,
+            ))
+        } else {
+            None
+        };
         let spine_history = if let Some(spine_replay) = spine_replay {
             self.install_prepared_spine_replay(spine_replay)
                 .await

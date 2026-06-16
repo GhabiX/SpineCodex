@@ -1,6 +1,7 @@
 use crate::function_tool::FunctionCallError;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_FEEDBACK;
 use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
@@ -27,30 +28,55 @@ pub(crate) struct SpineHandler {
 enum SpineTool {
     Tree,
     Trim,
+    Feedback,
     Open,
     Close,
     Next,
 }
 
 impl SpineHandler {
-    pub(crate) fn all() -> Vec<Self> {
-        vec![
-            Self {
-                tool: SpineTool::Tree,
-            },
-            Self {
+    pub(crate) fn all(
+        include_jit_tools: bool,
+        include_trim_tool: bool,
+        include_feedback_tool: bool,
+    ) -> Vec<Self> {
+        let mut handlers = Vec::new();
+        if include_jit_tools {
+            handlers.extend([
+                Self {
+                    tool: SpineTool::Tree,
+                },
+                Self {
+                    tool: SpineTool::Open,
+                },
+                Self {
+                    tool: SpineTool::Close,
+                },
+                Self {
+                    tool: SpineTool::Next,
+                },
+            ]);
+        }
+        if include_trim_tool {
+            handlers.push(Self {
                 tool: SpineTool::Trim,
-            },
-            Self {
-                tool: SpineTool::Open,
-            },
-            Self {
-                tool: SpineTool::Close,
-            },
-            Self {
-                tool: SpineTool::Next,
-            },
-        ]
+            });
+        }
+        if include_feedback_tool {
+            handlers.push(Self {
+                tool: SpineTool::Feedback,
+            });
+        }
+        handlers
+    }
+
+    fn namespace_spec_options(&self) -> Option<(bool, bool, bool)> {
+        match self.tool {
+            SpineTool::Tree => Some((true, false, false)),
+            SpineTool::Trim => Some((false, true, false)),
+            SpineTool::Feedback => Some((false, false, true)),
+            SpineTool::Open | SpineTool::Close | SpineTool::Next => None,
+        }
     }
 }
 
@@ -59,6 +85,7 @@ impl SpineTool {
         match self {
             SpineTool::Tree => SPINE_TOOL_TREE,
             SpineTool::Trim => SPINE_TOOL_TRIM,
+            SpineTool::Feedback => SPINE_TOOL_FEEDBACK,
             SpineTool::Open => SPINE_TOOL_OPEN,
             SpineTool::Close => SPINE_TOOL_CLOSE,
             SpineTool::Next => SPINE_TOOL_NEXT,
@@ -99,6 +126,22 @@ struct TrimArgs {
     op: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FeedbackArgs {
+    content: String,
+}
+
+fn normalize_feedback_args(mut args: FeedbackArgs) -> Result<FeedbackArgs, FunctionCallError> {
+    args.content = args.content.trim().to_string();
+    if args.content.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "spine.feedback requires non-empty content.".to_string(),
+        ));
+    }
+    Ok(args)
+}
+
 fn normalize_trim_args(mut args: TrimArgs) -> Result<TrimArgs, FunctionCallError> {
     args.trim_id = args.trim_id.trim().to_string();
     if args.trim_id.is_empty() {
@@ -116,7 +159,15 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        (self.tool == SpineTool::Tree).then(create_spine_namespace_tool)
+        self.namespace_spec_options().map(
+            |(include_jit_tools, include_trim_tool, include_feedback_tool)| {
+                create_spine_namespace_tool(
+                    include_jit_tools,
+                    include_trim_tool,
+                    include_feedback_tool,
+                )
+            },
+        )
     }
 
     async fn handle(
@@ -144,7 +195,9 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                 "spine is not available as a Code Mode nested tool".to_string(),
             ));
         }
-        if self.tool != SpineTool::Tree && turn.collaboration_mode.mode == ModeKind::Plan {
+        if !matches!(self.tool, SpineTool::Tree | SpineTool::Feedback)
+            && turn.collaboration_mode.mode == ModeKind::Plan
+        {
             return Err(FunctionCallError::RespondToModel(
                 "spine.trim, spine.open, spine.close, and spine.next are not allowed in Plan mode"
                     .to_string(),
@@ -192,6 +245,17 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                 };
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
                     message,
+                    Some(true),
+                )))
+            }
+            SpineTool::Feedback => {
+                let args: FeedbackArgs = normalize_feedback_args(parse_arguments(&arguments)?)?;
+                session
+                    .append_spine_feedback(args.content)
+                    .await
+                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                    "Spine feedback recorded.".to_string(),
                     Some(true),
                 )))
             }
@@ -260,6 +324,29 @@ mod tests {
         })
         .expect("non-empty TRIM_ID should be accepted");
         assert_eq!(args.trim_id, "trim_0");
+    }
+
+    #[test]
+    fn feedback_args_reject_empty_content() {
+        let err = match normalize_feedback_args(FeedbackArgs {
+            content: " \n\t ".to_string(),
+        }) {
+            Ok(_) => panic!("empty feedback content should be rejected"),
+            Err(err) => err,
+        };
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("expected model-visible feedback argument error");
+        };
+        assert!(message.contains("non-empty content"));
+    }
+
+    #[test]
+    fn feedback_args_trim_surrounding_whitespace() {
+        let args = normalize_feedback_args(FeedbackArgs {
+            content: " useful Spine feedback \n".to_string(),
+        })
+        .expect("non-empty feedback content should be accepted");
+        assert_eq!(args.content, "useful Spine feedback");
     }
 }
 

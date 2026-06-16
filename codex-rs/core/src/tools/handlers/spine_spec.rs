@@ -1,5 +1,6 @@
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_FEEDBACK;
 use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
@@ -12,24 +13,31 @@ use codex_tools::ToolSpec;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
-    ToolSpec::Namespace(ResponsesApiNamespace {
-        name: SPINE_NAMESPACE.to_string(),
-        description: "Inspect and move the Spine task tree.".to_string(),
-        tools: vec![
-            ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                name: SPINE_TOOL_TREE.to_string(),
-                description: "Inspect the current Spine tree, cursor, current live-node context pressure, and overall context-window pressure without moving the cursor.".to_string(),
-                strict: false,
-                defer_loading: None,
-                parameters: JsonSchema::object(
-                    BTreeMap::new(),
-                    Some(Vec::new()),
-                    Some(false.into()),
-                ),
-                output_schema: None,
-            }),
-            ResponsesApiNamespaceTool::Function(spine_trim_tool()),
+pub(crate) fn create_spine_namespace_tool(
+    include_jit_tools: bool,
+    include_trim_tool: bool,
+    include_feedback_tool: bool,
+) -> ToolSpec {
+    let mut tools = Vec::new();
+    if include_jit_tools {
+        tools.push(ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+            name: SPINE_TOOL_TREE.to_string(),
+            description: "Inspect the current Spine tree, cursor, current live-node context pressure, and overall context-window pressure without moving the cursor.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::object(
+                BTreeMap::new(),
+                Some(Vec::new()),
+                Some(false.into()),
+            ),
+            output_schema: None,
+        }));
+    }
+    if include_trim_tool {
+        tools.push(ResponsesApiNamespaceTool::Function(spine_trim_tool()));
+    }
+    if include_jit_tools {
+        tools.extend([
             ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                 name: SPINE_TOOL_OPEN.to_string(),
                 description: "Open a focused child task under the current Spine cursor."
@@ -50,8 +58,34 @@ pub(crate) fn create_spine_namespace_tool() -> ToolSpec {
             }),
             ResponsesApiNamespaceTool::Function(spine_close_tool()),
             ResponsesApiNamespaceTool::Function(spine_next_tool()),
-        ],
+        ]);
+    }
+    if include_feedback_tool {
+        tools.push(ResponsesApiNamespaceTool::Function(spine_feedback_tool()));
+    }
+
+    ToolSpec::Namespace(ResponsesApiNamespace {
+        name: SPINE_NAMESPACE.to_string(),
+        description: "Inspect and move the Spine task tree.".to_string(),
+        tools,
     })
+}
+
+fn spine_feedback_tool() -> ResponsesApiTool {
+    let properties = BTreeMap::from([(
+        "content".to_string(),
+        JsonSchema::string(Some(
+            "Concise feedback for Spine developers about a problem, rough edge, confusing behavior, missing capability, or concrete improvement idea noticed during real work.".to_string(),
+        )),
+    )]);
+    ResponsesApiTool {
+        name: SPINE_TOOL_FEEDBACK.to_string(),
+        description: "Record debug-only feedback for Spine developers when real work reveals a Spine problem, rough edge, confusing behavior, missing capability, or concrete improvement idea. Do not use this for normal task notes, user-facing summaries, or project implementation logs.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, Some(vec!["content".to_string()]), Some(false.into())),
+        output_schema: None,
+    }
 }
 
 fn spine_trim_tool() -> ResponsesApiTool {

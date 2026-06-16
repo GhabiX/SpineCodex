@@ -2095,6 +2095,8 @@ async fn drain_in_flight(
         match res {
             Ok(response_input) => {
                 let mut response_item = response_input.into();
+                let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
+                let spine_trim_enabled = sess.features.enabled(Feature::SpineTrim);
                 let is_pending_spine_close_like = sess
                     .is_pending_spine_close_like_output(&response_item)
                     .await
@@ -2104,20 +2106,19 @@ async fn drain_in_flight(
                             reason: err.to_string(),
                         })
                     })?;
-                let output_recorded_before_spine_commit =
-                    if sess.features.enabled(Feature::SpineJit) {
-                        sess.record_conversation_items_without_spine_observe(
-                            &turn_context,
-                            std::slice::from_ref(&response_item),
-                        )
-                        .await
-                        .map_err(SamplingRequestError::Codex)?;
-                        true
-                    } else {
-                        false
-                    };
-                let commit = sess
-                    .maybe_commit_spine_tool_output_with_client_session(
+                let output_recorded_before_spine_commit = if spine_jit_enabled {
+                    sess.record_conversation_items_without_spine_observe(
+                        &turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await
+                    .map_err(SamplingRequestError::Codex)?;
+                    true
+                } else {
+                    false
+                };
+                let commit = if spine_jit_enabled {
+                    sess.maybe_commit_spine_tool_output_with_client_session(
                         &turn_context,
                         client_session,
                         &response_item,
@@ -2129,7 +2130,10 @@ async fn drain_in_flight(
                             operation: "commit Spine tool output".to_string(),
                             reason: err.to_string(),
                         })
-                    })?;
+                    })?
+                } else {
+                    Session::no_spine_tool_commit()
+                };
                 if !commit.record_output && !output_recorded_before_spine_commit {
                     continue;
                 }
@@ -2187,6 +2191,18 @@ async fn drain_in_flight(
                     )
                     .await
                     .map_err(SamplingRequestError::Codex)?;
+                    if spine_trim_enabled {
+                        sess.apply_spine_trim_projection_if_available()
+                            .await
+                            .map_err(|err| {
+                                SamplingRequestError::FailedNoTurnComplete(
+                                    CodexErr::SpineTerminalFailure {
+                                        operation: "apply Spine trim projection".to_string(),
+                                        reason: err.to_string(),
+                                    },
+                                )
+                            })?;
+                    }
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
@@ -2205,6 +2221,18 @@ async fn drain_in_flight(
                     )
                     .await
                     .map_err(SamplingRequestError::Codex)?;
+                    if spine_trim_enabled {
+                        sess.apply_spine_trim_projection_if_available()
+                            .await
+                            .map_err(|err| {
+                                SamplingRequestError::FailedNoTurnComplete(
+                                    CodexErr::SpineTerminalFailure {
+                                        operation: "apply Spine trim projection".to_string(),
+                                        reason: err.to_string(),
+                                    },
+                                )
+                            })?;
+                    }
                 }
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),

@@ -176,7 +176,7 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn validate_dynamic_tools_accepts_spine_namespace_when_spine_jit_is_disabled() {
+    fn validate_dynamic_tools_accepts_spine_namespace_when_spine_features_are_disabled() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: Some("spine".to_string()),
             name: "external_tool".to_string(),
@@ -188,12 +188,14 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: true,
         }];
-        validate_dynamic_tools_with_spine_jit(&tools, /*spine_jit_enabled*/ false)
-            .expect("spine namespace remains allowed when spine_jit is disabled");
+        validate_dynamic_tools_with_spine_namespace_reservation(
+            &tools, /*spine_namespace_reserved*/ false,
+        )
+        .expect("spine namespace remains allowed when Spine features are disabled");
     }
 
     #[test]
-    fn validate_dynamic_tools_rejects_spine_namespace_when_spine_jit_is_enabled() {
+    fn validate_dynamic_tools_rejects_spine_namespace_when_spine_feature_is_enabled() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: Some("spine".to_string()),
             name: "external_tool".to_string(),
@@ -205,8 +207,10 @@ mod thread_processor_behavior_tests {
             }),
             defer_loading: true,
         }];
-        let err = validate_dynamic_tools_with_spine_jit(&tools, /*spine_jit_enabled*/ true)
-            .expect_err("spine namespace should be reserved under spine_jit");
+        let err = validate_dynamic_tools_with_spine_namespace_reservation(
+            &tools, /*spine_namespace_reserved*/ true,
+        )
+        .expect_err("spine namespace should be reserved under a Spine feature");
         assert!(err.contains("external_tool"), "unexpected error: {err}");
         assert!(err.contains("Spine"), "unexpected error: {err}");
         assert!(err.contains("spine"), "unexpected error: {err}");

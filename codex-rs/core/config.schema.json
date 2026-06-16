@@ -553,6 +553,12 @@
             "spine_jit": {
               "type": "boolean"
             },
+            "spine_trim": {
+              "type": "boolean"
+            },
+            "spine": {
+              "type": "boolean"
+            },
             "sqlite": {
               "type": "boolean"
             },
@@ -4334,6 +4340,12 @@
           "type": "boolean"
         },
         "spine_jit": {
+          "type": "boolean"
+        },
+        "spine_trim": {
+          "type": "boolean"
+        },
+        "spine": {
           "type": "boolean"
         },
         "sqlite": {

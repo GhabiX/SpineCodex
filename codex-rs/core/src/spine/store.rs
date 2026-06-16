@@ -60,6 +60,7 @@ const TRIM_FILE: &str = "trim.jsonl";
 const MEM_FILE: &str = "mem.jsonl";
 const COMMIT_FILE: &str = "commits.jsonl";
 const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
+const FEEDBACK_FILE: &str = "spine_feedback.md";
 const WRITER_LOCK_FILE: &str = ".writer.lock";
 #[cfg(debug_assertions)]
 const DEBUG_DIR: &str = ".debug";
@@ -77,11 +78,20 @@ pub struct SpineCloneBoundary {
     pub(crate) structural_seq_limit: u64,
     pub(crate) pressure_seq_watermark: Option<u64>,
     pub(crate) trim_seq_watermark: Option<u64>,
+    pub(crate) trim_toolcall_seq_limit: u64,
 }
 
 impl SpineCloneBoundary {
     pub(crate) fn raw_ordinal_limit(&self) -> u64 {
         self.raw_ordinal_limit
+    }
+}
+
+fn event_seq_limit_for_clone(source: &SpineStore) -> Result<u64, SpineError> {
+    if source.tree_path().exists() {
+        source.next_event_seq()
+    } else {
+        Ok(0)
     }
 }
 
@@ -138,12 +148,19 @@ impl SpineStore {
             return Ok(None);
         }
         let source = Self::for_rollout(source_rollout_path)?;
+        let structural_seq_limit = event_seq_limit_for_clone(&source)?;
+        let trim_seq_watermark = source.next_trim_seq()?.checked_sub(1);
         Ok(Some(SpineCloneBoundary {
             source_rollout_path: source_rollout_path.to_path_buf(),
             raw_ordinal_limit,
-            structural_seq_limit: source.next_event_seq()?,
+            structural_seq_limit,
             pressure_seq_watermark: source.next_pressure_seq()?.checked_sub(1),
-            trim_seq_watermark: source.next_trim_seq()?.checked_sub(1),
+            trim_seq_watermark,
+            trim_toolcall_seq_limit: if source.tree_path().exists() {
+                structural_seq_limit
+            } else {
+                source.trim_toolcall_seq_limit(trim_seq_watermark)?
+            },
         }))
     }
 
@@ -155,13 +172,23 @@ impl SpineStore {
             return Ok(None);
         }
         let source = Self::for_rollout(source_rollout_path)?;
+        if !source.tree_path().exists() {
+            return source
+                .trim_only_clone_boundary_for_raw_ordinal(source_rollout_path, raw_ordinal);
+        }
         let checkpoint = source.checkpoint_for_raw_ordinal(raw_ordinal)?;
+        let structural_seq_limit = checkpoint.token_seq;
         Ok(Some(SpineCloneBoundary {
             source_rollout_path: source_rollout_path.to_path_buf(),
             raw_ordinal_limit: raw_ordinal,
-            structural_seq_limit: checkpoint.token_seq,
+            structural_seq_limit,
             pressure_seq_watermark: checkpoint.pressure_seq_watermark,
             trim_seq_watermark: checkpoint.trim_seq_watermark,
+            trim_toolcall_seq_limit: if source.tree_path().exists() {
+                structural_seq_limit
+            } else {
+                source.trim_toolcall_seq_limit(checkpoint.trim_seq_watermark)?
+            },
         }))
     }
 
@@ -230,6 +257,30 @@ impl SpineStore {
             .append(true)
             .open(self.trim_path())?;
         Ok(())
+    }
+
+    fn trim_only_clone_boundary_for_raw_ordinal(
+        &self,
+        source_rollout_path: &Path,
+        raw_ordinal: u64,
+    ) -> Result<Option<SpineCloneBoundary>, SpineError> {
+        let trim_events = self.trim_events()?;
+        let trim_seq_watermark = trim_seq_watermark_for_raw_boundary(&trim_events, raw_ordinal);
+        Ok(Some(SpineCloneBoundary {
+            source_rollout_path: source_rollout_path.to_path_buf(),
+            raw_ordinal_limit: raw_ordinal,
+            structural_seq_limit: 0,
+            pressure_seq_watermark: None,
+            trim_seq_watermark,
+            trim_toolcall_seq_limit: trim_toolcall_seq_limit_from_events(
+                &trim_events,
+                trim_seq_watermark,
+            )?,
+        }))
+    }
+
+    fn trim_toolcall_seq_limit(&self, trim_seq_watermark: Option<u64>) -> Result<u64, SpineError> {
+        trim_toolcall_seq_limit_from_events(&self.trim_events()?, trim_seq_watermark)
     }
 
     pub(crate) fn ensure_writer_lock(&mut self) -> Result<(), SpineError> {
@@ -413,11 +464,28 @@ fn clone_for_rollout_into_store(
     let source_raw_live = &raw_live[..raw_ordinal_limit];
     let mask = RawMask::new(source_raw_live);
     target.ensure_trim_ledger_exists()?;
-    let source_events = source.events()?;
+    let clone_jit_records = source.tree_path().exists();
+    let source_events = if clone_jit_records {
+        source.events()?
+    } else {
+        Vec::new()
+    };
     let source_mems = source.mems()?;
-    let source_checkpoints = source.checkpoints()?;
-    let source_compact_checkpoints = source.compact_checkpoints()?;
-    let source_commit_markers = source.commit_markers()?;
+    let source_checkpoints = if clone_jit_records {
+        source.checkpoints()?
+    } else {
+        Vec::new()
+    };
+    let source_compact_checkpoints = if clone_jit_records {
+        source.compact_checkpoints()?
+    } else {
+        Vec::new()
+    };
+    let source_commit_markers = if clone_jit_records {
+        source.commit_markers()?
+    } else {
+        Vec::new()
+    };
     let source_trim_events = source.trim_events()?;
     let source_events_by_seq = source_events
         .iter()
@@ -537,7 +605,7 @@ fn clone_for_rollout_into_store(
             .trim_seq_watermark
             .is_some_and(|watermark| trim.trim_seq <= watermark)
             && trim.allowed_by(mask)?
-            && trim_event_within_structural_boundary(&trim, boundary.structural_seq_limit)
+            && trim_event_within_toolcall_boundary(&trim, boundary.trim_toolcall_seq_limit)
         {
             target.append_logged_trim_event(&trim)?;
         }
@@ -581,14 +649,58 @@ fn clone_for_rollout_into_store(
     Ok(())
 }
 
-fn trim_event_within_structural_boundary(
-    event: &LoggedTrimEvent,
-    structural_seq_limit: u64,
-) -> bool {
+fn trim_event_within_toolcall_boundary(event: &LoggedTrimEvent, toolcall_seq_limit: u64) -> bool {
     match &event.event {
-        TrimEvent::Candidate { toolcall_seq, .. } => *toolcall_seq < structural_seq_limit,
+        TrimEvent::ToolCallBoundary { toolcall_seq, .. }
+        | TrimEvent::Candidate { toolcall_seq, .. } => *toolcall_seq < toolcall_seq_limit,
         TrimEvent::Cleared { .. } => true,
     }
+}
+
+fn trim_seq_watermark_for_raw_boundary(
+    events: &[LoggedTrimEvent],
+    raw_boundary: u64,
+) -> Option<u64> {
+    let mut watermark = None;
+    for event in events {
+        let within_boundary = match &event.event {
+            TrimEvent::ToolCallBoundary {
+                raw_boundary: event_boundary,
+                ..
+            }
+            | TrimEvent::Cleared {
+                raw_boundary: event_boundary,
+                ..
+            } => *event_boundary <= raw_boundary,
+            TrimEvent::Candidate { raw_ordinal, .. } => *raw_ordinal < raw_boundary,
+        };
+        if within_boundary {
+            watermark =
+                Some(watermark.map_or(event.trim_seq, |current: u64| current.max(event.trim_seq)));
+        }
+    }
+    watermark
+}
+
+fn trim_toolcall_seq_limit_from_events(
+    events: &[LoggedTrimEvent],
+    trim_seq_watermark: Option<u64>,
+) -> Result<u64, SpineError> {
+    Ok(events
+        .iter()
+        .filter(|event| trim_seq_watermark.is_none_or(|watermark| event.trim_seq <= watermark))
+        .filter_map(|event| match &event.event {
+            TrimEvent::ToolCallBoundary { toolcall_seq, .. } => Some(*toolcall_seq),
+            _ => None,
+        })
+        .max()
+        .map(|toolcall_seq| {
+            toolcall_seq.checked_add(1).ok_or_else(|| {
+                SpineError::InvalidEvent("spine trim toolcall seq overflow".to_string())
+            })
+        })
+        .transpose()?
+        .unwrap_or(0))
 }
 
 impl SpineStore {
@@ -632,6 +744,15 @@ impl SpineStore {
         self.trim_path()
     }
 
+    pub(crate) fn feedback_path(&self) -> PathBuf {
+        self.root.join(FEEDBACK_FILE)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn feedback_path_for_test(&self) -> PathBuf {
+        self.feedback_path()
+    }
+
     fn compact_checkpoint_path(&self) -> PathBuf {
         self.root.join(COMPACT_CHECKPOINT_FILE)
     }
@@ -662,6 +783,11 @@ impl SpineStore {
 
     pub(super) fn initial_checkpoint_path(&self) -> PathBuf {
         self.checkpoint_dir().join(INITIAL_CHECKPOINT_FILE)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initial_checkpoint_path_for_test(&self) -> PathBuf {
+        self.initial_checkpoint_path()
     }
 
     pub(super) fn append_event(&self, event: &SpineLedgerEvent) -> Result<u64, SpineError> {
@@ -737,6 +863,20 @@ impl SpineStore {
         record: &T,
     ) -> Result<(), SpineError> {
         append_json_line(&self.compact_close_debug_path(), record)
+    }
+
+    pub(crate) fn append_feedback_markdown(&self, entry: &str) -> Result<(), SpineError> {
+        let path = self.feedback_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        if file.metadata()?.len() > 0 {
+            file.write_all(b"\n")?;
+        }
+        file.write_all(entry.as_bytes())?;
+        file.write_all(b"\n")?;
+        Ok(())
     }
 
     pub(super) fn events(&self) -> Result<Vec<LoggedSpineLedgerEvent>, SpineError> {

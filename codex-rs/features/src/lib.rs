@@ -129,6 +129,13 @@ pub enum Feature {
     /// SpineJit incrementally parses Codex events into a durable sidecar ledger
     /// and materializes the live parse stack into ContextManager items.
     SpineJit,
+    /// Enable Spine tool-response trimming.
+    ///
+    /// SpineTrim tags large previous tool responses with TRIM_ID values and
+    /// exposes the model-visible spine.trim cleanup tool.
+    SpineTrim,
+    /// Convenience feature that enables both Spine JIT and Spine trim.
+    Spine,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
     /// Enable apps.
@@ -494,6 +501,10 @@ impl Features {
     }
 
     pub fn normalize_dependencies(&mut self) {
+        if self.enabled(Feature::Spine) {
+            self.enable(Feature::SpineJit);
+            self.enable(Feature::SpineTrim);
+        }
         if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
             self.enable(Feature::Collab);
         }
@@ -924,6 +935,18 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SpineJit,
         key: "spine_jit",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpineTrim,
+        key: "spine_trim",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Spine,
+        key: "spine",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

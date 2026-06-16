@@ -44,6 +44,20 @@ pub(super) struct PreparedSpineReplay {
     materialized: Option<Vec<ResponseItem>>,
 }
 
+impl PreparedSpineReplay {
+    pub(super) fn new(
+        raw_len: u64,
+        runtime: Option<SpineRuntime>,
+        materialized: Option<Vec<ResponseItem>>,
+    ) -> Self {
+        Self {
+            raw_len,
+            runtime,
+            materialized,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct SpineToolCommit {
     pub(crate) output_text: Option<String>,
@@ -106,7 +120,7 @@ enum SpineCommitAttempt {
 }
 
 impl Session {
-    fn no_spine_tool_commit() -> SpineToolCommit {
+    pub(crate) fn no_spine_tool_commit() -> SpineToolCommit {
         SpineToolCommit {
             output_text: None,
             record_output: true,
@@ -149,6 +163,9 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Result<(), SpineError> {
+        if !self.features.enabled(Feature::SpineJit) {
+            return Ok(());
+        }
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
@@ -163,6 +180,9 @@ impl Session {
     }
 
     pub(crate) async fn seed_spine_tree_snapshot_if_available(&self) -> Result<(), SpineError> {
+        if !self.features.enabled(Feature::SpineJit) {
+            return Ok(());
+        }
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
@@ -199,7 +219,9 @@ impl Session {
         let mut guard = spine_slot.lock().await;
         guard.ensure_runtime(&rollout_path)?;
         if let Some(runtime) = guard.runtime() {
-            runtime.checkpoint_initial(&rollout_path, &[])?;
+            if runtime.jit_enabled() {
+                runtime.checkpoint_initial(&rollout_path, &[])?;
+            }
         }
         Ok(())
     }
@@ -210,6 +232,24 @@ impl Session {
         };
         let guard = spine_slot.lock().await;
         guard.is_ready()
+    }
+
+    pub(crate) async fn apply_spine_trim_projection_if_available(&self) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let history = self.clone_history().await;
+        let projected = {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(runtime) = guard.runtime() else {
+                return Ok(());
+            };
+            runtime.project_raw_history_with_trim(history.raw_items())?
+        };
+        self.replace_history(projected, self.reference_context_item().await)
+            .await;
+        Ok(())
     }
 
     pub(super) async fn release_spine_runtime_for_shutdown(&self) {
@@ -245,29 +285,56 @@ impl Session {
             ));
         }
         if raw_ordinal_limit == raw_items.len() {
+            let runtime = SpineRuntime::load_for_rollout_items_for_writer_with_jit(
+                &target_rollout_path,
+                raw_items,
+                &[],
+                self.features.enabled(Feature::SpineJit),
+            )?;
+            spine_slot.lock().await.set_replayed(
+                u64::try_from(raw_items.len())
+                    .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
+                runtime,
+            )?;
             return Ok(());
         }
-        let prefix_runtime = SpineRuntime::load_for_rollout_items_for_writer(
+        let prefix_runtime = SpineRuntime::load_for_rollout_items_for_writer_with_jit(
             &target_rollout_path,
             &raw_items[..raw_ordinal_limit],
             &[],
+            self.features.enabled(Feature::SpineJit),
         )?;
         let mut runtime = prefix_runtime.ok_or_else(|| {
             SpineError::InvalidStore("cloned Spine sidecar is missing after fork clone".to_string())
         })?;
+        runtime.set_jit_enabled(self.features.enabled(Feature::SpineJit));
+        runtime.set_trim_enabled(self.features.enabled(Feature::SpineTrim));
+        let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
         for (raw_ordinal, item) in raw_items.iter().enumerate().skip(raw_ordinal_limit) {
             runtime.observe_raw_items(1)?;
             let Some(item) = item.as_ref() else {
                 continue;
             };
-            let context_index = runtime.materialize_history(raw_items)?.len();
-            runtime.observe_context_item(
-                u64::try_from(raw_ordinal)
-                    .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?,
-                context_index,
-                item,
-            )?;
+            let context_index = if runtime.jit_enabled() {
+                runtime.materialize_history(raw_items)?.len()
+            } else {
+                raw_items
+                    .iter()
+                    .take(raw_ordinal)
+                    .filter(|item| item.is_some())
+                    .count()
+            };
+            let raw_ordinal = u64::try_from(raw_ordinal)
+                .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+            runtime.observe_context_item(raw_ordinal, context_index, item)?;
+            if let Some(call_id) = tool_response_call_id(item) {
+                recorded_tool_outputs.push((call_id.to_string(), raw_ordinal, context_index));
+            }
         }
+        runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+            &recorded_tool_outputs,
+            raw_items,
+        )?;
         spine_slot.lock().await.set_replayed(
             u64::try_from(raw_items.len())
                 .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
@@ -287,6 +354,9 @@ impl Session {
         let Some(_spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
+        if !self.features.enabled(Feature::SpineJit) {
+            return Ok(None);
+        }
         let Some(rollout_path) = self
             .current_rollout_path()
             .await
@@ -296,8 +366,12 @@ impl Session {
         };
         let raw_len = u64::try_from(raw_items.len())
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
-        let runtime =
+        let mut runtime =
             SpineRuntime::load_for_rollout_items(&rollout_path, raw_items, rollback_cuts)?;
+        if let Some(runtime) = runtime.as_mut() {
+            runtime.set_jit_enabled(self.features.enabled(Feature::SpineJit));
+            runtime.set_trim_enabled(self.features.enabled(Feature::SpineTrim));
+        }
         if runtime.is_none() && (used_replacement_history || raw_items.iter().any(Option::is_some))
         {
             return Err(SpineError::InvalidStore(
@@ -347,6 +421,33 @@ impl Session {
         }))
     }
 
+    pub(super) async fn prepare_spine_trim_replay_from_rollout_items(
+        &self,
+        raw_len: u64,
+        history: &[ResponseItem],
+    ) -> Result<Option<SpineRuntime>, SpineError> {
+        let Some(_spine_slot) = self.spine.as_ref() else {
+            return Ok(None);
+        };
+        if !self.features.enabled(Feature::SpineTrim) {
+            return Ok(None);
+        }
+        let Some(rollout_path) = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+        else {
+            return Ok(None);
+        };
+        if !SpineStore::has_for_rollout(&rollout_path)? {
+            return Ok(None);
+        }
+        let mut runtime = SpineRuntime::load_or_create_with_jit(&rollout_path, raw_len, false)?;
+        runtime.set_trim_enabled(true);
+        runtime.project_raw_history_with_trim(history)?;
+        Ok(Some(runtime))
+    }
+
     pub(super) async fn install_prepared_spine_replay(
         &self,
         replay: PreparedSpineReplay,
@@ -372,6 +473,9 @@ impl Session {
         &self,
         token_info: &TokenUsageInfo,
     ) {
+        if !self.features.enabled(Feature::SpineJit) {
+            return;
+        }
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
         };
@@ -415,6 +519,9 @@ impl Session {
     }
 
     pub(super) async fn emit_spine_tree_snapshot_cache_only_if_available(&self) {
+        if !self.features.enabled(Feature::SpineJit) {
+            return;
+        }
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
         };
@@ -652,7 +759,7 @@ impl Session {
             let item = items.get(append.input_index).ok_or_else(|| {
                 SpineError::InvalidEvent("context append input index outside items".to_string())
             })?;
-            if crate::spine::is_user_message(item) {
+            if runtime.jit_enabled() && crate::spine::is_user_message(item) {
                 let raw_end = usize::try_from(raw_ordinal)
                     .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
                 let prefix = raw_items.get(..raw_end).ok_or_else(|| {
@@ -796,6 +903,23 @@ impl Session {
             ));
         };
         runtime.trim_tool_response(&trim_id)
+    }
+
+    pub(crate) async fn append_spine_feedback(&self, content: String) -> Result<(), SpineError> {
+        let spine = self.ensure_spine_runtime().await?;
+        let guard = spine.lock().await;
+        guard.ensure_valid()?;
+        let Some(runtime) = guard.runtime() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing after initialization".to_string(),
+            ));
+        };
+        let entry = format!(
+            "## {}\n\n{}",
+            chrono::Utc::now().to_rfc3339(),
+            content.trim()
+        );
+        runtime.append_feedback_markdown(&entry)
     }
 
     #[cfg(test)]

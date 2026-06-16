@@ -2794,7 +2794,7 @@ async fn spine_tools_hidden_until_sidecar_runtime_ready() {
     let before_init = session.new_default_turn().await;
     assert!(before_init.tools_config.spine_jit);
     assert!(
-        !before_init.tools_config.spine_tools_visible,
+        !before_init.tools_config.spine_jit_tools_visible,
         "feature-on alone must not expose Spine parser-control tools"
     );
 
@@ -2807,7 +2807,7 @@ async fn spine_tools_hidden_until_sidecar_runtime_ready() {
     let after_init = session.new_default_turn().await;
     assert!(after_init.tools_config.spine_jit);
     assert!(
-        after_init.tools_config.spine_tools_visible,
+        after_init.tools_config.spine_jit_tools_visible,
         "Spine parser-control tools become visible after sidecar/runtime initialization"
     );
 }
@@ -2823,23 +2823,34 @@ async fn review_turn_inherits_spine_tool_visibility_from_parent_turn() {
                     .features
                     .enable(Feature::SpineJit)
                     .expect("enable spine feature");
+    assert!(!before_init.tools_config.spine_trim);
             },
         )
         .await;
 
+    assert!(!before_init.tools_config.spine_trim_tools_visible);
     assert!(
-        !hidden_parent_turn_context.tools_config.spine_tools_visible,
+        !hidden_parent_turn_context
+            .tools_config
+            .spine_jit_tools_visible,
         "feature-on parent turn must stay hidden before sidecar/runtime readiness"
     );
     let hidden_review_tools = crate::session::review::apply_review_spine_tool_visibility(
         hidden_parent_turn_context.tools_config.clone(),
-        hidden_parent_turn_context.tools_config.spine_tools_visible,
+        hidden_parent_turn_context
+            .tools_config
+            .spine_jit_tools_visible,
+        hidden_parent_turn_context
+            .tools_config
+            .spine_trim_tools_visible,
     );
     assert!(hidden_review_tools.spine_jit);
+    assert!(!after_init.tools_config.spine_trim);
     assert!(
-        !hidden_review_tools.spine_tools_visible,
+        !hidden_review_tools.spine_jit_tools_visible,
         "review turn must not expose Spine parser-control tools before parent readiness"
     );
+    assert!(!after_init.tools_config.spine_trim_tools_visible);
 
     attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
     session
@@ -2849,16 +2860,23 @@ async fn review_turn_inherits_spine_tool_visibility_from_parent_turn() {
 
     let ready_parent_turn_context = session.new_default_turn().await;
     assert!(
-        ready_parent_turn_context.tools_config.spine_tools_visible,
+        ready_parent_turn_context
+            .tools_config
+            .spine_jit_tools_visible,
+        ready_parent_turn_context
+            .tools_config
+            .spine_trim_tools_visible,
         "parent turn should become visible after sidecar/runtime initialization"
     );
     let visible_review_tools = crate::session::review::apply_review_spine_tool_visibility(
         hidden_parent_turn_context.tools_config.clone(),
-        ready_parent_turn_context.tools_config.spine_tools_visible,
+        ready_parent_turn_context
+            .tools_config
+            .spine_jit_tools_visible,
     );
     assert!(visible_review_tools.spine_jit);
     assert!(
-        visible_review_tools.spine_tools_visible,
+        visible_review_tools.spine_jit_tools_visible,
         "review turn must inherit Spine parser-control visibility from a ready parent turn"
     );
 }
@@ -2870,6 +2888,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
 
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+    assert!(!hidden_review_tools.spine_trim_tools_visible);
             conversation_id: ThreadId::default(),
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
@@ -2891,6 +2910,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await
+    assert!(!visible_review_tools.spine_trim_tools_visible);
         .expect("record context updates");
     let history_after_second_seed = session.clone_history().await;
     assert_eq!(
@@ -6003,10 +6023,14 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         goal_runtime: crate::goals::GoalRuntimeState::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
-        spine: config
-            .features
-            .enabled(Feature::SpineJit)
-            .then(|| TokioMutex::new(SpineSessionState::new())),
+        spine: (config.features.enabled(Feature::SpineJit)
+            || config.features.enabled(Feature::SpineTrim))
+        .then(|| {
+            TokioMutex::new(SpineSessionState::new_with_features(
+                config.features.enabled(Feature::SpineJit),
+                config.features.enabled(Feature::SpineTrim),
+            ))
+        }),
         spine_pressure_prompt_state: Mutex::new(Default::default()),
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -7903,10 +7927,14 @@ where
         goal_runtime: crate::goals::GoalRuntimeState::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
-        spine: config
-            .features
-            .enabled(Feature::SpineJit)
-            .then(|| TokioMutex::new(SpineSessionState::new())),
+        spine: (config.features.enabled(Feature::SpineJit)
+            || config.features.enabled(Feature::SpineTrim))
+        .then(|| {
+            TokioMutex::new(SpineSessionState::new_with_features(
+                config.features.enabled(Feature::SpineJit),
+                config.features.enabled(Feature::SpineTrim),
+            ))
+        }),
         spine_pressure_prompt_state: Mutex::new(Default::default()),
         next_internal_sub_id: AtomicU64::new(0),
     });
@@ -15581,9 +15609,35 @@ async fn custom_and_tool_search_outputs_commit_as_completed_toolcalls() {
             config
                 .features
                 .enable(Feature::SpineJit)
+    assert!(
+        !function_output_text(&visible_history[1]).contains("[TRIM_ID:"),
+        "cleared target output must replace the whole visible body, including the trim tag"
+    );
+    assert!(
+        !function_output_text(&visible_history[1]).contains(&long_text),
+        "cleared target output must not retain the original long body"
+    );
                 .expect("enable spine feature");
         },
     )
+    let next_prompt_history = session
+        .clone_history()
+        .await
+        .for_prompt(&turn_context.model_info.input_modalities);
+    assert_eq!(
+        function_output_text_by_call_id(&next_prompt_history, "long-tool"),
+        "[Old tool result content cleared]",
+        "next LLM-visible prompt history must see only the cleared placeholder for the target"
+    );
+    assert!(
+        !function_output_text_by_call_id(&next_prompt_history, "long-tool").contains("[TRIM_ID:"),
+        "next LLM-visible prompt history must not retain the cleared target trim tag"
+    );
+    assert!(
+        !function_output_text_by_call_id(&next_prompt_history, "long-tool").contains(&long_text),
+        "next LLM-visible prompt history must not retain the cleared target body"
+    );
+
     .await;
     let rollout_path =
         attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
@@ -15609,6 +15663,226 @@ async fn custom_and_tool_search_outputs_commit_as_completed_toolcalls() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&search_request))
         .await
         .expect("record tool-search request");
+    assert_eq!(
+        function_output_text_by_call_id(&replayed_visible, "long-tool"),
+        "[Old tool result content cleared]",
+        "replayed h(PS) must see only the cleared placeholder for the target"
+    );
+}
+
+#[tokio::test]
+async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree() {
+    let (mut source_session, source_context, _source_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTrim)
+                    .expect("enable spine trim");
+            },
+        )
+        .await;
+    let source_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut source_session).expect("source session should be unique"),
+    )
+    .await;
+    source_session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize trim-only spine");
+    let source_store = SpineStore::for_rollout(&source_rollout_path).expect("source store");
+    assert!(
+        !source_store.tree_path_for_test().exists(),
+        "spine_trim alone must not create the JIT parser tree ledger"
+    );
+    assert!(
+        !source_store.initial_checkpoint_path_for_test().exists(),
+        "spine_trim alone must not create JIT checkpoints"
+    );
+
+    let source_output =
+        function_output_with_text("source-long-tool", &"source trim-only output ".repeat(40));
+    source_session
+        .record_conversation_items(&source_context, std::slice::from_ref(&source_output))
+        .await
+        .expect("record source trim-only output");
+    source_session
+        .apply_spine_trim_projection_if_available()
+        .await
+        .expect("apply source trim projection");
+    let source_visible = source_session.clone_history().await.raw_items().to_vec();
+    assert!(
+        function_output_text(&source_visible[0]).starts_with("[TRIM_ID: trim_1]\n"),
+        "trim-only source output should receive a TRIM_ID"
+    );
+    assert!(
+        !source_store.tree_path_for_test().exists(),
+        "trim-only tagging must not create the JIT parser tree ledger"
+    );
+
+    let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout_path, 1)
+        .expect("capture trim-only boundary")
+        .expect("source sidecar exists");
+    let (mut child_session, _child_context, _child_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTrim)
+                    .expect("enable spine trim");
+            },
+        )
+        .await;
+    let child_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut child_session).expect("child session should be unique"),
+    )
+    .await;
+    let child_output =
+        function_output_with_text("child-long-tool", &"child trim-only output ".repeat(40));
+    let child_raw_items = vec![Some(source_output.clone()), Some(child_output.clone())];
+    child_session
+        .clone_spine_sidecar_for_fork(&boundary, &child_raw_items)
+        .await
+        .expect("clone trim-only sidecar and replay child suffix");
+
+    let child_store = SpineStore::for_rollout(&child_rollout_path).expect("child store");
+    assert!(
+        !child_store.tree_path_for_test().exists(),
+        "trim-only fork clone must not create the JIT parser tree ledger"
+    );
+    let child_projected = {
+        let spine = child_session.spine.as_ref().expect("child spine runtime");
+        let guard = spine.lock().await;
+        let runtime = guard.runtime().expect("child runtime should be installed");
+        runtime
+            .project_raw_history_with_trim(&[source_output, child_output])
+            .expect("project child trim-only history")
+    };
+    assert!(
+        function_output_text(&child_projected[0]).starts_with("[TRIM_ID: trim_1]\n"),
+        "forked prefix trim id should remain visible"
+    );
+    assert!(
+        function_output_text(&child_projected[1]).starts_with("[TRIM_ID: trim_3]\n"),
+        "fork replayed suffix should allocate a non-colliding trim id"
+    );
+}
+
+#[tokio::test]
+async fn spine_trim_only_head_fork_installs_runtime_without_jit_tree() {
+    let (mut source_session, source_context, _source_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTrim)
+                    .expect("enable source spine trim");
+            },
+        )
+        .await;
+    let source_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut source_session).expect("source session should be unique"),
+    )
+    .await;
+    source_session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize source trim-only spine");
+    let source_output =
+        function_output_with_text("source-long-tool", &"source head fork output ".repeat(40));
+    source_session
+        .record_conversation_items(&source_context, std::slice::from_ref(&source_output))
+        .await
+        .expect("record source output");
+    source_session
+        .apply_spine_trim_projection_if_available()
+        .await
+        .expect("tag source output");
+
+    let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout_path, 1)
+        .expect("capture source head boundary")
+        .expect("source sidecar exists");
+    let (mut child_session, child_context, _child_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineTrim)
+                    .expect("enable child spine trim");
+            },
+        )
+        .await;
+    let child_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut child_session).expect("child session should be unique"),
+    )
+    .await;
+    child_session
+        .clone_spine_sidecar_for_fork(&boundary, &[Some(source_output.clone())])
+        .await
+        .expect("clone trim-only head sidecar");
+    child_session
+        .replace_history(
+            vec![source_output.clone()],
+            child_session.reference_context_item().await,
+        )
+        .await;
+    child_session
+        .persist_rollout_items(&[RolloutItem::ResponseItem(source_output.clone())])
+        .await;
+    child_session.ensure_rollout_materialized().await;
+
+    let child_store = SpineStore::for_rollout(&child_rollout_path).expect("child store");
+    assert!(
+        !child_store.tree_path_for_test().exists(),
+        "trim-only head fork must not create the JIT parser tree ledger"
+    );
+    assert!(
+        child_session
+            .spine
+            .as_ref()
+            .expect("child spine state")
+            .lock()
+            .await
+            .runtime()
+            .is_some(),
+        "head-boundary fork must install the cloned trim runtime"
+    );
+
+    let child_output = function_output_with_text(
+        "child-long-tool",
+        &"child after head fork output ".repeat(40),
+    );
+    child_session
+        .record_conversation_items(&child_context, std::slice::from_ref(&child_output))
+        .await
+        .expect("record child output after head fork");
+    child_session
+        .apply_spine_trim_projection_if_available()
+        .await
+        .expect("tag child output after head fork");
+    let visible = child_session.clone_history().await.raw_items().to_vec();
+    assert!(
+        function_output_text_by_call_id(&visible, "source-long-tool")
+            .starts_with("[TRIM_ID: trim_1]\n"),
+        "forked source trim id should remain visible"
+    );
+    assert!(
+        function_output_text_by_call_id(&visible, "child-long-tool")
+            .starts_with("[TRIM_ID: trim_3]\n"),
+        "child output after head fork should continue the trim ledger without JIT"
+    );
+    assert!(
+        !child_store.tree_path_for_test().exists(),
+        "continuing trim-only head fork must still not create the JIT parser tree ledger"
+    );
     commit_spine_output_and_record_raw_durable_for_test(
         &session,
         &turn_context,

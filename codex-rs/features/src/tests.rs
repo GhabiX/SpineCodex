@@ -87,6 +87,32 @@ fn code_mode_only_requires_code_mode() {
 }
 
 #[test]
+fn spine_enables_jit_and_trim_without_coupling_specific_flags() {
+    let mut combined = Features::with_defaults();
+    combined.enable(Feature::Spine);
+    combined.normalize_dependencies();
+    assert!(combined.enabled(Feature::Spine));
+    assert!(combined.enabled(Feature::SpineJit));
+    assert!(combined.enabled(Feature::SpineTrim));
+
+    let mut jit_only = Features::with_defaults();
+    jit_only.enable(Feature::SpineJit);
+    jit_only.normalize_dependencies();
+    assert!(jit_only.enabled(Feature::SpineJit));
+    assert!(!jit_only.enabled(Feature::SpineTrim));
+
+    let mut trim_only = Features::with_defaults();
+    trim_only.enable(Feature::SpineTrim);
+    trim_only.normalize_dependencies();
+    assert!(!trim_only.enabled(Feature::SpineJit));
+    assert!(trim_only.enabled(Feature::SpineTrim));
+
+    assert_eq!(feature_for_key("spine"), Some(Feature::Spine));
+    assert_eq!(feature_for_key("spine_jit"), Some(Feature::SpineJit));
+    assert_eq!(feature_for_key("spine_trim"), Some(Feature::SpineTrim));
+}
+
+#[test]
 fn guardian_approval_is_stable_and_enabled_by_default() {
     let spec = Feature::GuardianApproval.info();
 

@@ -59,6 +59,7 @@ use crate::spine::parse_stack::parse_stack_msg_leaf_count;
 use crate::spine::parse_stack::parse_stack_toolcall_leaf_count;
 use crate::spine::render::VisibleItemSource;
 use crate::spine::render::memory_response_item;
+use crate::spine::render::project_raw_history_with_trim_projection;
 use crate::spine::render::project_spine_tree_nodes_visible_items;
 use crate::spine::render::read_memory_ref_body;
 #[cfg(test)]
@@ -74,6 +75,7 @@ pub(crate) const SPINE_TOOL_OPEN: &str = "open";
 pub(crate) const SPINE_TOOL_CLOSE: &str = "close";
 pub(crate) const SPINE_TOOL_NEXT: &str = "next";
 pub(crate) const SPINE_TOOL_TRIM: &str = "trim";
+pub(crate) const SPINE_TOOL_FEEDBACK: &str = "feedback";
 pub(crate) const SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX: &str =
     "Spine parser-control tools are mutually exclusive within one model response;";
 
@@ -84,6 +86,8 @@ pub(crate) struct SpineRuntime {
     parse_stack: ParseStack,
     raw_len: u64,
     raw_live: Vec<bool>,
+    jit_enabled: bool,
+    trim_enabled: bool,
     // Turn-local Spine control transaction state. Committed open/close effects
     // are represented by SpineLedgerEvents and ParseStack tokens; these maps
     // are empty on resume/rollback by design and are not part of h(PS).
@@ -359,15 +363,23 @@ pub(crate) struct LiveRootCompact {
 pub(crate) struct SpineSessionState {
     raw_len: u64,
     runtime: Option<SpineRuntime>,
+    jit_enabled: bool,
+    trim_enabled: bool,
     initial_tree_snapshot_emitted: bool,
     invalid: Option<String>,
 }
 
 impl SpineSessionState {
     pub(crate) fn new() -> Self {
+        Self::new_with_features(true, true)
+    }
+
+    pub(crate) fn new_with_features(jit_enabled: bool, trim_enabled: bool) -> Self {
         Self {
             raw_len: 0,
             runtime: None,
+            jit_enabled,
+            trim_enabled,
             initial_tree_snapshot_emitted: false,
             invalid: None,
         }
@@ -402,6 +414,8 @@ impl SpineSessionState {
     ) -> Result<(), SpineError> {
         drop(self.runtime.take());
         if let Some(runtime) = runtime.as_mut() {
+            runtime.set_jit_enabled(self.jit_enabled);
+            runtime.set_trim_enabled(self.trim_enabled);
             runtime.acquire_writer_lock()?;
         }
         self.raw_len = raw_len;
@@ -467,7 +481,14 @@ impl SpineSessionState {
             return Err(err);
         }
         if self.runtime.is_none() {
-            self.runtime = Some(SpineRuntime::load_or_create(rollout_path, self.raw_len)?);
+            let mut runtime = SpineRuntime::load_or_create_with_jit(
+                rollout_path,
+                self.raw_len,
+                self.jit_enabled,
+            )?;
+            runtime.set_jit_enabled(self.jit_enabled);
+            runtime.set_trim_enabled(self.trim_enabled);
+            self.runtime = Some(runtime);
         }
         Ok(())
     }
@@ -484,6 +505,9 @@ impl SpineSessionState {
         let Some(runtime) = self.runtime.as_ref() else {
             return Ok(None);
         };
+        if !runtime.jit_enabled() {
+            return Ok(None);
+        }
         let snapshot = runtime.build_tree_snapshot()?;
         self.initial_tree_snapshot_emitted = true;
         Ok(Some(snapshot))
@@ -492,8 +516,21 @@ impl SpineSessionState {
 
 impl SpineRuntime {
     pub(crate) fn load_or_create(rollout_path: &Path, raw_len: u64) -> Result<Self, SpineError> {
+        Self::load_or_create_with_jit(rollout_path, raw_len, true)
+    }
+
+    pub(crate) fn load_or_create_with_jit(
+        rollout_path: &Path,
+        raw_len: u64,
+        jit_enabled: bool,
+    ) -> Result<Self, SpineError> {
         let store = SpineStore::load_or_create_for_writer(rollout_path)?;
-        if !store.tree_path().exists() {
+        if !jit_enabled {
+            let raw_len_usize = usize::try_from(raw_len)
+                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
+            return Self::load_trim_only(store, vec![true; raw_len_usize]);
+        }
+        if jit_enabled && !store.tree_path().exists() {
             store.append_event(&SpineLedgerEvent::Init { raw_start: 0 })?;
             store.append_event(&SpineLedgerEvent::Open {
                 child: NodeId::root_epoch(1).child(1),
@@ -505,7 +542,31 @@ impl SpineRuntime {
                 open_context_source: None,
             })?;
         }
-        Self::load(store, raw_len)
+        let mut runtime = Self::load(store, raw_len)?;
+        runtime.set_jit_enabled(jit_enabled);
+        Ok(runtime)
+    }
+
+    fn load_trim_only(store: SpineStore, raw_live: Vec<bool>) -> Result<Self, SpineError> {
+        let ledger = SpineLedgerCache::new(Vec::new(), Vec::new(), store.trim_events()?)?;
+        Ok(Self {
+            store,
+            ledger,
+            parse_stack: ParseStack::new(),
+            raw_len: u64::try_from(raw_live.len())
+                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
+            raw_live,
+            jit_enabled: false,
+            trim_enabled: true,
+            open_requests: BTreeMap::new(),
+            control_call_ids: BTreeSet::new(),
+            tree_call_ids: BTreeSet::new(),
+            ordinary_tool_requests: BTreeMap::new(),
+            #[cfg(test)]
+            pending_tool_responses: BTreeMap::new(),
+            pending: None,
+            pressure_baselines: BTreeMap::new(),
+        })
     }
 
     pub(crate) fn load_for_rollout_items(
@@ -530,8 +591,35 @@ impl SpineRuntime {
         raw_items: &[Option<ResponseItem>],
         rollback_cuts: &[usize],
     ) -> Result<Option<Self>, SpineError> {
+        Self::load_for_rollout_items_for_writer_with_jit(
+            rollout_path,
+            raw_items,
+            rollback_cuts,
+            true,
+        )
+    }
+
+    pub(crate) fn load_for_rollout_items_for_writer_with_jit(
+        rollout_path: &Path,
+        raw_items: &[Option<ResponseItem>],
+        rollback_cuts: &[usize],
+        jit_enabled: bool,
+    ) -> Result<Option<Self>, SpineError> {
         if !SpineStore::has_for_rollout(rollout_path)? {
             return Ok(None);
+        }
+        if !jit_enabled {
+            if !rollback_cuts.is_empty() {
+                return Err(SpineError::InvalidStore(
+                    "spine_trim-only replay does not support rollback cuts".to_string(),
+                ));
+            }
+            let raw_live = raw_items.iter().map(Option::is_some).collect();
+            let runtime = Self::load_trim_only(
+                SpineStore::for_rollout(rollout_path)?.with_writer_lock()?,
+                raw_live,
+            )?;
+            return Ok(Some(runtime));
         }
         let runtime = Self::load_for_rollout_items_from_store(
             SpineStore::for_rollout(rollout_path)?.with_writer_lock()?,
@@ -730,6 +818,8 @@ impl SpineRuntime {
             raw_len: u64::try_from(raw_live.len())
                 .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
             raw_live,
+            jit_enabled: true,
+            trim_enabled: true,
             open_requests: BTreeMap::new(),
             control_call_ids: BTreeSet::new(),
             tree_call_ids: BTreeSet::new(),
@@ -829,6 +919,8 @@ impl SpineRuntime {
             raw_len: u64::try_from(raw_live.len())
                 .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
             raw_live,
+            jit_enabled: true,
+            trim_enabled: true,
             open_requests: BTreeMap::new(),
             control_call_ids: BTreeSet::new(),
             tree_call_ids: BTreeSet::new(),
@@ -849,11 +941,13 @@ impl SpineRuntime {
         &self,
         annotations: &BTreeMap<NodeId, String>,
     ) -> Result<String, SpineError> {
+        self.ensure_jit_enabled("Spine tree render")?;
         self.parse_stack
             .render_tree_with_context_annotations(annotations)
     }
 
     pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineError> {
+        self.ensure_jit_enabled("Spine tree snapshot")?;
         let nodes = self.parse_stack.tree_snapshot_nodes()?;
         let active_node_id = self.parse_stack.current_cursor_id()?.as_path();
         Ok(SpineTreeUpdateEvent {
@@ -863,7 +957,12 @@ impl SpineRuntime {
         })
     }
 
+    pub(crate) fn append_feedback_markdown(&self, entry: &str) -> Result<(), SpineError> {
+        self.store.append_feedback_markdown(entry)
+    }
+
     pub(crate) fn current_open_index(&self) -> Result<usize, SpineError> {
+        self.ensure_jit_enabled("Spine current open index")?;
         Ok(self.parse_stack.current_open_meta()?.index)
     }
 
@@ -897,6 +996,9 @@ impl SpineRuntime {
     }
 
     pub(crate) fn open_node_context_projections(&self) -> Vec<SpineOpenNodeContextProjection> {
+        if !self.jit_enabled {
+            return Vec::new();
+        }
         self.parse_stack
             .live_open_metas()
             .into_iter()
@@ -967,6 +1069,27 @@ impl SpineRuntime {
         SpineArchive::new(self.store.root.clone())
     }
 
+    pub(crate) fn jit_enabled(&self) -> bool {
+        self.jit_enabled
+    }
+
+    pub(crate) fn set_jit_enabled(&mut self, enabled: bool) {
+        self.jit_enabled = enabled;
+    }
+
+    fn ensure_jit_enabled(&self, operation: &str) -> Result<(), SpineError> {
+        if self.jit_enabled {
+            return Ok(());
+        }
+        Err(SpineError::InvalidStore(format!(
+            "{operation} requires spine_jit"
+        )))
+    }
+
+    pub(crate) fn set_trim_enabled(&mut self, enabled: bool) {
+        self.trim_enabled = enabled;
+    }
+
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
         let count = u64::try_from(count)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
@@ -987,6 +1110,7 @@ impl SpineRuntime {
         estimated_live_suffix_tokens: Option<i64>,
         observed_context_index: usize,
     ) -> Result<bool, SpineError> {
+        self.ensure_jit_enabled("Spine open context baseline")?;
         let Some(open_meta) = self.parse_stack.current_open_meta_opt() else {
             return Ok(false);
         };
@@ -1029,6 +1153,9 @@ impl SpineRuntime {
         context_index: usize,
         item: &ResponseItem,
     ) -> Result<(), SpineError> {
+        if !self.jit_enabled {
+            return Ok(());
+        }
         let context_index = u64::try_from(context_index)
             .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
         let msg = PendingMsg {
@@ -1155,6 +1282,9 @@ impl SpineRuntime {
         toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
+        if !self.jit_enabled {
+            return self.observe_completed_toolcall_for_trim(toolcall, raw_items);
+        }
         let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
         let toolcall_seq = self.append_cached_event(event)?;
         self.push_completed_toolcall_token(segments)?;
@@ -1177,6 +1307,7 @@ impl SpineRuntime {
         toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<bool, SpineError> {
+        self.ensure_jit_enabled("Spine pending toolcall abort")?;
         if self
             .pending
             .as_ref()
@@ -1209,6 +1340,7 @@ impl SpineRuntime {
         toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<bool, SpineError> {
+        self.ensure_jit_enabled("Spine ordinary toolcall commit")?;
         if self
             .pending
             .as_ref()
@@ -1243,6 +1375,9 @@ impl SpineRuntime {
         tool_responses: &[(String, u64, usize)],
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
+        if !self.jit_enabled {
+            return self.observe_recorded_tool_output_group_for_trim(tool_responses, raw_items);
+        }
         let mut response_segments = Vec::new();
         let mut request_call_ids = Vec::new();
         for (call_id, raw_ordinal, context_index) in tool_responses {
@@ -1301,6 +1436,40 @@ impl SpineRuntime {
             SpineError::InvalidEvent("completed toolcall missing call id".to_string())
         })?;
         self.observe_completed_toolcall_with_raw_items(
+            CompletedToolCall {
+                call_id,
+                request_call_ids,
+                segments,
+            },
+            raw_items,
+        )
+    }
+
+    fn observe_recorded_tool_output_group_for_trim(
+        &mut self,
+        tool_responses: &[(String, u64, usize)],
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        let mut segments = Vec::new();
+        let mut request_call_ids = Vec::new();
+        for (call_id, raw_ordinal, context_index) in tool_responses {
+            if !request_call_ids.contains(call_id) {
+                request_call_ids.push(call_id.clone());
+            }
+            segments.push(CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Response,
+                raw_ordinal: *raw_ordinal,
+                context_index: *context_index,
+            });
+        }
+        if request_call_ids.is_empty() || segments.is_empty() {
+            return Ok(());
+        }
+        segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
+        let call_id = request_call_ids.first().cloned().ok_or_else(|| {
+            SpineError::InvalidEvent("completed trim toolcall missing call id".to_string())
+        })?;
+        self.observe_completed_toolcall_for_trim(
             CompletedToolCall {
                 call_id,
                 request_call_ids,
@@ -1555,6 +1724,9 @@ impl SpineRuntime {
         toolcall_seq: u64,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
+        if !self.trim_enabled {
+            return Ok(());
+        }
         if raw_items.is_empty() {
             return Ok(());
         }
@@ -1592,16 +1764,36 @@ impl SpineRuntime {
         Ok(())
     }
 
+    fn observe_completed_toolcall_for_trim(
+        &mut self,
+        toolcall: CompletedToolCall,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        let toolcall_seq = self.ledger.next_trim_seq;
+        self.append_cached_trim_event(TrimEvent::ToolCallBoundary {
+            toolcall_seq,
+            raw_boundary: self.raw_len,
+            raw_live_hash: hash_raw_live(&self.raw_live),
+        })?;
+        self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)
+    }
+
     fn current_trim_projection(&self) -> Result<TrimProjection, SpineError> {
-        trim_projection_from_events(
-            &self.ledger.trim_events,
-            &self.raw_live,
-            self.ledger.next_event_seq,
-            None,
-        )
+        if !self.trim_enabled {
+            return Ok(TrimProjection::default());
+        }
+        let current_seq = if self.jit_enabled {
+            self.ledger.next_event_seq
+        } else {
+            self.ledger.next_trim_seq
+        };
+        trim_projection_from_events(&self.ledger.trim_events, &self.raw_live, current_seq, None)
     }
 
     fn latest_live_completed_toolcall_seq(&self) -> Result<Option<u64>, SpineError> {
+        if !self.jit_enabled {
+            return self.latest_live_trim_toolcall_seq();
+        }
         let raw_mask = RawMask::new(&self.raw_live);
         for event in self.ledger.events.iter().rev() {
             if event.seq >= self.ledger.next_event_seq {
@@ -1611,6 +1803,19 @@ impl SpineRuntime {
                 && event.allowed_by(raw_mask)?
             {
                 return Ok(Some(event.seq));
+            }
+        }
+        Ok(None)
+    }
+
+    fn latest_live_trim_toolcall_seq(&self) -> Result<Option<u64>, SpineError> {
+        let raw_mask = RawMask::new(&self.raw_live);
+        for event in self.ledger.trim_events.iter().rev() {
+            let TrimEvent::ToolCallBoundary { toolcall_seq, .. } = event.event else {
+                continue;
+            };
+            if event.allowed_by(raw_mask)? {
+                return Ok(Some(toolcall_seq));
             }
         }
         Ok(None)
@@ -2886,6 +3091,7 @@ impl SpineRuntime {
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
+        self.ensure_jit_enabled("Spine history materialization")?;
         let trim_projection = self.current_trim_projection()?;
         render_parse_stack_to_context_with_trim_projection(
             &self.parse_stack,
@@ -2894,10 +3100,21 @@ impl SpineRuntime {
         )
     }
 
+    pub(crate) fn project_raw_history_with_trim(
+        &self,
+        raw_items: &[ResponseItem],
+    ) -> Result<Vec<ResponseItem>, SpineError> {
+        let trim_projection = self.current_trim_projection()?;
+        project_raw_history_with_trim_projection(raw_items, &trim_projection)
+    }
+
     pub(crate) fn validate_raw_coverage(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
+        if !self.jit_enabled {
+            return Ok(());
+        }
         let (
             spine_control_call_ids,
             spine_tree_call_ids,
@@ -3025,6 +3242,9 @@ impl SpineRuntime {
     }
 
     pub(crate) fn live_root_compacts(&self) -> Result<Vec<LiveRootCompact>, SpineError> {
+        if !self.jit_enabled {
+            return Ok(Vec::new());
+        }
         let raw_mask = RawMask::new(&self.raw_live);
         let mut compacts = Vec::new();
         for event in &self.ledger.events {
@@ -3126,6 +3346,7 @@ fn trim_projection_from_events(
             continue;
         }
         match &event.event {
+            TrimEvent::ToolCallBoundary { .. } => {}
             TrimEvent::Candidate {
                 trim_id,
                 toolcall_seq,

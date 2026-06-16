@@ -649,7 +649,9 @@ impl ThreadManager {
             history,
             InterruptedTurnHistoryMarker::from_config(&options.config),
         );
-        if options.config.features.enabled(Feature::SpineJit) {
+        if options.config.features.enabled(Feature::SpineJit)
+            || options.config.features.enabled(Feature::SpineTrim)
+        {
             options.spine_fork_source_boundary = source_rollout_path
                 .as_deref()
                 .map(|source_rollout_path| {
@@ -908,7 +910,10 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
         let spine_source_rollout_path = match &history {
-            InitialHistory::Resumed(resumed) if config.features.enabled(Feature::SpineJit) => {
+            InitialHistory::Resumed(resumed)
+                if config.features.enabled(Feature::SpineJit)
+                    || config.features.enabled(Feature::SpineTrim) =>
+            {
                 resumed.rollout_path.clone()
             }
             _ => None,

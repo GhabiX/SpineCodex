@@ -399,11 +399,18 @@ fn collect_tool_executors(
     }
 
     executors.push(Arc::new(PlanHandler));
-    if config.spine_tools_visible {
+    if config.spine_jit_tools_visible
+        || config.spine_trim_tools_visible
+        || config.spine_feedback_tool_visible
+    {
         executors.extend(
-            SpineHandler::all()
-                .into_iter()
-                .map(|handler| Arc::new(handler) as Arc<dyn CoreToolRuntime>),
+            SpineHandler::all(
+                config.spine_jit_tools_visible,
+                config.spine_trim_tools_visible,
+                config.spine_feedback_tool_visible,
+            )
+            .into_iter()
+            .map(|handler| Arc::new(handler) as Arc<dyn CoreToolRuntime>),
         );
     }
     if config.goal_tools {
@@ -521,14 +528,14 @@ fn collect_tool_executors(
     }
 
     for tool in params.dynamic_tools {
-        if config.spine_jit
+        if (config.spine_jit || config.spine_trim)
             && tool
                 .namespace
                 .as_deref()
                 .is_some_and(crate::is_spine_reserved_tool_namespace)
         {
             return Err(CodexErr::InvalidRequest(format!(
-                "dynamic tool namespace `spine` is reserved when spine_jit is enabled: {}",
+                "dynamic tool namespace `spine` is reserved when a Spine feature is enabled: {}",
                 tool.name
             )));
         }
@@ -609,14 +616,14 @@ fn append_extension_tool_executors(
 
     for executor in executors.iter().cloned() {
         let tool_name = executor.tool_name();
-        if config.spine_jit
+        if (config.spine_jit || config.spine_trim)
             && tool_name
                 .namespace
                 .as_deref()
                 .is_some_and(crate::is_spine_reserved_tool_namespace)
         {
             return Err(CodexErr::InvalidRequest(format!(
-                "extension tool namespace `spine` is reserved when spine_jit is enabled: {tool_name}"
+                "extension tool namespace `spine` is reserved when a Spine feature is enabled: {tool_name}"
             )));
         }
         if !reserved_tool_names.insert(tool_name.clone()) {

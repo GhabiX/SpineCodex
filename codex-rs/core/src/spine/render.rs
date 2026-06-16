@@ -95,6 +95,24 @@ pub(super) fn render_parse_stack_to_context_with_memory_body_and_trim_projection
     Ok(out)
 }
 
+pub(super) fn project_raw_history_with_trim_projection(
+    raw_items: &[ResponseItem],
+    trim_projection: &TrimProjection,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    raw_items
+        .iter()
+        .enumerate()
+        .map(|(raw_ordinal, item)| {
+            let raw_ordinal = u64::try_from(raw_ordinal)
+                .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+            let Some(target) = trim_projection.target_for_raw_ordinal(raw_ordinal) else {
+                return Ok(item.clone());
+            };
+            projected_tool_response_item(item, target)
+        })
+        .collect()
+}
+
 pub(super) fn project_parse_stack_visible_items(
     ps: &ParseStack,
 ) -> Result<Vec<VisibleItemRef>, SpineError> {

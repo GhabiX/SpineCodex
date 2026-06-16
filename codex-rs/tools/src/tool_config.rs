@@ -109,7 +109,10 @@ pub struct ToolsConfig {
     pub search_tool: bool,
     pub namespace_tools: bool,
     pub spine_jit: bool,
-    pub spine_tools_visible: bool,
+    pub spine_trim: bool,
+    pub spine_jit_tools_visible: bool,
+    pub spine_trim_tools_visible: bool,
+    pub spine_feedback_tool_visible: bool,
     pub tool_suggest: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
@@ -182,6 +185,7 @@ impl ToolsConfig {
         let include_goal_tools = features.enabled(Feature::Goals);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_spine_jit = features.enabled(Feature::SpineJit);
+        let include_spine_trim = features.enabled(Feature::SpineTrim);
         let include_collab_tools = include_multi_agent_v2 || features.enabled(Feature::Collab);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_search_tool =
@@ -251,7 +255,10 @@ impl ToolsConfig {
             search_tool: include_search_tool,
             namespace_tools: true,
             spine_jit: include_spine_jit,
-            spine_tools_visible: include_spine_jit,
+            spine_trim: include_spine_trim,
+            spine_jit_tools_visible: include_spine_jit,
+            spine_trim_tools_visible: include_spine_trim,
+            spine_feedback_tool_visible: false,
             tool_suggest: include_tool_suggest,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
@@ -286,13 +293,24 @@ impl ToolsConfig {
         if !namespace_tools {
             self.namespace_tools = false;
             self.spine_jit = false;
-            self.spine_tools_visible = false;
+            self.spine_trim = false;
+            self.spine_jit_tools_visible = false;
+            self.spine_trim_tools_visible = false;
+            self.spine_feedback_tool_visible = false;
         }
         self
     }
 
     pub fn with_spine_tools_visible(mut self, visible: bool) -> Self {
-        self.spine_tools_visible = self.spine_jit && visible;
+        self.spine_jit_tools_visible = self.spine_jit && visible;
+        self.spine_trim_tools_visible = self.spine_trim && visible;
+        self.spine_feedback_tool_visible =
+            self.spine_feedback_tool_visible && self.spine_jit_tools_visible;
+        self
+    }
+
+    pub fn with_spine_feedback_tool_visible(mut self, visible: bool) -> Self {
+        self.spine_feedback_tool_visible = self.spine_jit_tools_visible && visible;
         self
     }
 

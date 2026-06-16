@@ -195,6 +195,11 @@ pub(super) enum TrimResponseKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum TrimEvent {
+    ToolCallBoundary {
+        toolcall_seq: u64,
+        raw_boundary: u64,
+        raw_live_hash: String,
+    },
     Candidate {
         trim_id: String,
         toolcall_seq: u64,
@@ -575,6 +580,11 @@ impl LoggedTrimEvent {
 impl TrimEvent {
     pub(super) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         match self {
+            TrimEvent::ToolCallBoundary {
+                raw_boundary,
+                raw_live_hash,
+                ..
+            } => raw_mask.prefix_hash_matches(*raw_boundary, raw_live_hash),
             TrimEvent::Candidate { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
             TrimEvent::Cleared {
                 raw_boundary,

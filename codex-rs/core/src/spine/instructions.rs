@@ -1,6 +1,6 @@
 use std::path::Path;
 
-pub(crate) const SPINE_VIEW_INSTRUCTIONS: &str = r#"<spine_view>
+pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
 Spine is the primary control frame for nontrivial work: task management,
 attention allocation, context compaction, resume quality, and cost control.
 
@@ -35,28 +35,34 @@ Conventions:
 - `<spine_memory>` provides continuity from closed work.
 - Choose at most one of `open`, `close`, or `next` in one assistant response.
 - `spine.tree` is a read-only inspector for unclear tree/cursor state.
-- `spine.trim` is optional conservative cleanup for tagged tool responses from
-  the previous completed toolcall only. First use the previous tool result for
-  the active task. If a previous tool response starts with `[TRIM_ID: ...]`, use
-  `spine.trim` with `op: "snip"` only when, after considering the main task, you
-  are confident that exact response will not be needed again. Do not trim merely
-  because the output is long. Do not trim if the response may still be needed
-  for correctness, debugging, citations, synthesis, or verification. If trim
-  misses, do not retry that `TRIM_ID`.
 
 </spine_view>
 "#;
 
+pub(crate) const SPINE_TRIM_INSTRUCTIONS: &str = r#"<spine_trim>
+`spine.trim` is optional conservative cleanup for tagged tool responses from
+the previous completed toolcall only. First use the previous tool result for
+the active task. If a previous tool response starts with `[TRIM_ID: ...]`, use
+`spine.trim` with `op: "snip"` only when, after considering the main task, you
+are confident that exact response will not be needed again. Do not trim merely
+because the output is long. Do not trim if the response may still be needed for
+correctness, debugging, citations, synthesis, or verification. If trim misses,
+do not retry that `TRIM_ID`.
+
+</spine_trim>
+"#;
+
 const SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME: &str = "spine_instruction.md";
-const SPINE_VIEW_SEPARATOR_AND_START_MARKER: &str = "\n\n<spine_view>";
+const SPINE_VIEW_START_MARKERS: [&str; 2] = ["\n\n<spine_view>", "\n\n<spine_trim>"];
 
 pub(crate) fn append_spine_view_instructions(
     mut base_instructions: String,
-    enabled: bool,
+    spine_jit_enabled: bool,
+    spine_trim_enabled: bool,
     codex_home: &Path,
     dev_debug_prompt_overrides: bool,
 ) -> String {
-    if !enabled {
+    if !spine_jit_enabled && !spine_trim_enabled {
         return base_instructions;
     }
 
@@ -64,16 +70,20 @@ pub(crate) fn append_spine_view_instructions(
         let override_path = codex_home.join(SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME);
         match std::fs::read_to_string(override_path) {
             Ok(contents) if !contents.is_empty() => contents,
-            _ => SPINE_VIEW_INSTRUCTIONS.to_string(),
+            _ => joined_spine_instructions(spine_jit_enabled, spine_trim_enabled),
         }
     } else {
-        SPINE_VIEW_INSTRUCTIONS.to_string()
+        joined_spine_instructions(spine_jit_enabled, spine_trim_enabled)
     };
 
     if base_instructions.contains(&instructions) {
         return base_instructions;
     }
-    if let Some(start) = base_instructions.rfind(SPINE_VIEW_SEPARATOR_AND_START_MARKER) {
+    if let Some(start) = SPINE_VIEW_START_MARKERS
+        .into_iter()
+        .filter_map(|marker| base_instructions.rfind(marker))
+        .min()
+    {
         base_instructions.truncate(start);
     }
 
@@ -82,6 +92,17 @@ pub(crate) fn append_spine_view_instructions(
     }
     base_instructions.push_str(&instructions);
     base_instructions
+}
+
+fn joined_spine_instructions(spine_jit_enabled: bool, spine_trim_enabled: bool) -> String {
+    let mut sections = Vec::new();
+    if spine_jit_enabled {
+        sections.push(SPINE_JIT_INSTRUCTIONS);
+    }
+    if spine_trim_enabled {
+        sections.push(SPINE_TRIM_INSTRUCTIONS);
+    }
+    sections.join("\n\n")
 }
 
 #[cfg(test)]
