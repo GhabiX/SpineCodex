@@ -32,6 +32,21 @@ fn feature_on_appends_spine_view_instructions_once() {
 }
 
 #[test]
+fn spine_view_instructions_describe_conservative_trim_policy() {
+    let instructions = SPINE_VIEW_INSTRUCTIONS;
+    assert!(instructions.contains("spine.trim"));
+    assert!(instructions.contains("previous completed toolcall only"));
+    assert!(instructions.contains("active task"));
+    assert!(instructions.contains("main task"));
+    assert!(instructions.contains("Do not trim merely"));
+    assert!(instructions.contains("because the output is long"));
+    assert!(instructions.contains("correctness"));
+    assert!(instructions.contains("debugging"));
+    assert!(instructions.contains("verification"));
+    assert!(instructions.contains("do not retry that `TRIM_ID`"));
+}
+
+#[test]
 fn feature_on_does_not_append_spine_view_twice() {
     let base = format!("base instructions\n\n{SPINE_VIEW_INSTRUCTIONS}");
     let codex_home = tempfile::tempdir().expect("tempdir");
