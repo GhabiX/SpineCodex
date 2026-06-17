@@ -14809,15 +14809,11 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
         "ordinary tool output must not be replaced by Spine mutual-exclusion rejection: {shell_output}"
     );
     assert!(
-        !follow_up
-            .to_string()
-            .contains("Spine opened after this tool output is recorded"),
+        !follow_up.to_string().contains("Spine open accepted."),
         "spine.open body must not run before conflict detection: {follow_up}"
     );
     assert!(
-        !follow_up
-            .to_string()
-            .contains("Spine will close the current node"),
+        !follow_up.to_string().contains("Spine next accepted."),
         "spine.next body must not run before conflict detection: {follow_up}"
     );
     for call_id in ["multi-open", "multi-next", "multi-shell"] {
@@ -15116,15 +15112,11 @@ async fn spine_tree_runs_normally_with_conflicting_spine_controls() -> anyhow::R
         "spine.tree output must not be replaced by conflict rejection: {tree_output}"
     );
     assert!(
-        !follow_up
-            .to_string()
-            .contains("Spine opened after this tool output is recorded"),
+        !follow_up.to_string().contains("Spine open accepted."),
         "spine.open body must not run before conflict detection: {follow_up}"
     );
     assert!(
-        !follow_up
-            .to_string()
-            .contains("Spine will close the current node"),
+        !follow_up.to_string().contains("Spine next accepted."),
         "spine.next body must not run before conflict detection: {follow_up}"
     );
 
@@ -15267,7 +15259,13 @@ async fn spine_control_with_ordinary_tool_call_commits_grouped_toolcall_leaf() -
     let follow_up = &requests[2];
     assert!(follow_up.has_function_call("mixed-close"));
     assert!(follow_up.has_function_call("mixed-shell"));
-    assert!(follow_up.function_call_output_text("mixed-close").is_some());
+    let close_text = follow_up
+        .function_call_output_text("mixed-close")
+        .expect("follow-up should include the committed close output");
+    assert!(
+        close_text == "Spine close accepted.",
+        "grouped close follow-up must carry the simple control output: {close_text}"
+    );
     assert!(
         follow_up
             .function_call_output_text("mixed-shell")
@@ -15398,6 +15396,23 @@ async fn completed_spine_control_overlay_does_not_duplicate_followup_prompt() ->
     assert_eq!(
         output_count, 1,
         "completed Spine control output must appear exactly once from durable h(PS), not stale overlay: {follow_up}"
+    );
+    let output_text = follow_up_items
+        .iter()
+        .find_map(|item| {
+            (item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(serde_json::Value::as_str)
+                    == Some("overlay-open-once"))
+            .then(|| item.to_string())
+        })
+        .expect("follow-up should include overlay-open-once output");
+    assert!(
+        output_text.contains("Spine open accepted."),
+        "follow-up must preserve the simple control output: {follow_up}"
+    );
+    assert!(
+        !output_text.contains("Cursor: 1.1.1"),
+        "control tool output should not carry rendered tree state: {follow_up}"
     );
 
     let rollout_path = test

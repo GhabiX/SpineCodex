@@ -266,7 +266,7 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                    "Spine opened after this tool output is recorded.".to_string(),
+                    "Spine open accepted.".to_string(),
                     Some(true),
                 )))
             }
@@ -277,7 +277,7 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                    "Spine closed.".to_string(),
+                    "Spine close accepted.".to_string(),
                     Some(true),
                 )))
             }
@@ -288,8 +288,7 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                    "Spine will close the current node, then continue in a new sibling after this tool output is recorded."
-                        .to_string(),
+                    "Spine next accepted.".to_string(),
                     Some(true),
                 )))
             }
