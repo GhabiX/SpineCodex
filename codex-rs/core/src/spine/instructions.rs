@@ -16,11 +16,16 @@ Before nontrivial work, choose the matching boundary:
 - Use `open` for a focused boundary before work grows, or for a focused
   subproblem inside the current phase. Close the child when resolved.
 - Use `next` when moving from a completed phase to a peer phase.
-- Use `close` when the current phase is complete and there is no peer phase to start.
+- Use `close` when the current scope should be compacted now and no peer phase
+  needs to start immediately.
 
-`open` creates a child. `close` and `next` compact completed work and reduce
-future prompt context. Choose based on the semantic boundary, not raw context
-size alone.
+`open` creates a child. `close` and `next` compact the useful state from the
+current working context and reduce future prompt context. Do not wait for
+perfect completion if the current working context is becoming noisy,
+repetitive, or dominated by stale exploration; close or next early and keep
+the useful state. The compact memory is authored by you in the dedicated
+compact pass; runtime only persists it. Choose based on the semantic boundary
+and context hygiene, not raw context size alone.
 If the child already has a user-relevant conclusion, surface it before closing.
 
 Conventions:

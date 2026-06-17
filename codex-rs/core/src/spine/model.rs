@@ -297,6 +297,10 @@ pub(super) struct MemRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) close_context_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) closed_source_suffix_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) closed_memory_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) open_context_source: Option<ContextBaselineSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) memory_output_tokens: Option<i64>,
@@ -434,6 +438,10 @@ pub(super) struct MemoryRef {
     pub(super) open_context_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) close_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) closed_source_suffix_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) closed_memory_context_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) open_context_source: Option<ContextBaselineSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

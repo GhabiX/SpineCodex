@@ -783,8 +783,8 @@ struct TreeRenderRow {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct NodeAccounting {
-    live_context_tokens: Option<i64>,
-    live_input_tokens: Option<i64>,
+    closed_source_suffix_tokens: Option<i64>,
+    closed_memory_context_tokens: Option<i64>,
     memory_output_tokens: Option<i64>,
 }
 
@@ -1073,21 +1073,13 @@ fn visible_tree_row_ids(
 
 fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
     Some(NodeAccounting {
-        live_context_tokens: memory
-            .close_context_tokens
-            .zip(memory.open_context_tokens)
-            .map(|(close, open)| close.saturating_sub(open))
-            .filter(|tokens| *tokens > 0),
-        live_input_tokens: memory
-            .close_input_tokens
-            .zip(memory.open_input_tokens)
-            .map(|(close, open)| close.saturating_sub(open))
-            .filter(|tokens| *tokens > 0),
+        closed_source_suffix_tokens: memory.closed_source_suffix_tokens,
+        closed_memory_context_tokens: memory.closed_memory_context_tokens,
         memory_output_tokens: memory.memory_output_tokens.filter(|tokens| *tokens > 0),
     })
     .filter(|accounting| {
-        accounting.live_context_tokens.is_some()
-            || accounting.live_input_tokens.is_some()
+        accounting.closed_source_suffix_tokens.is_some()
+            || accounting.closed_memory_context_tokens.is_some()
             || accounting.memory_output_tokens.is_some()
     })
 }
@@ -1095,32 +1087,41 @@ fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
 fn snapshot_accounting(accounting: &NodeAccounting) -> Option<SpineTreeNodeAccountingSnapshot> {
     Some(SpineTreeNodeAccountingSnapshot {
         current_node_context_tokens: None,
-        current_node_context_unavailable: None,
+        current_node_context_problem: None,
         current_node_context_baseline_source: None,
-        raw_context_tokens: accounting.live_context_tokens,
-        raw_input_tokens: accounting.live_input_tokens,
+        closed_source_suffix_tokens: accounting.closed_source_suffix_tokens,
+        closed_memory_context_tokens: accounting.closed_memory_context_tokens,
         memory_output_tokens: accounting.memory_output_tokens,
     })
     .filter(|accounting| {
-        accounting.raw_context_tokens.is_some()
-            || accounting.raw_input_tokens.is_some()
+        accounting.closed_source_suffix_tokens.is_some()
+            || accounting.closed_memory_context_tokens.is_some()
             || accounting.memory_output_tokens.is_some()
     })
 }
 
 fn format_node_accounting(accounting: &NodeAccounting) -> Option<String> {
-    let raw_tokens = accounting
-        .live_context_tokens
-        .or(accounting.live_input_tokens);
-    match (raw_tokens, accounting.memory_output_tokens) {
-        (Some(raw), Some(memory)) => Some(format!(
-            "(~{} raw -> ~{} memory)",
-            format_si_suffix(raw),
+    match (
+        accounting.closed_source_suffix_tokens,
+        accounting.closed_memory_context_tokens,
+        accounting.memory_output_tokens,
+    ) {
+        (Some(source), Some(memory), _) => Some(format!(
+            "(~{} source -> ~{} memory context)",
+            format_si_suffix(source),
             format_si_suffix(memory)
         )),
-        (Some(raw), None) => Some(format!("(~{} raw)", format_si_suffix(raw))),
-        (None, Some(memory)) => Some(format!("(~{} memory)", format_si_suffix(memory))),
-        (None, None) => None,
+        (Some(source), None, Some(output)) => Some(format!(
+            "(~{} source -> ~{} memory output)",
+            format_si_suffix(source),
+            format_si_suffix(output)
+        )),
+        (Some(source), None, None) => Some(format!("(~{} source)", format_si_suffix(source))),
+        (None, Some(memory), _) => Some(format!("(~{} memory context)", format_si_suffix(memory))),
+        (None, None, Some(output)) => {
+            Some(format!("(~{} memory output)", format_si_suffix(output)))
+        }
+        (None, None, None) => None,
     }
 }
 
@@ -1217,6 +1218,8 @@ pub(super) fn event_to_token(
                     mem.close_input_tokens,
                     mem.open_context_tokens,
                     mem.close_context_tokens,
+                    mem.closed_source_suffix_tokens,
+                    mem.closed_memory_context_tokens,
                     mem.open_context_source,
                     mem.memory_output_tokens,
                 ),
@@ -1251,6 +1254,8 @@ pub(super) fn event_to_token(
                     mem.close_input_tokens,
                     mem.open_context_tokens,
                     mem.close_context_tokens,
+                    mem.closed_source_suffix_tokens,
+                    mem.closed_memory_context_tokens,
                     mem.open_context_source,
                     mem.memory_output_tokens,
                 ),

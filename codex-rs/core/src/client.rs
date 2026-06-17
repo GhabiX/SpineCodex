@@ -154,14 +154,17 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResponsesToolChoice {
     Auto,
-    None,
+    Function(&'static str),
 }
 
 impl ResponsesToolChoice {
-    fn as_wire_value(self) -> &'static str {
+    fn into_wire_value(self) -> serde_json::Value {
         match self {
-            Self::Auto => "auto",
-            Self::None => "none",
+            Self::Auto => serde_json::Value::String("auto".to_string()),
+            Self::Function(name) => serde_json::json!({
+                "type": "function",
+                "name": name,
+            }),
         }
     }
 }
@@ -765,7 +768,7 @@ impl ModelClient {
             instructions: instructions.clone(),
             input,
             tools,
-            tool_choice: tool_choice.as_wire_value().to_string(),
+            tool_choice: tool_choice.into_wire_value(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             store: provider.is_azure_responses_endpoint(),

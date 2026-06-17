@@ -1785,6 +1785,8 @@ fn validate_checkpoint_memory_ref_for_committed_mem(
         || memory.close_input_tokens != mem.close_input_tokens
         || memory.open_context_tokens != mem.open_context_tokens
         || memory.close_context_tokens != mem.close_context_tokens
+        || memory.closed_source_suffix_tokens != mem.closed_source_suffix_tokens
+        || memory.closed_memory_context_tokens != mem.closed_memory_context_tokens
         || memory.open_context_source != mem.open_context_source
         || memory.memory_output_tokens != mem.memory_output_tokens
         || checkpoint_body_path != mem_body_path

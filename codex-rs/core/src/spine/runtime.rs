@@ -242,6 +242,15 @@ struct OpenContextBaseline {
     source: ContextBaselineSource,
 }
 
+fn supports_closed_source_suffix_accounting(source: ContextBaselineSource) -> bool {
+    matches!(
+        source,
+        ContextBaselineSource::ProviderAtOpen
+            | ContextBaselineSource::RootCompactHandoff
+            | ContextBaselineSource::CheckpointReplay
+    )
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
     Open {
@@ -2463,6 +2472,8 @@ impl SpineRuntime {
             mem.close_input_tokens,
             mem.open_context_tokens,
             mem.close_context_tokens,
+            mem.closed_source_suffix_tokens,
+            mem.closed_memory_context_tokens,
             mem.open_context_source,
             mem.memory_output_tokens,
         );
@@ -2872,6 +2883,8 @@ impl SpineRuntime {
             close_input_tokens: token_metadata.close_input_tokens,
             open_context_tokens: None,
             close_context_tokens: token_metadata.close_context_tokens,
+            closed_source_suffix_tokens: None,
+            closed_memory_context_tokens: None,
             open_context_source: None,
             memory_output_tokens: None,
             body_path: format!("{BODY_DIR}/{compact_id}.md"),
@@ -2890,6 +2903,8 @@ impl SpineRuntime {
             mem.close_input_tokens,
             mem.open_context_tokens,
             mem.close_context_tokens,
+            mem.closed_source_suffix_tokens,
+            mem.closed_memory_context_tokens,
             mem.open_context_source,
             mem.memory_output_tokens,
         );
@@ -3016,6 +3031,15 @@ impl SpineRuntime {
         );
         let body_path = format!("{BODY_DIR}/{compact_id}.md");
         let open_context_baseline = self.open_context_baseline_for(open_meta);
+        let open_input_tokens = open_context_baseline
+            .and_then(|baseline| baseline.input_tokens)
+            .or(open_meta.open_input_tokens);
+        let open_context_tokens = open_context_baseline.map(|baseline| baseline.context_tokens);
+        let closed_source_suffix_tokens = open_context_baseline
+            .filter(|baseline| supports_closed_source_suffix_accounting(baseline.source))
+            .map(|baseline| baseline.context_tokens)
+            .zip(token_baselines.context_tokens)
+            .and_then(|(open, close)| (close >= open).then_some(close - open));
         let mem = MemRecord {
             compact_id,
             kind: MemKind::Suffix,
@@ -3025,12 +3049,12 @@ impl SpineRuntime {
             context_start: close_compact.source_context_range.start,
             context_end: close_compact.source_context_range.end,
             raw_live_hash: None,
-            open_input_tokens: open_context_baseline
-                .and_then(|baseline| baseline.input_tokens)
-                .or(open_meta.open_input_tokens),
+            open_input_tokens,
             close_input_tokens: token_baselines.input_tokens,
-            open_context_tokens: open_context_baseline.map(|baseline| baseline.context_tokens),
+            open_context_tokens,
             close_context_tokens: token_baselines.context_tokens,
+            closed_source_suffix_tokens,
+            closed_memory_context_tokens: None,
             open_context_source: open_context_baseline.map(|baseline| baseline.source),
             memory_output_tokens: close_compact.memory_output_tokens,
             body_path,
@@ -3979,6 +4003,8 @@ fn mem_record_matches(existing: &MemRecord, expected: &MemRecord) -> bool {
         && existing.close_input_tokens == expected.close_input_tokens
         && existing.open_context_tokens == expected.open_context_tokens
         && existing.close_context_tokens == expected.close_context_tokens
+        && existing.closed_source_suffix_tokens == expected.closed_source_suffix_tokens
+        && existing.closed_memory_context_tokens == expected.closed_memory_context_tokens
         && existing.open_context_source == expected.open_context_source
         && existing.memory_output_tokens == expected.memory_output_tokens
         && existing.body_path == expected.body_path

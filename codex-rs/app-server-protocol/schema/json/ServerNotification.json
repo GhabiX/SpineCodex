@@ -2867,11 +2867,11 @@
       ],
       "type": "string"
     },
-    "SpineNodeContextUnavailableReason": {
+    "SpineNodeContextProblem": {
       "enum": [
         "missing_current_usage",
         "missing_open_context_baseline",
-        "non_positive_delta",
+        "coordinate_mismatch",
         "corrupt_pressure_metadata"
       ],
       "type": "string"
@@ -2932,10 +2932,10 @@
             "null"
           ]
         },
-        "currentNodeContextUnavailable": {
+        "currentNodeContextProblem": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SpineNodeContextUnavailableReason"
+              "$ref": "#/definitions/SpineNodeContextProblem"
             },
             {
               "type": "null"
@@ -2949,14 +2949,14 @@
             "null"
           ]
         },
-        "rawContextTokens": {
+        "closedSourceSuffixTokens": {
           "format": "int64",
           "type": [
             "integer",
             "null"
           ]
         },
-        "rawInputTokens": {
+        "closedMemoryContextTokens": {
           "format": "int64",
           "type": [
             "integer",

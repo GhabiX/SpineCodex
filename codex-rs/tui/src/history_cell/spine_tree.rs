@@ -689,29 +689,37 @@ fn format_node_accounting(node: &SpineTreeNode, _active: bool) -> Option<String>
         node.status,
         SpineTreeNodeStatus::Live | SpineTreeNodeStatus::Opened
     ) {
-        if let Some(tokens) = positive_tokens(accounting.current_node_context_tokens) {
+        if let Some(tokens) = non_negative_tokens(accounting.current_node_context_tokens) {
             return Some(format!("(~{} inclusive context)", format_si_suffix(tokens)));
         }
-        if let Some(reason) = accounting.current_node_context_unavailable {
+        if let Some(problem) = accounting.current_node_context_problem {
             return Some(format!(
-                "(context unavailable: {})",
-                context_unavailable_reason_label(reason)
+                "(context problem: {})",
+                context_problem_label(problem)
             ));
         }
     }
     match (
-        positive_tokens(accounting.raw_context_tokens)
-            .or_else(|| positive_tokens(accounting.raw_input_tokens)),
+        non_negative_tokens(accounting.closed_source_suffix_tokens),
+        non_negative_tokens(accounting.closed_memory_context_tokens),
         positive_tokens(accounting.memory_output_tokens),
     ) {
-        (Some(raw), Some(memory)) => Some(format!(
-            "(~{} raw -> ~{} memory)",
-            format_si_suffix(raw),
+        (Some(source), Some(memory), _) => Some(format!(
+            "(~{} source -> ~{} memory context)",
+            format_si_suffix(source),
             format_si_suffix(memory)
         )),
-        (Some(raw), None) => Some(format!("(~{} raw)", format_si_suffix(raw))),
-        (None, Some(memory)) => Some(format!("(~{} memory)", format_si_suffix(memory))),
-        (None, None) => None,
+        (Some(source), None, Some(output)) => Some(format!(
+            "(~{} source -> ~{} memory output)",
+            format_si_suffix(source),
+            format_si_suffix(output)
+        )),
+        (Some(source), None, None) => Some(format!("(~{} source)", format_si_suffix(source))),
+        (None, Some(memory), _) => Some(format!("(~{} memory context)", format_si_suffix(memory))),
+        (None, None, Some(output)) => {
+            Some(format!("(~{} memory output)", format_si_suffix(output)))
+        }
+        (None, None, None) => None,
     }
 }
 
@@ -721,20 +729,25 @@ fn positive_tokens(tokens: Option<i64>) -> Option<i64> {
 }
 
 #[cfg(debug_assertions)]
-fn context_unavailable_reason_label(
-    reason: codex_app_server_protocol::SpineNodeContextUnavailableReason,
+fn non_negative_tokens(tokens: Option<i64>) -> Option<i64> {
+    tokens.filter(|tokens| *tokens >= 0)
+}
+
+#[cfg(debug_assertions)]
+fn context_problem_label(
+    problem: codex_app_server_protocol::SpineNodeContextProblem,
 ) -> &'static str {
-    match reason {
-        codex_app_server_protocol::SpineNodeContextUnavailableReason::MissingCurrentUsage => {
+    match problem {
+        codex_app_server_protocol::SpineNodeContextProblem::MissingCurrentUsage => {
             "missing current usage"
         }
-        codex_app_server_protocol::SpineNodeContextUnavailableReason::MissingOpenContextBaseline => {
+        codex_app_server_protocol::SpineNodeContextProblem::MissingOpenContextBaseline => {
             "missing open baseline"
         }
-        codex_app_server_protocol::SpineNodeContextUnavailableReason::NonPositiveDelta => {
-            "non-positive delta"
+        codex_app_server_protocol::SpineNodeContextProblem::CoordinateMismatch => {
+            "coordinate mismatch"
         }
-        codex_app_server_protocol::SpineNodeContextUnavailableReason::CorruptPressureMetadata => {
+        codex_app_server_protocol::SpineNodeContextProblem::CorruptPressureMetadata => {
             "corrupt pressure metadata"
         }
     }
@@ -825,30 +838,30 @@ mod tests {
 
     fn accounting(
         current_node_context_tokens: Option<i64>,
-        raw_context_tokens: Option<i64>,
-        raw_input_tokens: Option<i64>,
+        closed_source_suffix_tokens: Option<i64>,
+        closed_memory_context_tokens: Option<i64>,
         memory_output_tokens: Option<i64>,
     ) -> Option<SpineTreeNodeAccounting> {
         Some(SpineTreeNodeAccounting {
             current_node_context_tokens,
-            current_node_context_unavailable: None,
+            current_node_context_problem: None,
             current_node_context_baseline_source: None,
-            raw_context_tokens,
-            raw_input_tokens,
+            closed_source_suffix_tokens,
+            closed_memory_context_tokens,
             memory_output_tokens,
         })
     }
 
     #[cfg(debug_assertions)]
-    fn unavailable_accounting(
-        reason: codex_app_server_protocol::SpineNodeContextUnavailableReason,
+    fn problem_accounting(
+        problem: codex_app_server_protocol::SpineNodeContextProblem,
     ) -> Option<SpineTreeNodeAccounting> {
         Some(SpineTreeNodeAccounting {
             current_node_context_tokens: None,
-            current_node_context_unavailable: Some(reason),
+            current_node_context_problem: Some(problem),
             current_node_context_baseline_source: None,
-            raw_context_tokens: None,
-            raw_input_tokens: None,
+            closed_source_suffix_tokens: None,
+            closed_memory_context_tokens: None,
             memory_output_tokens: None,
         })
     }
@@ -1375,47 +1388,61 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
         insta::assert_snapshot!(rendered, @r###"
         • Debug Spine Tree  current 2.1
-          ├ 1 previous compacted (~7.50K raw -> ~1.25K memory)
+          ├ 1 previous compacted (~7.50K source -> ~1.25K memory output)
           ├ 2 outer open (~232K inclusive context)
           └ 2.1 active current (~182K inclusive context)
         "###);
-        assert!(rendered.contains("1 previous compacted (~7.50K raw -> ~1.25K memory)"));
+        assert!(rendered.contains("1 previous compacted (~7.50K source -> ~1.25K memory output)"));
         assert!(rendered.contains("2 outer open (~232K inclusive context)"));
         assert!(rendered.contains("2.1 active current (~182K inclusive context)"));
 
         let raw = render_lines(&cell.raw_lines()).join("\n");
         insta::assert_snapshot!(raw, @r###"
         Debug Spine Tree current 2.1
-        1 previous compacted (~7.50K raw -> ~1.25K memory)
+        1 previous compacted (~7.50K source -> ~1.25K memory output)
         2 outer open (~232K inclusive context)
         * 2.1 active current (~182K inclusive context)
         "###);
-        assert!(raw.contains("1 previous compacted (~7.50K raw -> ~1.25K memory)"));
+        assert!(raw.contains("1 previous compacted (~7.50K source -> ~1.25K memory output)"));
         assert!(raw.contains("2 outer open (~232K inclusive context)"));
         assert!(raw.contains("* 2.1 active current (~182K inclusive context)"));
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    fn debug_renders_context_unavailable_reason() {
+    fn debug_renders_context_problem() {
         let mut opened = node("2", None, Some("outer"), SpineTreeNodeStatus::Opened);
-        opened.accounting = unavailable_accounting(
-            codex_app_server_protocol::SpineNodeContextUnavailableReason::MissingOpenContextBaseline,
+        opened.accounting = problem_accounting(
+            codex_app_server_protocol::SpineNodeContextProblem::MissingOpenContextBaseline,
         );
         let mut active = node("2.1", Some("2"), Some("active"), SpineTreeNodeStatus::Live);
         active.accounting = accounting(Some(181_546), None, None, None);
         let cell = new_manual_debug_spine_tree_snapshot(snapshot(vec![opened, active]));
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
-        assert!(rendered.contains("2 outer open (context unavailable: missing open baseline)"));
+        assert!(rendered.contains("2 outer open (context problem: missing open baseline)"));
         assert!(rendered.contains("2.1 active current (~182K inclusive context)"));
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    fn omits_empty_context_accounting() {
+    fn debug_renders_open_context_zero_value() {
         let mut active = node("2.1", None, Some("active"), SpineTreeNodeStatus::Live);
-        active.accounting = accounting(Some(0), Some(0), Some(0), Some(0));
+        active.accounting = accounting(Some(0), None, None, None);
+        let cell = new_manual_debug_spine_tree_snapshot(snapshot(vec![active]));
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        assert!(rendered.contains("2.1 active current (~0 inclusive context)"));
+        assert!(rendered.contains("~0 inclusive context"));
+        assert!(!rendered.contains("raw"));
+        assert!(!rendered.contains("memory"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_omits_absent_context_accounting() {
+        let mut active = node("2.1", None, Some("active"), SpineTreeNodeStatus::Live);
+        active.accounting = accounting(None, None, None, None);
         let cell = new_manual_debug_spine_tree_snapshot(snapshot(vec![active]));
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
@@ -1423,6 +1450,19 @@ mod tests {
         assert!(!rendered.contains("inclusive context"));
         assert!(!rendered.contains("raw"));
         assert!(!rendered.contains("memory"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_renders_closed_accounting_zero_values() {
+        let mut closed = node("1", None, Some("previous"), SpineTreeNodeStatus::Compacted);
+        closed.accounting = accounting(None, Some(0), Some(0), Some(0));
+        let cell = new_manual_debug_spine_tree_snapshot(snapshot(vec![closed]));
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        assert!(rendered.contains("1 previous compacted (~0 source -> ~0 memory context)"));
+        assert!(rendered.contains("~0 source"));
+        assert!(rendered.contains("~0 memory context"));
     }
 
     #[cfg(debug_assertions)]

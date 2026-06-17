@@ -41,6 +41,8 @@ pub struct JsonSchema {
     pub enum_values: Option<Vec<JsonValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Box<JsonSchema>>,
+    #[serde(rename = "maxItems", skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<BTreeMap<String, JsonSchema>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +109,17 @@ impl JsonSchema {
             description,
             items: Some(Box::new(items)),
             ..Default::default()
+        }
+    }
+
+    pub fn array_with_max_items(
+        items: JsonSchema,
+        description: Option<String>,
+        max_items: usize,
+    ) -> Self {
+        Self {
+            max_items: Some(max_items),
+            ..Self::array(items, description)
         }
     }
 

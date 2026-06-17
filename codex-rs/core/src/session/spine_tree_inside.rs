@@ -4,7 +4,7 @@ use crate::spine::SpineOpenNodeContextProjection;
 use crate::spine::SpineRuntime;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::spine_tree::SpineNodeContextUnavailableReason;
+use codex_protocol::spine_tree::SpineNodeContextProblem;
 use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
@@ -25,7 +25,7 @@ pub(crate) struct SpineOpenNodeInside {
     pub(crate) summary: Option<String>,
     pub(crate) baseline_tokens: Option<i64>,
     pub(crate) current_node_context_tokens: Option<i64>,
-    pub(crate) unavailable: Option<SpineNodeContextUnavailableReason>,
+    pub(crate) problem: Option<SpineNodeContextProblem>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,25 +72,25 @@ pub(crate) fn build_spine_tree_inside_view(
 pub(crate) fn node_context_tokens(
     current: Option<&TokenUsageInfo>,
     open_context_tokens: Option<i64>,
-) -> Result<Option<i64>, SpineNodeContextUnavailableReason> {
+) -> Result<i64, SpineNodeContextProblem> {
     let current = current
-        .ok_or(SpineNodeContextUnavailableReason::MissingCurrentUsage)?
+        .ok_or(SpineNodeContextProblem::MissingCurrentUsage)?
         .last_token_usage
         .tokens_in_context_window();
     let open_context_tokens =
-        open_context_tokens.ok_or(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)?;
-    let tokens = current.saturating_sub(open_context_tokens);
-    Ok((tokens > 0).then_some(tokens))
+        open_context_tokens.ok_or(SpineNodeContextProblem::MissingOpenContextBaseline)?;
+    if current < open_context_tokens {
+        return Err(SpineNodeContextProblem::CoordinateMismatch);
+    }
+    Ok(current - open_context_tokens)
 }
 
-pub(crate) fn context_unavailable_reason_label(
-    reason: SpineNodeContextUnavailableReason,
-) -> &'static str {
-    match reason {
-        SpineNodeContextUnavailableReason::MissingCurrentUsage => "missing current usage",
-        SpineNodeContextUnavailableReason::MissingOpenContextBaseline => "missing open baseline",
-        SpineNodeContextUnavailableReason::NonPositiveDelta => "non-positive delta",
-        SpineNodeContextUnavailableReason::CorruptPressureMetadata => "corrupt pressure metadata",
+pub(crate) fn context_problem_label(problem: SpineNodeContextProblem) -> &'static str {
+    match problem {
+        SpineNodeContextProblem::MissingCurrentUsage => "missing current usage",
+        SpineNodeContextProblem::MissingOpenContextBaseline => "missing open baseline",
+        SpineNodeContextProblem::CoordinateMismatch => "coordinate mismatch",
+        SpineNodeContextProblem::CorruptPressureMetadata => "corrupt pressure metadata",
     }
 }
 
@@ -102,14 +102,10 @@ fn build_open_nodes_inside(
     open_nodes
         .iter()
         .map(|open_node| {
-            let (current_node_context_tokens, unavailable) =
+            let (current_node_context_tokens, problem) =
                 match node_context_tokens(current, open_node.baseline_tokens) {
-                    Ok(Some(tokens)) => (Some(tokens), None),
-                    Ok(None) => (
-                        None,
-                        Some(SpineNodeContextUnavailableReason::NonPositiveDelta),
-                    ),
-                    Err(reason) => (None, Some(reason)),
+                    Ok(tokens) => (Some(tokens), None),
+                    Err(problem) => (None, Some(problem)),
                 };
             let node_id = open_node.node_id.to_string();
             let summary = snapshot
@@ -122,7 +118,7 @@ fn build_open_nodes_inside(
                 summary,
                 baseline_tokens: open_node.baseline_tokens,
                 current_node_context_tokens,
-                unavailable,
+                problem,
             }
         })
         .collect()
@@ -136,13 +132,10 @@ fn format_open_node_context_annotations(
         .map(|open_node| {
             let annotation = if let Some(tokens) = open_node.current_node_context_tokens {
                 format!("(~{} inclusive context)", format_si_suffix(tokens))
-            } else if let Some(reason) = open_node.unavailable {
-                format!(
-                    "(context unavailable: {})",
-                    context_unavailable_reason_label(reason)
-                )
+            } else if let Some(problem) = open_node.problem {
+                format!("(context problem: {})", context_problem_label(problem))
             } else {
-                "(context unavailable: non-positive delta)".to_string()
+                "(context problem: unknown)".to_string()
             };
             (open_node.node_id.clone(), annotation)
         })
@@ -166,21 +159,15 @@ fn annotate_open_node_contexts(
             .accounting
             .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default);
         match node_context_tokens(current, open_node.baseline_tokens) {
-            Ok(Some(tokens)) => {
+            Ok(tokens) => {
                 accounting.current_node_context_tokens = Some(tokens);
                 accounting.current_node_context_baseline_source = open_node.baseline_source;
-                accounting.current_node_context_unavailable = None;
+                accounting.current_node_context_problem = None;
             }
-            Ok(None) => {
+            Err(problem) => {
                 accounting.current_node_context_tokens = None;
                 accounting.current_node_context_baseline_source = open_node.baseline_source;
-                accounting.current_node_context_unavailable =
-                    Some(SpineNodeContextUnavailableReason::NonPositiveDelta);
-            }
-            Err(reason) => {
-                accounting.current_node_context_tokens = None;
-                accounting.current_node_context_baseline_source = open_node.baseline_source;
-                accounting.current_node_context_unavailable = Some(reason);
+                accounting.current_node_context_problem = Some(problem);
             }
         }
     }
@@ -216,4 +203,40 @@ fn format_context_window_pressure(info: Option<&SpineContextWindowInside>) -> Op
         format_si_suffix(used),
         format_si_suffix(window)
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::{TokenUsage, TokenUsageInfo};
+
+    fn token_info(input_tokens: i64, total_tokens: i64) -> TokenUsageInfo {
+        TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens,
+                total_tokens,
+                ..TokenUsage::default()
+            },
+            model_context_window: None,
+        }
+    }
+
+    #[test]
+    fn node_context_tokens_supports_zero_delta() {
+        let current = token_info(10_000, 10_000);
+        assert_eq!(
+            node_context_tokens(Some(&current), Some(10_000)).expect("delta"),
+            0
+        );
+    }
+
+    #[test]
+    fn node_context_tokens_rejects_negative_delta() {
+        let current = token_info(9_000, 9_000);
+        assert_eq!(
+            node_context_tokens(Some(&current), Some(10_000)).unwrap_err(),
+            SpineNodeContextProblem::CoordinateMismatch
+        );
+    }
 }

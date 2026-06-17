@@ -226,6 +226,12 @@ fn render_memory_archive(
     if let Some(tokens) = memory.close_context_tokens {
         out.push_str(&format!("close_context_tokens: {tokens}\n"));
     }
+    if let Some(tokens) = memory.closed_source_suffix_tokens {
+        out.push_str(&format!("closed_source_suffix_tokens: {tokens}\n"));
+    }
+    if let Some(tokens) = memory.closed_memory_context_tokens {
+        out.push_str(&format!("closed_memory_context_tokens: {tokens}\n"));
+    }
     if let Some(source) = memory.open_context_source {
         out.push_str(&format!("open_context_source: {source:?}\n"));
     }
@@ -236,6 +242,8 @@ fn render_memory_archive(
         || memory.close_input_tokens.is_some()
         || memory.open_context_tokens.is_some()
         || memory.close_context_tokens.is_some()
+        || memory.closed_source_suffix_tokens.is_some()
+        || memory.closed_memory_context_tokens.is_some()
         || memory.open_context_source.is_some()
         || memory.memory_output_tokens.is_some()
     {
@@ -378,6 +386,8 @@ pub(super) fn memory_ref(
     close_input_tokens: Option<i64>,
     open_context_tokens: Option<i64>,
     close_context_tokens: Option<i64>,
+    closed_source_suffix_tokens: Option<i64>,
+    closed_memory_context_tokens: Option<i64>,
     open_context_source: Option<crate::spine::model::ContextBaselineSource>,
     memory_output_tokens: Option<i64>,
 ) -> MemoryRef {
@@ -393,6 +403,8 @@ pub(super) fn memory_ref(
         close_input_tokens,
         open_context_tokens,
         close_context_tokens,
+        closed_source_suffix_tokens,
+        closed_memory_context_tokens,
         open_context_source,
         memory_output_tokens,
     }

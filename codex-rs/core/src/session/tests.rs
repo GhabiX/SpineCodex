@@ -143,7 +143,6 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
-use codex_protocol::spine_tree::SpineNodeContextUnavailableReason;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rmcp_client::ElicitationAction;
@@ -198,6 +197,7 @@ use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::Metric;
 use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use serial_test::serial;
 use std::path::Path;
 use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
@@ -205,6 +205,8 @@ use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+const SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME: &str = "submit_spine_memory";
 
 fn spine_summary_sse(id: &str, text: &str) -> String {
     sse(vec![ev_assistant_message(id, text), ev_completed(id)])
@@ -244,7 +246,11 @@ fn spine_compact_json_summary_sse(
     })
     .to_string();
     sse(vec![
-        ev_assistant_message(id, &compact_body),
+        ev_function_call(
+            &format!("call-{id}"),
+            SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME,
+            &compact_body,
+        ),
         ev_completed(id),
     ])
 }
@@ -257,24 +263,40 @@ fn spine_slot_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
         .collect()
 }
 
-fn assert_close_compact_tool_envelope_request(
-    request: &ResponsesRequest,
-    expected_tool_choice: &str,
-    message: &str,
-) {
+fn assert_close_compact_tool_envelope_request(request: &ResponsesRequest, message: &str) {
     let body = request.body_json();
     assert_eq!(
-        body["tool_choice"].as_str(),
-        Some(expected_tool_choice),
+        body["tool_choice"],
+        serde_json::json!({
+            "type": "function",
+            "name": SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME,
+        }),
         "{message}: unexpected close compact tool_choice"
     );
-    assert!(
-        body["tools"]
-            .as_array()
-            .expect("tools should be an array")
-            .len()
-            > 0,
-        "{message}: close compact must keep ordinary model-visible tools for prompt caching"
+    let tools = body["tools"].as_array().expect("tools should be an array");
+    assert!(!tools.is_empty(), "{message}: close compact tools missing");
+    let carrier_tool = tools.last().expect("carrier tool");
+    assert_eq!(
+        carrier_tool.get("type").and_then(serde_json::Value::as_str),
+        Some("function"),
+        "{message}: close compact carrier must be a Responses function tool"
+    );
+    assert_eq!(
+        carrier_tool.get("name").and_then(serde_json::Value::as_str),
+        Some(SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME),
+        "{message}: close compact must append the memory carrier tool"
+    );
+    assert_eq!(
+        carrier_tool
+            .get("strict")
+            .and_then(serde_json::Value::as_bool),
+        Some(true),
+        "{message}: close compact carrier tool should be strict"
+    );
+    assert_eq!(
+        body["parallel_tool_calls"].as_bool(),
+        Some(false),
+        "{message}: close compact must disable parallel tool calls for the forced carrier"
     );
     assert!(
         body["text"].get("format").is_none(),
@@ -292,25 +314,34 @@ fn assert_close_compact_tool_envelope_request(
     );
 }
 
-fn assert_close_compact_none_tool_choice_request(request: &ResponsesRequest, message: &str) {
-    assert_close_compact_tool_envelope_request(request, "none", message);
+fn assert_close_compact_forced_carrier_request(request: &ResponsesRequest, message: &str) {
+    assert_close_compact_tool_envelope_request(request, message);
 }
 
-fn assert_close_compact_reuses_request_tools(
+fn assert_close_compact_reuses_request_tools_prefix(
     source_request: &ResponsesRequest,
     target_request: &ResponsesRequest,
     message: &str,
 ) {
+    let source_body = source_request.body_json();
+    let target_body = target_request.body_json();
+    let source_tools = source_body["tools"]
+        .as_array()
+        .expect("source tools should be an array");
+    let target_tools = target_body["tools"]
+        .as_array()
+        .expect("target tools should be an array");
     assert_eq!(
-        target_request.body_json()["tools"],
-        source_request.body_json()["tools"],
-        "{message}: close compact must reuse exact tools from the sampling request that produced the close/next call"
+        target_tools.len(),
+        source_tools.len() + 1,
+        "{message}: close compact must append exactly one carrier tool"
     );
-    assert_eq!(
-        target_request.body_json()["parallel_tool_calls"],
-        source_request.body_json()["parallel_tool_calls"],
-        "{message}: close compact should keep the sampling request parallel tool-call setting"
-    );
+    for (index, source_tool) in source_tools.iter().enumerate() {
+        assert_eq!(
+            &target_tools[index], source_tool,
+            "{message}: close compact must preserve ordinary sampling tool prefix"
+        );
+    }
 }
 
 fn assert_close_compact_reuses_sampling_request_tools(
@@ -318,8 +349,8 @@ fn assert_close_compact_reuses_sampling_request_tools(
     compact_request: &ResponsesRequest,
     message: &str,
 ) {
-    assert_close_compact_none_tool_choice_request(compact_request, message);
-    assert_close_compact_reuses_request_tools(sampling_request, compact_request, message);
+    assert_close_compact_forced_carrier_request(compact_request, message);
+    assert_close_compact_reuses_request_tools_prefix(sampling_request, compact_request, message);
 }
 
 async fn prime_model_client_turn_state(
@@ -2793,10 +2824,12 @@ async fn spine_tools_hidden_until_sidecar_runtime_ready() {
 
     let before_init = session.new_default_turn().await;
     assert!(before_init.tools_config.spine_jit);
+    assert!(!before_init.tools_config.spine_trim);
     assert!(
         !before_init.tools_config.spine_jit_tools_visible,
         "feature-on alone must not expose Spine parser-control tools"
     );
+    assert!(!before_init.tools_config.spine_trim_tools_visible);
 
     attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
     session
@@ -2806,10 +2839,12 @@ async fn spine_tools_hidden_until_sidecar_runtime_ready() {
 
     let after_init = session.new_default_turn().await;
     assert!(after_init.tools_config.spine_jit);
+    assert!(!after_init.tools_config.spine_trim);
     assert!(
         after_init.tools_config.spine_jit_tools_visible,
         "Spine parser-control tools become visible after sidecar/runtime initialization"
     );
+    assert!(!after_init.tools_config.spine_trim_tools_visible);
 }
 
 #[tokio::test]
@@ -2823,12 +2858,10 @@ async fn review_turn_inherits_spine_tool_visibility_from_parent_turn() {
                     .features
                     .enable(Feature::SpineJit)
                     .expect("enable spine feature");
-    assert!(!before_init.tools_config.spine_trim);
             },
         )
         .await;
 
-    assert!(!before_init.tools_config.spine_trim_tools_visible);
     assert!(
         !hidden_parent_turn_context
             .tools_config
@@ -2845,12 +2878,11 @@ async fn review_turn_inherits_spine_tool_visibility_from_parent_turn() {
             .spine_trim_tools_visible,
     );
     assert!(hidden_review_tools.spine_jit);
-    assert!(!after_init.tools_config.spine_trim);
     assert!(
         !hidden_review_tools.spine_jit_tools_visible,
         "review turn must not expose Spine parser-control tools before parent readiness"
     );
-    assert!(!after_init.tools_config.spine_trim_tools_visible);
+    assert!(!hidden_review_tools.spine_trim_tools_visible);
 
     attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
     session
@@ -2863,9 +2895,6 @@ async fn review_turn_inherits_spine_tool_visibility_from_parent_turn() {
         ready_parent_turn_context
             .tools_config
             .spine_jit_tools_visible,
-        ready_parent_turn_context
-            .tools_config
-            .spine_trim_tools_visible,
         "parent turn should become visible after sidecar/runtime initialization"
     );
     let visible_review_tools = crate::session::review::apply_review_spine_tool_visibility(
@@ -2873,12 +2902,16 @@ async fn review_turn_inherits_spine_tool_visibility_from_parent_turn() {
         ready_parent_turn_context
             .tools_config
             .spine_jit_tools_visible,
+        ready_parent_turn_context
+            .tools_config
+            .spine_trim_tools_visible,
     );
     assert!(visible_review_tools.spine_jit);
     assert!(
         visible_review_tools.spine_jit_tools_visible,
         "review turn must inherit Spine parser-control visibility from a ready parent turn"
     );
+    assert!(!visible_review_tools.spine_trim_tools_visible);
 }
 
 #[tokio::test]
@@ -2888,7 +2921,6 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
 
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-    assert!(!hidden_review_tools.spine_trim_tools_visible);
             conversation_id: ThreadId::default(),
             history: rollout_items,
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
@@ -2910,7 +2942,6 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await
-    assert!(!visible_review_tools.spine_trim_tools_visible);
         .expect("record context updates");
     let history_after_second_seed = session.clone_history().await;
     assert_eq!(
@@ -7291,6 +7322,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
 }
 
 #[tokio::test]
+#[serial(spine_writer_lock)]
 async fn shutdown_releases_spine_writer_lock_without_dropping_session_arc() {
     let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -7300,6 +7332,10 @@ async fn shutdown_releases_spine_writer_lock_without_dropping_session_arc() {
                 .features
                 .enable(Feature::SpineJit)
                 .expect("enable spine feature");
+            config
+                .features
+                .enable(Feature::SpineTrim)
+                .expect("enable spine trim");
         },
     )
     .await;
@@ -9223,9 +9259,9 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         Some(session.conversation_id.to_string().as_str()),
         "spine.close compact should reuse the current thread prompt cache key"
     );
-    assert_close_compact_none_tool_choice_request(
+    assert_close_compact_forced_carrier_request(
         compact_request,
-        "spine.close compact should use the no-tool compact envelope",
+        "spine.close compact should use the forced carrier compact envelope",
     );
     assert!(
         compact_request.body_json()["instructions"]
@@ -9426,20 +9462,19 @@ async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_pr
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, mut turn_context, rx) =
-        make_session_and_context_with_auth_and_config_and_rx(
-            CodexAuth::from_api_key("Test API Key"),
-            Vec::new(),
-            |config| {
-                config
-                    .features
-                    .enable(Feature::SpineJit)
-                    .expect("enable spine feature");
-                config.model_provider.base_url = Some(base_url.clone());
-                config.model_provider.supports_websockets = false;
-            },
-        )
-        .await;
+    let (mut session, mut turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
     Arc::get_mut(&mut turn_context)
         .expect("turn context should be unique")
         .model_info
@@ -9513,9 +9548,9 @@ async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_pr
     .expect("commit close output and record raw evidence");
 
     let compact_request = compact_mock.single_request();
-    assert_close_compact_none_tool_choice_request(
+    assert_close_compact_forced_carrier_request(
         &compact_request,
-        "spine.close compact with text-only model should use the no-tool compact envelope",
+        "spine.close compact with text-only model should use the forced carrier compact envelope",
     );
     assert!(
         compact_request
@@ -9564,20 +9599,19 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
-    let (mut session, mut turn_context, rx) =
-        make_session_and_context_with_auth_and_config_and_rx(
-            CodexAuth::from_api_key("Test API Key"),
-            Vec::new(),
-            |config| {
-                config
-                    .features
-                    .enable(Feature::SpineJit)
-                    .expect("enable spine feature");
-                config.model_provider.base_url = Some(base_url.clone());
-                config.model_provider.supports_websockets = false;
-            },
-        )
-        .await;
+    let (mut session, mut turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
     Arc::get_mut(&mut turn_context)
         .expect("turn context should be unique")
         .model_info
@@ -9656,9 +9690,9 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
     .expect("commit close output and record raw evidence");
 
     let compact_request = compact_mock.single_request();
-    assert_close_compact_none_tool_choice_request(
+    assert_close_compact_forced_carrier_request(
         &compact_request,
-        "spine.close compact with text-only suffix image should use the no-tool compact envelope",
+        "spine.close compact with text-only suffix image should use the forced carrier compact envelope",
     );
     assert!(
         compact_request
@@ -9820,9 +9854,9 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_close_compact_none_tool_choice_request(
+    assert_close_compact_forced_carrier_request(
         &compact_request,
-        "spine.next close compact should use the no-tool compact envelope",
+        "spine.next close compact should use the forced carrier compact envelope",
     );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
@@ -11168,9 +11202,9 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_close_compact_none_tool_choice_request(
+    assert_close_compact_forced_carrier_request(
         &compact_request,
-        "failed compact request should use the no-tool compact envelope",
+        "failed compact request should use the forced carrier compact envelope",
     );
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -11477,9 +11511,9 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert_close_compact_none_tool_choice_request(
+    assert_close_compact_forced_carrier_request(
         &requests[0],
-        "spine.next suffix compact should use the no-tool compact envelope",
+        "spine.next suffix compact should use the forced carrier compact envelope",
     );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),
@@ -11921,7 +11955,7 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
     assert_close_compact_reuses_sampling_request_tools(
         &requests[0],
         &requests[1],
-        "spine compact failure request should reuse sampling tools while denying tool calls",
+        "spine compact failure request should reuse sampling tools while forcing submit_spine_memory",
     );
     test.codex.ensure_rollout_materialized().await;
     test.codex.flush_rollout().await?;
@@ -11956,7 +11990,7 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_close_compact_reuses_sampling_tools_with_none_tool_choice() -> anyhow::Result<()> {
+async fn spine_close_compact_reuses_sampling_tools_with_forced_carrier() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config
@@ -12029,7 +12063,7 @@ async fn spine_close_compact_reuses_sampling_tools_with_none_tool_choice() -> an
     assert_close_compact_reuses_sampling_request_tools(
         &requests[0],
         &requests[1],
-        "successful spine.close compact should reuse sampling tools while denying tool calls",
+        "successful spine.close compact should reuse sampling tools while forcing submit_spine_memory",
     );
 
     Ok(())
@@ -12094,6 +12128,17 @@ async fn spine_close_bridge_can_close_initial_root_child() {
     );
     let compact_request = compact_mock.single_request();
     assert!(!compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
+    let compact_body = compact_request.body_json();
+    let carrier_tool = compact_body["tools"]
+        .as_array()
+        .expect("tools should be an array")
+        .last()
+        .expect("carrier tool");
+    assert_eq!(
+        carrier_tool["parameters"]["properties"]["slots"]["maxItems"],
+        serde_json::json!(0),
+        "zero-slot close compact carrier schema should only allow an empty slots array"
+    );
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -12873,9 +12918,9 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert_close_compact_none_tool_choice_request(
+    assert_close_compact_forced_carrier_request(
         &requests[0],
-        "spine.close suffix compact should use the no-tool compact envelope",
+        "spine.close suffix compact should use the forced carrier compact envelope",
     );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),
@@ -14834,9 +14879,12 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
         );
         let materialized_output = function_output_text_by_call_id(&materialized, call_id);
         assert!(
-            materialized_output.starts_with("[TRIM_ID: trim_")
-                && materialized_output.contains("mutually exclusive"),
-            "visible h(PS) should tag long conflict output for next-turn trim: {materialized_output}"
+            materialized_output.contains("mutually exclusive"),
+            "visible h(PS) should keep the conflict rejection output: {materialized_output}"
+        );
+        assert!(
+            !materialized_output.starts_with("[TRIM_ID: trim_"),
+            "short conflict rejection output should not be forced into trim tagging: {materialized_output}"
         );
     }
     assert_eq!(
@@ -15119,9 +15167,12 @@ async fn spine_tree_runs_normally_with_conflicting_spine_controls() -> anyhow::R
         );
         let materialized_output = function_output_text_by_call_id(&materialized, call_id);
         assert!(
-            materialized_output.starts_with("[TRIM_ID: trim_")
-                && materialized_output.contains("mutually exclusive"),
-            "visible h(PS) should tag long conflict output for next-turn trim: {materialized_output}"
+            materialized_output.contains("mutually exclusive"),
+            "visible h(PS) should keep the conflict rejection output: {materialized_output}"
+        );
+        assert!(
+            !materialized_output.starts_with("[TRIM_ID: trim_"),
+            "short conflict rejection output should not be forced into trim tagging: {materialized_output}"
         );
     }
     assert_eq!(
@@ -15504,6 +15555,10 @@ async fn spine_trim_rewrites_visible_history_and_preserves_raw_tool_output() {
                 .features
                 .enable(Feature::SpineJit)
                 .expect("enable spine feature");
+            config
+                .features
+                .enable(Feature::SpineTrim)
+                .expect("enable spine trim");
         },
     )
     .await;
@@ -15570,8 +15625,34 @@ async fn spine_trim_rewrites_visible_history_and_preserves_raw_tool_output() {
         function_output_text(&visible_history[1]),
         "[Old tool result content cleared]"
     );
+    assert!(
+        !function_output_text(&visible_history[1]).contains("[TRIM_ID:"),
+        "cleared target output must replace the whole visible body, including the trim tag"
+    );
+    assert!(
+        !function_output_text(&visible_history[1]).contains(&long_text),
+        "cleared target output must not retain the original long body"
+    );
     assert_eq!(visible_history[2], trim_request);
     assert_eq!(visible_history[3], trim_output);
+
+    let next_prompt_history = session
+        .clone_history()
+        .await
+        .for_prompt(&turn_context.model_info.input_modalities);
+    assert_eq!(
+        function_output_text_by_call_id(&next_prompt_history, "long-tool"),
+        "[Old tool result content cleared]",
+        "next LLM-visible prompt history must see only the cleared placeholder for the target"
+    );
+    assert!(
+        !function_output_text_by_call_id(&next_prompt_history, "long-tool").contains("[TRIM_ID:"),
+        "next LLM-visible prompt history must not retain the cleared target trim tag"
+    );
+    assert!(
+        !function_output_text_by_call_id(&next_prompt_history, "long-tool").contains(&long_text),
+        "next LLM-visible prompt history must not retain the cleared target body"
+    );
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -15598,71 +15679,6 @@ async fn spine_trim_rewrites_visible_history_and_preserves_raw_tool_output() {
         .materialize_history(&raw_items)
         .expect("materialize replayed trim projection");
     assert_eq!(replayed_visible, visible_history);
-}
-
-#[tokio::test]
-async fn custom_and_tool_search_outputs_commit_as_completed_toolcalls() {
-    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
-        CodexAuth::from_api_key("Test API Key"),
-        Vec::new(),
-        |config| {
-            config
-                .features
-                .enable(Feature::SpineJit)
-    assert!(
-        !function_output_text(&visible_history[1]).contains("[TRIM_ID:"),
-        "cleared target output must replace the whole visible body, including the trim tag"
-    );
-    assert!(
-        !function_output_text(&visible_history[1]).contains(&long_text),
-        "cleared target output must not retain the original long body"
-    );
-                .expect("enable spine feature");
-        },
-    )
-    let next_prompt_history = session
-        .clone_history()
-        .await
-        .for_prompt(&turn_context.model_info.input_modalities);
-    assert_eq!(
-        function_output_text_by_call_id(&next_prompt_history, "long-tool"),
-        "[Old tool result content cleared]",
-        "next LLM-visible prompt history must see only the cleared placeholder for the target"
-    );
-    assert!(
-        !function_output_text_by_call_id(&next_prompt_history, "long-tool").contains("[TRIM_ID:"),
-        "next LLM-visible prompt history must not retain the cleared target trim tag"
-    );
-    assert!(
-        !function_output_text_by_call_id(&next_prompt_history, "long-tool").contains(&long_text),
-        "next LLM-visible prompt history must not retain the cleared target body"
-    );
-
-    .await;
-    let rollout_path =
-        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
-            .await;
-
-    let custom_request = custom_tool_call("custom-tool");
-    let custom_output = custom_tool_output("custom-tool");
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&custom_request))
-        .await
-        .expect("record custom request");
-    commit_spine_output_and_record_raw_durable_for_test(
-        &session,
-        &turn_context,
-        custom_output.clone(),
-    )
-    .await
-    .expect("commit custom output");
-
-    let search_request = tool_search_call("search-tool");
-    let search_output = tool_search_output("search-tool");
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&search_request))
-        .await
-        .expect("record tool-search request");
     assert_eq!(
         function_output_text_by_call_id(&replayed_visible, "long-tool"),
         "[Old tool result content cleared]",
@@ -15883,6 +15899,45 @@ async fn spine_trim_only_head_fork_installs_runtime_without_jit_tree() {
         !child_store.tree_path_for_test().exists(),
         "continuing trim-only head fork must still not create the JIT parser tree ledger"
     );
+}
+
+#[tokio::test]
+async fn custom_and_tool_search_outputs_commit_as_completed_toolcalls() {
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let custom_request = custom_tool_call("custom-tool");
+    let custom_output = custom_tool_output("custom-tool");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&custom_request))
+        .await
+        .expect("record custom request");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        custom_output.clone(),
+    )
+    .await
+    .expect("commit custom output");
+
+    let search_request = tool_search_call("search-tool");
+    let search_output = tool_search_output("search-tool");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&search_request))
+        .await
+        .expect("record tool-search request");
     commit_spine_output_and_record_raw_durable_for_test(
         &session,
         &turn_context,
@@ -16232,7 +16287,11 @@ async fn spine_status_overlay_is_injected_into_sampling_prompt_only() -> anyhow:
         .expect("status overlay should be present");
     assert!(status.contains(r#"cursor="1.1""#), "{status}");
     assert!(status.contains(r#"parent="1""#), "{status}");
-    assert!(status.contains(r#"live_node="unavailable""#), "{status}");
+    assert!(
+        status.contains(r#"cursor_node_context_tokens="unavailable""#),
+        "{status}"
+    );
+    assert!(!status.contains(r#"live_node=""#), "{status}");
     assert!(
         status.contains(r#"context_left=""#) || status.contains(r#"context_left="unavailable""#),
         "{status}"
@@ -16564,7 +16623,7 @@ async fn assert_spine_tree_tool_node_context_uses_provider_context_delta() {
         accounting.current_node_context_baseline_source,
         Some(SpineNodeContextBaselineSource::ProviderAtOpen)
     );
-    assert_eq!(accounting.current_node_context_unavailable, None);
+    assert_eq!(accounting.current_node_context_problem, None);
 
     let rollout_path = session
         .current_rollout_path()
@@ -16648,7 +16707,7 @@ async fn assert_spine_tree_tool_node_context_uses_provider_context_delta() {
         accounting.current_node_context_baseline_source,
         Some(SpineNodeContextBaselineSource::ProviderAtOpen)
     );
-    assert_eq!(accounting.current_node_context_unavailable, None);
+    assert_eq!(accounting.current_node_context_problem, None);
 }
 
 #[tokio::test]
@@ -16777,7 +16836,7 @@ async fn spine_next_sibling_tree_uses_provider_open_baseline() {
         accounting.current_node_context_baseline_source,
         Some(SpineNodeContextBaselineSource::ProviderAtOpen)
     );
-    assert_eq!(accounting.current_node_context_unavailable, None);
+    assert_eq!(accounting.current_node_context_problem, None);
 }
 
 #[tokio::test]
@@ -17031,14 +17090,17 @@ async fn spine_tree_tool_defers_missing_open_baseline_to_pressure_repair() {
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
         .expect("commit open should defer missing token usage");
-    assert!(commit.output_text.is_some(), "expected Spine tool output text");
+    assert!(
+        commit.output_text.is_some(),
+        "expected Spine tool output text"
+    );
     assert!(commit.spine_context_already_observed);
 
     while rx.try_recv().is_ok() {}
     let history_before = session.clone_history().await.raw_items().to_vec();
     let tree = session.spine_tree().await.expect("tree");
     assert!(
-        tree.contains("(context unavailable: missing current usage)"),
+        tree.contains("(context problem: missing current usage)"),
         "{tree}"
     );
 
@@ -17072,7 +17134,7 @@ async fn spine_tree_tool_defers_missing_open_baseline_to_pressure_repair() {
         Some(SpineNodeContextBaselineSource::EstimatedFromLiveSuffix)
     );
     assert!(accounting.current_node_context_tokens.is_some());
-    assert_eq!(accounting.current_node_context_unavailable, None);
+    assert_eq!(accounting.current_node_context_problem, None);
     assert_eq!(session.clone_history().await.raw_items(), history_before);
 }
 
@@ -17258,7 +17320,11 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
         "{text}"
     );
     assert!(text.contains(r#"parent="1.1""#), "{text}");
-    assert!(text.contains(r#"live_node="32.0K""#), "{text}");
+    assert!(
+        text.contains(r#"cursor_node_context_tokens="32.0K""#),
+        "{text}"
+    );
+    assert!(!text.contains(r#"live_node=""#), "{text}");
     assert!(
         text.contains(&format!(
             r#"context_left="{}""#,

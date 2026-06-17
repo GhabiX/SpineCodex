@@ -2015,10 +2015,10 @@ async fn slash_spinetree_renders_cached_snapshot() {
                 status: SpineTreeNodeStatus::Compacted,
                 accounting: Some(SpineTreeNodeAccounting {
                     current_node_context_tokens: None,
-                    current_node_context_unavailable: None,
+                    current_node_context_problem: None,
                     current_node_context_baseline_source: None,
-                    raw_context_tokens: Some(7_500),
-                    raw_input_tokens: Some(7_500),
+                    closed_source_suffix_tokens: Some(7_500),
+                    closed_memory_context_tokens: None,
                     memory_output_tokens: Some(1_250),
                 }),
             },
@@ -2029,10 +2029,10 @@ async fn slash_spinetree_renders_cached_snapshot() {
                 status: SpineTreeNodeStatus::Live,
                 accounting: Some(SpineTreeNodeAccounting {
                     current_node_context_tokens: Some(181_546),
-                    current_node_context_unavailable: None,
+                    current_node_context_problem: None,
                     current_node_context_baseline_source: None,
-                    raw_context_tokens: None,
-                    raw_input_tokens: None,
+                    closed_source_suffix_tokens: None,
+                    closed_memory_context_tokens: None,
                     memory_output_tokens: None,
                 }),
             },
@@ -2047,7 +2047,7 @@ async fn slash_spinetree_renders_cached_snapshot() {
     assert!(rendered.contains("active scope"), "got {rendered}");
     assert!(!rendered.contains("2.1"), "got {rendered}");
     assert!(!rendered.contains("inclusive context"), "got {rendered}");
-    assert!(!rendered.contains("raw ->"), "got {rendered}");
+    assert!(!rendered.contains("source ->"), "got {rendered}");
     assert!(!rendered.contains("compacted"), "got {rendered}");
 }
 
@@ -2069,10 +2069,10 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
                 status: SpineTreeNodeStatus::Compacted,
                 accounting: Some(SpineTreeNodeAccounting {
                     current_node_context_tokens: None,
-                    current_node_context_unavailable: None,
+                    current_node_context_problem: None,
                     current_node_context_baseline_source: None,
-                    raw_context_tokens: Some(7_500),
-                    raw_input_tokens: Some(7_500),
+                    closed_source_suffix_tokens: Some(7_500),
+                    closed_memory_context_tokens: None,
                     memory_output_tokens: Some(1_250),
                 }),
             },
@@ -2083,10 +2083,10 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
                 status: SpineTreeNodeStatus::Opened,
                 accounting: Some(SpineTreeNodeAccounting {
                     current_node_context_tokens: Some(231_546),
-                    current_node_context_unavailable: None,
+                    current_node_context_problem: None,
                     current_node_context_baseline_source: None,
-                    raw_context_tokens: None,
-                    raw_input_tokens: None,
+                    closed_source_suffix_tokens: None,
+                    closed_memory_context_tokens: None,
                     memory_output_tokens: None,
                 }),
             },
@@ -2097,10 +2097,10 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
                 status: SpineTreeNodeStatus::Live,
                 accounting: Some(SpineTreeNodeAccounting {
                     current_node_context_tokens: Some(181_546),
-                    current_node_context_unavailable: None,
+                    current_node_context_problem: None,
                     current_node_context_baseline_source: None,
-                    raw_context_tokens: None,
-                    raw_input_tokens: None,
+                    closed_source_suffix_tokens: None,
+                    closed_memory_context_tokens: None,
                     memory_output_tokens: None,
                 }),
             },
@@ -2121,7 +2121,7 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
         "got {rendered}"
     );
     assert!(
-        rendered.contains("~7.50K raw -> ~1.25K memory"),
+        rendered.contains("~7.50K source -> ~1.25K memory output"),
         "got {rendered}"
     );
     assert!(rendered.contains("2 outer scope open"), "got {rendered}");

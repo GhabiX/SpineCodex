@@ -25,20 +25,20 @@ pub struct SpineTreeNodeSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct SpineTreeNodeAccountingSnapshot {
     pub current_node_context_tokens: Option<i64>,
-    pub current_node_context_unavailable: Option<SpineNodeContextUnavailableReason>,
+    pub current_node_context_problem: Option<SpineNodeContextProblem>,
     pub current_node_context_baseline_source: Option<SpineNodeContextBaselineSource>,
-    pub raw_context_tokens: Option<i64>,
-    pub raw_input_tokens: Option<i64>,
+    pub closed_source_suffix_tokens: Option<i64>,
+    pub closed_memory_context_tokens: Option<i64>,
     pub memory_output_tokens: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
-pub enum SpineNodeContextUnavailableReason {
+pub enum SpineNodeContextProblem {
     MissingCurrentUsage,
     MissingOpenContextBaseline,
-    NonPositiveDelta,
+    CoordinateMismatch,
     CorruptPressureMetadata,
 }
 

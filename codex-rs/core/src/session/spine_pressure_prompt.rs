@@ -9,7 +9,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::spine_tree::SpineNodeContextUnavailableReason;
+use codex_protocol::spine_tree::SpineNodeContextProblem;
 
 const SPINE_BOUNDARY_HINT_FIRST_TOKENS: i64 = 50_000;
 const SPINE_BOUNDARY_HINT_STEP_TOKENS: i64 = 25_000;
@@ -45,8 +45,8 @@ struct SpineStatusPromptSignal {
     cursor: String,
     node_summary: Option<String>,
     parent: Option<String>,
-    live_node_context_tokens: Option<i64>,
-    live_node_context_unavailable: Option<SpineNodeContextUnavailableReason>,
+    cursor_node_context_tokens: Option<i64>,
+    cursor_node_context_problem: Option<SpineNodeContextProblem>,
     context_left_tokens: Option<i64>,
 }
 
@@ -54,7 +54,7 @@ struct SpineStatusPromptSignal {
 pub(crate) struct SpinePressurePromptSignal {
     node_id: String,
     node_summary: Option<String>,
-    live_node_context_tokens: Option<i64>,
+    cursor_node_context_tokens: Option<i64>,
     boundary_hint_band: Option<i64>,
     context_tokens: Option<i64>,
     model_context_window: Option<i64>,
@@ -168,10 +168,10 @@ fn status_prompt_signal(
     let active_open_node = open_nodes
         .iter()
         .find(|node| node.node_id.to_string() == snapshot.active_node_id);
-    let (live_node_context_tokens, live_node_context_unavailable) = match active_open_node {
+    let (cursor_node_context_tokens, cursor_node_context_problem) = match active_open_node {
         Some(node) => match node_context_tokens(token_info, node.baseline_tokens) {
-            Ok(tokens) => (tokens, None),
-            Err(reason) => (None, Some(reason)),
+            Ok(tokens) => (Some(tokens), None),
+            Err(problem) => (None, Some(problem)),
         },
         None => (None, None),
     };
@@ -179,35 +179,45 @@ fn status_prompt_signal(
         cursor: snapshot.active_node_id,
         node_summary,
         parent,
-        live_node_context_tokens,
-        live_node_context_unavailable,
+        cursor_node_context_tokens,
+        cursor_node_context_problem,
         context_left_tokens,
     })
 }
 
 fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> String {
-    let live_node = signal
-        .live_node_context_tokens
+    let cursor_node_context = signal
+        .cursor_node_context_tokens
         .map(format_si_suffix)
         .unwrap_or_else(|| "unavailable".to_string());
     let context_left = format_context_left_status(signal.context_left_tokens)
         .unwrap_or_else(|| "unavailable".to_string());
     let summary = format_spine_status_summary(signal.node_summary.as_deref());
     let mut text = format!(
-        r#"<spine_status cursor="{}" summary="{}" parent="{}" live_node="{}" context_left="{}""#,
+        r#"<spine_status cursor="{}" summary="{}" parent="{}" cursor_node_context_tokens="{}" context_left="{}""#,
         signal.cursor,
         summary,
         signal.parent.as_deref().unwrap_or("none"),
-        live_node,
+        cursor_node_context,
         context_left,
     );
-    if signal.live_node_context_unavailable
-        == Some(SpineNodeContextUnavailableReason::MissingOpenContextBaseline)
-    {
-        text.push_str(r#" baseline="missing""#);
+    if let Some(problem) = signal.cursor_node_context_problem {
+        text.push_str(&format!(
+            r#" cursor_node_context_problem="{}""#,
+            context_problem_attr(problem)
+        ));
     }
     text.push_str(" />");
     text
+}
+
+fn context_problem_attr(problem: SpineNodeContextProblem) -> &'static str {
+    match problem {
+        SpineNodeContextProblem::MissingCurrentUsage => "missing_current_usage",
+        SpineNodeContextProblem::MissingOpenContextBaseline => "missing_open_context_baseline",
+        SpineNodeContextProblem::CoordinateMismatch => "coordinate_mismatch",
+        SpineNodeContextProblem::CorruptPressureMetadata => "corrupt_pressure_metadata",
+    }
 }
 
 fn format_spine_status_summary(summary: Option<&str>) -> String {
@@ -233,10 +243,10 @@ fn pressure_prompt_signal(
     let active_open_node_allows_close = active_open_node
         .and_then(|node| node.summary.as_deref())
         .is_some_and(|summary| summary.trim() != "root");
-    let live_node_context_tokens =
+    let cursor_node_context_tokens =
         active_open_node.and_then(|node| node.current_node_context_tokens);
     let boundary_hint_band = (mode_allows_spine_close && active_open_node_allows_close)
-        .then(|| live_node_context_tokens.and_then(pressure_band))
+        .then(|| cursor_node_context_tokens.and_then(pressure_band))
         .flatten();
     let context_tokens = inside_view
         .context_window
@@ -264,7 +274,7 @@ fn pressure_prompt_signal(
             .active_node_summary
             .clone()
             .or_else(|| active_open_node.and_then(|node| node.summary.clone())),
-        live_node_context_tokens,
+        cursor_node_context_tokens,
         boundary_hint_band,
         context_tokens,
         model_context_window,
@@ -353,12 +363,12 @@ fn format_spine_pressure_prompt_overlay(signal: &SpinePressurePromptSignal) -> O
 }
 
 fn format_boundary_hint(signal: &SpinePressurePromptSignal) -> Option<String> {
-    let live_tokens = signal.live_node_context_tokens?;
+    let cursor_tokens = signal.cursor_node_context_tokens?;
     let mut text = format!(
-        "Spine boundary hint: current live node {}{} is using ~{} context tokens",
+        "Spine boundary hint: current cursor node {}{} is using ~{} context tokens",
         signal.node_id,
         format_node_summary(signal.node_summary.as_deref()),
-        format_si_suffix(live_tokens),
+        format_si_suffix(cursor_tokens),
     );
     if let Some(context_window) = format_context_window_usage(signal) {
         text.push_str("; ");
@@ -463,7 +473,7 @@ mod tests {
         let mut first = SpinePressurePromptSignal {
             node_id: "1.1".to_string(),
             node_summary: None,
-            live_node_context_tokens: Some(50_000),
+            cursor_node_context_tokens: Some(50_000),
             boundary_hint_band: Some(50_000),
             context_tokens: Some(80_000),
             model_context_window: Some(100_000),
@@ -494,7 +504,7 @@ mod tests {
         let signal = SpinePressurePromptSignal {
             node_id: "1.1".to_string(),
             node_summary: None,
-            live_node_context_tokens: None,
+            cursor_node_context_tokens: None,
             boundary_hint_band: None,
             context_tokens: Some(80_000),
             model_context_window: Some(100_000),

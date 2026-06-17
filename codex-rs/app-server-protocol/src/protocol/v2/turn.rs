@@ -11,7 +11,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource as CoreSpineNodeContextBaselineSource;
-use codex_protocol::spine_tree::SpineNodeContextUnavailableReason as CoreSpineNodeContextUnavailableReason;
+use codex_protocol::spine_tree::SpineNodeContextProblem as CoreSpineNodeContextProblem;
 use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot as CoreSpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot as CoreSpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus as CoreSpineTreeNodeStatus;
@@ -390,20 +390,20 @@ pub struct SpineTreeNode {
 #[ts(export_to = "v2/")]
 pub struct SpineTreeNodeAccounting {
     pub current_node_context_tokens: Option<i64>,
-    pub current_node_context_unavailable: Option<SpineNodeContextUnavailableReason>,
+    pub current_node_context_problem: Option<SpineNodeContextProblem>,
     pub current_node_context_baseline_source: Option<SpineNodeContextBaselineSource>,
-    pub raw_context_tokens: Option<i64>,
-    pub raw_input_tokens: Option<i64>,
+    pub closed_source_suffix_tokens: Option<i64>,
+    pub closed_memory_context_tokens: Option<i64>,
     pub memory_output_tokens: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
-pub enum SpineNodeContextUnavailableReason {
+pub enum SpineNodeContextProblem {
     MissingCurrentUsage,
     MissingOpenContextBaseline,
-    NonPositiveDelta,
+    CoordinateMismatch,
     CorruptPressureMetadata,
 }
 
@@ -479,30 +479,26 @@ impl From<CoreSpineTreeNodeAccountingSnapshot> for SpineTreeNodeAccounting {
     fn from(value: CoreSpineTreeNodeAccountingSnapshot) -> Self {
         Self {
             current_node_context_tokens: value.current_node_context_tokens,
-            current_node_context_unavailable: value
-                .current_node_context_unavailable
-                .map(Into::into),
+            current_node_context_problem: value.current_node_context_problem.map(Into::into),
             current_node_context_baseline_source: value
                 .current_node_context_baseline_source
                 .map(Into::into),
-            raw_context_tokens: value.raw_context_tokens,
-            raw_input_tokens: value.raw_input_tokens,
+            closed_source_suffix_tokens: value.closed_source_suffix_tokens,
+            closed_memory_context_tokens: value.closed_memory_context_tokens,
             memory_output_tokens: value.memory_output_tokens,
         }
     }
 }
 
-impl From<CoreSpineNodeContextUnavailableReason> for SpineNodeContextUnavailableReason {
-    fn from(value: CoreSpineNodeContextUnavailableReason) -> Self {
+impl From<CoreSpineNodeContextProblem> for SpineNodeContextProblem {
+    fn from(value: CoreSpineNodeContextProblem) -> Self {
         match value {
-            CoreSpineNodeContextUnavailableReason::MissingCurrentUsage => Self::MissingCurrentUsage,
-            CoreSpineNodeContextUnavailableReason::MissingOpenContextBaseline => {
+            CoreSpineNodeContextProblem::MissingCurrentUsage => Self::MissingCurrentUsage,
+            CoreSpineNodeContextProblem::MissingOpenContextBaseline => {
                 Self::MissingOpenContextBaseline
             }
-            CoreSpineNodeContextUnavailableReason::NonPositiveDelta => Self::NonPositiveDelta,
-            CoreSpineNodeContextUnavailableReason::CorruptPressureMetadata => {
-                Self::CorruptPressureMetadata
-            }
+            CoreSpineNodeContextProblem::CoordinateMismatch => Self::CoordinateMismatch,
+            CoreSpineNodeContextProblem::CorruptPressureMetadata => Self::CorruptPressureMetadata,
         }
     }
 }

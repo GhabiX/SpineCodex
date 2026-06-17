@@ -14,6 +14,7 @@ use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
+use serial_test::serial;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -169,6 +170,8 @@ fn root_compact_checkpoint_for_memory(
             close_input_tokens: mem.close_input_tokens,
             open_context_tokens: mem.open_context_tokens,
             close_context_tokens: mem.close_context_tokens,
+            closed_source_suffix_tokens: mem.closed_source_suffix_tokens,
+            closed_memory_context_tokens: mem.closed_memory_context_tokens,
             open_context_source: mem.open_context_source,
             memory_output_tokens: mem.memory_output_tokens,
         }],
@@ -418,6 +421,7 @@ fn spine_error_classifies_tool_use_operation_and_compact_failures() {
 }
 
 #[test]
+#[serial(spine_writer_lock)]
 fn second_live_runtime_for_same_sidecar_fails_fast() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -463,6 +467,7 @@ fn new_sidecar_initializes_empty_trim_ledger() {
 }
 
 #[test]
+#[serial(spine_writer_lock)]
 fn installing_replayed_runtime_requires_sidecar_writer_ownership() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -1426,7 +1431,10 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
 
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("[1.1.1] Done accounted child"), "{tree}");
-    assert!(tree.contains("(~7.50K raw -> ~1.25K memory)"), "{tree}");
+    assert!(
+        tree.contains("(~7.50K source -> ~1.25K memory output)"),
+        "{tree}"
+    );
     let materialized_before_snapshot = runtime
         .materialize_history(&raw)
         .expect("materialize before snapshot");
@@ -1443,10 +1451,10 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
         snapshot_nodes["1.1.1"].accounting,
         Some(SpineTreeNodeAccountingSnapshot {
             current_node_context_tokens: None,
-            current_node_context_unavailable: None,
+            current_node_context_problem: None,
             current_node_context_baseline_source: None,
-            raw_context_tokens: Some(7_500),
-            raw_input_tokens: Some(7_500),
+            closed_source_suffix_tokens: Some(7_500),
+            closed_memory_context_tokens: None,
             memory_output_tokens: Some(1_250),
         })
     );
@@ -1456,7 +1464,7 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
         .expect("sidecar exists");
     let replayed_tree = replayed.render_tree().expect("render replayed tree");
     assert!(
-        replayed_tree.contains("(~7.50K raw -> ~"),
+        replayed_tree.contains("(~7.50K source -> ~"),
         "{replayed_tree}"
     );
     let materialized = replayed.materialize_history(&raw).expect("materialize");
@@ -1813,6 +1821,7 @@ fn close_consumes_pressure_overlay_open_baseline() {
     );
     assert_eq!(memory.open_input_tokens, Some(8_500));
     assert_eq!(memory.close_input_tokens, Some(12_500));
+    assert_eq!(memory.closed_source_suffix_tokens, None);
 
     let snapshot = runtime.build_tree_snapshot().expect("snapshot");
     let nodes = snapshot_nodes_by_id(&snapshot);
@@ -1820,10 +1829,10 @@ fn close_consumes_pressure_overlay_open_baseline() {
         nodes["1.1.1"].accounting,
         Some(SpineTreeNodeAccountingSnapshot {
             current_node_context_tokens: None,
-            current_node_context_unavailable: None,
+            current_node_context_problem: None,
             current_node_context_baseline_source: None,
-            raw_context_tokens: Some(4_000),
-            raw_input_tokens: Some(4_000),
+            closed_source_suffix_tokens: None,
+            closed_memory_context_tokens: None,
             memory_output_tokens: Some(1_250),
         })
     );
@@ -1866,12 +1875,80 @@ fn close_consumes_pressure_overlay_survives_replay() {
         nodes["1.1.1"].accounting,
         Some(SpineTreeNodeAccountingSnapshot {
             current_node_context_tokens: None,
-            current_node_context_unavailable: None,
+            current_node_context_problem: None,
             current_node_context_baseline_source: None,
-            raw_context_tokens: Some(4_000),
-            raw_input_tokens: None,
+            closed_source_suffix_tokens: None,
+            closed_memory_context_tokens: None,
             memory_output_tokens: Some(1_250),
         })
+    );
+}
+
+#[test]
+fn closed_child_tree_snapshot_preserves_zero_source_suffix_accounting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    open_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "open-zero-child",
+        "zero child",
+        SpineTokenBaselines {
+            input_tokens: Some(5_000),
+            context_tokens: Some(5_000),
+        },
+    );
+    append_msg(&mut runtime, &mut raw, "zero child work");
+    close_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "close-zero-child",
+        "1.1.1",
+        SpineTokenBaselines {
+            input_tokens: Some(5_000),
+            context_tokens: Some(5_000),
+        },
+    );
+
+    let Some(Symbol::SpineTreeNodes(nodes)) = runtime.parse_stack().symbols.last() else {
+        panic!("closed child should reduce into ParseStack nodes")
+    };
+    let memory = nodes
+        .iter()
+        .find_map(|node| match node {
+            SpineTreeNode::SpineTree { memory, .. } => Some(memory),
+            _ => None,
+        })
+        .expect("closed child memory ref");
+    assert_eq!(memory.open_context_tokens, Some(5_000));
+    assert_eq!(memory.close_context_tokens, Some(5_000));
+    assert_eq!(memory.closed_source_suffix_tokens, Some(0));
+
+    let snapshot = runtime.build_tree_snapshot().expect("snapshot");
+    let nodes = snapshot_nodes_by_id(&snapshot);
+    assert_eq!(
+        nodes["1.1.1"].accounting,
+        Some(SpineTreeNodeAccountingSnapshot {
+            current_node_context_tokens: None,
+            current_node_context_problem: None,
+            current_node_context_baseline_source: None,
+            closed_source_suffix_tokens: Some(0),
+            closed_memory_context_tokens: None,
+            memory_output_tokens: Some(1_250),
+        })
+    );
+
+    let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
+        .expect("load spine")
+        .expect("sidecar exists");
+    let replayed_snapshot = replayed.build_tree_snapshot().expect("replay snapshot");
+    let replayed_nodes = snapshot_nodes_by_id(&replayed_snapshot);
+    assert_eq!(
+        replayed_nodes["1.1.1"].accounting,
+        nodes["1.1.1"].accounting
     );
 }
 
@@ -1933,10 +2010,10 @@ fn close_prefers_structural_open_baseline_over_pressure_overlay() {
         nodes["1.1.1"].accounting,
         Some(SpineTreeNodeAccountingSnapshot {
             current_node_context_tokens: None,
-            current_node_context_unavailable: None,
+            current_node_context_problem: None,
             current_node_context_baseline_source: None,
-            raw_context_tokens: Some(4_000),
-            raw_input_tokens: Some(4_000),
+            closed_source_suffix_tokens: Some(4_000),
+            closed_memory_context_tokens: None,
             memory_output_tokens: Some(1_250),
         })
     );
@@ -2607,6 +2684,108 @@ fn completed_toolcall_tags_long_text_tool_response_for_next_turn_trim() {
 }
 
 #[test]
+fn trim_only_runtime_tags_and_trims_without_tree_ledger() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let output = function_output_text("long-tool", &"trim-only output ".repeat(50));
+    let raw = vec![Some(output.clone())];
+    let mut runtime =
+        SpineRuntime::load_or_create_with_jit(&rollout, 0, false).expect("create trim runtime");
+
+    assert!(
+        !runtime.store.tree_path_for_test().exists(),
+        "trim-only must not create the JIT parser tree ledger"
+    );
+    runtime.observe_raw_items(1).expect("record raw");
+    runtime
+        .observe_completed_toolcall_with_raw_items(
+            CompletedToolCall {
+                call_id: "long-tool".to_string(),
+                request_call_ids: vec!["long-tool".to_string()],
+                segments: vec![CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Response,
+                    raw_ordinal: 0,
+                    context_index: 0,
+                }],
+            },
+            &raw,
+        )
+        .expect("observe trim-only completed toolcall");
+
+    let projected = runtime
+        .project_raw_history_with_trim(&[output.clone()])
+        .expect("project trim-only history");
+    assert!(
+        function_output_text_content(&projected[0]).starts_with("[TRIM_ID: trim_1]\n"),
+        "trim-only projection should expose the generated trim id"
+    );
+    assert_eq!(
+        runtime.trim_tool_response("trim_1").expect("trim succeeds"),
+        SpineTrimOutcome::Cleared {
+            trim_id: "trim_1".to_string()
+        }
+    );
+    let cleared = runtime
+        .project_raw_history_with_trim(&[output])
+        .expect("project cleared trim-only history");
+    assert_eq!(
+        function_output_text_content(&cleared[0]),
+        crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE
+    );
+    assert!(
+        !runtime.store.tree_path_for_test().exists(),
+        "trim-only trim must still not create the JIT parser tree ledger"
+    );
+}
+
+#[test]
+fn trim_only_fork_clone_copies_trim_ledger_without_tree_ledger() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source_rollout = dir.path().join("source.jsonl");
+    let target_rollout = dir.path().join("target.jsonl");
+    let output = function_output_text("long-tool", &"trim-only fork output ".repeat(50));
+    let raw = vec![Some(output.clone())];
+    let mut source = SpineRuntime::load_or_create_with_jit(&source_rollout, 0, false)
+        .expect("create trim runtime");
+
+    source.observe_raw_items(1).expect("record raw");
+    source
+        .observe_completed_toolcall_with_raw_items(
+            CompletedToolCall {
+                call_id: "long-tool".to_string(),
+                request_call_ids: vec!["long-tool".to_string()],
+                segments: vec![CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Response,
+                    raw_ordinal: 0,
+                    context_index: 0,
+                }],
+            },
+            &raw,
+        )
+        .expect("observe trim-only completed toolcall");
+    source.trim_tool_response("trim_1").expect("clear trim id");
+    assert!(
+        !source.store.tree_path_for_test().exists(),
+        "trim-only source must not create the JIT parser tree ledger"
+    );
+
+    clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[true]);
+    let target =
+        SpineRuntime::load_or_create_with_jit(&target_rollout, 1, false).expect("load target");
+    let projected = target
+        .project_raw_history_with_trim(&[output])
+        .expect("project target");
+    assert_eq!(
+        function_output_text_content(&projected[0]),
+        crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE
+    );
+    assert!(
+        !target.store.tree_path_for_test().exists(),
+        "trim-only clone must not create the JIT parser tree ledger"
+    );
+}
+
+#[test]
 fn completed_toolcall_tags_long_custom_tool_response_for_next_turn_trim() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -2840,6 +3019,103 @@ fn trim_tool_response_only_matches_latest_completed_toolcall() {
     assert!(
         function_output_text_content(&rendered[1]).starts_with("[TRIM_ID: trim_0]\n"),
         "miss must not clear the old output"
+    );
+}
+
+#[test]
+fn trim_tool_response_does_not_retry_old_id_after_missed_attempt_commits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let request = ordinary_call("shell_command", "long-tool");
+    let long_text = "important raw output ".repeat(40);
+    let output = function_output_text("long-tool", &long_text);
+    let trim_request = spine_call(SPINE_TOOL_TRIM, "trim-miss");
+    let trim_output = function_output_text("trim-miss", "Do not retry this trim id.");
+    let raw = vec![
+        Some(request.clone()),
+        Some(output.clone()),
+        Some(trim_request.clone()),
+        Some(trim_output.clone()),
+    ];
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(2).expect("record target raw");
+    runtime
+        .observe_context_item(0, 0, &request)
+        .expect("observe target request");
+    runtime
+        .observe_context_item(1, 1, &output)
+        .expect("observe target output");
+    runtime
+        .observe_completed_toolcall_with_raw_items(
+            completed_toolcall("long-tool", vec![tool_req(0, 0), tool_resp(1, 1)]),
+            &raw,
+        )
+        .expect("observe target completed toolcall");
+
+    assert_eq!(
+        runtime
+            .trim_tool_response("unknown_trim")
+            .expect("unknown trim id misses"),
+        SpineTrimOutcome::Miss {
+            trim_id: "unknown_trim".to_string()
+        }
+    );
+
+    runtime
+        .observe_raw_items(2)
+        .expect("record committed trim attempt raw");
+    runtime
+        .observe_context_item(2, 2, &trim_request)
+        .expect("observe trim attempt request");
+    runtime
+        .observe_context_item(3, 3, &trim_output)
+        .expect("observe trim attempt output");
+    runtime
+        .observe_completed_toolcall_with_raw_items(
+            completed_toolcall("trim-miss", vec![tool_req(2, 2), tool_resp(3, 3)]),
+            &raw,
+        )
+        .expect("observe committed trim attempt as latest toolcall");
+
+    assert_eq!(
+        runtime
+            .trim_tool_response("trim_0")
+            .expect("old target trim id is no longer in previous completed toolcall"),
+        SpineTrimOutcome::Miss {
+            trim_id: "trim_0".to_string()
+        }
+    );
+    let rendered = runtime.materialize_history(&raw).expect("materialize");
+    assert!(
+        function_output_text_content(&rendered[1]).starts_with("[TRIM_ID: trim_0]\n"),
+        "missed attempt commit must not make the older target retryable"
+    );
+    assert!(
+        function_output_text_content(&rendered[1]).contains(&long_text),
+        "missed attempt commit must leave the older target body intact under the tag"
+    );
+}
+
+#[test]
+fn feedback_markdown_append_creates_file_and_preserves_existing_entries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine runtime");
+    let store = &runtime.store;
+
+    store
+        .append_feedback_markdown("## first\n\nInitial feedback")
+        .expect("append first feedback");
+    store
+        .append_feedback_markdown("## second\n\nFollow-up feedback")
+        .expect("append second feedback");
+
+    let body =
+        std::fs::read_to_string(store.feedback_path_for_test()).expect("read feedback markdown");
+    assert_eq!(
+        body,
+        "## first\n\nInitial feedback\n\n## second\n\nFollow-up feedback\n"
     );
 }
 
@@ -3813,6 +4089,8 @@ fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
         body_path: "memory/mem-missing.md".to_string(),
@@ -3917,6 +4195,8 @@ fn clone_for_rollout_rewrites_compact_checkpoint_memory_refs() {
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
         body_path: body_path.clone(),
@@ -3994,6 +4274,8 @@ fn compact_checkpoint_without_root_compact_marker_fails_validation() {
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
         body_path: body_path.clone(),
@@ -4046,6 +4328,8 @@ fn compact_checkpoint_with_mismatched_root_memory_ref_fails_validation() {
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
         body_path: body_path.clone(),
@@ -4111,6 +4395,8 @@ fn replacement_history_memory_ref_span_hash_checked() {
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
         body_path: root_body_path.clone(),
@@ -4135,6 +4421,8 @@ fn replacement_history_memory_ref_span_hash_checked() {
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
         body_path: suffix_body_path.clone(),
@@ -4187,6 +4475,8 @@ fn replacement_history_memory_ref_span_hash_checked() {
         close_input_tokens: suffix_mem.close_input_tokens,
         open_context_tokens: suffix_mem.open_context_tokens,
         close_context_tokens: suffix_mem.close_context_tokens,
+        closed_source_suffix_tokens: suffix_mem.closed_source_suffix_tokens,
+        closed_memory_context_tokens: suffix_mem.closed_memory_context_tokens,
         open_context_source: suffix_mem.open_context_source,
         memory_output_tokens: suffix_mem.memory_output_tokens,
     });
@@ -4229,6 +4519,8 @@ fn compact_checkpoint_same_boundary_hash_multiple_token_seq_fails_closed() {
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
         body_path: body_path.clone(),
@@ -4310,6 +4602,8 @@ fn compact_checkpoint_same_boundary_hash_token_seq_multiple_records_fails_closed
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
         body_path: body_path.clone(),
@@ -4395,6 +4689,8 @@ fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: None,
         body_path: body_path,
@@ -4701,6 +4997,7 @@ fn assert_clone_boundary_excludes_future_structural_and_pressure_records() {
             .next_trim_seq()
             .expect("trim seq limit")
             .checked_sub(1),
+        trim_toolcall_seq_limit: source.next_event_seq().expect("structural seq limit"),
     };
 
     source
@@ -4909,6 +5206,8 @@ fn empty_task_tree_reduce_fails_without_archive_side_effects() {
         None,
         None,
         None,
+        None,
+        None,
     );
     let mut parse_stack = ParseStack {
         symbols: vec![open, Symbol::Control(ControlSymbol::Close(memory))],
@@ -4946,6 +5245,8 @@ fn task_tree_reduce_archive_failure_leaves_symbols_unchanged() {
         0..1,
         0..1,
         1..2,
+        None,
+        None,
         None,
         None,
         None,
@@ -5482,6 +5783,8 @@ fn close_retry_reuses_matching_prepared_memory() {
         close_input_tokens: None,
         open_context_tokens: None,
         close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
         open_context_source: None,
         memory_output_tokens: close_compact.memory_output_tokens,
         body_path: format!("memory/{compact_id}.md"),
@@ -6884,6 +7187,8 @@ fn root_compact_staging_failure_does_not_write_memory_body() {
         0..0,
         0..0,
         1..2,
+        None,
+        None,
         None,
         None,
         None,

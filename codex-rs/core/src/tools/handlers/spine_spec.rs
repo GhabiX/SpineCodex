@@ -80,7 +80,7 @@ fn spine_feedback_tool() -> ResponsesApiTool {
     )]);
     ResponsesApiTool {
         name: SPINE_TOOL_FEEDBACK.to_string(),
-        description: "Record debug-only feedback for Spine developers when real work reveals a Spine problem, rough edge, confusing behavior, missing capability, or concrete improvement idea. Do not use this for normal task notes, user-facing summaries, or project implementation logs.".to_string(),
+        description: "Record debug-only feedback for Spine developers when real work reveals a Spine problem, rough edge, confusing behavior, missing capability, or concrete improvement idea. When the feedback is relevant to the ongoing collaboration, also mention the same issue or improvement idea in your ordinary assistant reply; do not rely on the tool call or tool response as the user-visible communication. Do not use this for normal task notes, user-facing summaries, or project implementation logs.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["content".to_string()]), Some(false.into())),

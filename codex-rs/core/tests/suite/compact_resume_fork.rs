@@ -33,6 +33,7 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
@@ -49,6 +50,7 @@ use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
+const SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME: &str = "submit_spine_memory";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
@@ -976,8 +978,9 @@ async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
         ev_completed("spine-close-call"),
     ]);
     let close_compact = sse(vec![
-        ev_assistant_message(
+        ev_function_call(
             "spine-close-compact-summary",
+            SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME,
             &spine_node_memory_compact_body("spine close compact summary"),
         ),
         ev_completed("spine-close-compact"),

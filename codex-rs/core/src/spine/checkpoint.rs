@@ -123,6 +123,10 @@ pub(super) struct CheckpointMemoryRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) close_context_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) closed_source_suffix_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) closed_memory_context_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) open_context_source: Option<crate::spine::model::ContextBaselineSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) memory_output_tokens: Option<i64>,
@@ -224,6 +228,8 @@ fn checkpoint_memory_ref(memory: &MemoryRef) -> CheckpointMemoryRef {
         close_input_tokens: memory.close_input_tokens,
         open_context_tokens: memory.open_context_tokens,
         close_context_tokens: memory.close_context_tokens,
+        closed_source_suffix_tokens: memory.closed_source_suffix_tokens,
+        closed_memory_context_tokens: memory.closed_memory_context_tokens,
         open_context_source: memory.open_context_source,
         memory_output_tokens: memory.memory_output_tokens,
     }

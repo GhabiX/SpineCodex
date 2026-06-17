@@ -29,7 +29,7 @@ use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConf
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource as CoreSpineNodeContextBaselineSource;
-use codex_protocol::spine_tree::SpineNodeContextUnavailableReason as CoreSpineNodeContextUnavailableReason;
+use codex_protocol::spine_tree::SpineNodeContextProblem as CoreSpineNodeContextProblem;
 use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot as CoreSpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot as CoreSpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus as CoreSpineTreeNodeStatus;
@@ -213,14 +213,14 @@ fn spine_tree_node_maps_accounting() {
         status: CoreSpineTreeNodeStatus::Live,
         accounting: Some(CoreSpineTreeNodeAccountingSnapshot {
             current_node_context_tokens: Some(181_546),
-            current_node_context_unavailable: Some(
-                CoreSpineNodeContextUnavailableReason::MissingOpenContextBaseline,
+            current_node_context_problem: Some(
+                CoreSpineNodeContextProblem::MissingOpenContextBaseline,
             ),
             current_node_context_baseline_source: Some(
                 CoreSpineNodeContextBaselineSource::EstimatedFromLiveSuffix,
             ),
-            raw_context_tokens: None,
-            raw_input_tokens: Some(7_500),
+            closed_source_suffix_tokens: Some(7_500),
+            closed_memory_context_tokens: None,
             memory_output_tokens: Some(1_250),
         }),
     };
@@ -234,14 +234,14 @@ fn spine_tree_node_maps_accounting() {
             status: SpineTreeNodeStatus::Live,
             accounting: Some(SpineTreeNodeAccounting {
                 current_node_context_tokens: Some(181_546),
-                current_node_context_unavailable: Some(
-                    SpineNodeContextUnavailableReason::MissingOpenContextBaseline,
+                current_node_context_problem: Some(
+                    SpineNodeContextProblem::MissingOpenContextBaseline
                 ),
                 current_node_context_baseline_source: Some(
                     SpineNodeContextBaselineSource::EstimatedFromLiveSuffix,
                 ),
-                raw_context_tokens: None,
-                raw_input_tokens: Some(7_500),
+                closed_source_suffix_tokens: Some(7_500),
+                closed_memory_context_tokens: None,
                 memory_output_tokens: Some(1_250),
             }),
         }
