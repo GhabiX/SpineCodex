@@ -37,6 +37,17 @@ fn text_item(text: &str) -> ResponseItem {
     }
 }
 
+fn assistant_text_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
 fn tool_req(raw_ordinal: u64, context_index: usize) -> ToolCallSegment {
     tool_segment(ToolCallSegmentKind::Request, raw_ordinal, context_index)
 }
@@ -1523,6 +1534,38 @@ fn close_source_plan_uses_current_hps_projection_indices() {
     assert_eq!(contexts, vec![5, 6, 7, 8]);
     assert_eq!(source_plan.source_context_range, 5..9);
     assert_eq!(source_plan.source_raw_range, 5..9);
+    let user_evidence = source_plan
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.kind {
+            SpineCompactSourceEntryKind::RawResponseItem {
+                item,
+                from_user: true,
+                user_anchor,
+                ..
+            } => Some((item, user_anchor)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(user_evidence.len(), 2);
+    assert_eq!(user_evidence[0].1, &Some(6));
+    assert!(matches!(
+        user_evidence[0].0,
+        ResponseItem::Message { content, .. }
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }] if text == "[U6]\nfirst live item"
+            )
+    ));
+    assert_eq!(user_evidence[1].1, &Some(7));
+    assert!(matches!(
+        user_evidence[1].0,
+        ResponseItem::Message { content, .. }
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }] if text == "[U7]\nsecond live item"
+            )
+    ));
 }
 
 #[test]
@@ -2315,6 +2358,7 @@ fn ordinary_response_item_shifts_msg() {
                 raw_ordinal: 0,
                 context_index: 0,
                 from_user: true,
+                user_anchor: Some(1),
             }
         ] if summary == "root"
     ));
@@ -2345,9 +2389,85 @@ fn ordinary_response_item_shifts_msg() {
                     context_index: 0,
                 },
                 from_user: true,
+                user_anchor: Some(1),
             }]),
         ]
     );
+    let raw = vec![Some(item)];
+    let materialized = runtime.materialize_history(&raw).expect("materialize");
+    assert!(matches!(
+        materialized.as_slice(),
+        [ResponseItem::Message { content, .. }]
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }] if text == "[U1]\nordinary"
+            )
+    ));
+}
+
+#[test]
+fn non_user_message_does_not_receive_user_anchor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let item = assistant_text_item("assistant note");
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(1).expect("observe raw");
+    runtime
+        .observe_context_item(0, 0, &item)
+        .expect("observe context item");
+
+    let events = event_log(&runtime);
+    assert!(matches!(
+        events.as_slice(),
+        [
+            SpineLedgerEvent::Init { .. },
+            SpineLedgerEvent::Open { .. },
+            SpineLedgerEvent::Msg {
+                raw_ordinal: 0,
+                context_index: 0,
+                from_user: false,
+                user_anchor: None,
+            }
+        ]
+    ));
+    let raw = vec![Some(item)];
+    let materialized = runtime.materialize_history(&raw).expect("materialize");
+    assert!(matches!(
+        materialized.as_slice(),
+        [ResponseItem::Message { content, .. }]
+            if matches!(
+                content.as_slice(),
+                [ContentItem::OutputText { text }] if text == "assistant note"
+            )
+    ));
+}
+
+#[test]
+fn close_memory_rejects_unknown_user_anchor_reference() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "known user");
+    observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close");
+    let err = runtime
+        .stage_close(
+            "close".to_string(),
+            "This memory cites [U99], which does not exist.".to_string(),
+        )
+        .expect_err("unknown user anchor must fail");
+    assert!(
+        err.to_string().contains("unknown user anchor [U99]"),
+        "{err}"
+    );
+    runtime
+        .stage_close(
+            "close".to_string(),
+            "This memory cites the existing [U1].".to_string(),
+        )
+        .expect("known user anchor should be accepted");
 }
 
 #[test]
@@ -3897,6 +4017,7 @@ fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
+            user_anchor: None,
         })
         .expect("append msg");
     let close_seq = source
@@ -4390,6 +4511,7 @@ fn compact_checkpoint_same_boundary_hash_multiple_token_seq_fails_closed() {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
+            user_anchor: None,
         })
         .expect("append non-root marker at second checkpoint predecessor");
     store
@@ -4648,6 +4770,7 @@ fn clone_preserves_structural_seq_gaps_and_appends_after_max() {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
+            user_anchor: None,
         })
         .expect("append dropped msg");
     source
@@ -4655,6 +4778,7 @@ fn clone_preserves_structural_seq_gaps_and_appends_after_max() {
             raw_ordinal: 1,
             context_index: 1,
             from_user: true,
+            user_anchor: None,
         })
         .expect("append kept msg");
 
@@ -4674,6 +4798,7 @@ fn clone_preserves_structural_seq_gaps_and_appends_after_max() {
             raw_ordinal: 2,
             context_index: 2,
             from_user: true,
+            user_anchor: None,
         })
         .expect("append after gapped clone");
     assert_eq!(next_seq, 4);
@@ -4704,6 +4829,7 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
+            user_anchor: None,
         })
         .expect("append dropped msg");
     source
@@ -4711,6 +4837,7 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
             raw_ordinal: 1,
             context_index: 1,
             from_user: true,
+            user_anchor: None,
         })
         .expect("append kept msg");
     source
@@ -4806,6 +4933,7 @@ fn assert_clone_boundary_excludes_future_structural_and_pressure_records() {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
+            user_anchor: None,
         })
         .expect("append kept msg");
     source
@@ -4842,6 +4970,7 @@ fn assert_clone_boundary_excludes_future_structural_and_pressure_records() {
             raw_ordinal: 0,
             context_index: 0,
             from_user: true,
+            user_anchor: None,
         })
         .expect("append future structural event");
     source
@@ -5100,6 +5229,7 @@ fn task_tree_reduce_archive_failure_leaves_symbols_unchanged() {
                     context_index: 0,
                 },
                 from_user: true,
+                user_anchor: None,
             }]),
             Symbol::Control(ControlSymbol::Close(memory)),
         ],
@@ -6276,6 +6406,7 @@ fn materialize_history_renders_from_parse_stack_memory_segments() {
         symbols: vec![Symbol::SpineTreeNodes(vec![SpineTreeNode::MsgAsLeafNode {
             msg: memory_seg,
             from_user: true,
+            user_anchor: None,
         }])],
     };
     let rendered_memory =
@@ -7349,6 +7480,7 @@ fn assert_rollback_uses_pre_user_checkpoint_to_restore_parse_stack() {
                     context_index: 0,
                 },
                 from_user: true,
+                user_anchor: None,
             }]),
         ]
     );

@@ -121,17 +121,17 @@ fn spine_trim_tool() -> ResponsesApiTool {
 
 fn spine_close_tool() -> ResponsesApiTool {
     let properties = BTreeMap::from([(
-        "instruction".to_string(),
+        "memory".to_string(),
         JsonSchema::string(Some(
-            "Optional guidance for the runtime compact memory.".to_string(),
+            "Required Node Memory body for closing the current Spine task. Include stable continuation facts, decisions, evidence, unresolved risks, and next actions. Do not include runtime-owned Spine Memory/User Message/Child Memory headings.".to_string(),
         )),
     )]);
     ResponsesApiTool {
         name: SPINE_TOOL_CLOSE.to_string(),
-        description: "Close the current Spine task node and resume its parent.".to_string(),
+        description: "Close the current Spine task node with model-authored Node Memory and resume its parent.".to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(Vec::new()), Some(false.into())),
+        parameters: JsonSchema::object(properties, Some(vec!["memory".to_string()]), Some(false.into())),
         output_schema: None,
     }
 }
@@ -145,19 +145,19 @@ fn spine_next_tool() -> ResponsesApiTool {
             )),
         ),
         (
-            "instruction".to_string(),
+            "memory".to_string(),
             JsonSchema::string(Some(
-                "Optional compact guidance for closing the current node before opening the sibling."
+                "Required Node Memory body for closing the current Spine task before opening the sibling. Do not include runtime-owned Spine Memory/User Message/Child Memory headings."
                     .to_string(),
             )),
         ),
     ]);
     ResponsesApiTool {
         name: SPINE_TOOL_NEXT.to_string(),
-        description: "Close the current node, preserve compact guidance as memory, then continue in a new sibling under the resumed parent.".to_string(),
+        description: "Close the current node with model-authored Node Memory, then continue in a new sibling under the resumed parent.".to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(vec!["summary".to_string()]), Some(false.into())),
+        parameters: JsonSchema::object(properties, Some(vec!["summary".to_string(), "memory".to_string()]), Some(false.into())),
         output_schema: None,
     }
 }

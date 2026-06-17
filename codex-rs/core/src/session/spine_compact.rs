@@ -392,6 +392,32 @@ impl Session {
     }
 }
 
+pub(crate) fn spine_close_memory_from_tool_arg(
+    node_id: &str,
+    source_plan: &SpineCompactSourcePlan,
+    node_memory: &str,
+) -> Result<SpineCloseCompact, SpineError> {
+    if source_plan.node_id.to_string() != node_id {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan node {} does not match close node {node_id}",
+            source_plan.node_id
+        )));
+    }
+    if source_plan.entries.is_empty() {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close compact source plan is empty for node {node_id}"
+        )));
+    }
+    let skeleton = SpineCompactMemorySkeleton::from_source_plan(node_id, source_plan)?;
+    let body = skeleton.assemble(std::iter::empty(), node_memory)?;
+    Ok(SpineCloseCompact {
+        body,
+        source_context_range: source_plan.source_context_range.clone(),
+        source_raw_range: source_plan.source_raw_range.clone(),
+        memory_output_tokens: None,
+    })
+}
+
 pub(crate) enum SpineCloseCompactOutcome {
     Compact(SpineCloseCompact),
     NativeCompacted { reset_client_session: bool },
@@ -727,7 +753,10 @@ struct SpineCompactMemorySkeleton {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SpineCompactMemoryBlock {
-    UserMessage(String),
+    UserMessage {
+        body: String,
+        user_anchor: Option<u64>,
+    },
     ChildMemory {
         node_id: String,
         compact_id: String,
@@ -755,13 +784,15 @@ impl SpineCompactMemorySkeleton {
                 SpineCompactSourceEntryKind::RawResponseItem {
                     item,
                     from_user: true,
+                    user_anchor,
                     ..
                 } => {
                     if let Some(text) = response_item_text(item) {
                         builder.flush_slot();
-                        builder
-                            .blocks
-                            .push(SpineCompactMemoryBlock::UserMessage(text.to_string()));
+                        builder.blocks.push(SpineCompactMemoryBlock::UserMessage {
+                            body: text.to_string(),
+                            user_anchor: *user_anchor,
+                        });
                     } else {
                         builder.push_slot_entry(entry.source_ordinal);
                     }
@@ -867,17 +898,20 @@ Node {} evidence order:\n\n",
         if !self
             .blocks
             .iter()
-            .any(|block| matches!(block, SpineCompactMemoryBlock::UserMessage(_)))
+            .any(|block| matches!(block, SpineCompactMemoryBlock::UserMessage { .. }))
         {
             text.push_str("* No preserved user messages exist in this node.\n");
         }
         let mut user_msg_ordinal = 0usize;
         for (block_index, block) in self.blocks.iter().enumerate() {
             match block {
-                SpineCompactMemoryBlock::UserMessage(body) => {
+                SpineCompactMemoryBlock::UserMessage { body, user_anchor } => {
                     user_msg_ordinal += 1;
+                    let anchor = user_anchor
+                        .map(|anchor| format!(" [U{anchor}]"))
+                        .unwrap_or_default();
                     text.push_str(&format!(
-                        "* USER_MSG_{user_msg_ordinal} is preserved exactly:\n"
+                        "* USER_MSG_{user_msg_ordinal}{anchor} is preserved exactly:\n"
                     ));
                     push_indented_source_map_block(&mut text, body);
                 }
@@ -926,8 +960,14 @@ Node {} evidence order:\n\n",
         let mut body = format!("# Spine Memory {}\n", self.node_id);
         for block in &self.blocks {
             match block {
-                SpineCompactMemoryBlock::UserMessage(text) => {
-                    push_memory_block(&mut body, "## User Message", text);
+                SpineCompactMemoryBlock::UserMessage {
+                    body: text,
+                    user_anchor,
+                } => {
+                    let heading = user_anchor
+                        .map(|anchor| format!("## User Message [U{anchor}]"))
+                        .unwrap_or_else(|| "## User Message".to_string());
+                    push_memory_block(&mut body, &heading, text);
                 }
                 SpineCompactMemoryBlock::ChildMemory { body: child, .. } => {
                     push_memory_block(&mut body, "## Child Memory", child);
@@ -978,9 +1018,13 @@ fn preserved_evidence_labels(blocks: &[SpineCompactMemoryBlock]) -> Vec<Option<S
     let mut user_ordinal = 0usize;
     for block in blocks {
         let label = match block {
-            SpineCompactMemoryBlock::UserMessage(_) => {
+            SpineCompactMemoryBlock::UserMessage { user_anchor, .. } => {
                 user_ordinal += 1;
-                Some(format!("USER_MSG_{user_ordinal}"))
+                Some(
+                    user_anchor
+                        .map(|anchor| format!("USER_MSG_{user_ordinal} [U{anchor}]"))
+                        .unwrap_or_else(|| format!("USER_MSG_{user_ordinal}")),
+                )
             }
             SpineCompactMemoryBlock::ChildMemory { node_id, .. } => {
                 Some(format!("child memory {node_id}"))
@@ -1520,6 +1564,22 @@ mod spine_close_slot_map_tests {
         item: ResponseItem,
         from_user: bool,
     ) -> crate::spine::SpineCompactSourcePlanEntry {
+        source_entry_with_user_anchor(
+            context_index,
+            source_ordinal,
+            item,
+            from_user,
+            from_user.then_some(1),
+        )
+    }
+
+    fn source_entry_with_user_anchor(
+        context_index: usize,
+        source_ordinal: usize,
+        item: ResponseItem,
+        from_user: bool,
+        user_anchor: Option<u64>,
+    ) -> crate::spine::SpineCompactSourcePlanEntry {
         crate::spine::SpineCompactSourcePlanEntry {
             context_index,
             source_ordinal,
@@ -1528,6 +1588,7 @@ mod spine_close_slot_map_tests {
                 item,
                 raw_ordinal: u64::try_from(context_index).expect("context index fits u64"),
                 from_user,
+                user_anchor,
             },
         }
     }
@@ -1712,11 +1773,13 @@ mod spine_close_slot_map_tests {
         assert!(skeleton.has_generated_slots());
         let slot_map = skeleton.prompt_slot_map().expect("slot map");
         assert!(slot_map.starts_with(SPINE_COMPACT_SOURCE_MAP_HEADER));
-        assert!(slot_map.contains("* USER_MSG_1 is preserved exactly:\n  USER_EXACT\n  line 2\n"));
+        assert!(
+            slot_map.contains("* USER_MSG_1 [U1] is preserved exactly:\n  USER_EXACT\n  line 2\n")
+        );
         assert!(slot_map.contains("# Spine Memory 1.1.1"));
         assert!(!slot_map.contains("----- BEGIN CHILD MEMORY -----"));
         assert!(slot_map.contains(
-            "* slot_1: optional non-preserved span after USER_MSG_1 and before child memory 1.1.1."
+            "* slot_1: optional non-preserved span after USER_MSG_1 [U1] and before child memory 1.1.1."
         ));
         assert!(slot_map.contains("Allowed slot ids: slot_1."));
         assert!(!slot_map.contains("source ordinals"));
@@ -1740,7 +1803,7 @@ mod spine_close_slot_map_tests {
             )
             .expect("assembled body");
         assert!(body.contains("# Spine Memory 1.1"));
-        assert!(body.contains("## User Message\nUSER_EXACT\nline 2"));
+        assert!(body.contains("## User Message [U1]\nUSER_EXACT\nline 2"));
         assert!(body.contains("## Memory Slot\ncompact assistant facts"));
         assert!(body.contains("## Child Memory\n# Spine Memory 1.1.1\n\nchild body"));
         assert!(body.contains("## Node Memory\nnode continuation facts"));
@@ -1758,9 +1821,9 @@ mod spine_close_slot_map_tests {
 
         let slot_map = skeleton.prompt_slot_map().expect("slot map");
         assert!(slot_map.starts_with(SPINE_COMPACT_SOURCE_MAP_HEADER));
-        assert!(slot_map.contains("* slot_1: optional non-preserved span before USER_MSG_1."));
-        assert!(slot_map.contains("* slot_2: optional non-preserved span after USER_MSG_1."));
-        assert!(slot_map.contains("* USER_MSG_1 is preserved exactly:\n  USER_EXACT\n"));
+        assert!(slot_map.contains("* slot_1: optional non-preserved span before USER_MSG_1 [U1]."));
+        assert!(slot_map.contains("* slot_2: optional non-preserved span after USER_MSG_1 [U1]."));
+        assert!(slot_map.contains("* USER_MSG_1 [U1] is preserved exactly:\n  USER_EXACT\n"));
         assert!(
             !slot_map
                 .lines()
@@ -1862,9 +1925,9 @@ mod spine_close_slot_map_tests {
     #[test]
     fn zero_optional_slot_skeleton_requires_node_memory() {
         let plan = source_plan(vec![
-            source_entry(2, 0, user_message("only user one"), true),
+            source_entry_with_user_anchor(2, 0, user_message("only user one"), true, Some(1)),
             child_memory_entry(3, 1, "# Spine Memory 1.1.1\n\nchild exact\n"),
-            source_entry(4, 2, user_message("only user two"), true),
+            source_entry_with_user_anchor(4, 2, user_message("only user two"), true, Some(2)),
         ]);
         let skeleton =
             SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
@@ -1873,11 +1936,34 @@ mod spine_close_slot_map_tests {
         let body = skeleton
             .assemble(std::iter::empty(), "node memory for exact-only suffix")
             .expect("assembled body");
-        assert!(body.contains("## User Message\nonly user one"));
+        assert!(body.contains("## User Message [U1]\nonly user one"));
         assert!(body.contains("## Child Memory\n# Spine Memory 1.1.1\n\nchild exact"));
-        assert!(body.contains("## User Message\nonly user two"));
+        assert!(body.contains("## User Message [U2]\nonly user two"));
         assert!(!body.contains("## Memory Slot"));
         assert!(body.contains("## Node Memory\nnode memory for exact-only suffix"));
+    }
+
+    #[test]
+    fn direct_close_memory_assembles_user_anchor_evidence() {
+        let plan = source_plan(vec![
+            source_entry_with_user_anchor(2, 0, user_message("[U7]\napprove"), true, Some(7)),
+            source_entry(3, 1, assistant_message("tool detail"), false),
+        ]);
+
+        let compact = spine_close_memory_from_tool_arg(
+            "1.1",
+            &plan,
+            "After [U7], implementation continued and tests passed.",
+        )
+        .expect("direct memory assembly");
+
+        assert!(compact.body.contains("## User Message [U7]\n[U7]\napprove"));
+        assert!(
+            compact
+                .body
+                .contains("## Node Memory\nAfter [U7], implementation continued and tests passed.")
+        );
+        assert_eq!(compact.source_context_range, 2..4);
     }
 
     #[test]
@@ -2313,6 +2399,7 @@ node
                 },
                 raw_ordinal: 2,
                 from_user: true,
+                user_anchor: Some(1),
             },
         }]);
 

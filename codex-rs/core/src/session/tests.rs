@@ -1000,7 +1000,7 @@ async fn make_spine_close_window_missing_output_carrier(
         .await
         .expect("record close-window request");
     session
-        .stage_spine_close("close-window".to_string(), None)
+        .stage_spine_close("close-window".to_string(), "test node memory".to_string())
         .await
         .expect("stage close-window");
 
@@ -1224,7 +1224,7 @@ async fn make_spine_session_with_closed_child(
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("resume-close".to_string(), None)
+        .stage_spine_close("resume-close".to_string(), "test node memory".to_string())
         .await
         .expect("stage close");
     let close_output = function_output("resume-close");
@@ -9532,7 +9532,10 @@ async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_pr
         .await
         .expect("record close request");
     session
-        .stage_spine_close("image-prefix-close".to_string(), None)
+        .stage_spine_close(
+            "image-prefix-close".to_string(),
+            "test node memory".to_string(),
+        )
         .await
         .expect("stage close");
     commit_spine_output_and_record_raw_durable_for_test(
@@ -9674,7 +9677,10 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
         .await
         .expect("record close request");
     session
-        .stage_spine_close("image-suffix-close".to_string(), None)
+        .stage_spine_close(
+            "image-suffix-close".to_string(),
+            "test node memory".to_string(),
+        )
         .await
         .expect("stage close");
     commit_spine_output_and_record_raw_durable_for_test(
@@ -10535,7 +10541,7 @@ async fn close_commit_is_atomic_across_sidecar_and_history() {
         .await
         .expect("record close request");
     session
-        .stage_spine_close("close-raw-fail".to_string(), None)
+        .stage_spine_close("close-raw-fail".to_string(), "test node memory".to_string())
         .await
         .expect("stage close");
     let original_history = session.clone_history().await.raw_items().to_vec();
@@ -10666,7 +10672,10 @@ async fn close_sidecar_commit_marker_failure_invalidates_runtime() {
         .await
         .expect("record close request");
     session
-        .stage_spine_close("close-sidecar-fail".to_string(), None)
+        .stage_spine_close(
+            "close-sidecar-fail".to_string(),
+            "test node memory".to_string(),
+        )
         .await
         .expect("stage close");
     let original_history = session.clone_history().await.raw_items().to_vec();
@@ -10775,7 +10784,10 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
         .await
         .expect("record close request");
     session
-        .stage_spine_close("close-history-fail".to_string(), None)
+        .stage_spine_close(
+            "close-history-fail".to_string(),
+            "test node memory".to_string(),
+        )
         .await
         .expect("stage close");
     while rx.try_recv().is_ok() {}
@@ -12102,7 +12114,10 @@ async fn spine_close_bridge_can_close_initial_root_child() {
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("close-root-child".to_string(), None)
+        .stage_spine_close(
+            "close-root-child".to_string(),
+            "test node memory".to_string(),
+        )
         .await
         .expect("stage close");
     commit_spine_output_and_record_raw_durable_for_test(
@@ -12333,7 +12348,7 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("close".to_string(), None)
+        .stage_spine_close("close".to_string(), "test node memory".to_string())
         .await
         .expect("stage close");
     let close_output = function_output("close");
@@ -12488,7 +12503,7 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("empty-close".to_string(), None)
+        .stage_spine_close("empty-close".to_string(), "test node memory".to_string())
         .await
         .expect("stage close");
     let close_output = commit_spine_output_and_record_raw_durable_for_test(
@@ -12622,7 +12637,10 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("encrypted-close".to_string(), None)
+        .stage_spine_close(
+            "encrypted-close".to_string(),
+            "test node memory".to_string(),
+        )
         .await
         .expect("stage close");
     let close_output = function_output("encrypted-close");
@@ -12739,7 +12757,7 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("partial-close".to_string(), None)
+        .stage_spine_close("partial-close".to_string(), "test node memory".to_string())
         .await
         .expect("stage close");
     let close_output = function_output("partial-close");
@@ -12893,7 +12911,7 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
         .await
         .expect("record close request");
     session
-        .stage_spine_close("overflow-close".to_string(), None)
+        .stage_spine_close("overflow-close".to_string(), "test node memory".to_string())
         .await
         .expect("stage close");
     let close_output = function_output("overflow-close");
@@ -13059,7 +13077,7 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("inner-close".to_string(), None)
+        .stage_spine_close("inner-close".to_string(), "test node memory".to_string())
         .await
         .expect("stage inner close");
     commit_spine_output_and_record_raw_durable_for_test(
@@ -13082,7 +13100,7 @@ async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("outer-close".to_string(), None)
+        .stage_spine_close("outer-close".to_string(), "test node memory".to_string())
         .await
         .expect("stage outer close");
     commit_spine_output_and_record_raw_durable_for_test(
@@ -13187,7 +13205,10 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("native-compact-close".to_string(), None)
+        .stage_spine_close(
+            "native-compact-close".to_string(),
+            "test node memory".to_string(),
+        )
         .await
         .expect("stage close");
     let close_output = function_output("native-compact-close");
@@ -14186,7 +14207,7 @@ async fn replacement_history_validates_at_compact_boundary() {
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("sequence-close".to_string(), None)
+        .stage_spine_close("sequence-close".to_string(), "test node memory".to_string())
         .await
         .expect("stage close");
     commit_spine_output_and_record_raw_durable_for_test(
@@ -14402,7 +14423,10 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
         .await
         .expect("record conversation items");
     session
-        .stage_spine_close("post-native-close".to_string(), None)
+        .stage_spine_close(
+            "post-native-close".to_string(),
+            "test node memory".to_string(),
+        )
         .await
         .expect("stage post-native close");
     commit_spine_output_and_record_raw_durable_for_test(
@@ -16368,7 +16392,7 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
         .await
         .expect("record close request");
     session
-        .stage_spine_close("overlay-close".to_string(), None)
+        .stage_spine_close("overlay-close".to_string(), "test node memory".to_string())
         .await
         .expect("stage close");
     let close_output = commit_spine_output_and_record_raw_durable_for_test(
@@ -18508,7 +18532,7 @@ async fn turn_abort_clears_stale_spine_pending_transition() {
         .await
         .expect("record close request");
     session
-        .stage_spine_close("abort-close".to_string(), None)
+        .stage_spine_close("abort-close".to_string(), "test node memory".to_string())
         .await
         .expect("stage close");
     assert_pending_spine_commit(&session, "abort-close").await;

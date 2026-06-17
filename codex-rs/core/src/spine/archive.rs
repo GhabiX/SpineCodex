@@ -267,7 +267,7 @@ fn render_trajs_archive(children: &[SpineTreeNode]) -> Result<String, SpineError
 
 fn render_trajs_node(out: &mut String, node: &SpineTreeNode) -> Result<(), SpineError> {
     match node {
-        SpineTreeNode::MsgAsLeafNode { msg, from_user } => match msg {
+        SpineTreeNode::MsgAsLeafNode { msg, from_user, .. } => match msg {
             SegRef::ResponseItem {
                 raw_ordinal,
                 context_index,

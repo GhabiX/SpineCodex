@@ -106,16 +106,14 @@ struct OpenArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CloseArgs {
-    #[serde(default)]
-    instruction: Option<String>,
+    memory: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NextArgs {
     summary: String,
-    #[serde(default)]
-    instruction: Option<String>,
+    memory: String,
 }
 
 #[derive(Deserialize)]
@@ -150,6 +148,16 @@ fn normalize_trim_args(mut args: TrimArgs) -> Result<TrimArgs, FunctionCallError
         ));
     }
     Ok(args)
+}
+
+fn normalize_memory_arg(memory: String, tool_name: &str) -> Result<String, FunctionCallError> {
+    let memory = memory.trim().to_string();
+    if memory.is_empty() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{tool_name} requires a non-empty memory."
+        )));
+    }
+    Ok(memory)
 }
 
 #[async_trait::async_trait]
@@ -272,8 +280,9 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
             }
             SpineTool::Close => {
                 let args: CloseArgs = parse_arguments(&arguments)?;
+                let memory = normalize_memory_arg(args.memory, "spine.close")?;
                 session
-                    .stage_spine_close(call_id, args.instruction)
+                    .stage_spine_close(call_id, memory)
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
@@ -283,8 +292,9 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
             }
             SpineTool::Next => {
                 let args: NextArgs = parse_arguments(&arguments)?;
+                let memory = normalize_memory_arg(args.memory, "spine.next")?;
                 session
-                    .stage_spine_next(call_id, args.summary, args.instruction)
+                    .stage_spine_next(call_id, args.summary, memory)
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
@@ -346,6 +356,37 @@ mod tests {
         })
         .expect("non-empty feedback content should be accepted");
         assert_eq!(args.content, "useful Spine feedback");
+    }
+
+    #[test]
+    fn close_memory_rejects_empty_content() {
+        let err = match normalize_memory_arg(" \n\t ".to_string(), "spine.close") {
+            Ok(_) => panic!("empty close memory should be rejected"),
+            Err(err) => err,
+        };
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("expected model-visible close memory argument error");
+        };
+        assert!(message.contains("non-empty memory"));
+    }
+
+    #[test]
+    fn close_memory_trims_surrounding_whitespace() {
+        let memory = normalize_memory_arg(" node memory \n".to_string(), "spine.close")
+            .expect("non-empty memory should be accepted");
+        assert_eq!(memory, "node memory");
+    }
+
+    #[test]
+    fn next_memory_rejects_empty_content() {
+        let err = match normalize_memory_arg("".to_string(), "spine.next") {
+            Ok(_) => panic!("empty next memory should be rejected"),
+            Err(err) => err,
+        };
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("expected model-visible next memory argument error");
+        };
+        assert!(message.contains("non-empty memory"));
     }
 }
 

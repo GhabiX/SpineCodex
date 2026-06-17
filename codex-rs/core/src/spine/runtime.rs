@@ -98,6 +98,7 @@ pub(crate) struct SpineRuntime {
     #[cfg(test)]
     pending_tool_responses: BTreeMap<String, Vec<PendingToolResponse>>,
     pending: Option<PendingTransition>,
+    next_user_anchor: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -157,12 +158,12 @@ enum PendingTransition {
     },
     Close {
         call_id: String,
-        instruction: Option<String>,
+        memory: String,
     },
     NextSugar {
         call_id: String,
         summary: String,
-        instruction: Option<String>,
+        memory: String,
     },
 }
 
@@ -181,6 +182,7 @@ struct PendingMsg {
     raw_ordinal: u64,
     context_index: u64,
     from_user: bool,
+    user_anchor: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -262,6 +264,26 @@ pub(crate) enum SpinePendingCloseAction {
     Next,
 }
 
+pub(crate) trait IntoSpineNodeMemory {
+    fn into_spine_node_memory(self) -> Result<String, SpineError>;
+}
+
+impl IntoSpineNodeMemory for String {
+    fn into_spine_node_memory(self) -> Result<String, SpineError> {
+        validate_model_node_memory(&self)?;
+        Ok(self)
+    }
+}
+
+#[cfg(test)]
+impl IntoSpineNodeMemory for Option<String> {
+    fn into_spine_node_memory(self) -> Result<String, SpineError> {
+        let memory = self.unwrap_or_else(|| "test node memory".to_string());
+        validate_model_node_memory(&memory)?;
+        Ok(memory)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpinePendingCommit {
     Open,
@@ -269,7 +291,7 @@ pub(crate) enum SpinePendingCommit {
         action: SpinePendingCloseAction,
         node: NodeId,
         suffix_start: usize,
-        instruction: Option<String>,
+        memory: String,
         next_summary: Option<String>,
     },
 }
@@ -304,6 +326,7 @@ pub(crate) enum SpineCompactSourceEntryKind {
         item: ResponseItem,
         raw_ordinal: u64,
         from_user: bool,
+        user_anchor: Option<u64>,
     },
     ChildMemory {
         node_id: NodeId,
@@ -545,6 +568,7 @@ impl SpineRuntime {
 
     fn load_trim_only(store: SpineStore, raw_live: Vec<bool>) -> Result<Self, SpineError> {
         let ledger = SpineLedgerCache::new(Vec::new(), Vec::new(), store.trim_events()?)?;
+        let next_user_anchor = next_user_anchor_from_events(&ledger.events)?;
         Ok(Self {
             store,
             ledger,
@@ -561,6 +585,7 @@ impl SpineRuntime {
             #[cfg(test)]
             pending_tool_responses: BTreeMap::new(),
             pending: None,
+            next_user_anchor,
         })
     }
 
@@ -759,6 +784,7 @@ impl SpineRuntime {
             store.pressure_events()?,
             store.trim_events()?,
         )?;
+        let next_user_anchor = next_user_anchor_from_events(&ledger.events)?;
         let mems = store.mems()?;
         let markers = store.commit_markers()?;
         store.validate_commit_markers_for_replay(
@@ -813,6 +839,7 @@ impl SpineRuntime {
             #[cfg(test)]
             pending_tool_responses: BTreeMap::new(),
             pending: None,
+            next_user_anchor,
         })
     }
 
@@ -826,6 +853,7 @@ impl SpineRuntime {
             store.pressure_events()?,
             store.trim_events()?,
         )?;
+        let next_user_anchor = next_user_anchor_from_events(&ledger.events)?;
         ledger.retain_trim_events_at_or_before(checkpoint.trim_seq_watermark);
         let mems = store.mems()?;
         let markers = store.commit_markers()?;
@@ -905,6 +933,7 @@ impl SpineRuntime {
             #[cfg(test)]
             pending_tool_responses: BTreeMap::new(),
             pending: None,
+            next_user_anchor,
         })
     }
 
@@ -1148,10 +1177,21 @@ impl SpineRuntime {
         }
         let context_index = u64::try_from(context_index)
             .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
+        let user_anchor = if is_user_message(item) {
+            let user_anchor = self.next_user_anchor;
+            self.next_user_anchor = self
+                .next_user_anchor
+                .checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("user anchor overflow".to_string()))?;
+            Some(user_anchor)
+        } else {
+            None
+        };
         let msg = PendingMsg {
             raw_ordinal,
             context_index,
             from_user: is_user_message(item),
+            user_anchor,
         };
         if let ResponseItem::FunctionCall {
             call_id,
@@ -1620,6 +1660,7 @@ impl SpineRuntime {
             raw_ordinal: msg.raw_ordinal,
             context_index: msg.context_index,
             from_user: msg.from_user,
+            user_anchor: msg.user_anchor,
         })
     }
 
@@ -1857,6 +1898,7 @@ impl SpineRuntime {
                     })?,
                 },
                 from_user: msg.from_user,
+                user_anchor: msg.user_anchor,
             },
             &self.archive(),
         )
@@ -1900,28 +1942,27 @@ impl SpineRuntime {
         })
     }
 
-    pub(crate) fn stage_close(
+    pub(crate) fn stage_close<M: IntoSpineNodeMemory>(
         &mut self,
         call_id: String,
-        instruction: Option<String>,
+        memory: M,
     ) -> Result<(), SpineError> {
         self.ensure_no_pending_transition()?;
+        let memory = memory.into_spine_node_memory()?;
+        self.validate_memory_user_anchor_refs(&memory)?;
         if !self.control_call_ids.contains(&call_id) {
             return Err(SpineError::Operation(format!(
                 "missing spine.close request anchor for call_id={call_id}"
             )));
         }
-        self.stage(PendingTransition::Close {
-            call_id,
-            instruction,
-        })
+        self.stage(PendingTransition::Close { call_id, memory })
     }
 
-    pub(crate) fn stage_next(
+    pub(crate) fn stage_next<M: IntoSpineNodeMemory>(
         &mut self,
         call_id: String,
         summary: String,
-        instruction: Option<String>,
+        memory: M,
     ) -> Result<(), SpineError> {
         self.ensure_no_pending_transition()?;
         let summary = summary.trim().to_string();
@@ -1930,6 +1971,8 @@ impl SpineRuntime {
                 "spine.next summary must not be empty".to_string(),
             ));
         }
+        let memory = memory.into_spine_node_memory()?;
+        self.validate_memory_user_anchor_refs(&memory)?;
         if !self.control_call_ids.contains(&call_id) {
             return Err(SpineError::Operation(format!(
                 "missing spine.next request anchor for call_id={call_id}"
@@ -1938,8 +1981,42 @@ impl SpineRuntime {
         self.stage(PendingTransition::NextSugar {
             call_id,
             summary,
-            instruction,
+            memory,
         })
+    }
+
+    fn validate_memory_user_anchor_refs(&self, memory: &str) -> Result<(), SpineError> {
+        let refs = user_anchor_refs_in_memory(memory)?;
+        if refs.is_empty() {
+            return Ok(());
+        }
+        let existing = self.live_user_anchors()?;
+        for anchor in refs {
+            if !existing.contains(&anchor) {
+                return Err(SpineError::ToolUse(format!(
+                    "spine.close/next memory references unknown user anchor [U{anchor}]"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn live_user_anchors(&self) -> Result<BTreeSet<u64>, SpineError> {
+        let raw_mask = RawMask::new(&self.raw_live);
+        let mut anchors = BTreeSet::new();
+        for event in &self.ledger.events {
+            if !event.allowed_by(raw_mask)? {
+                continue;
+            }
+            if let SpineLedgerEvent::Msg {
+                user_anchor: Some(anchor),
+                ..
+            } = &event.event
+            {
+                anchors.insert(*anchor);
+            }
+        }
+        Ok(anchors)
     }
 
     fn stage(&mut self, pending: PendingTransition) -> Result<(), SpineError> {
@@ -2098,20 +2175,14 @@ impl SpineRuntime {
                 completed_toolcall,
                 raw_items,
             )?,
-            PendingTransition::Close { instruction, .. } => self.commit_close_pending(
-                instruction,
+            PendingTransition::Close { .. } => self.commit_close_pending(
                 close_compact,
                 token_baselines,
                 completed_toolcall,
                 raw_items,
             )?,
-            PendingTransition::NextSugar {
+            PendingTransition::NextSugar { summary, .. } => self.commit_next_sugar_pending(
                 summary,
-                instruction,
-                ..
-            } => self.commit_next_sugar_pending(
-                summary,
-                instruction,
                 close_compact,
                 token_baselines,
                 completed_toolcall,
@@ -2201,13 +2272,12 @@ impl SpineRuntime {
 
     fn commit_close_pending(
         &mut self,
-        instruction: Option<String>,
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitKind, SpineError> {
-        let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
+        let prepared = self.prepare_close_commit(None, close_compact, token_baselines)?;
         let mut events = vec![prepared.close_event.clone()];
         let completed_toolcall = completed_toolcall.ok_or_else(|| {
             SpineError::InvalidEvent(
@@ -2273,13 +2343,12 @@ impl SpineRuntime {
     fn commit_next_sugar_pending(
         &mut self,
         summary: String,
-        instruction: Option<String>,
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitKind, SpineError> {
-        let prepared = self.prepare_close_commit(instruction, close_compact, token_baselines)?;
+        let prepared = self.prepare_close_commit(None, close_compact, token_baselines)?;
         let mut close_reduced_parse_stack = self.parse_stack.clone();
         close_reduced_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
         close_reduced_parse_stack
@@ -2376,10 +2445,15 @@ impl SpineRuntime {
 
     fn prepare_close_commit(
         &self,
-        instruction: Option<String>,
+        _instruction: Option<String>,
         close_compact: Option<SpineCloseCompact>,
         token_baselines: SpineTokenBaselines,
     ) -> Result<PreparedCloseCommit, SpineError> {
+        let close_compact = close_compact.ok_or_else(|| {
+            SpineError::CompactFailure(
+                "spine.close requires a validated source plan for memory assembly".to_string(),
+            )
+        })?;
         let open_meta = self.current_close_open_meta()?.clone();
         let node = open_meta.id.clone();
         if !self.parse_stack.current_open_has_nodes()? {
@@ -2392,16 +2466,10 @@ impl SpineRuntime {
             node,
             boundary: self.raw_len,
             summary: open_meta.summary.clone(),
-            instruction,
+            instruction: None,
             close_input_tokens: token_baselines.provider_input_tokens,
             close_context_tokens: token_baselines.provider_input_tokens,
         };
-        let close_compact = close_compact.ok_or_else(|| {
-            SpineError::CompactFailure(format!(
-                "spine.close requires a completed suffix compact for node {}",
-                open_meta.id
-            ))
-        })?;
         let seq = self.ledger.next_event_seq;
         if close_compact.source_context_range.start != suffix_start {
             return Err(SpineError::CompactFailure(format!(
@@ -2475,27 +2543,25 @@ impl SpineRuntime {
         }
         Ok(Some(match pending {
             PendingTransition::Open { .. } => SpinePendingCommit::Open,
-            PendingTransition::Close { instruction, .. } => {
+            PendingTransition::Close { memory, .. } => {
                 let open_meta = self.current_close_open_meta()?;
                 SpinePendingCommit::Close {
                     action: SpinePendingCloseAction::Close,
                     node: open_meta.id.clone(),
                     suffix_start: open_meta.index,
-                    instruction: instruction.clone(),
+                    memory: memory.clone(),
                     next_summary: None,
                 }
             }
             PendingTransition::NextSugar {
-                summary,
-                instruction,
-                ..
+                summary, memory, ..
             } => {
                 let open_meta = self.current_close_open_meta()?;
                 SpinePendingCommit::Close {
                     action: SpinePendingCloseAction::Next,
                     node: open_meta.id.clone(),
                     suffix_start: open_meta.index,
-                    instruction: instruction.clone(),
+                    memory: memory.clone(),
                     next_summary: Some(summary.clone()),
                 }
             }
@@ -3301,6 +3367,26 @@ fn next_event_seq_from(events: &[LoggedSpineLedgerEvent]) -> Result<u64, SpineEr
         .map(|seq| seq.unwrap_or(0))
 }
 
+fn next_user_anchor_from_events(events: &[LoggedSpineLedgerEvent]) -> Result<u64, SpineError> {
+    let next = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            SpineLedgerEvent::Msg {
+                user_anchor: Some(user_anchor),
+                ..
+            } => Some(*user_anchor),
+            _ => None,
+        })
+        .max()
+        .map(|anchor| {
+            anchor
+                .checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("user anchor overflow".to_string()))
+        })
+        .transpose()?;
+    Ok(next.unwrap_or(1))
+}
+
 fn next_pressure_seq_from(events: &[LoggedPressureEvent]) -> Result<u64, SpineError> {
     events
         .iter()
@@ -3726,10 +3812,12 @@ fn collect_source_plan_entries_from_visible_refs(
             VisibleItemSource::RawResponseItem {
                 raw_ordinal,
                 from_user,
+                user_anchor,
             } => collect_source_plan_entry_from_response_item(
                 *raw_ordinal,
                 visible_ref.context_index,
                 *from_user,
+                *user_anchor,
                 raw_context_items,
                 &mut entries,
             )?,
@@ -3739,6 +3827,7 @@ fn collect_source_plan_entries_from_visible_refs(
                     *raw_ordinal,
                     visible_ref.context_index,
                     false,
+                    None,
                     raw_context_items,
                     &mut entries,
                 )?;
@@ -3775,6 +3864,7 @@ fn collect_source_plan_entry_from_response_item(
     raw_ordinal: u64,
     context_index: usize,
     from_user: bool,
+    user_anchor: Option<u64>,
     raw_context_items: &[ResponseItem],
     entries: &mut Vec<SpineCompactSourcePlanEntry>,
 ) -> Result<(), SpineError> {
@@ -3797,9 +3887,70 @@ fn collect_source_plan_entry_from_response_item(
             item,
             raw_ordinal,
             from_user,
+            user_anchor,
         },
     });
     Ok(())
+}
+
+fn validate_model_node_memory(memory: &str) -> Result<(), SpineError> {
+    if memory.trim().is_empty() {
+        return Err(SpineError::ToolUse(
+            "spine.close/next memory must not be empty".to_string(),
+        ));
+    }
+    for marker in [
+        "# Spine Memory ",
+        "## User Message",
+        "## Child Memory",
+        "## Memory Slot",
+        "## Node Memory",
+        "<spine_memory>",
+        "</spine_memory>",
+    ] {
+        if memory.contains(marker) {
+            return Err(SpineError::ToolUse(format!(
+                "spine.close/next memory must not contain runtime-owned marker {marker:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn user_anchor_refs_in_memory(memory: &str) -> Result<BTreeSet<u64>, SpineError> {
+    let bytes = memory.as_bytes();
+    let mut refs = BTreeSet::new();
+    let mut offset = 0usize;
+    while let Some(relative_start) = memory[offset..].find("[U") {
+        let start = offset
+            .checked_add(relative_start)
+            .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))?;
+        let digits_start = start
+            .checked_add(2)
+            .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))?;
+        let mut digits_end = digits_start;
+        while digits_end < bytes.len() && bytes[digits_end].is_ascii_digit() {
+            digits_end += 1;
+        }
+        if digits_end > digits_start && bytes.get(digits_end) == Some(&b']') {
+            let anchor = memory[digits_start..digits_end]
+                .parse::<u64>()
+                .map_err(|_| {
+                    SpineError::ToolUse(
+                        "spine.close/next memory contains invalid user anchor".to_string(),
+                    )
+                })?;
+            refs.insert(anchor);
+            offset = digits_end
+                .checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))?;
+        } else {
+            offset = start
+                .checked_add(2)
+                .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))?;
+        }
+    }
+    Ok(refs)
 }
 
 fn validate_source_plan_context_index(

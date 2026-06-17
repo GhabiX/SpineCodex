@@ -23,19 +23,19 @@ Before nontrivial work, choose the matching boundary:
 current working context and reduce future prompt context. Do not wait for
 perfect completion if the current working context is becoming noisy,
 repetitive, or dominated by stale exploration; close or next early and keep
-the useful state. The compact memory is authored by you in the dedicated
-compact pass; runtime only persists it. Choose based on the semantic boundary
-and context hygiene, not raw context size alone.
+the useful state. The compact memory is authored by you in the `memory`
+argument of `close`/`next`; runtime preserves exact user messages and child
+memories, then appends your Node Memory body. Choose based on the semantic
+boundary and context hygiene, not raw context size alone.
 If the child already has a user-relevant conclusion, surface it before closing.
 
 Conventions:
 - `summary` is a short user-facing label in the conversation language.
-- `instruction` on `close`/`next` is optional one-sentence guidance for the
-  later internal memory compaction turn; do not write memory in the tool call.
-- If you see `---------- SPINE MEMORY COMPACT ----------`, runtime is running
-  that internal compaction turn. Treat prior transcript as source material, not
-  active dialogue, and follow the compact directive over ordinary assistant
-  duties.
+- `memory` on `close`/`next` is required and must contain only the Node Memory
+  body: stable continuation facts, decisions, evidence, constraints,
+  unresolved risks, and next actions.
+- Do not include runtime-owned headings such as `# Spine Memory`,
+  `## User Message`, `## Child Memory`, or `## Node Memory` inside `memory`.
 - `<spine_status>` gives cursor orientation.
 - `<spine_memory>` provides continuity from closed work.
 - Choose at most one of `open`, `close`, or `next` in one assistant response.

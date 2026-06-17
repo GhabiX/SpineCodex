@@ -11,6 +11,7 @@ use crate::spine::model::TrimProjection;
 use crate::spine::model::TrimResponseKind;
 use crate::spine::model::TrimTarget;
 use crate::spine::parse_stack::ParseStack;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -27,6 +28,7 @@ pub(super) enum VisibleItemSource {
     RawResponseItem {
         raw_ordinal: u64,
         from_user: bool,
+        user_anchor: Option<u64>,
     },
     ToolCallSegment {
         kind: ToolCallSegmentKind,
@@ -177,13 +179,18 @@ fn project_node_to_visible_refs(
     refs: &mut Vec<VisibleItemRef>,
 ) -> Result<(), SpineError> {
     match node {
-        SpineTreeNode::MsgAsLeafNode { msg, from_user } => match msg {
+        SpineTreeNode::MsgAsLeafNode {
+            msg,
+            from_user,
+            user_anchor,
+        } => match msg {
             SegRef::ResponseItem { raw_ordinal, .. } => push_visible_ref(
                 next_context_index,
                 refs,
                 VisibleItemSource::RawResponseItem {
                     raw_ordinal: *raw_ordinal,
                     from_user: *from_user,
+                    user_anchor: *user_anchor,
                 },
             ),
             SegRef::Memory {
@@ -277,6 +284,14 @@ fn render_visible_ref_to_context(
             {
                 item = projected_tool_response_item(&item, target)?;
             }
+            if let VisibleItemSource::RawResponseItem {
+                from_user: true,
+                user_anchor: Some(user_anchor),
+                ..
+            } = source
+            {
+                item = anchored_user_message_item(&item, *user_anchor)?;
+            }
             out.push(item);
             Ok(())
         }
@@ -303,6 +318,44 @@ fn render_visible_ref_to_context(
             Ok(())
         }
     }
+}
+
+fn anchored_user_message_item(
+    item: &ResponseItem,
+    user_anchor: u64,
+) -> Result<ResponseItem, SpineError> {
+    let mut item = item.clone();
+    let ResponseItem::Message { role, content, .. } = &mut item else {
+        return Err(SpineError::InvalidEvent(format!(
+            "user anchor U{user_anchor} attached to non-message response item"
+        )));
+    };
+    if role != "user" {
+        return Err(SpineError::InvalidEvent(format!(
+            "user anchor U{user_anchor} attached to non-user message"
+        )));
+    }
+    match content.as_mut_slice() {
+        [ContentItem::InputText { text }] => {
+            prefix_user_anchor(text, user_anchor);
+        }
+        [ContentItem::OutputText { text }] => {
+            prefix_user_anchor(text, user_anchor);
+        }
+        _ => {
+            return Err(SpineError::InvalidEvent(format!(
+                "user anchor U{user_anchor} requires a single text user message"
+            )));
+        }
+    }
+    Ok(item)
+}
+
+fn prefix_user_anchor(text: &mut String, user_anchor: u64) {
+    if text.starts_with(&format!("[U{user_anchor}]")) {
+        return;
+    }
+    *text = format!("[U{user_anchor}]\n{text}");
 }
 
 pub(super) fn tagged_tool_response_item(

@@ -1654,15 +1654,20 @@ fn spine_namespace_tools_follow_jit_and_trim_visibility_independently() {
 
     let close_tool = find_namespace_function_tool(&specs, "spine", "close");
     let (close_properties, close_required) = expect_object_schema(&close_tool.parameters);
-    assert_eq!(close_required, Some(&Vec::new()));
+    assert_eq!(close_required, Some(&vec!["memory".to_string()]));
     assert!(!close_properties.contains_key("summary"));
-    assert!(close_properties.contains_key("instruction"));
+    assert!(!close_properties.contains_key("instruction"));
+    assert!(close_properties.contains_key("memory"));
 
     let next_tool = find_namespace_function_tool(&specs, "spine", "next");
     let (next_properties, next_required) = expect_object_schema(&next_tool.parameters);
-    assert_eq!(next_required, Some(&vec!["summary".to_string()]));
+    assert_eq!(
+        next_required,
+        Some(&vec!["summary".to_string(), "memory".to_string()])
+    );
     assert!(next_properties.contains_key("summary"));
-    assert!(next_properties.contains_key("instruction"));
+    assert!(!next_properties.contains_key("instruction"));
+    assert!(next_properties.contains_key("memory"));
 }
 
 #[test]

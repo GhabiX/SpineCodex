@@ -472,6 +472,7 @@ mod tests {
                         context_index: 0,
                     },
                     from_user: true,
+                    user_anchor: None,
                 },
                 SpineTreeNode::MsgAsLeafNode {
                     msg: SegRef::ResponseItem {
@@ -479,6 +480,7 @@ mod tests {
                         context_index: 1,
                     },
                     from_user: true,
+                    user_anchor: None,
                 },
             ])],
         };

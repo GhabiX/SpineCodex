@@ -79,6 +79,8 @@ pub(super) enum SpineLedgerEvent {
         raw_ordinal: u64,
         context_index: u64,
         from_user: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_anchor: Option<u64>,
     },
     ToolCall {
         segments: Vec<ToolCallEventSegment>,
@@ -477,6 +479,8 @@ pub(super) enum SpineToken {
     Msg {
         seg: SegRef,
         from_user: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_anchor: Option<u64>,
     },
     ToolCall {
         segments: Vec<ToolCallSegment>,
@@ -505,6 +509,8 @@ pub(super) enum SpineTreeNode {
     MsgAsLeafNode {
         msg: SegRef,
         from_user: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_anchor: Option<u64>,
     },
     ToolCallAsLeafNode {
         segments: Vec<ToolCallSegment>,

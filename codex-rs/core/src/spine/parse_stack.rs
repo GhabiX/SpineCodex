@@ -81,12 +81,15 @@ impl ParseStack {
                 next_open_input_tokens,
                 next_open_context_tokens,
             )),
-            SpineToken::Msg { seg, from_user } => {
-                Symbol::SpineTreeNode(SpineTreeNode::MsgAsLeafNode {
-                    msg: seg,
-                    from_user,
-                })
-            }
+            SpineToken::Msg {
+                seg,
+                from_user,
+                user_anchor,
+            } => Symbol::SpineTreeNode(SpineTreeNode::MsgAsLeafNode {
+                msg: seg,
+                from_user,
+                user_anchor,
+            }),
             SpineToken::ToolCall { segments } => {
                 Symbol::SpineTreeNode(SpineTreeNode::ToolCallAsLeafNode { segments })
             }
@@ -1193,6 +1196,7 @@ pub(super) fn event_to_token(
             raw_ordinal,
             context_index,
             from_user,
+            user_anchor,
         } => Ok(SpineToken::Msg {
             seg: SegRef::ResponseItem {
                 raw_ordinal: *raw_ordinal,
@@ -1200,6 +1204,7 @@ pub(super) fn event_to_token(
                     .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?,
             },
             from_user: *from_user,
+            user_anchor: *user_anchor,
         }),
         SpineLedgerEvent::ToolCall { segments } => Ok(SpineToken::ToolCall {
             segments: segments
