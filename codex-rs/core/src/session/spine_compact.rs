@@ -599,6 +599,7 @@ Call submit_spine_memory exactly once with this JSON payload shape:\n\
 {SPINE_CLOSE_COMPACT_JSON_SHAPE}\n\n\
 Contract:\n\n\
 * node_memory is required. Keep only stable facts needed to continue: goal, key decisions, evidence, constraints, unresolved risks, and next actions.\n\
+* When it helps user-facing continuation, start node_memory with a brief `User Intent Status:` block: latest intent, status, already said/done, continue from, do-not-repeat. Include it even without a new user message if this node changed an existing user intent. Omit it when it adds no information beyond ordinary work state. Keep the block short and keep node_memory concise.\n\
 * slots is an array. Use [] unless a listed non-preserved span contains information needed later.\n\
 * Each used slot must be exactly {{\"slot_id\":\"slot_N\",\"body\":\"...\"}}.\n\
 * slot_id must be one of the allowed slot ids below.\n\
