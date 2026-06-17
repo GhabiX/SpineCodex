@@ -116,6 +116,14 @@ pub(super) enum SpineLedgerEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         next_open_context_tokens: Option<i64>,
     },
+    OpenContextBaseline {
+        node: NodeId,
+        raw_boundary: u64,
+        raw_live_hash: String,
+        open_input_tokens: i64,
+        open_context_tokens: i64,
+        open_context_source: ContextBaselineSource,
+    },
 }
 
 /// Append-only Spine ledger event with a monotonic sidecar sequence number.
@@ -634,6 +642,11 @@ impl SpineLedgerEvent {
                 raw_live_hash,
                 ..
             } => raw_mask.prefix_hash_matches(*boundary, raw_live_hash),
+            SpineLedgerEvent::OpenContextBaseline {
+                raw_boundary,
+                raw_live_hash,
+                ..
+            } => raw_mask.prefix_hash_matches(*raw_boundary, raw_live_hash),
         }
     }
 }

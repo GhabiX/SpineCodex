@@ -137,8 +137,8 @@ pub(super) fn next_root_open_symbol(
     archive: &SpineArchive,
     memory: &MemoryRef,
     next_open_index: usize,
-    open_input_tokens: Option<i64>,
-    open_context_tokens: Option<i64>,
+    _open_input_tokens: Option<i64>,
+    _open_context_tokens: Option<i64>,
 ) -> Result<Symbol, SpineError> {
     let root_index = *memory
         .node_id
@@ -151,10 +151,9 @@ pub(super) fn next_root_open_symbol(
             id: next_id.clone(),
             index: next_open_index,
             summary: "root".to_string(),
-            open_input_tokens,
-            open_context_tokens,
-            open_context_source: open_context_tokens
-                .map(|_| crate::spine::model::ContextBaselineSource::RootCompactHandoff),
+            open_input_tokens: None,
+            open_context_tokens: None,
+            open_context_source: None,
             node_dir: archive.node_dir(&next_id),
         },
     )))
@@ -349,7 +348,7 @@ pub(super) fn tree_meta(
     index: u64,
     summary: String,
 ) -> Result<TreeMeta, SpineError> {
-    tree_meta_with_token_baselines(archive, id, index, summary, None, None, None)
+    tree_meta_with_token_baselines(archive, id, index, summary, None, None)
 }
 
 pub(super) fn tree_meta_with_token_baselines(
@@ -357,8 +356,7 @@ pub(super) fn tree_meta_with_token_baselines(
     id: NodeId,
     index: u64,
     summary: String,
-    open_input_tokens: Option<i64>,
-    open_context_tokens: Option<i64>,
+    provider_input_tokens: Option<i64>,
     open_context_source: Option<crate::spine::model::ContextBaselineSource>,
 ) -> Result<TreeMeta, SpineError> {
     let index = usize::try_from(index)
@@ -368,8 +366,8 @@ pub(super) fn tree_meta_with_token_baselines(
         id,
         index,
         summary,
-        open_input_tokens,
-        open_context_tokens,
+        open_input_tokens: provider_input_tokens,
+        open_context_tokens: provider_input_tokens,
         open_context_source,
     })
 }

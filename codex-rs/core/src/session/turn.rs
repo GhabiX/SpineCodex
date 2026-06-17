@@ -1546,12 +1546,6 @@ fn conflicting_toolreq_rejection_output(call: &ToolCall, message: &str) -> Respo
     }
 }
 
-fn replace_function_output_text(item: &mut ResponseItem, text: String) {
-    if let ResponseItem::FunctionCallOutput { output, .. } = item {
-        output.body = FunctionCallOutputBody::Text(text);
-    }
-}
-
 /// Ephemeral per-response state for streaming a single proposed plan.
 /// This is intentionally not persisted or stored in session/state since it
 /// only exists while a response is actively streaming. The final plan text
@@ -2094,7 +2088,7 @@ async fn drain_in_flight(
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
-                let mut response_item = response_input.into();
+                let response_item = response_input.into();
                 let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
                 let spine_trim_enabled = sess.features.enabled(Feature::SpineTrim);
                 let is_pending_spine_close_like = sess
@@ -2136,11 +2130,6 @@ async fn drain_in_flight(
                 };
                 if !commit.record_output && !output_recorded_before_spine_commit {
                     continue;
-                }
-                if let Some(text) = commit.output_text
-                    && !output_recorded_before_spine_commit
-                {
-                    replace_function_output_text(&mut response_item, text);
                 }
                 let mut deferred_history_update = commit.deferred_history_update;
                 let deferred_tree_update = commit.deferred_tree_update;
@@ -2320,7 +2309,15 @@ async fn drain_deferred_spine_tool_group(
         .await;
     }
     spine_control_overlay.remove_call_ids(&tool_call_ids);
-    if let Some(update) = commit.deferred_history_update {
+    let mut deferred_history_update = commit.deferred_history_update;
+    if let Some(update) = deferred_history_update.as_mut()
+        && let Some(response_item) = response_items.iter().find(|item| {
+            tool_response_call_id_for_overlay(item).as_deref() == Some(commit_call_id.as_str())
+        })
+    {
+        update.replace_tool_output(response_item);
+    }
+    if let Some(update) = deferred_history_update {
         sess.apply_deferred_spine_history_update(update)
             .await
             .map_err(SamplingRequestError::Codex)?;

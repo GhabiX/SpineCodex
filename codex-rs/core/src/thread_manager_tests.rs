@@ -200,7 +200,7 @@ fn developer_interrupted_marker() -> ResponseItem {
         .expect("developer interrupted marker should be enabled")
 }
 
-fn build_spine_source_with_checkpoint_and_future_pressure(
+fn build_spine_source_with_checkpoint_and_future_open(
     dir: &tempfile::TempDir,
 ) -> std::path::PathBuf {
     let rollout = dir.path().join("source.jsonl");
@@ -213,8 +213,8 @@ fn build_spine_source_with_checkpoint_and_future_pressure(
         .observe_context_item(0, 0, &first)
         .expect("observe first context item");
     runtime
-        .ensure_current_open_context_baseline(1_000, Some(1_100), Some(0), 1)
-        .expect("record checkpoint-visible pressure");
+        .capture_current_open_provider_baseline(1_000)
+        .expect("capture checkpoint-visible root baseline");
     runtime
         .checkpoint_before_user_msg(&rollout, 1, std::slice::from_ref(&first))
         .expect("write pre-user checkpoint");
@@ -237,16 +237,13 @@ fn build_spine_source_with_checkpoint_and_future_pressure(
     runtime
         .maybe_commit_output("future-open", None)
         .expect("commit future open");
-    runtime
-        .ensure_current_open_context_baseline(2_000, Some(2_100), Some(0), 2)
-        .expect("record future pressure");
     rollout
 }
 
 #[test]
 fn interrupted_spine_fork_boundary_uses_current_head() {
     let dir = tempdir().expect("tempdir");
-    let source_rollout = build_spine_source_with_checkpoint_and_future_pressure(&dir);
+    let source_rollout = build_spine_source_with_checkpoint_and_future_open(&dir);
     let boundary = spine_clone_boundary_for_fork(
         &source_rollout,
         ForkSnapshot::Interrupted,
@@ -279,13 +276,13 @@ fn interrupted_spine_fork_boundary_uses_current_head() {
     )
     .expect("load target")
     .expect("target sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), Some(2_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), None);
 }
 
 #[test]
 fn truncated_spine_fork_boundary_uses_checkpoint_watermark() {
     let dir = tempdir().expect("tempdir");
-    let source_rollout = build_spine_source_with_checkpoint_and_future_pressure(&dir);
+    let source_rollout = build_spine_source_with_checkpoint_and_future_open(&dir);
     let forked_history = InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("first"))]);
     let boundary = spine_clone_boundary_for_fork(
         &source_rollout,
@@ -303,13 +300,13 @@ fn truncated_spine_fork_boundary_uses_checkpoint_watermark() {
         SpineRuntime::load_for_rollout_items(&target_rollout, &[Some(user_msg("first"))], &[])
             .expect("load target")
             .expect("target sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), Some(1_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), Some(1_000));
 }
 
 #[test]
 fn full_truncate_spine_fork_boundary_uses_current_head() {
     let dir = tempdir().expect("tempdir");
-    let source_rollout = build_spine_source_with_checkpoint_and_future_pressure(&dir);
+    let source_rollout = build_spine_source_with_checkpoint_and_future_open(&dir);
     let forked_history = InitialHistory::Forked(vec![
         RolloutItem::ResponseItem(user_msg("first")),
         RolloutItem::ResponseItem(spine_call(crate::spine::SPINE_TOOL_OPEN, "future-open")),
@@ -338,7 +335,7 @@ fn full_truncate_spine_fork_boundary_uses_current_head() {
     )
     .expect("load target")
     .expect("target sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), Some(2_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), None);
 }
 
 #[test]

@@ -13,7 +13,6 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
-use crate::spine::SpineTokenBaselines;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -32,7 +31,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -196,7 +194,7 @@ async fn run_compact_task_inner_impl(
     // request tracking)
     // survives retries within this compact turn.
 
-    let handoff_token_baselines = loop {
+    loop {
         // Clone is required because of the loop
         let turn_input = history
             .clone()
@@ -219,8 +217,8 @@ async fn run_compact_task_inner_impl(
         .await;
 
         match attempt_result {
-            Ok(handoff_token_baselines) => {
-                break handoff_token_baselines;
+            Ok(()) => {
+                break;
             }
             Err(CodexErr::Interrupted) => {
                 return Err(CodexErr::Interrupted);
@@ -291,7 +289,6 @@ async fn run_compact_task_inner_impl(
             new_history,
             reference_context_item,
             compacted_item,
-            handoff_token_baselines,
         )
         .await
     {
@@ -560,7 +557,7 @@ async fn drain_to_completed(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     prompt: &Prompt,
-) -> CodexResult<Option<SpineTokenBaselines>> {
+) -> CodexResult<()> {
     let mut stream = client_session
         .stream(
             prompt,
@@ -595,22 +592,14 @@ async fn drain_to_completed(
                 sess.update_rate_limits(turn_context, snapshot).await;
             }
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
-                let handoff_token_baselines = token_baselines_from_usage(token_usage.as_ref());
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())
                     .await;
-                return Ok(handoff_token_baselines);
+                return Ok(());
             }
             Ok(_) => continue,
             Err(e) => return Err(e),
         }
     }
-}
-
-fn token_baselines_from_usage(current: Option<&TokenUsage>) -> Option<SpineTokenBaselines> {
-    current.map(|current| SpineTokenBaselines {
-        input_tokens: Some(current.input_tokens),
-        context_tokens: Some(current.tokens_in_context_window()),
-    })
 }
 
 #[cfg(test)]

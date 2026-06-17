@@ -576,6 +576,47 @@ impl ParseStack {
             .collect()
     }
 
+    pub(super) fn set_live_open_context_baseline(
+        &mut self,
+        node: &NodeId,
+        provider_input_tokens: i64,
+        source: crate::spine::model::ContextBaselineSource,
+    ) -> Result<bool, SpineError> {
+        let Some(meta) = self
+            .symbols
+            .iter_mut()
+            .rev()
+            .find_map(|symbol| match symbol {
+                Symbol::Control(ControlSymbol::Open(meta)) if &meta.id == node => Some(meta),
+                _ => None,
+            })
+        else {
+            return Ok(false);
+        };
+        match (
+            meta.open_input_tokens,
+            meta.open_context_tokens,
+            meta.open_context_source,
+        ) {
+            (None, None, None) => {
+                meta.open_input_tokens = Some(provider_input_tokens);
+                meta.open_context_tokens = Some(provider_input_tokens);
+                meta.open_context_source = Some(source);
+                Ok(true)
+            }
+            (Some(existing_input), Some(existing_context), Some(existing_source))
+                if existing_input == provider_input_tokens
+                    && existing_context == provider_input_tokens
+                    && existing_source == source =>
+            {
+                Ok(false)
+            }
+            _ => Err(SpineError::InvalidEvent(format!(
+                "open context baseline for node {node} is already set"
+            ))),
+        }
+    }
+
     pub(super) fn current_open_has_nodes(&self) -> Result<bool, SpineError> {
         let open_idx = self
             .symbols
@@ -1184,17 +1225,23 @@ pub(super) fn event_to_token(
             open_context_tokens,
             open_context_source,
             ..
-        } => Ok(SpineToken::Open {
-            meta: tree_meta_with_token_baselines(
-                archive,
-                child.clone(),
-                *index,
-                summary.clone(),
-                *open_input_tokens,
-                *open_context_tokens,
-                *open_context_source,
-            )?,
-        }),
+        } => {
+            if open_input_tokens != open_context_tokens {
+                return Err(SpineError::InvalidEvent(format!(
+                    "open event for node {child} has mismatched provider input baseline encoding"
+                )));
+            }
+            Ok(SpineToken::Open {
+                meta: tree_meta_with_token_baselines(
+                    archive,
+                    child.clone(),
+                    *index,
+                    summary.clone(),
+                    *open_input_tokens,
+                    *open_context_source,
+                )?,
+            })
+        }
         SpineLedgerEvent::Close { node, .. } => {
             let mem = mems.values().find(|mem| &mem.node == node).ok_or_else(|| {
                 SpineError::InvalidEvent(format!("missing memory for close node {node}"))
@@ -1228,8 +1275,6 @@ pub(super) fn event_to_token(
         SpineLedgerEvent::RootCompact {
             mem,
             next_open_index,
-            next_open_input_tokens,
-            next_open_context_tokens,
             ..
         } => {
             let mem = mems.get(mem).ok_or_else(|| {
@@ -1262,10 +1307,36 @@ pub(super) fn event_to_token(
                 next_open_index: usize::try_from(*next_open_index).map_err(|_| {
                     SpineError::InvalidEvent("root open index overflow".to_string())
                 })?,
-                next_open_input_tokens: *next_open_input_tokens,
-                next_open_context_tokens: *next_open_context_tokens,
+                next_open_input_tokens: None,
+                next_open_context_tokens: None,
             })
         }
+        SpineLedgerEvent::OpenContextBaseline { .. } => Err(SpineError::InvalidEvent(
+            "OpenContextBaseline is metadata and cannot be converted to a SpineToken".to_string(),
+        )),
+    }
+}
+
+pub(super) fn apply_metadata_event(
+    ps: &mut ParseStack,
+    event: &LoggedSpineLedgerEvent,
+) -> Result<bool, SpineError> {
+    match &event.event {
+        SpineLedgerEvent::OpenContextBaseline {
+            node,
+            open_input_tokens,
+            open_context_tokens,
+            open_context_source,
+            ..
+        } => {
+            if open_input_tokens != open_context_tokens {
+                return Err(SpineError::InvalidEvent(format!(
+                    "open context baseline for node {node} has mismatched provider input encoding"
+                )));
+            }
+            ps.set_live_open_context_baseline(node, *open_input_tokens, *open_context_source)
+        }
+        _ => Ok(false),
     }
 }
 
@@ -1285,13 +1356,17 @@ pub(super) fn parse_stack_from_events_with_forced_events(
     let mut ps = ParseStack::new();
     for event in events {
         if forced_event_seqs.contains(&event.seq) {
-            ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;
+            if !apply_metadata_event(&mut ps, event)? {
+                ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;
+            }
             continue;
         }
         if marker_structural_event_seqs.contains(&event.seq) || !event.allowed_by(raw_mask)? {
             continue;
         }
-        ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;
+        if !apply_metadata_event(&mut ps, event)? {
+            ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;
+        }
     }
     Ok(ps)
 }

@@ -23,7 +23,7 @@ pub(crate) struct SpineTreeInsideView {
 pub(crate) struct SpineOpenNodeInside {
     pub(crate) node_id: NodeId,
     pub(crate) summary: Option<String>,
-    pub(crate) baseline_tokens: Option<i64>,
+    pub(crate) provider_input_tokens: Option<i64>,
     pub(crate) current_node_context_tokens: Option<i64>,
     pub(crate) problem: Option<SpineNodeContextProblem>,
 }
@@ -73,16 +73,20 @@ pub(crate) fn node_context_tokens(
     current: Option<&TokenUsageInfo>,
     open_context_tokens: Option<i64>,
 ) -> Result<i64, SpineNodeContextProblem> {
-    let current = current
-        .ok_or(SpineNodeContextProblem::MissingCurrentUsage)?
-        .last_token_usage
-        .tokens_in_context_window();
+    let current =
+        provider_input_context_tokens(current.ok_or(SpineNodeContextProblem::MissingCurrentUsage)?)
+            .ok_or(SpineNodeContextProblem::MissingCurrentUsage)?;
     let open_context_tokens =
         open_context_tokens.ok_or(SpineNodeContextProblem::MissingOpenContextBaseline)?;
     if current < open_context_tokens {
         return Err(SpineNodeContextProblem::CoordinateMismatch);
     }
     Ok(current - open_context_tokens)
+}
+
+fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
+    let input_tokens = current.last_token_usage.input_tokens;
+    (input_tokens > 0).then_some(input_tokens)
 }
 
 pub(crate) fn context_problem_label(problem: SpineNodeContextProblem) -> &'static str {
@@ -102,11 +106,14 @@ fn build_open_nodes_inside(
     open_nodes
         .iter()
         .map(|open_node| {
-            let (current_node_context_tokens, problem) =
-                match node_context_tokens(current, open_node.baseline_tokens) {
+            let (current_node_context_tokens, problem) = if let Some(problem) = open_node.problem {
+                (None, Some(problem))
+            } else {
+                match node_context_tokens(current, open_node.provider_input_tokens) {
                     Ok(tokens) => (Some(tokens), None),
                     Err(problem) => (None, Some(problem)),
-                };
+                }
+            };
             let node_id = open_node.node_id.to_string();
             let summary = snapshot
                 .nodes
@@ -116,7 +123,7 @@ fn build_open_nodes_inside(
             SpineOpenNodeInside {
                 node_id: open_node.node_id.clone(),
                 summary,
-                baseline_tokens: open_node.baseline_tokens,
+                provider_input_tokens: open_node.provider_input_tokens,
                 current_node_context_tokens,
                 problem,
             }
@@ -158,7 +165,13 @@ fn annotate_open_node_contexts(
         let accounting = node
             .accounting
             .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default);
-        match node_context_tokens(current, open_node.baseline_tokens) {
+        if let Some(problem) = open_node.problem {
+            accounting.current_node_context_tokens = None;
+            accounting.current_node_context_baseline_source = open_node.baseline_source;
+            accounting.current_node_context_problem = Some(problem);
+            continue;
+        }
+        match node_context_tokens(current, open_node.provider_input_tokens) {
             Ok(tokens) => {
                 accounting.current_node_context_tokens = Some(tokens);
                 accounting.current_node_context_baseline_source = open_node.baseline_source;

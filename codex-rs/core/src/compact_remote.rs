@@ -257,7 +257,6 @@ async fn run_remote_compact_task_inner_impl(
             new_history,
             reference_context_item,
             compacted_item,
-            None,
         )
         .await?;
     let spine_tree_snapshot = replace_outcome.spine_tree_snapshot;

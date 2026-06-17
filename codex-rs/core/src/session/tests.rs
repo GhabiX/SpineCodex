@@ -60,6 +60,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_protocol::spine_tree::SpineNodeContextProblem;
 use tracing::Span;
 
 use crate::goals::ExternalGoalPreviousStatus;
@@ -571,7 +572,7 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
     session: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut crate::client::ModelClientSession,
-    mut response_item: ResponseItem,
+    response_item: ResponseItem,
 ) -> CodexResult<ResponseItem> {
     let is_pending_close_like = session
         .is_pending_spine_close_like_output(&response_item)
@@ -609,11 +610,6 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
         })?;
     if !commit.record_output && !output_recorded_before_spine_commit {
         return Ok(response_item);
-    }
-    if let Some(text) = commit.output_text
-        && !output_recorded_before_spine_commit
-    {
-        replace_function_output_text_for_test(&mut response_item, text);
     }
     let mut deferred_history_update = commit.deferred_history_update;
     if let Some(update) = deferred_history_update.as_mut() {
@@ -10784,7 +10780,7 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
         .expect("stage close");
     while rx.try_recv().is_ok() {}
 
-    let mut close_output = function_output("close-history-fail");
+    let close_output = function_output("close-history-fail");
     let commit = session
         .maybe_commit_spine_tool_output(&turn_context, &close_output)
         .await
@@ -10793,10 +10789,6 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
         .deferred_history_update
         .expect("close commit should defer host history replacement");
     let deferred_tree_update = commit.deferred_tree_update;
-    replace_function_output_text_for_test(
-        &mut close_output,
-        commit.output_text.expect("close output text"),
-    );
     session
         .record_conversation_items_raw_only_durable_without_emission(
             &turn_context,
@@ -10832,7 +10824,7 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
                         if call_id == "close-history-fail"
                             && output
                                 .text_content()
-                                .is_some_and(|text| text.contains("Spine closed."))
+                                .is_some_and(|text| text == "ok")
                 )
             }
             EventMsg::SpineTreeUpdate(snapshot) => snapshot
@@ -13330,7 +13322,6 @@ async fn spine_native_compact_post_hook_ignores_stale_compacted_item_carrier() {
                     "stale compacted item replacement history must not become Spine memory",
                 )]),
             },
-            None,
         )
         .await
         .expect("install root compact after native compact");
@@ -14032,7 +14023,7 @@ async fn spine_root_compact_records_close_tokens_without_next_open_baseline() {
 
     let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
     let close_tokens = store.mem_close_tokens_for_test().expect("mem close tokens");
-    assert_eq!(close_tokens, vec![(Some(229_136), Some(230_871))]);
+    assert_eq!(close_tokens, vec![(Some(229_136), Some(229_136))]);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -14047,7 +14038,7 @@ async fn spine_root_compact_records_close_tokens_without_next_open_baseline() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     assert_eq!(runtime.current_open_input_tokens(), None);
-    assert_eq!(runtime.current_open_context_tokens(), None);
+    assert_eq!(runtime.current_open_provider_input_tokens(), None);
 }
 
 #[tokio::test]
@@ -16659,7 +16650,7 @@ async fn assert_spine_tree_tool_node_context_uses_provider_context_delta() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     assert_eq!(runtime.current_open_input_tokens(), Some(37_002));
-    assert_eq!(runtime.current_open_context_tokens(), Some(37_002));
+    assert_eq!(runtime.current_open_provider_input_tokens(), Some(37_002));
 
     resumed_history.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
@@ -17073,7 +17064,7 @@ async fn record_token_usage_refreshes_spine_tree_cache_only_snapshot() {
 }
 
 #[tokio::test]
-async fn spine_tree_tool_defers_missing_open_baseline_to_pressure_repair() {
+async fn spine_tree_tool_keeps_missing_open_baseline_without_provider_sample() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -17105,10 +17096,6 @@ async fn spine_tree_tool_defers_missing_open_baseline_to_pressure_repair() {
         .maybe_commit_spine_tool_output(&turn_context, &open_output)
         .await
         .expect("commit open should defer missing token usage");
-    assert!(
-        commit.output_text.is_some(),
-        "expected Spine tool output text"
-    );
     assert!(commit.spine_context_already_observed);
 
     while rx.try_recv().is_ok() {}
@@ -17132,7 +17119,7 @@ async fn spine_tree_tool_defers_missing_open_baseline_to_pressure_repair() {
 
     let event = timeout(StdDuration::from_secs(1), rx.recv())
         .await
-        .expect("timeout waiting for repaired Spine tree snapshot")
+        .expect("timeout waiting for Spine tree snapshot")
         .expect("event");
     let snapshot = match event.msg {
         EventMsg::SpineTreeUpdate(snapshot) => snapshot,
@@ -17144,12 +17131,12 @@ async fn spine_tree_tool_defers_missing_open_baseline_to_pressure_repair() {
         .find(|node| node.node_id == snapshot.active_node_id)
         .expect("active node");
     let accounting = active.accounting.as_ref().expect("active accounting");
+    assert_eq!(accounting.current_node_context_baseline_source, None);
+    assert!(accounting.current_node_context_tokens.is_none());
     assert_eq!(
-        accounting.current_node_context_baseline_source,
-        Some(SpineNodeContextBaselineSource::EstimatedFromLiveSuffix)
+        accounting.current_node_context_problem,
+        Some(SpineNodeContextProblem::MissingOpenContextBaseline)
     );
-    assert!(accounting.current_node_context_tokens.is_some());
-    assert_eq!(accounting.current_node_context_problem, None);
     assert_eq!(session.clone_history().await.raw_items(), history_before);
 }
 

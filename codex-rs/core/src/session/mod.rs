@@ -42,7 +42,6 @@ use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineError;
 use crate::spine::SpineSessionState;
-use crate::spine::SpineTokenBaselines;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -3032,14 +3031,9 @@ impl Session {
         mut items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         mut compacted_item: CompactedItem,
-        root_compact_handoff: Option<SpineTokenBaselines>,
     ) -> CodexResult<ReplaceCompactedHistoryOutcome> {
         let spine_tree_snapshot = self
-            .install_spine_root_compact_after_native_compact(
-                &mut items,
-                &mut compacted_item,
-                root_compact_handoff,
-            )
+            .install_spine_root_compact_after_native_compact(&mut items, &mut compacted_item)
             .await?;
         let installed_spine_root_compact = spine_tree_snapshot.is_some();
         let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
@@ -3462,6 +3456,21 @@ impl Session {
                 state.token_info()
             };
             if let Some(token_info) = token_info.as_ref() {
+                if let Some(spine_slot) = self.spine.as_ref() {
+                    let input_tokens = token_info.last_token_usage.input_tokens;
+                    if input_tokens > 0 {
+                        let mut guard = spine_slot.lock().await;
+                        if guard.ensure_valid().is_ok()
+                            && let Some(runtime) = guard.runtime_mut()
+                            && let Err(err) =
+                                runtime.capture_current_open_provider_baseline(input_tokens)
+                        {
+                            guard.invalidate(format!(
+                                "failed to capture Spine open context baseline from provider input tokens: {err}"
+                            ));
+                        }
+                    }
+                }
                 for contributor in self.services.extensions.token_usage_contributors() {
                     contributor.on_token_usage(
                         &self.services.session_extension_data,
@@ -3470,8 +3479,6 @@ impl Session {
                         token_info,
                     );
                 }
-                self.repair_spine_pressure_after_token_usage(token_info)
-                    .await;
                 self.emit_spine_tree_snapshot_cache_only_if_available()
                     .await;
             }
@@ -3509,9 +3516,7 @@ impl Session {
             state.set_token_info(Some(info));
             state.token_info()
         };
-        if let Some(token_info) = token_info.as_ref() {
-            self.repair_spine_pressure_after_token_usage(token_info)
-                .await;
+        if token_info.is_some() {
             self.emit_spine_tree_snapshot_cache_only_if_available()
                 .await;
         }

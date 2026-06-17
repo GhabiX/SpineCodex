@@ -1307,7 +1307,8 @@ impl SpineStore {
                 SpineLedgerEvent::Init { .. }
                 | SpineLedgerEvent::Msg { .. }
                 | SpineLedgerEvent::ToolCall { .. }
-                | SpineLedgerEvent::Open { .. } => {}
+                | SpineLedgerEvent::Open { .. }
+                | SpineLedgerEvent::OpenContextBaseline { .. } => {}
             }
         }
         Ok(())
@@ -1925,7 +1926,8 @@ fn required_memory_ids_for_cloned_events(
             SpineLedgerEvent::Init { .. }
             | SpineLedgerEvent::Msg { .. }
             | SpineLedgerEvent::ToolCall { .. }
-            | SpineLedgerEvent::Open { .. } => {}
+            | SpineLedgerEvent::Open { .. }
+            | SpineLedgerEvent::OpenContextBaseline { .. } => {}
         }
     }
     Ok(ids)

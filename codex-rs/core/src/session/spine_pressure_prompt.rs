@@ -169,7 +169,8 @@ fn status_prompt_signal(
         .iter()
         .find(|node| node.node_id.to_string() == snapshot.active_node_id);
     let (cursor_node_context_tokens, cursor_node_context_problem) = match active_open_node {
-        Some(node) => match node_context_tokens(token_info, node.baseline_tokens) {
+        Some(node) if node.problem.is_some() => (None, node.problem),
+        Some(node) => match node_context_tokens(token_info, node.provider_input_tokens) {
             Ok(tokens) => (Some(tokens), None),
             Err(problem) => (None, Some(problem)),
         },

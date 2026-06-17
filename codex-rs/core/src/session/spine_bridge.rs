@@ -1,8 +1,6 @@
 use super::*;
 use crate::client::ModelClientSession;
 use crate::context_manager::ContextAppend;
-use crate::context_manager::ContextManager;
-use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_compact::SpineCloseCompactOutcome;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
@@ -32,7 +30,6 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 use codex_tools::ToolSpec;
-use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 #[cfg(test)]
 use std::collections::HashSet;
 #[cfg(test)]
@@ -60,7 +57,6 @@ impl PreparedSpineReplay {
 
 #[derive(Debug)]
 pub(crate) struct SpineToolCommit {
-    pub(crate) output_text: Option<String>,
     pub(crate) record_output: bool,
     pub(crate) spine_context_already_observed: bool,
     pub(crate) deferred_history_update: Option<DeferredSpineHistoryUpdate>,
@@ -107,7 +103,6 @@ impl DeferredSpineHistoryUpdate {
 
 struct SpineCommitOutput {
     snapshot: Option<SpineTreeUpdateEvent>,
-    output_text: Option<String>,
     spine_context_already_observed: bool,
     history_update: Option<DeferredSpineHistoryUpdate>,
     defer_tree_update_until_raw_output: bool,
@@ -122,7 +117,6 @@ enum SpineCommitAttempt {
 impl Session {
     pub(crate) fn no_spine_tool_commit() -> SpineToolCommit {
         SpineToolCommit {
-            output_text: None,
             record_output: true,
             spine_context_already_observed: false,
             deferred_history_update: None,
@@ -132,7 +126,6 @@ impl Session {
 
     fn skip_spine_tool_output_commit() -> SpineToolCommit {
         SpineToolCommit {
-            output_text: None,
             record_output: false,
             spine_context_already_observed: false,
             deferred_history_update: None,
@@ -142,7 +135,6 @@ impl Session {
 
     fn spine_tool_commit_from_commit_output(output: SpineCommitOutput) -> SpineToolCommit {
         SpineToolCommit {
-            output_text: output.output_text,
             record_output: true,
             spine_context_already_observed: output.spine_context_already_observed,
             deferred_history_update: output.history_update,
@@ -469,55 +461,6 @@ impl Session {
         spine_slot.lock().await.observe_raw_items(count)
     }
 
-    pub(super) async fn repair_spine_pressure_after_token_usage(
-        &self,
-        token_info: &TokenUsageInfo,
-    ) {
-        if !self.features.enabled(Feature::SpineJit) {
-            return;
-        }
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return;
-        };
-        let current_context_tokens = token_info.last_token_usage.tokens_in_context_window();
-        if current_context_tokens <= 0 {
-            return;
-        }
-        let history = self.clone_history().await;
-        let estimated_live_suffix_tokens = {
-            let guard = spine_slot.lock().await;
-            if guard.ensure_valid().is_err() {
-                return;
-            }
-            let Some(runtime) = guard.runtime() else {
-                return;
-            };
-            let Ok(open_index) = runtime.current_open_index() else {
-                return;
-            };
-            Some(estimate_history_suffix_tokens(&history, open_index))
-        };
-        let result = {
-            let mut guard = spine_slot.lock().await;
-            if let Err(err) = guard.ensure_valid() {
-                tracing::debug!("skipping Spine pressure repair: {err}");
-                return;
-            }
-            let Some(runtime) = guard.runtime_mut() else {
-                return;
-            };
-            runtime.ensure_current_open_context_baseline(
-                current_context_tokens,
-                Some(token_info.last_token_usage.input_tokens),
-                estimated_live_suffix_tokens,
-                history.raw_items().len(),
-            )
-        };
-        if let Err(err) = result {
-            tracing::debug!("failed to append Spine pressure repair metadata: {err}");
-        }
-    }
-
     pub(super) async fn emit_spine_tree_snapshot_cache_only_if_available(&self) {
         if !self.features.enabled(Feature::SpineJit) {
             return;
@@ -691,7 +634,6 @@ impl Session {
         );
         Ok(SpineCommitOutput {
             snapshot: Some(snapshot),
-            output_text: None,
             spine_context_already_observed: true,
             history_update: None,
             defer_tree_update_until_raw_output: false,
@@ -1364,7 +1306,6 @@ impl Session {
         };
         let SpineCommitOutput {
             snapshot,
-            output_text,
             spine_context_already_observed,
             history_update,
             defer_tree_update_until_raw_output,
@@ -1384,7 +1325,6 @@ impl Session {
             );
         }
         Ok(SpineToolCommit {
-            output_text,
             record_output: true,
             spine_context_already_observed,
             deferred_history_update: history_update,
@@ -1501,14 +1441,8 @@ impl Session {
             Some(SpineCommitKind::Close { .. } | SpineCommitKind::CloseThenOpen { .. })
         );
         let mut snapshot = None;
-        let mut output_text = None;
         let mut history_update = None;
         if let Some(commit_kind) = commit_kind.as_ref() {
-            let output_prefix = match commit_kind {
-                SpineCommitKind::Open { .. } => "Spine opened.",
-                SpineCommitKind::Close { .. } => "Spine closed.",
-                SpineCommitKind::CloseThenOpen { .. } => "Spine advanced to next sibling.",
-            };
             match commit_kind {
                 SpineCommitKind::Open { open_request_index } => {
                     let history = state.clone_history();
@@ -1590,8 +1524,6 @@ impl Session {
             }
             let token_info = state.token_info();
             snapshot = Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?);
-            let tree = render_spine_tree_for_model(spine, token_info)?;
-            output_text = Some(format!("{output_prefix}\n\n{tree}"));
         }
         if history_update.is_none() && tool_resp_already_recorded {
             let history = state.clone_history();
@@ -1607,7 +1539,6 @@ impl Session {
         }
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
             snapshot,
-            output_text,
             spine_context_already_observed: true,
             history_update,
             defer_tree_update_until_raw_output,
@@ -1658,14 +1589,12 @@ impl Session {
         &self,
         body: String,
     ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
-        self.install_spine_root_compact_with_handoff(body, None)
-            .await
+        self.install_spine_root_compact_impl(body).await
     }
 
-    async fn install_spine_root_compact_with_handoff(
+    async fn install_spine_root_compact_impl(
         &self,
         body: String,
-        root_compact_handoff: Option<SpineTokenBaselines>,
     ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
@@ -1696,19 +1625,17 @@ impl Session {
             .token_usage_info()
             .await
             .map(|info| SpineTokenBaselines {
-                input_tokens: Some(info.last_token_usage.input_tokens),
-                context_tokens: Some(info.last_token_usage.tokens_in_context_window()),
+                provider_input_tokens: provider_input_context_tokens(&info),
             });
         let token_metadata = SpineRootCompactTokenMetadata {
             close_input_tokens: close_baselines
                 .as_ref()
-                .and_then(|baselines| baselines.input_tokens),
+                .and_then(|baselines| baselines.provider_input_tokens),
             close_context_tokens: close_baselines
                 .as_ref()
-                .and_then(|baselines| baselines.context_tokens),
-            next_open_input_tokens: root_compact_handoff.and_then(|handoff| handoff.input_tokens),
-            next_open_context_tokens: root_compact_handoff
-                .and_then(|handoff| handoff.context_tokens),
+                .and_then(|baselines| baselines.provider_input_tokens),
+            next_open_input_tokens: None,
+            next_open_context_tokens: None,
         };
         {
             let mut guard = spine_slot.lock().await;
@@ -1756,7 +1683,6 @@ impl Session {
         &self,
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
-        root_compact_handoff: Option<SpineTokenBaselines>,
     ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
@@ -1781,7 +1707,7 @@ impl Session {
             }
         })?;
         let Some((root_compact, snapshot)) = self
-            .install_spine_root_compact_with_handoff(body, root_compact_handoff)
+            .install_spine_root_compact_impl(body)
             .await
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
@@ -2093,10 +2019,14 @@ fn render_spine_tree_for_model(
 fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {
     current
         .map(|current| SpineTokenBaselines {
-            input_tokens: Some(current.last_token_usage.input_tokens),
-            context_tokens: Some(current.last_token_usage.tokens_in_context_window()),
+            provider_input_tokens: provider_input_context_tokens(current),
         })
         .unwrap_or_default()
+}
+
+fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
+    let input_tokens = current.last_token_usage.input_tokens;
+    (input_tokens > 0).then_some(input_tokens)
 }
 
 impl Session {
@@ -2121,17 +2051,6 @@ impl Session {
             || (turn_started_from_zero && last_tokens > 0);
         has_fresh_turn_usage.then_some(current)
     }
-}
-
-fn estimate_history_suffix_tokens(history: &ContextManager, open_index: usize) -> i64 {
-    let bytes = history
-        .raw_items()
-        .get(open_index..)
-        .unwrap_or(&[])
-        .iter()
-        .map(estimate_response_item_model_visible_bytes)
-        .fold(0i64, i64::saturating_add);
-    approx_tokens_from_byte_count_i64(bytes)
 }
 
 pub(super) fn assign_spine_raw_ordinals(

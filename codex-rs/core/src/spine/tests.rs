@@ -6,6 +6,7 @@ use crate::spine::checkpoint::CheckpointMemoryRef;
 use crate::spine::compact_checkpoint::CompactCheckpointMemoryItemRef;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
 use crate::spine::io::hash_response_items;
+use crate::spine::model::PressureEvent;
 use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegment;
 use codex_protocol::models::ContentItem;
@@ -1650,111 +1651,39 @@ fn close_source_plan_ignores_stale_persisted_leaf_context_indices() {
     assert_eq!(source_plan.source_context_range, 0..4);
 }
 
-// Pressure overlay repair and replay.
+// Provider input baseline capture and replay.
 
 #[test]
-fn pressure_repair_records_overlay_without_structural_seq_change() {
+fn provider_input_baseline_capture_records_structural_event() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let mut raw = Vec::new();
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
-    let snapshot_seq_before = runtime
-        .build_tree_snapshot()
-        .expect("snapshot")
-        .snapshot_seq;
 
     append_msg(&mut runtime, &mut raw, "live suffix for root");
     let structural_seq_after_msg = runtime
         .build_tree_snapshot()
         .expect("snapshot")
         .snapshot_seq;
-    let pressure_seq_before = runtime.ledger.next_pressure_seq;
-    let repaired = runtime
-        .ensure_current_open_context_baseline(9_000, Some(9_000), Some(1_250), raw.len())
-        .expect("repair pressure baseline");
-    assert!(repaired);
+    let captured = runtime
+        .capture_current_open_provider_baseline(9_000)
+        .expect("capture provider baseline");
+    assert!(captured);
 
     let snapshot = runtime.build_tree_snapshot().expect("snapshot");
-    assert_eq!(snapshot.snapshot_seq, structural_seq_after_msg);
-    assert_eq!(runtime.store.event_count_for_test().expect("events"), 3);
-    assert_eq!(runtime.ledger.next_pressure_seq, pressure_seq_before + 1);
-    assert_eq!(runtime.store.pressure_events().expect("pressure").len(), 1);
-    assert_eq!(runtime.current_open_context_tokens(), Some(7_750));
+    assert_eq!(snapshot.snapshot_seq, structural_seq_after_msg + 1);
+    assert_eq!(runtime.store.event_count_for_test().expect("events"), 4);
+    assert_eq!(runtime.store.pressure_events().expect("pressure").len(), 0);
+    assert_eq!(runtime.current_open_input_tokens(), Some(9_000));
+    assert_eq!(runtime.current_open_provider_input_tokens(), Some(9_000));
     assert_eq!(
         runtime.current_open_context_baseline_source(),
-        Some(SpineNodeContextBaselineSource::EstimatedFromLiveSuffix)
+        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
     );
-    assert_eq!(snapshot_seq_before, 2);
 }
 
 #[test]
-fn event_limit_pressure_replay_uses_limited_structural_seq_without_truncating_cache() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let rollout = rollout_path(&dir);
-    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
-    store
-        .append_logged_event(&LoggedSpineLedgerEvent {
-            seq: 0,
-            event: SpineLedgerEvent::Init { raw_start: 0 },
-        })
-        .expect("append init");
-    store
-        .append_logged_event(&LoggedSpineLedgerEvent {
-            seq: 1,
-            event: SpineLedgerEvent::Open {
-                child: NodeId::root_epoch(1).child(1),
-                boundary: 0,
-                index: 0,
-                summary: "root".to_string(),
-                open_input_tokens: None,
-                open_context_tokens: None,
-                open_context_source: None,
-            },
-        })
-        .expect("append open");
-    store
-        .append_logged_event(&LoggedSpineLedgerEvent {
-            seq: 2,
-            event: SpineLedgerEvent::Msg {
-                raw_ordinal: 0,
-                context_index: 0,
-                from_user: true,
-            },
-        })
-        .expect("append future msg");
-    store
-        .append_logged_pressure_event(&LoggedPressureEvent {
-            pressure_seq: 0,
-            event: PressureEvent::OpenContextBaseline {
-                node: NodeId::root_epoch(1).child(1),
-                open_structural_seq: Some(1),
-                observed_structural_seq: 3,
-                observed_raw_ordinal: 1,
-                observed_raw_live_hash: Some(hash_raw_live(&[true])),
-                observed_context_index: 1,
-                context_tokens: 7_000,
-                input_tokens: Some(8_000),
-                source: ContextBaselineSource::EstimatedFromLiveSuffix,
-                estimated_live_suffix_tokens: Some(1_000),
-            },
-        })
-        .expect("append future pressure");
-
-    let mut replayed = SpineRuntime::load_with_raw_live_and_event_limit(store, vec![true], Some(2))
-        .expect("load limited replay");
-
-    assert_eq!(replayed.ledger.next_event_seq, 3);
-    assert_eq!(replayed.ledger.next_pressure_seq, 1);
-    assert_eq!(replayed.current_open_context_tokens(), None);
-
-    replayed
-        .ensure_current_open_context_baseline(9_000, Some(9_000), Some(1_000), 1)
-        .expect("append pressure after limited replay");
-    assert_eq!(replayed.ledger.next_pressure_seq, 2);
-}
-
-#[test]
-fn pressure_repair_replays_overlay_after_reload() {
+fn provider_input_baseline_replays_after_reload() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let mut raw = Vec::new();
@@ -1762,126 +1691,78 @@ fn pressure_repair_replays_overlay_after_reload() {
 
     append_msg(&mut runtime, &mut raw, "live suffix");
     runtime
-        .ensure_current_open_context_baseline(12_000, Some(12_000), Some(2_000), raw.len())
-        .expect("repair pressure baseline");
+        .capture_current_open_provider_baseline(12_000)
+        .expect("capture provider baseline");
 
     let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
         .expect("load spine")
         .expect("sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), Some(10_000));
+    assert_eq!(replayed.current_open_input_tokens(), Some(12_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), Some(12_000));
     assert_eq!(
         replayed.current_open_context_baseline_source(),
-        Some(SpineNodeContextBaselineSource::EstimatedFromLiveSuffix)
+        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
     );
 }
 
 #[test]
-fn close_consumes_pressure_overlay_open_baseline() {
+fn mismatched_legacy_open_baseline_encoding_fails_replay() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+    store
+        .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
+        .expect("append init");
+    store
+        .append_event(&SpineLedgerEvent::Open {
+            child: NodeId::root_epoch(1).child(1),
+            boundary: 0,
+            index: 0,
+            summary: "root".to_string(),
+            open_input_tokens: Some(12_345),
+            open_context_tokens: Some(10_000),
+            open_context_source: Some(ContextBaselineSource::ProviderAtOpen),
+        })
+        .expect("append mismatched open");
+
+    let err = SpineRuntime::load_for_rollout(&rollout, 0)
+        .expect_err("mismatched provider input encoding must fail closed");
+    assert!(
+        err.to_string().contains("mismatched provider input"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn legacy_pressure_ledger_does_not_drive_live_baseline() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let mut raw = Vec::new();
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
 
-    open_task(
-        &mut runtime,
-        &mut raw,
-        "open-overlay-child",
-        "overlay child",
-    );
-    append_msg(&mut runtime, &mut raw, "child work");
-    runtime
-        .ensure_current_open_context_baseline(9_000, Some(8_500), Some(1_000), raw.len())
-        .expect("repair overlay baseline");
-    close_task_with_token_baselines(
-        &mut runtime,
-        &mut raw,
-        "close-overlay-child",
-        "1.1.1",
-        SpineTokenBaselines {
-            input_tokens: Some(12_500),
-            context_tokens: Some(12_000),
-        },
-    );
-
-    let Some(Symbol::SpineTreeNodes(nodes)) = runtime.parse_stack().symbols.last() else {
-        panic!("closed child should reduce into ParseStack nodes")
-    };
-    let memory = nodes
-        .iter()
-        .find_map(|node| match node {
-            SpineTreeNode::SpineTree { memory, .. } => Some(memory),
-            _ => None,
-        })
-        .expect("closed child memory ref");
-    assert_eq!(memory.open_context_tokens, Some(8_000));
-    assert_eq!(memory.close_context_tokens, Some(12_000));
-    assert_eq!(
-        memory.open_context_source,
-        Some(ContextBaselineSource::EstimatedFromLiveSuffix)
-    );
-    assert_eq!(memory.open_input_tokens, Some(8_500));
-    assert_eq!(memory.close_input_tokens, Some(12_500));
-    assert_eq!(memory.closed_source_suffix_tokens, None);
-
-    let snapshot = runtime.build_tree_snapshot().expect("snapshot");
-    let nodes = snapshot_nodes_by_id(&snapshot);
-    assert_eq!(
-        nodes["1.1.1"].accounting,
-        Some(SpineTreeNodeAccountingSnapshot {
-            current_node_context_tokens: None,
-            current_node_context_problem: None,
-            current_node_context_baseline_source: None,
-            closed_source_suffix_tokens: None,
-            closed_memory_context_tokens: None,
-            memory_output_tokens: Some(1_250),
-        })
-    );
-}
-
-#[test]
-fn close_consumes_pressure_overlay_survives_replay() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let rollout = rollout_path(&dir);
-    let mut raw = Vec::new();
-    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
-
-    open_task(
-        &mut runtime,
-        &mut raw,
-        "open-overlay-child",
-        "overlay child",
-    );
-    append_msg(&mut runtime, &mut raw, "child work");
-    runtime
-        .ensure_current_open_context_baseline(9_000, Some(8_500), Some(1_000), raw.len())
-        .expect("repair overlay baseline");
-    close_task_with_token_baselines(
-        &mut runtime,
-        &mut raw,
-        "close-overlay-child",
-        "1.1.1",
-        SpineTokenBaselines {
-            input_tokens: None,
-            context_tokens: Some(12_000),
-        },
-    );
+    append_msg(&mut runtime, &mut raw, "live suffix");
+    std::fs::write(
+        runtime.store.pressure_path_for_test(),
+        [
+            format!(
+                r#"{{"pressure_seq":0,"type":"open_context_baseline","node":[1,1],"observed_structural_seq":{},"observed_raw_ordinal":{},"observed_raw_live_hash":"{}","observed_context_index":{},"context_tokens":7000,"input_tokens":7500,"source":"estimated_from_live_suffix","estimated_live_suffix_tokens":500}}"#,
+                runtime.store.next_event_seq().expect("next structural seq"),
+                raw.len(),
+                hash_raw_live(&vec![true; raw.len()]),
+                raw.len()
+            ),
+            String::new(),
+        ]
+        .join("\n"),
+    )
+    .expect("write legacy pressure ledger");
 
     let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
         .expect("load spine")
         .expect("sidecar exists");
-    let snapshot = replayed.build_tree_snapshot().expect("snapshot");
-    let nodes = snapshot_nodes_by_id(&snapshot);
-    assert_eq!(
-        nodes["1.1.1"].accounting,
-        Some(SpineTreeNodeAccountingSnapshot {
-            current_node_context_tokens: None,
-            current_node_context_problem: None,
-            current_node_context_baseline_source: None,
-            closed_source_suffix_tokens: None,
-            closed_memory_context_tokens: None,
-            memory_output_tokens: Some(1_250),
-        })
-    );
+    assert_eq!(replayed.current_open_input_tokens(), None);
+    assert_eq!(replayed.current_open_provider_input_tokens(), None);
+    assert_eq!(replayed.current_open_context_baseline_source(), None);
 }
 
 #[test]
@@ -1897,8 +1778,7 @@ fn closed_child_tree_snapshot_preserves_zero_source_suffix_accounting() {
         "open-zero-child",
         "zero child",
         SpineTokenBaselines {
-            input_tokens: Some(5_000),
-            context_tokens: Some(5_000),
+            provider_input_tokens: Some(5_000),
         },
     );
     append_msg(&mut runtime, &mut raw, "zero child work");
@@ -1908,8 +1788,7 @@ fn closed_child_tree_snapshot_preserves_zero_source_suffix_accounting() {
         "close-zero-child",
         "1.1.1",
         SpineTokenBaselines {
-            input_tokens: Some(5_000),
-            context_tokens: Some(5_000),
+            provider_input_tokens: Some(5_000),
         },
     );
 
@@ -1965,8 +1844,7 @@ fn close_prefers_structural_open_baseline_over_pressure_overlay() {
         "open-structural-child",
         "structural child",
         SpineTokenBaselines {
-            input_tokens: Some(5_500),
-            context_tokens: Some(5_000),
+            provider_input_tokens: Some(5_500),
         },
     );
     append_msg(&mut runtime, &mut raw, "child work");
@@ -1988,7 +1866,7 @@ fn close_prefers_structural_open_baseline_over_pressure_overlay() {
     let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
         .expect("load spine")
         .expect("sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), Some(5_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), Some(5_500));
     assert_eq!(
         replayed.current_open_context_baseline_source(),
         Some(SpineNodeContextBaselineSource::ProviderAtOpen)
@@ -2000,8 +1878,7 @@ fn close_prefers_structural_open_baseline_over_pressure_overlay() {
         "close-structural-child",
         "1.1.1",
         SpineTokenBaselines {
-            input_tokens: Some(9_500),
-            context_tokens: Some(9_000),
+            provider_input_tokens: Some(9_500),
         },
     );
     let snapshot = runtime.build_tree_snapshot().expect("snapshot");
@@ -2020,34 +1897,12 @@ fn close_prefers_structural_open_baseline_over_pressure_overlay() {
 }
 
 #[test]
-fn pressure_repair_skips_overlay_when_raw_live_prefix_changed() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let rollout = rollout_path(&dir);
-    let mut raw = Vec::new();
-    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
-
-    append_msg(&mut runtime, &mut raw, "live suffix");
-    runtime
-        .ensure_current_open_context_baseline(12_000, Some(12_000), Some(2_000), raw.len())
-        .expect("repair pressure baseline");
-    raw[0] = None;
-
-    let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
-        .expect("load spine")
-        .expect("sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), None);
-}
-
-#[test]
-fn corrupt_pressure_records_do_not_fail_structural_replay() {
+fn corrupt_legacy_pressure_records_do_not_fail_structural_replay() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let mut raw = Vec::new();
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
     append_msg(&mut runtime, &mut raw, "live suffix");
-    runtime
-        .ensure_current_open_context_baseline(10_000, Some(10_000), Some(1_000), raw.len())
-        .expect("repair pressure baseline");
     std::fs::write(
         runtime.store.pressure_path_for_test(),
         "not-json\n{\"pressure_seq\":77,\"type\":\"open_context_baseline\"",
@@ -2057,24 +1912,7 @@ fn corrupt_pressure_records_do_not_fail_structural_replay() {
     let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
         .expect("load spine despite malformed pressure")
         .expect("sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), None);
-
-    let repaired = runtime
-        .ensure_current_open_context_baseline(14_000, Some(14_000), Some(2_000), raw.len())
-        .expect("append after partial pressure line");
-    assert!(!repaired, "in-memory baseline already exists");
-
-    let mut reloaded = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
-        .expect("reload spine")
-        .expect("sidecar exists");
-    let repaired = reloaded
-        .ensure_current_open_context_baseline(14_000, Some(14_000), Some(2_000), raw.len())
-        .expect("repair after corrupt ledger reload");
-    assert!(repaired);
-    let rereplayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
-        .expect("reload repaired spine")
-        .expect("sidecar exists");
-    assert_eq!(rereplayed.current_open_context_tokens(), Some(12_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), None);
 }
 
 // Root-depth lifecycle and spine.next transactions.
@@ -2255,8 +2093,7 @@ fn spine_next_records_provider_baseline_for_sibling_open() {
     append_msg(&mut runtime, &mut raw, "nested child work");
 
     let token_baselines = SpineTokenBaselines {
-        input_tokens: Some(12_345),
-        context_tokens: Some(10_000),
+        provider_input_tokens: Some(12_345),
     };
     let commit = next_task_with_token_baselines(
         &mut runtime,
@@ -2272,7 +2109,7 @@ fn spine_next_records_provider_baseline_for_sibling_open() {
         SpineCommitKind::CloseThenOpen { open_index: 2, .. }
     ));
     assert_eq!(runtime.current_open_input_tokens(), Some(12_345));
-    assert_eq!(runtime.current_open_context_tokens(), Some(10_000));
+    assert_eq!(runtime.current_open_provider_input_tokens(), Some(12_345));
     assert_eq!(
         runtime.current_open_context_baseline_source(),
         Some(SpineNodeContextBaselineSource::ProviderAtOpen)
@@ -2289,7 +2126,7 @@ fn spine_next_records_provider_baseline_for_sibling_open() {
             && next_sibling.summary == "next sibling"
             && next_sibling.index == 2
             && next_sibling.open_input_tokens == Some(12_345)
-            && next_sibling.open_context_tokens == Some(10_000)
+            && next_sibling.open_context_tokens == Some(12_345)
             && next_sibling.open_context_source == Some(ContextBaselineSource::ProviderAtOpen)
             && matches!(
                 next_nodes.as_slice(),
@@ -2313,7 +2150,7 @@ fn spine_next_records_provider_baseline_for_sibling_open() {
                 child: next,
                 index: 2,
                 open_input_tokens: Some(12_345),
-                open_context_tokens: Some(10_000),
+                open_context_tokens: Some(12_345),
                 open_context_source: Some(ContextBaselineSource::ProviderAtOpen),
                 ..
             },
@@ -2325,7 +2162,7 @@ fn spine_next_records_provider_baseline_for_sibling_open() {
         .expect("load spine")
         .expect("sidecar exists");
     assert_eq!(replayed.current_open_input_tokens(), Some(12_345));
-    assert_eq!(replayed.current_open_context_tokens(), Some(10_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), Some(12_345));
     assert_eq!(
         replayed.current_open_context_baseline_source(),
         Some(SpineNodeContextBaselineSource::ProviderAtOpen)
@@ -4916,7 +4753,7 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
     let replayed = SpineRuntime::load_for_rollout_items(&target_rollout, &raw_items, &[])
         .expect("load target")
         .expect("target sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), Some(7_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), None);
 
     let next_pressure_seq = target
         .append_pressure_event(&PressureEvent::OpenContextBaseline {
@@ -5047,7 +4884,7 @@ fn assert_clone_boundary_excludes_future_structural_and_pressure_records() {
         SpineRuntime::load_for_rollout_items(&target_rollout, &[Some(text_item("kept"))], &[])
             .expect("load target")
             .expect("target sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), Some(7_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), None);
 }
 
 // Close, reduce, and materialized history.
@@ -6905,7 +6742,7 @@ fn root_compact_keeps_close_tokens_without_next_open_baseline() {
     assert_eq!(mems.len(), 1);
     assert_eq!(mems[0].close_input_tokens, Some(229_136));
     assert_eq!(mems[0].close_context_tokens, Some(230_871));
-    assert_eq!(runtime.current_open_context_tokens(), None);
+    assert_eq!(runtime.current_open_provider_input_tokens(), None);
     assert_eq!(runtime.current_open_context_baseline_source(), None);
 
     let events = event_log(&runtime);
@@ -6925,7 +6762,7 @@ fn root_compact_keeps_close_tokens_without_next_open_baseline() {
 }
 
 #[test]
-fn root_compact_handoff_tokens_survive_replay() {
+fn root_compact_ignores_next_open_handoff_tokens() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let mut raw = Vec::new();
@@ -6946,12 +6783,9 @@ fn root_compact_handoff_tokens_survive_replay() {
         )
         .expect("compact root");
 
-    assert_eq!(runtime.current_open_input_tokens(), Some(12_345));
-    assert_eq!(runtime.current_open_context_tokens(), Some(67_890));
-    assert_eq!(
-        runtime.current_open_context_baseline_source(),
-        Some(SpineNodeContextBaselineSource::RootCompactHandoff)
-    );
+    assert_eq!(runtime.current_open_input_tokens(), None);
+    assert_eq!(runtime.current_open_provider_input_tokens(), None);
+    assert_eq!(runtime.current_open_context_baseline_source(), None);
 
     let events = event_log(&runtime);
     assert!(matches!(
@@ -6961,8 +6795,8 @@ fn root_compact_handoff_tokens_survive_replay() {
             SpineLedgerEvent::Open { .. },
             SpineLedgerEvent::Msg { .. },
             SpineLedgerEvent::RootCompact {
-                next_open_input_tokens: Some(12_345),
-                next_open_context_tokens: Some(67_890),
+                next_open_input_tokens: None,
+                next_open_context_tokens: None,
                 ..
             },
         ]
@@ -6971,12 +6805,9 @@ fn root_compact_handoff_tokens_survive_replay() {
     let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
         .expect("load spine")
         .expect("sidecar exists");
-    assert_eq!(replayed.current_open_input_tokens(), Some(12_345));
-    assert_eq!(replayed.current_open_context_tokens(), Some(67_890));
-    assert_eq!(
-        replayed.current_open_context_baseline_source(),
-        Some(SpineNodeContextBaselineSource::RootCompactHandoff)
-    );
+    assert_eq!(replayed.current_open_input_tokens(), None);
+    assert_eq!(replayed.current_open_provider_input_tokens(), None);
+    assert_eq!(replayed.current_open_context_baseline_source(), None);
 }
 
 #[test]
@@ -7082,7 +6913,7 @@ fn root_compact_checkpoint_append_failure_can_retry_without_duplicate_mem() {
 }
 
 #[test]
-fn root_compact_new_root_accepts_post_compact_pressure_repair() {
+fn root_compact_new_root_accepts_post_compact_provider_baseline_capture() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let mut raw = Vec::new();
@@ -7102,18 +6933,19 @@ fn root_compact_new_root_accepts_post_compact_pressure_repair() {
             },
         )
         .expect("compact root");
-    assert_eq!(runtime.current_open_context_tokens(), None);
+    assert_eq!(runtime.current_open_provider_input_tokens(), None);
 
     runtime
-        .ensure_current_open_context_baseline(8_648, Some(7_913), Some(1_000), raw.len())
-        .expect("repair post-compact baseline");
+        .capture_current_open_provider_baseline(7_913)
+        .expect("capture post-compact provider baseline");
 
-    assert_eq!(runtime.current_open_context_tokens(), Some(7_648));
+    assert_eq!(runtime.current_open_input_tokens(), Some(7_913));
+    assert_eq!(runtime.current_open_provider_input_tokens(), Some(7_913));
     assert_eq!(
         runtime.current_open_context_baseline_source(),
-        Some(SpineNodeContextBaselineSource::EstimatedFromLiveSuffix)
+        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
     );
-    assert_ne!(runtime.current_open_context_tokens(), Some(230_871));
+    assert_ne!(runtime.current_open_provider_input_tokens(), Some(230_871));
 }
 
 #[test]
@@ -7376,7 +7208,7 @@ fn initial_checkpoint_records_root_open_without_msg() {
 }
 
 #[test]
-fn rollback_checkpoint_without_pressure_watermark_excludes_later_pressure_overlay() {
+fn rollback_checkpoint_without_provider_baseline_has_no_node_context() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![Some(text_item("kept")), None];
@@ -7388,10 +7220,10 @@ fn rollback_checkpoint_without_pressure_watermark_excludes_later_pressure_overla
         .expect("observe kept");
     runtime
         .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
-        .expect("write checkpoint before pressure metadata");
+        .expect("write checkpoint before provider baseline");
     runtime
-        .ensure_current_open_context_baseline(8_000, Some(8_000), Some(1_000), 1)
-        .expect("append pressure metadata after checkpoint");
+        .capture_current_open_provider_baseline(8_000)
+        .expect("capture provider baseline after checkpoint");
     runtime
         .observe_raw_items(1)
         .expect("observe rolled-back raw");
@@ -7408,20 +7240,20 @@ fn rollback_checkpoint_without_pressure_watermark_excludes_later_pressure_overla
     let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw_after_rollback, &[1])
         .expect("load spine")
         .expect("sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), None);
+    assert_eq!(replayed.current_open_provider_input_tokens(), None);
 }
 
 #[test]
-fn rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible_overlay() {
-    assert_rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible_overlay();
+fn rollback_checkpoint_replays_checkpoint_visible_provider_baseline() {
+    assert_rollback_checkpoint_replays_checkpoint_visible_provider_baseline();
 }
 
 #[test]
-fn rollback_restores_checkpoint_visible_pressure_metadata() {
-    assert_rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible_overlay();
+fn rollback_restores_checkpoint_visible_provider_baseline() {
+    assert_rollback_checkpoint_replays_checkpoint_visible_provider_baseline();
 }
 
-fn assert_rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible_overlay() {
+fn assert_rollback_checkpoint_replays_checkpoint_visible_provider_baseline() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![Some(text_item("kept")), None];
@@ -7432,22 +7264,11 @@ fn assert_rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible
         .observe_context_item(0, 0, &text_item("kept"))
         .expect("observe kept");
     runtime
-        .ensure_current_open_context_baseline(8_000, Some(8_000), Some(1_000), 1)
-        .expect("append pre-checkpoint pressure metadata");
+        .capture_current_open_provider_baseline(8_000)
+        .expect("capture pre-checkpoint provider baseline");
     runtime
         .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
-        .expect("write checkpoint after pressure metadata");
-
-    std::fs::write(
-        runtime.store.pressure_path_for_test(),
-        [
-            r#"{"pressure_seq":0,"type":"open_context_baseline","node":[1,1],"observed_structural_seq":3,"observed_raw_ordinal":1,"observed_raw_live_hash":"356a192b7913b04c54574d18c28d46e6395428ab","observed_context_index":1,"context_tokens":7000,"input_tokens":8000,"source":"estimated_from_live_suffix","estimated_live_suffix_tokens":1000}"#,
-            r#"{"pressure_seq":1,"type":"open_context_baseline","node":[1,1],"observed_structural_seq":3,"observed_raw_ordinal":1,"observed_raw_live_hash":"356a192b7913b04c54574d18c28d46e6395428ab","observed_context_index":1,"context_tokens":11000,"input_tokens":12000,"source":"estimated_from_live_suffix","estimated_live_suffix_tokens":1000}"#,
-            "",
-        ]
-        .join("\n"),
-    )
-    .expect("overwrite pressure ledger with future overlay");
+        .expect("write checkpoint after provider baseline");
     runtime
         .observe_raw_items(1)
         .expect("observe rolled-back raw");
@@ -7459,12 +7280,12 @@ fn assert_rollback_checkpoint_pressure_watermark_replays_only_checkpoint_visible
         .store
         .checkpoint_for_test(1)
         .expect("read checkpoint");
-    assert_eq!(checkpoint.pressure_seq_watermark, Some(0));
+    assert_eq!(checkpoint.pressure_seq_watermark, None);
 
     let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw_after_rollback, &[1])
         .expect("load spine")
         .expect("sidecar exists");
-    assert_eq!(replayed.current_open_context_tokens(), Some(7_000));
+    assert_eq!(replayed.current_open_provider_input_tokens(), Some(8_000));
 }
 
 #[test]
