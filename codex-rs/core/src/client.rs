@@ -154,17 +154,12 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResponsesToolChoice {
     Auto,
-    Function(&'static str),
 }
 
 impl ResponsesToolChoice {
     fn into_wire_value(self) -> serde_json::Value {
         match self {
             Self::Auto => serde_json::Value::String("auto".to_string()),
-            Self::Function(name) => serde_json::json!({
-                "type": "function",
-                "name": name,
-            }),
         }
     }
 }

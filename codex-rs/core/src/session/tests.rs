@@ -169,7 +169,6 @@ use core_test_support::PathExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
-use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
@@ -207,8 +206,6 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-const SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME: &str = "submit_spine_memory";
-
 fn spine_summary_sse(id: &str, text: &str) -> String {
     sse(vec![ev_assistant_message(id, text), ev_completed(id)])
 }
@@ -218,42 +215,11 @@ fn spine_slot_summary_sse(id: &str, text: &str) -> String {
 }
 
 fn spine_node_memory_summary_sse(id: &str, text: &str) -> String {
-    spine_compact_json_summary_sse(id, &[], text)
+    sse(vec![ev_assistant_message(id, text), ev_completed(id)])
 }
 
 fn spine_slots_summary_sse(id: &str, texts: &[&str]) -> String {
-    let slots = texts
-        .iter()
-        .enumerate()
-        .map(|(index, text)| {
-            serde_json::json!({
-                "slot_id": format!("slot_{}", index + 1),
-                "body": text,
-            })
-        })
-        .collect::<Vec<_>>();
-    let node_memory = texts.join("\n");
-    spine_compact_json_summary_sse(id, &slots, &node_memory)
-}
-
-fn spine_compact_json_summary_sse(
-    id: &str,
-    slots: &[serde_json::Value],
-    node_memory: &str,
-) -> String {
-    let compact_body = serde_json::json!({
-        "slots": slots,
-        "node_memory": node_memory,
-    })
-    .to_string();
-    sse(vec![
-        ev_function_call(
-            &format!("call-{id}"),
-            SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME,
-            &compact_body,
-        ),
-        ev_completed(id),
-    ])
+    sse(vec![ev_assistant_message(id, &texts.join("\n")), ev_completed(id)])
 }
 
 fn spine_slot_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
@@ -262,96 +228,6 @@ fn spine_slot_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
         .enumerate()
         .map(|(index, text)| spine_slot_summary_sse(&format!("spine-summary-{index}"), text))
         .collect()
-}
-
-fn assert_close_compact_tool_envelope_request(request: &ResponsesRequest, message: &str) {
-    let body = request.body_json();
-    assert_eq!(
-        body["tool_choice"],
-        serde_json::json!({
-            "type": "function",
-            "name": SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME,
-        }),
-        "{message}: unexpected close compact tool_choice"
-    );
-    let tools = body["tools"].as_array().expect("tools should be an array");
-    assert!(!tools.is_empty(), "{message}: close compact tools missing");
-    let carrier_tool = tools.last().expect("carrier tool");
-    assert_eq!(
-        carrier_tool.get("type").and_then(serde_json::Value::as_str),
-        Some("function"),
-        "{message}: close compact carrier must be a Responses function tool"
-    );
-    assert_eq!(
-        carrier_tool.get("name").and_then(serde_json::Value::as_str),
-        Some(SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME),
-        "{message}: close compact must append the memory carrier tool"
-    );
-    assert_eq!(
-        carrier_tool
-            .get("strict")
-            .and_then(serde_json::Value::as_bool),
-        Some(true),
-        "{message}: close compact carrier tool should be strict"
-    );
-    assert_eq!(
-        body["parallel_tool_calls"].as_bool(),
-        Some(false),
-        "{message}: close compact must disable parallel tool calls for the forced carrier"
-    );
-    assert!(
-        body["text"].get("format").is_none(),
-        "{message}: close compact must keep the cache-stable no-schema text envelope"
-    );
-    assert_eq!(
-        body["input"]
-            .as_array()
-            .expect("input should be an array")
-            .last()
-            .and_then(|item| item.get("role"))
-            .and_then(|role| role.as_str()),
-        Some("developer"),
-        "{message}: close compact tail directive should be a trailing developer message"
-    );
-}
-
-fn assert_close_compact_forced_carrier_request(request: &ResponsesRequest, message: &str) {
-    assert_close_compact_tool_envelope_request(request, message);
-}
-
-fn assert_close_compact_reuses_request_tools_prefix(
-    source_request: &ResponsesRequest,
-    target_request: &ResponsesRequest,
-    message: &str,
-) {
-    let source_body = source_request.body_json();
-    let target_body = target_request.body_json();
-    let source_tools = source_body["tools"]
-        .as_array()
-        .expect("source tools should be an array");
-    let target_tools = target_body["tools"]
-        .as_array()
-        .expect("target tools should be an array");
-    assert_eq!(
-        target_tools.len(),
-        source_tools.len() + 1,
-        "{message}: close compact must append exactly one carrier tool"
-    );
-    for (index, source_tool) in source_tools.iter().enumerate() {
-        assert_eq!(
-            &target_tools[index], source_tool,
-            "{message}: close compact must preserve ordinary sampling tool prefix"
-        );
-    }
-}
-
-fn assert_close_compact_reuses_sampling_request_tools(
-    sampling_request: &ResponsesRequest,
-    compact_request: &ResponsesRequest,
-    message: &str,
-) {
-    assert_close_compact_forced_carrier_request(compact_request, message);
-    assert_close_compact_reuses_request_tools_prefix(sampling_request, compact_request, message);
 }
 
 async fn prime_model_client_turn_state(
@@ -9255,10 +9131,6 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         Some(session.conversation_id.to_string().as_str()),
         "spine.close compact should reuse the current thread prompt cache key"
     );
-    assert_close_compact_forced_carrier_request(
-        compact_request,
-        "spine.close compact should use the forced carrier compact envelope",
-    );
     assert!(
         compact_request.body_json()["instructions"]
             .as_str()
@@ -9547,10 +9419,6 @@ async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_pr
     .expect("commit close output and record raw evidence");
 
     let compact_request = compact_mock.single_request();
-    assert_close_compact_forced_carrier_request(
-        &compact_request,
-        "spine.close compact with text-only model should use the forced carrier compact envelope",
-    );
     assert!(
         compact_request
             .body_contains_text("image content omitted because you do not support image input")
@@ -9692,10 +9560,6 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
     .expect("commit close output and record raw evidence");
 
     let compact_request = compact_mock.single_request();
-    assert_close_compact_forced_carrier_request(
-        &compact_request,
-        "spine.close compact with text-only suffix image should use the forced carrier compact envelope",
-    );
     assert!(
         compact_request
             .body_contains_text("image content omitted because you do not support image input")
@@ -9856,10 +9720,6 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_close_compact_forced_carrier_request(
-        &compact_request,
-        "spine.next close compact should use the forced carrier compact envelope",
-    );
     assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
     assert!(compact_request.body_contains_text("inside next"));
     assert!(compact_request.body_contains_text("---------- SPINE MEMORY COMPACT ----------"));
@@ -11206,10 +11066,6 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
 
     assert_eq!(compact_mock.requests().len(), 1);
     let compact_request = compact_mock.single_request();
-    assert_close_compact_forced_carrier_request(
-        &compact_request,
-        "failed compact request should use the forced carrier compact envelope",
-    );
     assert_eq!(
         session.clone_history().await.raw_items(),
         &[
@@ -11515,10 +11371,6 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert_close_compact_forced_carrier_request(
-        &requests[0],
-        "spine.next suffix compact should use the forced carrier compact envelope",
-    );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),
         Some("auto")
@@ -11956,11 +11808,7 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
         requests[0].body_json()["tool_choice"].as_str(),
         Some("auto")
     );
-    assert_close_compact_reuses_sampling_request_tools(
-        &requests[0],
-        &requests[1],
-        "spine compact failure request should reuse sampling tools while forcing submit_spine_memory",
-    );
+    assert!(requests[0].body_contains_text("---------- SPINE MEMORY COMPACT ----------"));
     test.codex.ensure_rollout_materialized().await;
     test.codex.flush_rollout().await?;
     let rollout_path = test
@@ -11988,86 +11836,6 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
     assert_eq!(
         materialized,
         raw_items.iter().flatten().cloned().collect::<Vec<_>>()
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_close_compact_reuses_sampling_tools_with_forced_carrier() -> anyhow::Result<()> {
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::SpineJit)
-            .expect("enable spine feature");
-        config.model_provider.supports_websockets = false;
-    });
-    let test = builder.build(&server).await?;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_assistant_message(
-                    "spine-close-precompact-evidence",
-                    "successful close suffix evidence",
-                ),
-                ev_function_call_with_namespace(
-                    "call-spine-close-success",
-                    SPINE_NAMESPACE,
-                    SPINE_TOOL_CLOSE,
-                    r#"{"instruction":"compact the successful real-turn suffix"}"#,
-                ),
-                ev_completed("spine-close-tool-response"),
-            ]),
-            spine_slots_summary_sse(
-                "spine-close-compact-success",
-                &[
-                    "successful close compact memory",
-                    "successful close tool request memory",
-                ],
-            ),
-            sse(vec![
-                ev_assistant_message("spine-close-follow-up", "closed"),
-                ev_completed("spine-close-follow-up-response"),
-            ]),
-        ],
-    )
-    .await;
-
-    test.codex
-        .submit(Op::UserInput {
-            environments: None,
-            items: vec![UserInput::Text {
-                text: "do some root-child work, then close the Spine node".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-        })
-        .await?;
-
-    let last_agent_message = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::TurnComplete(turn_complete) => turn_complete.last_agent_message.clone(),
-        _ => None,
-    })
-    .await;
-    assert_eq!(last_agent_message.as_str(), "closed");
-
-    let requests = responses.requests();
-    assert_eq!(
-        requests.len(),
-        3,
-        "expected sampling request, close compact request, and follow-up request"
-    );
-    assert_eq!(
-        requests[0].body_json()["tool_choice"].as_str(),
-        Some("auto")
-    );
-    assert_close_compact_reuses_sampling_request_tools(
-        &requests[0],
-        &requests[1],
-        "successful spine.close compact should reuse sampling tools while forcing submit_spine_memory",
     );
 
     Ok(())
@@ -12928,10 +12696,6 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert_close_compact_forced_carrier_request(
-        &requests[0],
-        "spine.close suffix compact should use the forced carrier compact envelope",
-    );
     assert_eq!(
         requests[1].body_json()["tool_choice"].as_str(),
         Some("auto")
