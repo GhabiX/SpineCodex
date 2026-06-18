@@ -15792,6 +15792,114 @@ async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
 }
 
 #[tokio::test]
+async fn grouped_spine_open_after_close_uses_rollout_raw_evidence_for_projection() {
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("outer user prefix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "open-inner");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record inner open request");
+    session
+        .stage_spine_open("open-inner".to_string(), "inner scope".to_string())
+        .await
+        .expect("stage inner open");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("open-inner"),
+    )
+    .await
+    .expect("commit inner open");
+
+    let inner_body = assistant_message("inner body");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner_body))
+        .await
+        .expect("record inner body");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "close-inner");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record inner close request");
+    session
+        .stage_spine_close("close-inner".to_string(), "inner memory".to_string())
+        .await
+        .expect("stage inner close");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("close-inner"),
+    )
+    .await
+    .expect("commit inner close");
+
+    let post_close_user = user_message("post close user");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&post_close_user))
+        .await
+        .expect("record post-close user");
+    let sibling_open = spine_call(SPINE_TOOL_OPEN, "open-sibling");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&sibling_open))
+        .await
+        .expect("record sibling open request");
+    session
+        .stage_spine_open("open-sibling".to_string(), "sibling scope".to_string())
+        .await
+        .expect("stage sibling open");
+
+    let mut client_session = session.services.model_client.new_session();
+    session
+        .record_spine_toolcall_group_outputs_and_commit_with_client_session(
+            &turn_context,
+            &mut client_session,
+            "open-sibling",
+            &["open-sibling".to_string()],
+            &[function_output("open-sibling")],
+        )
+        .await
+        .expect("grouped sibling open commit must use rollout raw evidence");
+
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+    let visible_history = session.clone_history().await.raw_items().to_vec();
+    assert!(
+        visible_history.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "user"
+                    && matches!(
+                        content.as_slice(),
+                        [ContentItem::InputText { text }]
+                            if text.starts_with("[U")
+                                && text.contains("post close user")
+                    )
+        )),
+        "post-close user message must remain a user anchor, not be projected onto a tool output"
+    );
+    drop(rx);
+}
+
+#[tokio::test]
 async fn base_path_completed_toolcall_groups_all_outputs_in_one_append() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),

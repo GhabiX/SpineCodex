@@ -1157,6 +1157,7 @@ impl Session {
                 )));
             }
         }
+        let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
         let mut lock_retries = 0;
         let commit_output = loop {
             let attempt = self.try_commit_spine_tool_output_once(
@@ -1168,6 +1169,7 @@ impl Session {
                 current_turn_token_info.as_ref(),
                 completed_toolcall.clone(),
                 tool_resp_already_recorded,
+                &raw_items,
             );
             let attempt = match attempt {
                 Ok(attempt) => attempt,
@@ -1249,6 +1251,7 @@ impl Session {
         current_turn_token_info: Option<&TokenUsageInfo>,
         completed_toolcall: CompletedToolCall,
         tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
@@ -1284,23 +1287,16 @@ impl Session {
             Some(SpinePendingCommit::Open) => token_baselines_from_info(current_turn_token_info),
             None => SpineTokenBaselines::default(),
         };
-        let current_history = state.clone_history();
-        let raw_items = current_history
-            .raw_items()
-            .iter()
-            .cloned()
-            .map(Some)
-            .collect::<Vec<_>>();
         let commit_kind = if pending_commit.is_some() {
             spine.maybe_commit_output_with_toolcall_and_raw_items(
                 call_id,
                 memory_assembly,
                 token_baselines,
                 completed_toolcall,
-                &raw_items,
+                raw_items,
             )?
         } else {
-            spine.observe_completed_toolcall_with_raw_items(completed_toolcall, &raw_items)?;
+            spine.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
             None
         };
         let defer_tree_update_until_raw_output = matches!(
@@ -1392,7 +1388,7 @@ impl Session {
         }
         if history_update.is_none() && tool_resp_already_recorded {
             let history = state.clone_history();
-            let materialized = spine.materialize_history(&raw_items)?;
+            let materialized = spine.materialize_history(raw_items)?;
             if materialized.as_slice() != history.raw_items() {
                 history_update = Some(SpineHistoryUpdate {
                     call_id: call_id.to_string(),
@@ -1413,6 +1409,28 @@ impl Session {
             spine_context_already_observed: true,
             defer_tree_update_until_raw_output,
         }))
+    }
+
+    async fn spine_raw_items_from_rollout_for_commit(
+        &self,
+    ) -> Result<Vec<Option<ResponseItem>>, SpineError> {
+        self.ensure_rollout_materialized().await;
+        self.flush_rollout()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+            .ok_or_else(|| {
+                SpineError::InvalidStore("spine_jit commit requires rollout path".to_string())
+            })?;
+        let rollout_history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        Ok(spine_raw_items_after_rollback(
+            &rollout_history.get_rollout_items(),
+        ))
     }
 
     pub(crate) async fn is_pending_spine_close_like_output(
