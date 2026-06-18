@@ -15248,6 +15248,116 @@ async fn spine_trim_rewrites_visible_history_and_preserves_raw_tool_output() {
 }
 
 #[tokio::test]
+async fn spine_trim_slice_rewrites_visible_history_and_preserves_raw_tool_output() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config
+                .features
+                .enable(Feature::SpineTrim)
+                .expect("enable spine trim");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let request = function_call("shell_command", "long-tool");
+    let long_text = format!(
+        "{}abc<needle>xyz{}",
+        "left ".repeat(60),
+        " right".repeat(60)
+    );
+    let output = function_output_with_text("long-tool", &long_text);
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&request))
+        .await
+        .expect("record ordinary request");
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, output.clone())
+        .await
+        .expect("commit ordinary output");
+
+    let trim_request = ResponseItem::FunctionCall {
+        id: None,
+        name: SPINE_TOOL_TRIM.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: json!({
+            "TRIM_ID": "trim_0",
+            "op": "slice",
+            "anchor": "<needle>",
+            "preceding": 3,
+            "following": 3
+        })
+        .to_string(),
+        call_id: "slice-long".to_string(),
+    };
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&trim_request))
+        .await
+        .expect("record trim request");
+    let outcome = session
+        .slice_spine_tool_response_anchor("trim_0".to_string(), "<needle>".to_string(), 3, 3)
+        .await
+        .expect("slice previous tool response");
+    assert_eq!(
+        outcome,
+        crate::spine::SpineTrimOutcome::Sliced {
+            trim_id: "trim_0".to_string()
+        }
+    );
+    let trim_output = function_output_with_text("slice-long", "Sliced tool response trim_0.");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        trim_output.clone(),
+    )
+    .await
+    .expect("commit trim output");
+
+    let visible_history = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(function_output_text(&visible_history[1]), "abc<needle>xyz");
+    assert!(!function_output_text(&visible_history[1]).contains("[TRIM_ID:"));
+    assert!(!function_output_text(&visible_history[1]).contains("left left"));
+    assert_eq!(visible_history[2], trim_request);
+    assert_eq!(visible_history[3], trim_output);
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert!(resumed.history.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput { call_id, output })
+                if call_id == "long-tool" && output.text_content() == Some(long_text.as_str())
+        )
+    }));
+
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load replayed runtime")
+        .expect("spine sidecar exists");
+    let replayed_visible = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize replayed trim projection");
+    assert_eq!(replayed_visible, visible_history);
+    assert_eq!(
+        function_output_text_by_call_id(&replayed_visible, "long-tool"),
+        "abc<needle>xyz"
+    );
+}
+
+#[tokio::test]
 async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree() {
     let (mut source_session, source_context, _source_rx) =
         make_session_and_context_with_auth_and_config_and_rx(

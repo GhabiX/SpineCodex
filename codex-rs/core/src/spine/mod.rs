@@ -8,6 +8,7 @@ mod parse_stack;
 mod render;
 mod runtime;
 mod store;
+mod trimmer;
 mod user_message_projection;
 
 pub(crate) use model::NodeId;

@@ -6,7 +6,6 @@ use std::ops::Range;
 use std::path::Path;
 use thiserror::Error;
 
-use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::StagedArchiveWrite;
 use crate::spine::archive::flush_archive_writes;
@@ -37,15 +36,13 @@ use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
-use crate::spine::model::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES;
 use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegment;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
 use crate::spine::model::TrimEvent;
 use crate::spine::model::TrimProjection;
-use crate::spine::model::TrimResponseKind;
-use crate::spine::model::TrimTarget;
+use crate::spine::model::TrimSliceSpec;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::PreparedRootEpochReduction;
@@ -68,6 +65,8 @@ use crate::spine::render::render_parse_stack_to_context_with_memory_body_and_tri
 use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
 use crate::spine::store::BODY_DIR;
 use crate::spine::store::SpineStore;
+use crate::spine::trimmer::Trimmer;
+use crate::spine::trimmer::trim_projection_from_events;
 
 pub(crate) const SPINE_NAMESPACE: &str = "spine";
 pub(crate) const SPINE_TOOL_TREE: &str = "tree";
@@ -360,6 +359,7 @@ pub(crate) struct SpineRootCompactResult {
 pub(crate) enum SpineTrimOutcome {
     Cleared { trim_id: String },
     AlreadyCleared { trim_id: String },
+    Sliced { trim_id: String },
     Miss { trim_id: String },
 }
 
@@ -1144,6 +1144,25 @@ impl SpineRuntime {
         self.trim_enabled = enabled;
     }
 
+    fn trimmer(&mut self) -> Trimmer<'_> {
+        Trimmer::new(
+            &self.store,
+            &mut self.ledger.trim_events,
+            &mut self.ledger.next_trim_seq,
+            self.raw_len,
+            &self.raw_live,
+            self.trim_enabled,
+        )
+    }
+
+    fn current_trim_structural_seq(&self) -> u64 {
+        if self.jit_enabled {
+            self.ledger.next_event_seq
+        } else {
+            self.ledger.next_trim_seq
+        }
+    }
+
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
         let count = u64::try_from(count)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
@@ -1634,18 +1653,6 @@ impl SpineRuntime {
         Ok(())
     }
 
-    fn append_cached_trim_event(&mut self, event: TrimEvent) -> Result<u64, SpineError> {
-        let trim_seq = self.ledger.next_trim_seq;
-        let next_trim_seq = trim_seq
-            .checked_add(1)
-            .ok_or_else(|| SpineError::InvalidEvent("spine trim seq overflow".to_string()))?;
-        let logged = LoggedTrimEvent { trim_seq, event };
-        self.store.append_logged_trim_event(&logged)?;
-        self.ledger.trim_events.push(logged);
-        self.ledger.next_trim_seq = next_trim_seq;
-        Ok(trim_seq)
-    }
-
     fn append_msg_event(&mut self, msg: &PendingMsg) -> Result<u64, SpineError> {
         self.append_cached_event(SpineLedgerEvent::Msg {
             raw_ordinal: msg.raw_ordinal,
@@ -1731,44 +1738,8 @@ impl SpineRuntime {
         toolcall_seq: u64,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        if !self.trim_enabled {
-            return Ok(());
-        }
-        if raw_items.is_empty() {
-            return Ok(());
-        }
-        let existing_projection = self.current_trim_projection()?;
-        for segment in &toolcall.segments {
-            if segment.kind != ToolCallSegmentKind::Response
-                || existing_projection
-                    .contains_toolcall_raw_target(toolcall_seq, segment.raw_ordinal)
-            {
-                continue;
-            }
-            let raw_index = usize::try_from(segment.raw_ordinal)
-                .map_err(|_| SpineError::InvalidEvent("trim raw ordinal overflow".to_string()))?;
-            let Some(item) = raw_items.get(raw_index).and_then(Option::as_ref) else {
-                continue;
-            };
-            let Some((response_kind, call_id)) = trimmable_text_tool_response(item) else {
-                continue;
-            };
-            let original_visible_size = estimate_response_item_model_visible_bytes(item);
-            if original_visible_size <= TOOL_RESPONSE_TRIM_THRESHOLD_BYTES {
-                continue;
-            }
-            let trim_id = format!("trim_{}", self.ledger.next_trim_seq);
-            self.append_cached_trim_event(TrimEvent::Candidate {
-                trim_id,
-                toolcall_seq,
-                raw_ordinal: segment.raw_ordinal,
-                context_index: segment.context_index,
-                call_id: call_id.to_string(),
-                response_kind,
-                original_visible_size,
-            })?;
-        }
-        Ok(())
+        self.trimmer()
+            .on_tool_call(toolcall, toolcall_seq, raw_items, false)
     }
 
     fn observe_completed_toolcall_for_trim(
@@ -1777,24 +1748,20 @@ impl SpineRuntime {
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
         let toolcall_seq = self.ledger.next_trim_seq;
-        self.append_cached_trim_event(TrimEvent::ToolCallBoundary {
-            toolcall_seq,
-            raw_boundary: self.raw_len,
-            raw_live_hash: hash_raw_live(&self.raw_live),
-        })?;
-        self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)
+        self.trimmer()
+            .on_tool_call(&toolcall, toolcall_seq, raw_items, true)
     }
 
     fn current_trim_projection(&self) -> Result<TrimProjection, SpineError> {
         if !self.trim_enabled {
             return Ok(TrimProjection::default());
         }
-        let current_seq = if self.jit_enabled {
-            self.ledger.next_event_seq
-        } else {
-            self.ledger.next_trim_seq
-        };
-        trim_projection_from_events(&self.ledger.trim_events, &self.raw_live, current_seq, None)
+        trim_projection_from_events(
+            &self.ledger.trim_events,
+            &self.raw_live,
+            self.current_trim_structural_seq(),
+            None,
+        )
     }
 
     fn latest_live_completed_toolcall_seq(&self) -> Result<Option<u64>, SpineError> {
@@ -1832,36 +1799,58 @@ impl SpineRuntime {
         &mut self,
         trim_id: &str,
     ) -> Result<SpineTrimOutcome, SpineError> {
-        let trim_id = trim_id.trim();
-        if trim_id.is_empty() {
-            return Ok(SpineTrimOutcome::Miss {
-                trim_id: trim_id.to_string(),
-            });
-        }
-        let projection = self.current_trim_projection()?;
-        let Some(target) = projection.target(trim_id) else {
-            return Ok(SpineTrimOutcome::Miss {
-                trim_id: trim_id.to_string(),
-            });
-        };
-        if Some(target.toolcall_seq) != self.latest_live_completed_toolcall_seq()? {
-            return Ok(SpineTrimOutcome::Miss {
-                trim_id: trim_id.to_string(),
-            });
-        }
-        if target.cleared {
-            return Ok(SpineTrimOutcome::AlreadyCleared {
-                trim_id: trim_id.to_string(),
-            });
-        }
-        self.append_cached_trim_event(TrimEvent::Cleared {
-            trim_id: trim_id.to_string(),
-            raw_boundary: self.raw_len,
-            raw_live_hash: hash_raw_live(&self.raw_live),
-        })?;
-        Ok(SpineTrimOutcome::Cleared {
-            trim_id: trim_id.to_string(),
-        })
+        let latest = self.latest_live_completed_toolcall_seq()?;
+        let current_seq = self.current_trim_structural_seq();
+        self.trimmer().snip(trim_id, latest, current_seq)
+    }
+
+    pub(crate) fn slice_tool_response_head(
+        &mut self,
+        trim_id: &str,
+        head: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.slice_tool_response(trim_id, TrimSliceSpec::Head { head }, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_tail(
+        &mut self,
+        trim_id: &str,
+        tail: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.slice_tool_response(trim_id, TrimSliceSpec::Tail { tail }, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_anchor(
+        &mut self,
+        trim_id: &str,
+        anchor: &str,
+        preceding: usize,
+        following: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.slice_tool_response(
+            trim_id,
+            TrimSliceSpec::Anchor {
+                anchor: anchor.to_string(),
+                preceding,
+                following,
+            },
+            raw_items,
+        )
+    }
+
+    fn slice_tool_response(
+        &mut self,
+        trim_id: &str,
+        slice: TrimSliceSpec,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        let latest = self.latest_live_completed_toolcall_seq()?;
+        let current_seq = self.current_trim_structural_seq();
+        self.trimmer()
+            .slice(trim_id, slice, latest, current_seq, raw_items)
     }
 
     fn remap_completed_toolcall_context_indices(
@@ -3415,56 +3404,6 @@ pub(super) fn trim_projection_from_events_for_checkpoint(
     trim_projection_from_events(events, raw_live, current_structural_seq, trim_seq_watermark)
 }
 
-fn trim_projection_from_events(
-    events: &[LoggedTrimEvent],
-    raw_live: &[bool],
-    current_structural_seq: u64,
-    trim_seq_watermark: Option<u64>,
-) -> Result<TrimProjection, SpineError> {
-    let raw_mask = RawMask::new(raw_live);
-    let mut projection = TrimProjection::default();
-    let mut events = events.iter().collect::<Vec<_>>();
-    events.sort_by_key(|event| event.trim_seq);
-    for event in events {
-        if trim_seq_watermark.is_some_and(|watermark| event.trim_seq > watermark) {
-            continue;
-        }
-        if !event.allowed_by(raw_mask)? {
-            continue;
-        }
-        match &event.event {
-            TrimEvent::ToolCallBoundary { .. } => {}
-            TrimEvent::Candidate {
-                trim_id,
-                toolcall_seq,
-                raw_ordinal,
-                context_index,
-                call_id,
-                response_kind,
-                original_visible_size,
-            } => {
-                if *toolcall_seq >= current_structural_seq {
-                    continue;
-                }
-                projection.insert_candidate(TrimTarget {
-                    trim_id: trim_id.clone(),
-                    toolcall_seq: *toolcall_seq,
-                    raw_ordinal: *raw_ordinal,
-                    context_index: *context_index,
-                    call_id: call_id.clone(),
-                    response_kind: *response_kind,
-                    original_visible_size: *original_visible_size,
-                    cleared: false,
-                });
-            }
-            TrimEvent::Cleared { trim_id, .. } => {
-                projection.mark_cleared(trim_id);
-            }
-        }
-    }
-    Ok(projection)
-}
-
 fn replay_from_events(
     archive: &SpineArchive,
     events: &[LoggedSpineLedgerEvent],
@@ -3775,20 +3714,6 @@ fn tool_response_call_id(item: &ResponseItem) -> Option<&str> {
             call_id: Some(call_id),
             ..
         } => Some(call_id.as_str()),
-        _ => None,
-    }
-}
-
-fn trimmable_text_tool_response(item: &ResponseItem) -> Option<(TrimResponseKind, &str)> {
-    match item {
-        ResponseItem::FunctionCallOutput { call_id, output } if output.text_content().is_some() => {
-            Some((TrimResponseKind::FunctionCallOutput, call_id.as_str()))
-        }
-        ResponseItem::CustomToolCallOutput {
-            call_id, output, ..
-        } if output.text_content().is_some() => {
-            Some((TrimResponseKind::CustomToolCallOutput, call_id.as_str()))
-        }
         _ => None,
     }
 }

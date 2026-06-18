@@ -80,6 +80,21 @@ enum SpineCommitAttempt {
     RuntimeMissing,
 }
 
+enum SpineTrimRequest {
+    Snip,
+    SliceHead {
+        head: usize,
+    },
+    SliceTail {
+        tail: usize,
+    },
+    SliceAnchor {
+        anchor: String,
+        preceding: usize,
+        following: usize,
+    },
+}
+
 impl Session {
     pub(crate) fn no_spine_tool_commit() -> SpineToolCommit {
         SpineToolCommit {
@@ -699,6 +714,59 @@ impl Session {
         &self,
         trim_id: String,
     ) -> Result<SpineTrimOutcome, SpineError> {
+        self.apply_spine_trim_request(trim_id, SpineTrimRequest::Snip)
+            .await
+    }
+
+    pub(crate) async fn slice_spine_tool_response_head(
+        &self,
+        trim_id: String,
+        head: usize,
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.apply_spine_trim_request(trim_id, SpineTrimRequest::SliceHead { head })
+            .await
+    }
+
+    pub(crate) async fn slice_spine_tool_response_tail(
+        &self,
+        trim_id: String,
+        tail: usize,
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.apply_spine_trim_request(trim_id, SpineTrimRequest::SliceTail { tail })
+            .await
+    }
+
+    pub(crate) async fn slice_spine_tool_response_anchor(
+        &self,
+        trim_id: String,
+        anchor: String,
+        preceding: usize,
+        following: usize,
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.apply_spine_trim_request(
+            trim_id,
+            SpineTrimRequest::SliceAnchor {
+                anchor,
+                preceding,
+                following,
+            },
+        )
+        .await
+    }
+
+    async fn apply_spine_trim_request(
+        &self,
+        trim_id: String,
+        request: SpineTrimRequest,
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        let raw_items = self
+            .clone_history()
+            .await
+            .raw_items()
+            .iter()
+            .cloned()
+            .map(Some)
+            .collect::<Vec<_>>();
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
         guard.ensure_valid()?;
@@ -707,7 +775,21 @@ impl Session {
                 "spine runtime missing after initialization".to_string(),
             ));
         };
-        runtime.trim_tool_response(&trim_id)
+        match request {
+            SpineTrimRequest::Snip => runtime.trim_tool_response(&trim_id),
+            SpineTrimRequest::SliceHead { head } => {
+                runtime.slice_tool_response_head(&trim_id, head, &raw_items)
+            }
+            SpineTrimRequest::SliceTail { tail } => {
+                runtime.slice_tool_response_tail(&trim_id, tail, &raw_items)
+            }
+            SpineTrimRequest::SliceAnchor {
+                anchor,
+                preceding,
+                following,
+            } => runtime
+                .slice_tool_response_anchor(&trim_id, &anchor, preceding, following, &raw_items),
+        }
     }
 
     pub(crate) async fn append_spine_feedback(&self, content: String) -> Result<(), SpineError> {

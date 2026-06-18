@@ -649,7 +649,7 @@ fn trim_event_within_toolcall_boundary(event: &LoggedTrimEvent, toolcall_seq_lim
     match &event.event {
         TrimEvent::ToolCallBoundary { toolcall_seq, .. }
         | TrimEvent::Candidate { toolcall_seq, .. } => *toolcall_seq < toolcall_seq_limit,
-        TrimEvent::Cleared { .. } => true,
+        TrimEvent::Cleared { .. } | TrimEvent::Snipped { .. } | TrimEvent::Sliced { .. } => true,
     }
 }
 
@@ -665,6 +665,14 @@ fn trim_seq_watermark_for_raw_boundary(
                 ..
             }
             | TrimEvent::Cleared {
+                raw_boundary: event_boundary,
+                ..
+            }
+            | TrimEvent::Snipped {
+                raw_boundary: event_boundary,
+                ..
+            }
+            | TrimEvent::Sliced {
                 raw_boundary: event_boundary,
                 ..
             } => *event_boundary <= raw_boundary,
@@ -807,15 +815,6 @@ impl SpineStore {
         event: &LoggedPressureEvent,
     ) -> Result<(), SpineError> {
         append_pressure_json_line(&self.pressure_path(), event)
-    }
-
-    pub(super) fn append_trim_event(&self, event: &TrimEvent) -> Result<u64, SpineError> {
-        let trim_seq = self.next_trim_seq()?;
-        self.append_logged_trim_event(&LoggedTrimEvent {
-            trim_seq,
-            event: event.clone(),
-        })?;
-        Ok(trim_seq)
     }
 
     pub(super) fn append_logged_trim_event(

@@ -223,6 +223,18 @@ pub(super) enum TrimEvent {
         raw_boundary: u64,
         raw_live_hash: String,
     },
+    Snipped {
+        trim_id: String,
+        raw_boundary: u64,
+        raw_live_hash: String,
+    },
+    Sliced {
+        trim_id: String,
+        raw_boundary: u64,
+        raw_live_hash: String,
+        slice: TrimSliceSpec,
+        visible_body: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -241,7 +253,30 @@ pub(super) struct TrimTarget {
     pub(super) call_id: String,
     pub(super) response_kind: TrimResponseKind,
     pub(super) original_visible_size: i64,
-    pub(super) cleared: bool,
+    pub(super) state: TrimTargetState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum TrimTargetState {
+    Tagged,
+    Snipped,
+    Sliced { visible_body: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(super) enum TrimSliceSpec {
+    Head {
+        head: usize,
+    },
+    Tail {
+        tail: usize,
+    },
+    Anchor {
+        anchor: String,
+        preceding: usize,
+        following: usize,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -266,9 +301,15 @@ impl TrimProjection {
         self.targets_by_id.insert(target.trim_id.clone(), target);
     }
 
-    pub(super) fn mark_cleared(&mut self, trim_id: &str) {
+    pub(super) fn mark_snipped(&mut self, trim_id: &str) {
         if let Some(target) = self.targets_by_id.get_mut(trim_id) {
-            target.cleared = true;
+            target.state = TrimTargetState::Snipped;
+        }
+    }
+
+    pub(super) fn mark_sliced(&mut self, trim_id: &str, visible_body: String) {
+        if let Some(target) = self.targets_by_id.get_mut(trim_id) {
+            target.state = TrimTargetState::Sliced { visible_body };
         }
     }
 
@@ -608,6 +649,16 @@ impl TrimEvent {
             } => raw_mask.prefix_hash_matches(*raw_boundary, raw_live_hash),
             TrimEvent::Candidate { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
             TrimEvent::Cleared {
+                raw_boundary,
+                raw_live_hash,
+                ..
+            }
+            | TrimEvent::Snipped {
+                raw_boundary,
+                raw_live_hash,
+                ..
+            }
+            | TrimEvent::Sliced {
                 raw_boundary,
                 raw_live_hash,
                 ..

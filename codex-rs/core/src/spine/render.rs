@@ -10,6 +10,7 @@ use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimProjection;
 use crate::spine::model::TrimResponseKind;
 use crate::spine::model::TrimTarget;
+use crate::spine::model::TrimTargetState;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::user_message_projection::anchored_user_message_item;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -324,33 +325,39 @@ pub(super) fn tagged_tool_response_item(
     item: &ResponseItem,
     target: &TrimTarget,
 ) -> Result<ResponseItem, SpineError> {
-    projected_tool_response_item_with_state(item, target, false)
+    projected_tool_response_item_with_state(item, target, &TrimTargetState::Tagged)
 }
 
 pub(super) fn cleared_tool_response_item(
     item: &ResponseItem,
     target: &TrimTarget,
 ) -> Result<ResponseItem, SpineError> {
-    projected_tool_response_item_with_state(item, target, true)
+    projected_tool_response_item_with_state(item, target, &TrimTargetState::Snipped)
 }
 
 fn projected_tool_response_item(
     item: &ResponseItem,
     target: &TrimTarget,
 ) -> Result<ResponseItem, SpineError> {
-    projected_tool_response_item_with_state(item, target, target.cleared)
+    projected_tool_response_item_with_state(item, target, &target.state)
 }
 
 fn projected_tool_response_item_with_state(
     item: &ResponseItem,
     target: &TrimTarget,
-    cleared: bool,
+    state: &TrimTargetState,
 ) -> Result<ResponseItem, SpineError> {
-    let body = if cleared {
-        FunctionCallOutputBody::Text(TOOL_RESULT_CLEARED_MESSAGE.to_string())
-    } else {
-        let text = text_body(item, target)?;
-        FunctionCallOutputBody::Text(format!("[TRIM_ID: {}]\n{text}", target.trim_id))
+    let body = match state {
+        TrimTargetState::Tagged => {
+            let text = text_body(item, target)?;
+            FunctionCallOutputBody::Text(format!("[TRIM_ID: {}]\n{text}", target.trim_id))
+        }
+        TrimTargetState::Snipped => {
+            FunctionCallOutputBody::Text(TOOL_RESULT_CLEARED_MESSAGE.to_string())
+        }
+        TrimTargetState::Sliced { visible_body } => {
+            FunctionCallOutputBody::Text(visible_body.clone())
+        }
     };
     let output = FunctionCallOutputPayload {
         body,
