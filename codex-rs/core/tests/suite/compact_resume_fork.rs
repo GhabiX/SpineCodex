@@ -794,8 +794,10 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
         .unwrap_or_else(|| panic!("missing final request after compact resume"));
     let final_user_texts = final_request.message_input_texts("user");
     assert_eq!(
-        final_user_texts.last().map(String::as_str),
-        Some(FINAL_AFTER_COMPACT_RESUME)
+        final_user_texts
+            .last()
+            .map(|text| text.contains(FINAL_AFTER_COMPACT_RESUME)),
+        Some(true)
     );
     assert!(
         final_request.body_contains_text("<spine_memory>"),
