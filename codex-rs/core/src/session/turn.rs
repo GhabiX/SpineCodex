@@ -2128,17 +2128,8 @@ async fn drain_in_flight(
                 if !commit.record_output && !output_recorded_before_spine_commit {
                     continue;
                 }
-                let mut deferred_history_update = commit.deferred_history_update;
                 let deferred_tree_update = commit.deferred_tree_update;
-                if let Some(update) = deferred_history_update.as_mut() {
-                    update.replace_tool_output(&response_item);
-                }
                 if output_recorded_before_spine_commit {
-                    if let Some(update) = deferred_history_update {
-                        sess.apply_deferred_spine_history_update(update)
-                            .await
-                            .map_err(SamplingRequestError::Codex)?;
-                    }
                     if let Some(snapshot) = deferred_tree_update {
                         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
                             .await;
@@ -2153,11 +2144,6 @@ async fn drain_in_flight(
                     )
                     .await
                     .map_err(SamplingRequestError::Codex)?;
-                    if let Some(update) = deferred_history_update {
-                        sess.apply_deferred_spine_history_update(update)
-                            .await
-                            .map_err(SamplingRequestError::Codex)?;
-                    }
                     sess.send_raw_response_items(
                         &turn_context,
                         std::slice::from_ref(&response_item),
@@ -2304,19 +2290,6 @@ async fn drain_deferred_spine_tool_group(
         .await;
     }
     spine_control_overlay.remove_call_ids(&tool_call_ids);
-    let mut deferred_history_update = commit.deferred_history_update;
-    if let Some(update) = deferred_history_update.as_mut()
-        && let Some(response_item) = response_items.iter().find(|item| {
-            tool_response_call_id_for_overlay(item).as_deref() == Some(commit_call_id.as_str())
-        })
-    {
-        update.replace_tool_output(response_item);
-    }
-    if let Some(update) = deferred_history_update {
-        sess.apply_deferred_spine_history_update(update)
-            .await
-            .map_err(SamplingRequestError::Codex)?;
-    }
     if let Some(snapshot) = commit.deferred_tree_update {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;
@@ -2419,11 +2392,6 @@ async fn drain_conflicting_spine_control_tool_group(
         .await;
     }
     spine_control_overlay.remove_call_ids(&control_call_ids);
-    if let Some(update) = commit.deferred_history_update {
-        sess.apply_deferred_spine_history_update(update)
-            .await
-            .map_err(SamplingRequestError::Codex)?;
-    }
     if let Some(snapshot) = commit.deferred_tree_update {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;

@@ -515,14 +515,7 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
     if !commit.record_output && !output_recorded_before_spine_commit {
         return Ok(response_item);
     }
-    let mut deferred_history_update = commit.deferred_history_update;
-    if let Some(update) = deferred_history_update.as_mut() {
-        update.replace_tool_output(&response_item);
-    }
     if output_recorded_before_spine_commit {
-        if let Some(update) = deferred_history_update {
-            session.apply_deferred_spine_history_update(update).await?;
-        }
         if let Some(snapshot) = commit.deferred_tree_update {
             session
                 .send_spine_tree_update(turn_context.as_ref(), snapshot)
@@ -535,9 +528,6 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
                 std::slice::from_ref(&response_item),
             )
             .await?;
-        if let Some(update) = deferred_history_update {
-            session.apply_deferred_spine_history_update(update).await?;
-        }
         session
             .send_raw_response_items(turn_context, std::slice::from_ref(&response_item))
             .await;
@@ -842,14 +832,7 @@ async fn assert_close_window_session_state(
 async fn make_spine_close_window_missing_output_carrier(
     summary_text: &str,
 ) -> MissingOutputCarrierFixture {
-    let server = start_mock_server().await;
-    let compact_mock = mount_sse_once(
-        &server,
-        spine_slot_summary_sse("close-window-summary", summary_text),
-    )
-    .await;
-    let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -857,8 +840,6 @@ async fn make_spine_close_window_missing_output_carrier(
                 .features
                 .enable(Feature::SpineJit)
                 .expect("enable spine feature");
-            config.model_provider.base_url = Some(base_url.clone());
-            config.model_provider.supports_websockets = false;
         },
     )
     .await;
@@ -913,14 +894,13 @@ async fn make_spine_close_window_missing_output_carrier(
         .await
         .expect("commit close-window sidecar only");
     assert!(
-        commit.deferred_history_update.is_some(),
-        "close should defer host history replacement"
+        !commit.record_output,
+        "close reduce boundary should record raw output before returning success"
     );
     assert!(
         commit.deferred_tree_update.is_some(),
         "close should defer tree update until output carrier is durable"
     );
-    assert_eq!(compact_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -931,14 +911,24 @@ async fn make_spine_close_window_missing_output_carrier(
         panic!("expected resumed rollout history");
     };
     assert!(
-        !resumed.history.iter().any(|item| matches!(
+        resumed.history.iter().any(|item| matches!(
             item,
             RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput { call_id, .. })
                 if call_id == "close-window"
         )),
-        "test setup must omit the close output carrier"
+        "reduce success must persist the close output carrier before this fixture corrupts raw-live evidence"
     );
-    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let mut raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let output_index = raw_items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                Some(ResponseItem::FunctionCallOutput { call_id, .. }) if call_id == "close-window"
+            )
+        })
+        .expect("test setup must include the close output carrier");
+    raw_items[output_index] = None;
 
     MissingOutputCarrierFixture {
         rollout_path,
@@ -949,14 +939,7 @@ async fn make_spine_close_window_missing_output_carrier(
 async fn make_spine_next_window_missing_output_carrier(
     summary_text: &str,
 ) -> MissingOutputCarrierFixture {
-    let server = start_mock_server().await;
-    let compact_mock = mount_sse_once(
-        &server,
-        spine_slot_summary_sse("next-window-summary", summary_text),
-    )
-    .await;
-    let base_url = format!("{}/v1", server.uri());
-    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -964,8 +947,6 @@ async fn make_spine_next_window_missing_output_carrier(
                 .features
                 .enable(Feature::SpineJit)
                 .expect("enable spine feature");
-            config.model_provider.base_url = Some(base_url.clone());
-            config.model_provider.supports_websockets = false;
         },
     )
     .await;
@@ -1024,14 +1005,13 @@ async fn make_spine_next_window_missing_output_carrier(
         .await
         .expect("commit next-window sidecar only");
     assert!(
-        commit.deferred_history_update.is_some(),
-        "next should defer host history replacement"
+        !commit.record_output,
+        "next reduce boundary should record raw output before returning success"
     );
     assert!(
         commit.deferred_tree_update.is_some(),
         "next should defer tree update until output carrier is durable"
     );
-    assert_eq!(compact_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -1042,21 +1022,24 @@ async fn make_spine_next_window_missing_output_carrier(
         panic!("expected resumed rollout history");
     };
     assert!(
-        !resumed.history.iter().any(|item| matches!(
+        resumed.history.iter().any(|item| matches!(
             item,
             RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput { call_id, .. })
                 if call_id == "next-window"
         )),
-        "test setup must omit the next output carrier"
+        "reduce success must persist the next output carrier before this fixture corrupts raw-live evidence"
     );
-    let raw_items = spine_raw_items_after_rollback(&resumed.history);
-    let source_host_items = session.clone_history().await.raw_items().to_vec();
-    assert!(
-        !source_host_items.iter().any(
-            |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "next-window")
-        ),
-        "test setup must leave the next output carrier non-durable"
-    );
+    let mut raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let output_index = raw_items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                Some(ResponseItem::FunctionCallOutput { call_id, .. }) if call_id == "next-window"
+            )
+        })
+        .expect("test setup must include the next output carrier");
+    raw_items[output_index] = None;
 
     MissingOutputCarrierFixture {
         rollout_path,
@@ -10557,10 +10540,6 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
         !commit.record_output,
         "close reduce boundary should record raw output before returning success"
     );
-    assert!(
-        commit.deferred_history_update.is_none(),
-        "close reduce success must not expose a deferred host history replacement"
-    );
     let deferred_tree_update = commit.deferred_tree_update;
     assert_no_event_matching(
         &rx,
@@ -10933,14 +10912,10 @@ async fn spine_next_direct_memory_ignores_mock_compact_response_and_opens_siblin
         .await
         .expect("record next output before Spine commit");
 
-    let commit = session
+    session
         .maybe_commit_spine_tool_output(&turn_context, &next_output)
         .await
         .expect("direct memory next should not request or parse compact response");
-    assert!(
-        commit.deferred_history_update.is_none(),
-        "next reduce success must publish host history before returning"
-    );
     assert_eq!(compact_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
@@ -11380,10 +11355,6 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
         .await
         .expect("direct-memory grouped next opens sibling and keeps durable toolcall");
     assert!(commit.record_output);
-    assert!(
-        commit.deferred_history_update.is_none(),
-        "grouped next reduce success must publish host history before returning"
-    );
     assert_no_pending_spine_commit(&session, "grouped-durable-overflow-next").await;
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -11825,14 +11796,10 @@ async fn spine_close_direct_memory_commit_publishes_host_history_before_return()
         )
         .await
         .expect("record close output before Spine commit");
-    let commit = session
+    session
         .maybe_commit_spine_tool_output(&turn_context, &close_output)
         .await
         .expect("direct close commit should publish staged history replacement");
-    assert!(
-        commit.deferred_history_update.is_none(),
-        "close reduce success must publish host history before returning"
-    );
     assert_eq!(
         compact_mock.requests().len(),
         0,
@@ -11975,10 +11942,6 @@ async fn spine_close_reduce_records_raw_output_and_publishes_host_history_before
     assert!(
         !commit.record_output,
         "close reduce boundary should already record the raw output carrier"
-    );
-    assert!(
-        commit.deferred_history_update.is_none(),
-        "close reduce success must not expose an external host publish step"
     );
     assert_eq!(
         compact_mock.requests().len(),

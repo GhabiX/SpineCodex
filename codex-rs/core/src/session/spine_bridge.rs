@@ -53,52 +53,24 @@ impl PreparedSpineReplay {
 pub(crate) struct SpineToolCommit {
     pub(crate) record_output: bool,
     pub(crate) spine_context_already_observed: bool,
-    pub(crate) deferred_history_update: Option<DeferredSpineHistoryUpdate>,
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
 const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
 
 #[derive(Debug)]
-pub(crate) struct DeferredSpineHistoryUpdate {
+struct SpineHistoryUpdate {
     call_id: String,
     operation: &'static str,
     suffix_start: usize,
     expected_history: Vec<ResponseItem>,
     replacement: Vec<ResponseItem>,
     reference_context_item: Option<TurnContextItem>,
-    replace_tool_output: bool,
-}
-
-impl DeferredSpineHistoryUpdate {
-    pub(crate) fn replace_tool_output(&mut self, item: &ResponseItem) {
-        if !self.replace_tool_output {
-            return;
-        }
-        let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
-            return;
-        };
-        if call_id != &self.call_id {
-            return;
-        }
-        if let Some(existing) = self.replacement.iter_mut().rev().find(|existing| {
-            matches!(
-                existing,
-                ResponseItem::FunctionCallOutput {
-                    call_id: existing,
-                    ..
-                } if existing == call_id
-            )
-        }) {
-            *existing = item.clone();
-        }
-    }
 }
 
 struct SpineCommitOutput {
     snapshot: Option<SpineTreeUpdateEvent>,
     spine_context_already_observed: bool,
-    history_update: Option<DeferredSpineHistoryUpdate>,
     defer_tree_update_until_raw_output: bool,
 }
 
@@ -113,7 +85,6 @@ impl Session {
         SpineToolCommit {
             record_output: true,
             spine_context_already_observed: false,
-            deferred_history_update: None,
             deferred_tree_update: None,
         }
     }
@@ -129,7 +100,7 @@ impl Session {
 
     fn apply_spine_history_replacement_to_locked_state(
         state: &mut crate::state::SessionState,
-        update: DeferredSpineHistoryUpdate,
+        update: SpineHistoryUpdate,
     ) -> Result<(), String> {
         let history = state.clone_history();
         let current_history = history.raw_items();
@@ -1163,7 +1134,6 @@ impl Session {
         let SpineCommitOutput {
             snapshot,
             spine_context_already_observed,
-            history_update,
             defer_tree_update_until_raw_output,
         } = commit_output;
         let deferred_tree_update = if defer_tree_update_until_raw_output {
@@ -1183,27 +1153,8 @@ impl Session {
         Ok(SpineToolCommit {
             record_output: !recorded_output_inside_reduce,
             spine_context_already_observed,
-            deferred_history_update: history_update,
             deferred_tree_update,
         })
-    }
-
-    pub(crate) async fn apply_deferred_spine_history_update(
-        &self,
-        update: DeferredSpineHistoryUpdate,
-    ) -> CodexResult<()> {
-        let result = {
-            let mut state = self.state.lock().await;
-            Self::apply_spine_history_replacement_to_locked_state(&mut state, update)
-        };
-        if let Err(reason) = result {
-            self.invalidate_spine_runtime(reason.clone()).await;
-            return Err(CodexErr::SpineTerminalFailure {
-                operation: "apply deferred Spine close-like history replacement".to_string(),
-                reason,
-            });
-        }
-        Ok(())
     }
 
     fn try_commit_spine_tool_output_once(
@@ -1311,14 +1262,13 @@ impl Session {
                     if !tool_resp_already_recorded {
                         replacement.push(tool_resp_item.clone());
                     }
-                    history_update = Some(DeferredSpineHistoryUpdate {
+                    history_update = Some(SpineHistoryUpdate {
                         call_id: call_id.to_string(),
                         operation: "spine.close",
                         suffix_start: *suffix_start,
                         expected_history: history_items.to_vec(),
                         replacement,
                         reference_context_item: state.reference_context_item(),
-                        replace_tool_output: true,
                     });
                 }
                 SpineCommitKind::CloseThenOpen {
@@ -1345,14 +1295,13 @@ impl Session {
                     if !tool_resp_already_recorded {
                         replacement.push(tool_resp_item.clone());
                     }
-                    history_update = Some(DeferredSpineHistoryUpdate {
+                    history_update = Some(SpineHistoryUpdate {
                         call_id: call_id.to_string(),
                         operation: "spine.next",
                         suffix_start: *suffix_start,
                         expected_history: history_items.to_vec(),
                         replacement,
                         reference_context_item: state.reference_context_item(),
-                        replace_tool_output: true,
                     });
                 }
             }
@@ -1363,25 +1312,23 @@ impl Session {
             let history = state.clone_history();
             let materialized = spine.materialize_history(&raw_items)?;
             if materialized.as_slice() != history.raw_items() {
-                history_update = Some(DeferredSpineHistoryUpdate {
+                history_update = Some(SpineHistoryUpdate {
                     call_id: call_id.to_string(),
                     operation: "spine toolcall projection",
                     suffix_start: 0,
                     expected_history: history.raw_items().to_vec(),
                     replacement: materialized,
                     reference_context_item: state.reference_context_item(),
-                    replace_tool_output: false,
                 });
             }
         }
-        if tool_resp_already_recorded && let Some(update) = history_update.take() {
+        if let Some(update) = history_update.take() {
             Self::apply_spine_history_replacement_to_locked_state(&mut state, update)
                 .map_err(SpineError::Invariant)?;
         }
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
             snapshot,
             spine_context_already_observed: true,
-            history_update,
             defer_tree_update_until_raw_output,
         }))
     }
