@@ -783,33 +783,69 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
         };
-        let raw_len = {
-            let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(_spine) = guard.runtime() else {
-                return Ok(Self::no_spine_tool_commit());
+        let mut recorded_output_inside_reduce = false;
+        let mut raw_len;
+        let mut history_for_output_anchor;
+        loop {
+            raw_len = {
+                let guard = spine_slot.lock().await;
+                guard.ensure_valid()?;
+                let Some(_spine) = guard.runtime() else {
+                    return Ok(Self::no_spine_tool_commit());
+                };
+                guard.raw_len()
             };
-            guard.raw_len()
-        };
-        let history_for_output_anchor = self.clone_history().await;
-        let history_items_for_output_anchor = history_for_output_anchor.raw_items();
-        let (tool_resp_raw_ordinal, tool_resp_context_index, tool_resp_already_recorded) =
-            if history_items_for_output_anchor.last() == Some(item) && raw_len > 0 {
-                (
-                    raw_len - 1,
-                    history_items_for_output_anchor
-                        .len()
-                        .checked_sub(1)
-                        .ok_or_else(|| {
-                            SpineError::Invariant(
-                                "recorded tool output history length underflow".to_string(),
-                            )
-                        })?,
-                    true,
+            history_for_output_anchor = self.clone_history().await;
+            let history_items_for_output_anchor = history_for_output_anchor.raw_items();
+            let tool_resp_already_recorded =
+                history_items_for_output_anchor.last() == Some(item) && raw_len > 0;
+            if tool_resp_already_recorded || recorded_output_inside_reduce {
+                break;
+            }
+            let is_close_like = {
+                let guard = spine_slot.lock().await;
+                guard.ensure_valid()?;
+                let Some(spine) = guard.runtime() else {
+                    return Ok(Self::no_spine_tool_commit());
+                };
+                matches!(
+                    spine.pending_commit(call_id)?,
+                    Some(SpinePendingCommit::Close { .. })
                 )
-            } else {
-                (raw_len, history_items_for_output_anchor.len(), false)
             };
+            if !is_close_like {
+                break;
+            }
+            self.record_conversation_items_without_spine_observe(
+                turn_context,
+                std::slice::from_ref(item),
+            )
+            .await
+            .map_err(|err| {
+                SpineError::Operation(format!(
+                    "failed to record Spine close-like raw output before reduce for call_id={call_id}: {err}"
+                ))
+            })?;
+            recorded_output_inside_reduce = true;
+        }
+        let history_items_for_output_anchor = history_for_output_anchor.raw_items();
+        let tool_resp_already_recorded =
+            history_items_for_output_anchor.last() == Some(item) && raw_len > 0;
+        let (tool_resp_raw_ordinal, tool_resp_context_index) = if tool_resp_already_recorded {
+            (
+                raw_len - 1,
+                history_items_for_output_anchor
+                    .len()
+                    .checked_sub(1)
+                    .ok_or_else(|| {
+                        SpineError::Invariant(
+                            "recorded tool output history length underflow".to_string(),
+                        )
+                    })?,
+            )
+        } else {
+            (raw_len, history_items_for_output_anchor.len())
+        };
         let request_anchor = {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
@@ -841,6 +877,7 @@ impl Session {
             item,
             completed_toolcall,
             tool_resp_already_recorded,
+            recorded_output_inside_reduce,
         )
         .await
     }
@@ -959,6 +996,7 @@ impl Session {
             commit_output,
             completed_toolcall,
             true,
+            false,
         )
         .await
     }
@@ -971,6 +1009,7 @@ impl Session {
         item: &ResponseItem,
         completed_toolcall: CompletedToolCall,
         tool_resp_already_recorded: bool,
+        recorded_output_inside_reduce: bool,
     ) -> Result<SpineToolCommit, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
@@ -1142,7 +1181,7 @@ impl Session {
             );
         }
         Ok(SpineToolCommit {
-            record_output: true,
+            record_output: !recorded_output_inside_reduce,
             spine_context_already_observed,
             deferred_history_update: history_update,
             deferred_tree_update,

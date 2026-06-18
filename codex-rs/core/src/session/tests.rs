@@ -10553,54 +10553,37 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
         .maybe_commit_spine_tool_output(&turn_context, &close_output)
         .await
         .expect("commit close output");
-    let deferred_history_update = commit
-        .deferred_history_update
-        .expect("close commit should defer host history replacement");
-    let deferred_tree_update = commit.deferred_tree_update;
-    session
-        .record_conversation_items_raw_only_durable_without_emission(
-            &turn_context,
-            std::slice::from_ref(&close_output),
-        )
-        .await
-        .expect("durable raw output append should succeed");
-    session
-        .record_into_history(
-            &[user_message(
-                "host history drift before deferred close replacement",
-            )],
-            &turn_context,
-        )
-        .await;
-
-    let err = session
-        .apply_deferred_spine_history_update(deferred_history_update)
-        .await
-        .expect_err("history drift should fail deferred replacement");
     assert!(
-        matches!(err, CodexErr::SpineTerminalFailure { .. }),
-        "unexpected error: {err}"
+        !commit.record_output,
+        "close reduce boundary should record raw output before returning success"
     );
+    assert!(
+        commit.deferred_history_update.is_none(),
+        "close reduce success must not expose a deferred host history replacement"
+    );
+    let deferred_tree_update = commit.deferred_tree_update;
     assert_no_event_matching(
         &rx,
-        "failed deferred history replacement must not publish success raw output or committed close tree state",
+        "close reduce must not publish committed tree state before the post-commit caller step",
         |event| match &event.msg {
-            EventMsg::RawResponseItem(raw) => {
-                matches!(
-                    &raw.item,
-                    ResponseItem::FunctionCallOutput { call_id, output }
-                        if call_id == "close-history-fail"
-                            && output
-                                .text_content()
-                                .is_some_and(|text| text == "ok")
-                )
-            }
             EventMsg::SpineTreeUpdate(snapshot) => snapshot
                 .nodes
                 .iter()
                 .any(|node| node.node_id == "1.1.1" && node.status == SpineTreeNodeStatus::Closed),
             _ => false,
         },
+    );
+    let history = session.clone_history().await;
+    assert!(
+        history
+            .raw_items()
+            .iter()
+            .any(|item| message_text_contains(item, "test node memory")),
+        "close reduce success must publish host history before returning"
+    );
+    assert!(
+        history.raw_items().contains(&close_output),
+        "close reduce boundary must retain the raw output carrier in host history"
     );
     if let Some(snapshot) = deferred_tree_update {
         assert!(
@@ -10613,14 +10596,7 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
     } else {
         panic!("close commit should defer a tree update");
     }
-    let err = session
-        .spine_tree()
-        .await
-        .expect_err("history replacement failure should invalidate Spine runtime");
-    assert!(
-        err.to_string().contains("spine runtime is invalid"),
-        "unexpected runtime error: {err}"
-    );
+    session.spine_tree().await.expect("Spine runtime remains valid");
     assert_eq!(compact_mock.requests().len(), 0);
 }
 
@@ -11895,6 +11871,151 @@ async fn spine_close_direct_memory_commit_publishes_host_history_before_return()
         )),
         "close reduce success must not use compact response text"
     );
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    {
+        InitialHistory::Resumed(resumed) => spine_raw_items_after_rollback(&resumed.history),
+        _ => panic!("expected resumed rollout history"),
+    };
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)")
+            .as_slice(),
+        "close reduce success must leave ContextManager.items equal to h(PS)"
+    );
+}
+
+#[tokio::test]
+async fn spine_close_reduce_records_raw_output_and_publishes_host_history_before_return() {
+    let server = start_mock_server().await;
+    let compact_mock = core_test_support::responses::mount_response_once(
+        &server,
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(spine_slot_summary_sse(
+                "unused-spine-summary",
+                "unused compact summary",
+            )),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before raw-internal close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "raw-internal-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open("raw-internal-open".to_string(), "child".to_string())
+        .await
+        .expect("stage open");
+    let open_output = function_output("raw-internal-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open output");
+
+    let inner = assistant_message("inside raw-internal close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
+        .await
+        .expect("record child body");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "raw-internal-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .stage_spine_close(
+            "raw-internal-close".to_string(),
+            "raw-internal node memory".to_string(),
+        )
+        .await
+        .expect("stage close");
+    while rx.try_recv().is_ok() {}
+
+    let close_output = function_output("raw-internal-close");
+    let commit = session
+        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .await
+        .expect("close reduce should record raw output and publish host history");
+    assert!(
+        !commit.record_output,
+        "close reduce boundary should already record the raw output carrier"
+    );
+    assert!(
+        commit.deferred_history_update.is_none(),
+        "close reduce success must not expose an external host publish step"
+    );
+    assert_eq!(
+        compact_mock.requests().len(),
+        0,
+        "direct memory close must not send a secondary compact request"
+    );
+
+    let history = session.clone_history().await;
+    let items = history.raw_items();
+    assert_eq!(items.len(), 4);
+    assert!(message_text_contains(&items[0], "prefix before raw-internal close"));
+    assert!(
+        matches!(
+            &items[1],
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                            && text.contains("raw-internal node memory")
+                )
+        ),
+        "close reduce success must publish direct Node Memory into host history"
+    );
+    assert_eq!(items[2], close_request);
+    assert_eq!(items[3], close_output);
+    assert_no_pending_spine_tree_update_matching(
+        &rx,
+        "tree update must remain a post-commit effect and not publish before reduce success",
+        |snapshot| {
+            snapshot
+                .nodes
+                .iter()
+                .any(|node| node.node_id == "1.1.1" && node.status == SpineTreeNodeStatus::Closed)
+        },
+    );
+
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
     let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
