@@ -3528,6 +3528,12 @@ struct MarkerReplayEventSeqs {
     marker_structural: BTreeSet<u64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplayCommitClassification {
+    Committed,
+    Uncommitted,
+}
+
 fn replay_event_seqs_from_markers(
     events: &[LoggedSpineLedgerEvent],
     markers: &[SpineCommitMarker],
@@ -3553,14 +3559,15 @@ fn replay_event_seqs_from_markers(
         }
         let structural_event_seqs = commit_marker_structural_event_seqs(marker)?;
         marker_structural.extend(structural_event_seqs.iter().copied());
-        if commit_marker_transaction_live_for_replay(
+        if classify_commit_marker_for_replay(
             marker,
             &structural_event_seqs,
             &events_by_seq,
             &mems_by_id,
             raw_mask,
             fail_on_unproved_raw_backed,
-        )? {
+        )? == ReplayCommitClassification::Committed
+        {
             forced.extend(structural_event_seqs);
         }
     }
@@ -3570,20 +3577,20 @@ fn replay_event_seqs_from_markers(
     })
 }
 
-fn commit_marker_transaction_live_for_replay(
+fn classify_commit_marker_for_replay(
     marker: &SpineCommitMarker,
     structural_event_seqs: &BTreeSet<u64>,
     events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
     mems_by_id: &BTreeMap<&str, &MemRecord>,
     raw_mask: RawMask<'_>,
     fail_on_unproved_raw_backed: bool,
-) -> Result<bool, SpineError> {
+) -> Result<ReplayCommitClassification, SpineError> {
     for memory in &marker.memory_refs {
         let Some(mem) = mems_by_id.get(memory.compact_id.as_str()) else {
-            return Ok(false);
+            return Ok(ReplayCommitClassification::Uncommitted);
         };
         if !mem.allowed_by(raw_mask)? {
-            return Ok(false);
+            return Ok(ReplayCommitClassification::Uncommitted);
         }
     }
     for seq in marker.token_seq_start..marker.token_seq_end {
@@ -3591,11 +3598,11 @@ fn commit_marker_transaction_live_for_replay(
             continue;
         }
         let Some(event) = events_by_seq.get(&seq) else {
-            return Ok(false);
+            return Ok(ReplayCommitClassification::Uncommitted);
         };
         if !event.allowed_by(raw_mask)? {
             if !fail_on_unproved_raw_backed {
-                return Ok(false);
+                return Ok(ReplayCommitClassification::Uncommitted);
             }
             return Err(SpineError::InvalidStore(format!(
                 "Spine commit marker {} raw-backed event at token_seq {} is not proved by live raw state",
@@ -3603,7 +3610,7 @@ fn commit_marker_transaction_live_for_replay(
             )));
         }
     }
-    Ok(true)
+    Ok(ReplayCommitClassification::Committed)
 }
 
 fn marker_in_replay_range(
