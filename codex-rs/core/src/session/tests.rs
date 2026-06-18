@@ -210,26 +210,22 @@ fn spine_summary_sse(id: &str, text: &str) -> String {
     sse(vec![ev_assistant_message(id, text), ev_completed(id)])
 }
 
-fn spine_slot_summary_sse(id: &str, text: &str) -> String {
-    spine_slots_summary_sse(id, &[text])
-}
-
 fn spine_node_memory_summary_sse(id: &str, text: &str) -> String {
-    sse(vec![ev_assistant_message(id, text), ev_completed(id)])
+    spine_node_memory_summaries_sse(id, &[text])
 }
 
-fn spine_slots_summary_sse(id: &str, texts: &[&str]) -> String {
+fn spine_node_memory_summaries_sse(id: &str, texts: &[&str]) -> String {
     sse(vec![
         ev_assistant_message(id, &texts.join("\n")),
         ev_completed(id),
     ])
 }
 
-fn spine_slot_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
+fn spine_node_memory_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
     texts
         .iter()
         .enumerate()
-        .map(|(index, text)| spine_slot_summary_sse(&format!("spine-summary-{index}"), text))
+        .map(|(index, text)| spine_node_memory_summary_sse(&format!("spine-summary-{index}"), text))
         .collect()
 }
 
@@ -669,7 +665,7 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse("post-next-summary", summary_text),
+        spine_node_memory_summary_sse("post-next-summary", summary_text),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -1053,7 +1049,7 @@ async fn make_spine_session_with_closed_child(
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse("closed-child-summary", summary_text),
+        spine_node_memory_summary_sse("closed-child-summary", summary_text),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -9214,7 +9210,7 @@ async fn spine_close_direct_memory_keeps_prefix_image_provenance() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse("spine-close-image-summary", "image prefix compact summary"),
+        spine_node_memory_summary_sse("spine-close-image-summary", "image prefix compact summary"),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -9281,7 +9277,7 @@ async fn spine_close_direct_memory_keeps_prefix_image_provenance() {
         .await
         .expect("commit open output");
 
-    let inner = assistant_message("assistant suffix requiring generated compact slot");
+    let inner = assistant_message("assistant suffix requiring generated node memory");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
         .await
@@ -9366,7 +9362,7 @@ async fn spine_close_direct_memory_keeps_suffix_image_raw_provenance() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse(
+        spine_node_memory_summary_sse(
             "spine-close-suffix-image-summary",
             "image suffix compact summary",
         ),
@@ -9529,7 +9525,7 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse("spine-next-summary", "next compact summary"),
+        spine_node_memory_summary_sse("spine-next-summary", "next compact summary"),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -10216,7 +10212,7 @@ async fn close_commit_is_atomic_across_sidecar_and_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse(
+        spine_node_memory_summary_sse(
             "spine-close-raw-output-failure",
             "close failure compact summary",
         ),
@@ -10349,7 +10345,7 @@ async fn close_sidecar_commit_marker_failure_invalidates_runtime() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse(
+        spine_node_memory_summary_sse(
             "spine-close-sidecar-marker-failure",
             "close sidecar marker failure compact summary",
         ),
@@ -10463,7 +10459,7 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse(
+        spine_node_memory_summary_sse(
             "spine-close-history-failure",
             "close history failure compact summary",
         ),
@@ -10575,7 +10571,10 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
     } else {
         panic!("close commit should defer a tree update");
     }
-    session.spine_tree().await.expect("Spine runtime remains valid");
+    session
+        .spine_tree()
+        .await
+        .expect("Spine runtime remains valid");
     assert_eq!(compact_mock.requests().len(), 0);
 }
 
@@ -10584,7 +10583,7 @@ async fn spine_next_raw_output_append_failure_does_not_replace_host_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse(
+        spine_node_memory_summary_sse(
             "spine-next-raw-output-failure",
             "next failure compact summary",
         ),
@@ -10716,7 +10715,7 @@ async fn next_sidecar_commit_marker_failure_invalidates_runtime() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse(
+        spine_node_memory_summary_sse(
             "spine-next-sidecar-marker-failure",
             "next sidecar marker failure compact summary",
         ),
@@ -10951,7 +10950,7 @@ async fn spine_next_direct_memory_commit_does_not_wait_for_compact_request() {
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .set_body_string(spine_slot_summary_sse(
+            .set_body_string(spine_node_memory_summary_sse(
                 "late-spine-next-summary",
                 "late next compact summary",
             ))
@@ -11648,8 +11647,8 @@ async fn spine_close_memory_uses_required_node_memory_for_exact_only_suffix() {
     let compact_mock = mount_sse_once(
         &server,
         spine_node_memory_summary_sse(
-            "spine-close-instruction-only-summary",
-            "preserved close instruction: KEEP_CLOSE_GUIDANCE_42",
+            "spine-close-node-memory-only-summary",
+            "preserved node memory facts: KEEP_CLOSE_GUIDANCE_42",
         ),
     )
     .await;
@@ -11727,7 +11726,7 @@ async fn spine_close_direct_memory_commit_publishes_host_history_before_return()
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .set_body_string(spine_slot_summary_sse(
+            .set_body_string(spine_node_memory_summary_sse(
                 "unused-spine-summary",
                 "unused compact summary",
             )),
@@ -11867,7 +11866,7 @@ async fn spine_close_reduce_records_raw_output_and_publishes_host_history_before
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .set_body_string(spine_slot_summary_sse(
+            .set_body_string(spine_node_memory_summary_sse(
                 "unused-spine-summary",
                 "unused compact summary",
             )),
@@ -11952,7 +11951,10 @@ async fn spine_close_reduce_records_raw_output_and_publishes_host_history_before
     let history = session.clone_history().await;
     let items = history.raw_items();
     assert_eq!(items.len(), 4);
-    assert!(message_text_contains(&items[0], "prefix before raw-internal close"));
+    assert!(message_text_contains(
+        &items[0],
+        "prefix before raw-internal close"
+    ));
     assert!(
         matches!(
             &items[1],
@@ -12006,7 +12008,7 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse(
+        spine_node_memory_summary_sse(
             "open-toolcall-close-summary",
             "open toolcall compact summary",
         ),
@@ -12245,7 +12247,7 @@ async fn spine_close_direct_memory_commit_does_not_wait_for_compact_request() {
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .set_body_string(spine_slot_summary_sse(
+            .set_body_string(spine_node_memory_summary_sse(
                 "late-spine-summary",
                 "late close memory response",
             ))
@@ -15865,7 +15867,7 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse(
+        spine_node_memory_summary_sse(
             "spine-close-overlay-summary",
             "overlay secondary close memory",
         ),
@@ -16274,7 +16276,7 @@ async fn spine_next_sibling_tree_uses_provider_open_baseline() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
-        spine_slot_summary_sse("next-baseline-summary", "next baseline compact"),
+        spine_node_memory_summary_sse("next-baseline-summary", "next baseline memory"),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());

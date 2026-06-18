@@ -101,7 +101,6 @@ pub(super) enum SpineLedgerEvent {
         node: NodeId,
         boundary: u64,
         summary: String,
-        instruction: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         close_input_tokens: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

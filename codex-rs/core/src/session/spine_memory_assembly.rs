@@ -426,10 +426,10 @@ mod spine_close_slot_map_tests {
             SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
         let body = skeleton
-            .assemble("preserved close instruction facts")
+            .assemble("preserved node memory facts")
             .expect("assembled body");
         assert!(body.contains("## Child Memory\n# Spine Memory 1.1.1\n\nchild exact"));
-        assert!(body.contains("## Node Memory\npreserved close instruction facts"));
+        assert!(body.contains("## Node Memory\npreserved node memory facts"));
         assert!(!body.contains("## Memory Slot"));
         assert!(!body.contains("## User Message"));
     }
@@ -526,7 +526,7 @@ mod spine_close_slot_map_tests {
 
         let runtime_tag = skeleton
             .assemble("before\n<spine_memory>\nafter")
-            .expect_err("standalone runtime memory tag inside slot body must fail");
+            .expect_err("standalone runtime memory tag inside node memory must fail");
         assert!(
             runtime_tag
                 .to_string()

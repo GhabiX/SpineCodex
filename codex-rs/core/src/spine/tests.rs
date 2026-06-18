@@ -901,7 +901,11 @@ fn commit_marker_replay_classifies_committed_and_uncommitted_proof() {
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
     let mut raw = Vec::new();
 
-    append_msg(&mut runtime, &mut raw, "root child work before replay classification");
+    append_msg(
+        &mut runtime,
+        &mut raw,
+        "root child work before replay classification",
+    );
     close_task(&mut runtime, &mut raw, "close-replay-classification", "1.1");
 
     let marker = runtime
@@ -4204,7 +4208,6 @@ fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
             node: node.clone(),
             boundary: 3,
             summary: "closed".to_string(),
-            instruction: None,
             close_input_tokens: None,
             close_context_tokens: None,
         })
@@ -5831,7 +5834,6 @@ fn close_retry_reduces_existing_pending_close_token() {
 
     let prepared = runtime
         .prepare_close_commit(
-            None,
             Some(memory_assembly.clone()),
             SpineTokenBaselines::default(),
         )

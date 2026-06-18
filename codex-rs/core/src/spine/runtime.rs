@@ -2268,7 +2268,7 @@ impl SpineRuntime {
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitKind, SpineError> {
-        let prepared = self.prepare_close_commit(None, memory_assembly, token_baselines)?;
+        let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
         let mut events = vec![prepared.close_event.clone()];
         let completed_toolcall = completed_toolcall.ok_or_else(|| {
             SpineError::InvalidEvent(
@@ -2339,7 +2339,7 @@ impl SpineRuntime {
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitKind, SpineError> {
-        let prepared = self.prepare_close_commit(None, memory_assembly, token_baselines)?;
+        let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
         let mut close_reduced_parse_stack = self.parse_stack.clone();
         close_reduced_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
         close_reduced_parse_stack
@@ -2436,7 +2436,6 @@ impl SpineRuntime {
 
     fn prepare_close_commit(
         &self,
-        _instruction: Option<String>,
         memory_assembly: Option<SpineCloseMemoryAssembly>,
         token_baselines: SpineTokenBaselines,
     ) -> Result<PreparedCloseCommit, SpineError> {
@@ -2457,7 +2456,6 @@ impl SpineRuntime {
             node,
             boundary: self.raw_len,
             summary: open_meta.summary.clone(),
-            instruction: None,
             close_input_tokens: token_baselines.provider_input_tokens,
             close_context_tokens: token_baselines.provider_input_tokens,
         };
