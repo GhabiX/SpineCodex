@@ -127,6 +127,41 @@ impl Session {
             .await;
     }
 
+    fn apply_spine_history_replacement_to_locked_state(
+        state: &mut crate::state::SessionState,
+        update: DeferredSpineHistoryUpdate,
+    ) -> Result<(), String> {
+        let history = state.clone_history();
+        let current_history = history.raw_items();
+        if current_history != update.expected_history.as_slice() {
+            Err(format!(
+                "{} history changed before suffix replacement for call_id={}",
+                update.operation, update.call_id
+            ))
+        } else if update.suffix_start > current_history.len() {
+            Err(format!(
+                "{} suffix start {} exceeds history length {} for call_id={}",
+                update.operation,
+                update.suffix_start,
+                current_history.len(),
+                update.call_id
+            ))
+        } else {
+            state
+                .replace_history_suffix(
+                    update.suffix_start..current_history.len(),
+                    update.replacement,
+                    update.reference_context_item,
+                )
+                .map_err(|err| {
+                    format!(
+                        "{} suffix replacement failed for call_id={}: {err}",
+                        update.operation, update.call_id
+                    )
+                })
+        }
+    }
+
     pub(crate) async fn emit_initial_spine_tree_snapshot_if_needed(
         &self,
         turn_context: &TurnContext,
@@ -1120,35 +1155,7 @@ impl Session {
     ) -> CodexResult<()> {
         let result = {
             let mut state = self.state.lock().await;
-            let history = state.clone_history();
-            let current_history = history.raw_items();
-            if current_history != update.expected_history.as_slice() {
-                Err(format!(
-                    "{} history changed before deferred suffix replacement for call_id={}",
-                    update.operation, update.call_id
-                ))
-            } else if update.suffix_start > current_history.len() {
-                Err(format!(
-                    "{} suffix start {} exceeds history length {} for call_id={}",
-                    update.operation,
-                    update.suffix_start,
-                    current_history.len(),
-                    update.call_id
-                ))
-            } else {
-                state
-                    .replace_history_suffix(
-                        update.suffix_start..current_history.len(),
-                        update.replacement,
-                        update.reference_context_item,
-                    )
-                    .map_err(|err| {
-                        format!(
-                            "{} deferred suffix replacement failed for call_id={}: {err}",
-                            update.operation, update.call_id
-                        )
-                    })
-            }
+            Self::apply_spine_history_replacement_to_locked_state(&mut state, update)
         };
         if let Err(reason) = result {
             self.invalidate_spine_runtime(reason.clone()).await;
@@ -1178,7 +1185,7 @@ impl Session {
         let Some(spine) = guard.runtime_mut() else {
             return Ok(SpineCommitAttempt::RuntimeMissing);
         };
-        let Ok(state) = self.state.try_lock() else {
+        let Ok(mut state) = self.state.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
         };
         if let Some((_, expected_history)) = memory_assembly.as_ref()
@@ -1327,6 +1334,10 @@ impl Session {
                     replace_tool_output: false,
                 });
             }
+        }
+        if tool_resp_already_recorded && let Some(update) = history_update.take() {
+            Self::apply_spine_history_replacement_to_locked_state(&mut state, update)
+                .map_err(SpineError::Invariant)?;
         }
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
             snapshot,

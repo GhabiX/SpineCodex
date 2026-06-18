@@ -10962,8 +10962,8 @@ async fn spine_next_direct_memory_ignores_mock_compact_response_and_opens_siblin
         .await
         .expect("direct memory next should not request or parse compact response");
     assert!(
-        commit.deferred_history_update.is_some(),
-        "next should stage a direct-memory history replacement"
+        commit.deferred_history_update.is_none(),
+        "next reduce success must publish host history before returning"
     );
     assert_eq!(compact_mock.requests().len(), 0);
 
@@ -10979,6 +10979,14 @@ async fn spine_next_direct_memory_ignores_mock_compact_response_and_opens_siblin
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)")
+            .as_slice(),
+        "next reduce success must leave ContextManager.items equal to h(PS)"
+    );
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1.1.2"), "{tree}");
     assert!(tree.contains("[1.1.1] Done"), "{tree}");
@@ -11396,7 +11404,10 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
         .await
         .expect("direct-memory grouped next opens sibling and keeps durable toolcall");
     assert!(commit.record_output);
-    assert!(commit.deferred_history_update.is_some());
+    assert!(
+        commit.deferred_history_update.is_none(),
+        "grouped next reduce success must publish host history before returning"
+    );
     assert_no_pending_spine_commit(&session, "grouped-durable-overflow-next").await;
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -11413,6 +11424,11 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
     let materialized = runtime
         .materialize_history(&raw_items)
         .expect("materialize h(PS)");
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        materialized.as_slice(),
+        "grouped next reduce success must leave ContextManager.items equal to h(PS)"
+    );
     for expected_call_id in ["grouped-durable-ordinary", "grouped-durable-overflow-next"] {
         assert!(
             materialized.iter().any(|item| {
@@ -11758,7 +11774,7 @@ async fn spine_close_memory_uses_required_node_memory_for_exact_only_suffix() {
 }
 
 #[tokio::test]
-async fn spine_close_direct_memory_commit_rejects_deferred_history_drift() {
+async fn spine_close_direct_memory_commit_publishes_host_history_before_return() {
     let server = start_mock_server().await;
     let compact_mock = core_test_support::responses::mount_response_once(
         &server,
@@ -11826,28 +11842,20 @@ async fn spine_close_direct_memory_commit_rejects_deferred_history_drift() {
         .await
         .expect("stage close");
     let close_output = function_output("close");
+    session
+        .record_conversation_items_without_spine_observe(
+            &turn_context,
+            std::slice::from_ref(&close_output),
+        )
+        .await
+        .expect("record close output before Spine commit");
     let commit = session
         .maybe_commit_spine_tool_output(&turn_context, &close_output)
         .await
-        .expect("direct close commit should build staged history replacement");
-    let deferred_history_update = commit
-        .deferred_history_update
-        .expect("close commit should defer host history replacement until output is durable");
-
-    let concurrent = user_message("concurrent history mutation");
-    session
-        .record_into_history(std::slice::from_ref(&concurrent), &turn_context)
-        .await;
-
-    let err = session
-        .apply_deferred_spine_history_update(deferred_history_update)
-        .await
-        .expect_err("close replacement must reject changed history");
+        .expect("direct close commit should publish staged history replacement");
     assert!(
-        err.to_string().contains(
-            "spine.close history changed before deferred suffix replacement for call_id=close"
-        ),
-        "unexpected close error: {err}"
+        commit.deferred_history_update.is_none(),
+        "close reduce success must publish host history before returning"
     );
     assert_eq!(
         compact_mock.requests().len(),
@@ -11857,13 +11865,24 @@ async fn spine_close_direct_memory_commit_rejects_deferred_history_drift() {
 
     let history = session.clone_history().await;
     let items = history.raw_items();
-    assert_eq!(items.len(), 6);
+    assert_eq!(items.len(), 4);
     assert!(message_text_contains(&items[0], "prefix"));
-    assert_eq!(items[1], open_request);
-    assert_eq!(items[2], open_output);
-    assert_eq!(items[3], inner);
-    assert_eq!(items[4], close_request);
-    assert_eq!(items[5], concurrent);
+    assert!(
+        matches!(
+            &items[1],
+            ResponseItem::Message { content, .. }
+                if matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                            && text.contains("test node memory")
+                            && !text.contains("unused compact summary")
+                )
+        ),
+        "close reduce success must install direct Node Memory into host history"
+    );
+    assert_eq!(items[2], close_request);
+    assert_eq!(items[3], close_output);
     assert!(
         !items.iter().any(|item| matches!(
             item,
@@ -11871,11 +11890,10 @@ async fn spine_close_direct_memory_commit_rejects_deferred_history_drift() {
                 if matches!(
                     content.as_slice(),
                     [ContentItem::InputText { text }]
-                        if text.contains("Spine Memory 1.1.1")
-                            || text.contains("unused compact summary")
+                        if text.contains("unused compact summary")
                 )
         )),
-        "failed deferred close replacement must not install memory into host history"
+        "close reduce success must not use compact response text"
     );
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -11886,11 +11904,16 @@ async fn spine_close_direct_memory_commit_rejects_deferred_history_drift() {
         InitialHistory::Resumed(resumed) => spine_raw_items_after_rollback(&resumed.history),
         _ => panic!("expected resumed rollout history"),
     };
-    let err = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
-        .expect_err("failed deferred close replacement should leave runtime invalidated");
-    assert!(
-        err.to_string().contains("not proved by live raw state"),
-        "unexpected runtime load error after failed deferred replacement: {err}"
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)")
+            .as_slice(),
+        "close reduce success must leave ContextManager.items equal to h(PS)"
     );
 }
 
