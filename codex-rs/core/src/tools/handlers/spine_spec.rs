@@ -100,14 +100,47 @@ fn spine_trim_tool() -> ResponsesApiTool {
         (
             "op".to_string(),
             JsonSchema::string_enum(
-                vec![json!("snip")],
-                Some("Use snip to replace the tagged tool response body.".to_string()),
+                vec![json!("snip"), json!("slice")],
+                Some("Use snip to replace the tagged tool response body, or slice to keep a local part of it.".to_string()),
             ),
+        ),
+        (
+            "head".to_string(),
+            JsonSchema::integer(Some(
+                "For op=\"slice\", keep this many characters from the start of the current visible body. Mutually exclusive with tail and anchor."
+                    .to_string(),
+            )),
+        ),
+        (
+            "tail".to_string(),
+            JsonSchema::integer(Some(
+                "For op=\"slice\", keep this many characters from the end of the current visible body. Mutually exclusive with head and anchor."
+                    .to_string(),
+            )),
+        ),
+        (
+            "anchor".to_string(),
+            JsonSchema::string(Some(
+                "For op=\"slice\", locate this non-empty text in the current visible body and keep an anchor window. Mutually exclusive with head and tail."
+                    .to_string(),
+            )),
+        ),
+        (
+            "preceding".to_string(),
+            JsonSchema::integer(Some(
+                "For anchor slice, keep this many characters before the anchor.".to_string(),
+            )),
+        ),
+        (
+            "following".to_string(),
+            JsonSchema::integer(Some(
+                "For anchor slice, keep this many characters after the anchor end.".to_string(),
+            )),
         ),
     ]);
     ResponsesApiTool {
         name: SPINE_TOOL_TRIM.to_string(),
-        description: "Replace one tagged tool response from the previous completed toolcall with a fixed cleared placeholder in future visible context.".to_string(),
+        description: "Conservatively clean up one tagged tool response from the previous completed toolcall: snip replaces it with a cleared placeholder; slice keeps only a sufficient local part.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(

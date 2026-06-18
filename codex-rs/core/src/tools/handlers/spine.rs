@@ -122,6 +122,35 @@ struct TrimArgs {
     #[serde(rename = "TRIM_ID")]
     trim_id: String,
     op: String,
+    #[serde(default)]
+    head: Option<usize>,
+    #[serde(default)]
+    tail: Option<usize>,
+    #[serde(default)]
+    anchor: Option<String>,
+    #[serde(default)]
+    preceding: Option<usize>,
+    #[serde(default)]
+    following: Option<usize>,
+    #[serde(skip)]
+    request: TrimRequest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+enum TrimRequest {
+    #[default]
+    Snip,
+    SliceHead {
+        head: usize,
+    },
+    SliceTail {
+        tail: usize,
+    },
+    SliceAnchor {
+        anchor: String,
+        preceding: usize,
+        following: usize,
+    },
 }
 
 #[derive(Deserialize)]
@@ -147,6 +176,75 @@ fn normalize_trim_args(mut args: TrimArgs) -> Result<TrimArgs, FunctionCallError
             "spine.trim requires a non-empty TRIM_ID.".to_string(),
         ));
     }
+    args.request = match args.op.as_str() {
+        "snip" => {
+            if args.head.is_some()
+                || args.tail.is_some()
+                || args.anchor.is_some()
+                || args.preceding.is_some()
+                || args.following.is_some()
+            {
+                return Err(FunctionCallError::RespondToModel(
+                    "spine.trim op=\"snip\" does not accept slice parameters.".to_string(),
+                ));
+            }
+            TrimRequest::Snip
+        }
+        "slice" => {
+            let has_head = args.head.is_some();
+            let has_tail = args.tail.is_some();
+            let has_anchor = args.anchor.is_some();
+            let shape_count =
+                usize::from(has_head) + usize::from(has_tail) + usize::from(has_anchor);
+            if shape_count != 1 {
+                return Err(FunctionCallError::RespondToModel(
+                    "spine.trim slice requires exactly one slice shape: head, tail, or anchor with preceding/following.".to_string(),
+                ));
+            }
+            if let Some(head) = args.head {
+                if args.preceding.is_some() || args.following.is_some() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "spine.trim slice head must not include anchor window fields.".to_string(),
+                    ));
+                }
+                TrimRequest::SliceHead { head }
+            } else if let Some(tail) = args.tail {
+                if args.preceding.is_some() || args.following.is_some() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "spine.trim slice tail must not include anchor window fields.".to_string(),
+                    ));
+                }
+                TrimRequest::SliceTail { tail }
+            } else {
+                let anchor = args.anchor.take().unwrap_or_default().trim().to_string();
+                if anchor.is_empty() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "spine.trim slice anchor must be non-empty.".to_string(),
+                    ));
+                }
+                let Some(preceding) = args.preceding else {
+                    return Err(FunctionCallError::RespondToModel(
+                        "spine.trim slice anchor requires preceding.".to_string(),
+                    ));
+                };
+                let Some(following) = args.following else {
+                    return Err(FunctionCallError::RespondToModel(
+                        "spine.trim slice anchor requires following.".to_string(),
+                    ));
+                };
+                TrimRequest::SliceAnchor {
+                    anchor,
+                    preceding,
+                    following,
+                }
+            }
+        }
+        other => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "spine.trim unsupported op={other:?}; use \"snip\" or \"slice\"."
+            )));
+        }
+    };
     Ok(args)
 }
 
@@ -229,21 +327,43 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
             }
             SpineTool::Trim => {
                 let args: TrimArgs = normalize_trim_args(parse_arguments(&arguments)?)?;
-                if args.op != "snip" {
-                    return Err(FunctionCallError::RespondToModel(
-                        "spine.trim only supports op=\"snip\".".to_string(),
-                    ));
+                let outcome = match args.request {
+                    TrimRequest::Snip => session.trim_spine_tool_response(args.trim_id).await,
+                    TrimRequest::SliceHead { head } => {
+                        session
+                            .slice_spine_tool_response_head(args.trim_id, head)
+                            .await
+                    }
+                    TrimRequest::SliceTail { tail } => {
+                        session
+                            .slice_spine_tool_response_tail(args.trim_id, tail)
+                            .await
+                    }
+                    TrimRequest::SliceAnchor {
+                        anchor,
+                        preceding,
+                        following,
+                    } => {
+                        session
+                            .slice_spine_tool_response_anchor(
+                                args.trim_id,
+                                anchor,
+                                preceding,
+                                following,
+                            )
+                            .await
+                    }
                 }
-                let outcome = session
-                    .trim_spine_tool_response(args.trim_id)
-                    .await
-                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 let message = match outcome {
                     SpineTrimOutcome::Cleared { trim_id } => {
                         format!("Trimmed tool response {trim_id}.")
                     }
                     SpineTrimOutcome::AlreadyCleared { trim_id } => {
                         format!("Tool response {trim_id} was already cleared.")
+                    }
+                    SpineTrimOutcome::Sliced { trim_id } => {
+                        format!("Sliced tool response {trim_id}.")
                     }
                     SpineTrimOutcome::Miss { trim_id } => {
                         format!(
@@ -310,12 +430,22 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
 mod tests {
     use super::*;
 
+    fn trim_args(trim_id: &str, op: &str) -> TrimArgs {
+        TrimArgs {
+            trim_id: trim_id.to_string(),
+            op: op.to_string(),
+            head: None,
+            tail: None,
+            anchor: None,
+            preceding: None,
+            following: None,
+            request: TrimRequest::Snip,
+        }
+    }
+
     #[test]
     fn trim_args_reject_empty_trim_id() {
-        let err = match normalize_trim_args(TrimArgs {
-            trim_id: " \n\t ".to_string(),
-            op: "snip".to_string(),
-        }) {
+        let err = match normalize_trim_args(trim_args(" \n\t ", "snip")) {
             Ok(_) => panic!("empty TRIM_ID should be rejected"),
             Err(err) => err,
         };
@@ -327,12 +457,169 @@ mod tests {
 
     #[test]
     fn trim_args_trim_surrounding_whitespace() {
-        let args = normalize_trim_args(TrimArgs {
-            trim_id: " trim_0 \n".to_string(),
-            op: "snip".to_string(),
-        })
-        .expect("non-empty TRIM_ID should be accepted");
+        let args = normalize_trim_args(trim_args(" trim_0 \n", "snip"))
+            .expect("non-empty TRIM_ID should be accepted");
         assert_eq!(args.trim_id, "trim_0");
+    }
+
+    #[test]
+    fn trim_args_accept_slice_head_shape() {
+        let args = normalize_trim_args(TrimArgs {
+            trim_id: "trim_0".to_string(),
+            op: "slice".to_string(),
+            head: Some(12),
+            tail: None,
+            anchor: None,
+            preceding: None,
+            following: None,
+            request: TrimRequest::Snip,
+        })
+        .expect("head slice should be accepted");
+        assert!(matches!(args.request, TrimRequest::SliceHead { head: 12 }));
+    }
+
+    #[test]
+    fn trim_args_accept_slice_tail_shape() {
+        let args = normalize_trim_args(TrimArgs {
+            trim_id: "trim_0".to_string(),
+            op: "slice".to_string(),
+            head: None,
+            tail: Some(8),
+            anchor: None,
+            preceding: None,
+            following: None,
+            request: TrimRequest::Snip,
+        })
+        .expect("tail slice should be accepted");
+        assert!(matches!(args.request, TrimRequest::SliceTail { tail: 8 }));
+    }
+
+    #[test]
+    fn trim_args_accept_slice_anchor_shape() {
+        let args = normalize_trim_args(TrimArgs {
+            trim_id: "trim_0".to_string(),
+            op: "slice".to_string(),
+            head: None,
+            tail: None,
+            anchor: Some("needle".to_string()),
+            preceding: Some(3),
+            following: Some(5),
+            request: TrimRequest::Snip,
+        })
+        .expect("anchor slice should be accepted");
+        assert!(matches!(
+            args.request,
+            TrimRequest::SliceAnchor {
+                ref anchor,
+                preceding: 3,
+                following: 5
+            } if anchor == "needle"
+        ));
+    }
+
+    #[test]
+    fn trim_args_reject_snip_with_slice_fields() {
+        let err = match normalize_trim_args(TrimArgs {
+            trim_id: "trim_0".to_string(),
+            op: "snip".to_string(),
+            head: Some(12),
+            tail: None,
+            anchor: None,
+            preceding: None,
+            following: None,
+            request: TrimRequest::Snip,
+        }) {
+            Ok(_) => panic!("snip with slice fields should be rejected"),
+            Err(err) => err,
+        };
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("expected model-visible trim argument error");
+        };
+        assert!(message.contains("does not accept slice parameters"));
+    }
+
+    #[test]
+    fn trim_args_reject_mixed_slice_shape() {
+        let err = match normalize_trim_args(TrimArgs {
+            trim_id: "trim_0".to_string(),
+            op: "slice".to_string(),
+            head: Some(12),
+            tail: Some(5),
+            anchor: None,
+            preceding: None,
+            following: None,
+            request: TrimRequest::Snip,
+        }) {
+            Ok(_) => panic!("mixed slice shape should be rejected"),
+            Err(err) => err,
+        };
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("expected model-visible trim argument error");
+        };
+        assert!(message.contains("exactly one slice shape"));
+    }
+
+    #[test]
+    fn trim_args_reject_anchor_slice_without_window() {
+        let err = match normalize_trim_args(TrimArgs {
+            trim_id: "trim_0".to_string(),
+            op: "slice".to_string(),
+            head: None,
+            tail: None,
+            anchor: Some("needle".to_string()),
+            preceding: Some(3),
+            following: None,
+            request: TrimRequest::Snip,
+        }) {
+            Ok(_) => panic!("anchor slice without following should be rejected"),
+            Err(err) => err,
+        };
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("expected model-visible trim argument error");
+        };
+        assert!(message.contains("requires following"));
+    }
+
+    #[test]
+    fn trim_args_reject_empty_anchor_slice() {
+        let err = match normalize_trim_args(TrimArgs {
+            trim_id: "trim_0".to_string(),
+            op: "slice".to_string(),
+            head: None,
+            tail: None,
+            anchor: Some(" \n ".to_string()),
+            preceding: Some(0),
+            following: Some(0),
+            request: TrimRequest::Snip,
+        }) {
+            Ok(_) => panic!("empty anchor slice should be rejected"),
+            Err(err) => err,
+        };
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("expected model-visible trim argument error");
+        };
+        assert!(message.contains("anchor must be non-empty"));
+    }
+
+    #[test]
+    fn trim_args_reject_unknown_op() {
+        let err = match normalize_trim_args(TrimArgs {
+            trim_id: "trim_0".to_string(),
+            op: "delete".to_string(),
+            head: None,
+            tail: None,
+            anchor: None,
+            preceding: None,
+            following: None,
+            request: TrimRequest::Snip,
+        }) {
+            Ok(_) => panic!("unknown trim op should be rejected"),
+            Err(err) => err,
+        };
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("expected model-visible trim argument error");
+        };
+        assert!(message.contains("unsupported op"));
     }
 
     #[test]

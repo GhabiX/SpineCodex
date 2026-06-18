@@ -1619,8 +1619,13 @@ fn spine_namespace_tools_follow_jit_and_trim_visibility_independently() {
         trim_properties
             .get("op")
             .and_then(|schema| schema.enum_values.as_ref()),
-        Some(&vec![json!("snip")])
+        Some(&vec![json!("snip"), json!("slice")])
     );
+    assert!(trim_properties.contains_key("head"));
+    assert!(trim_properties.contains_key("tail"));
+    assert!(trim_properties.contains_key("anchor"));
+    assert!(trim_properties.contains_key("preceding"));
+    assert!(trim_properties.contains_key("following"));
 
     config.spine_jit = true;
     config.spine_trim = true;

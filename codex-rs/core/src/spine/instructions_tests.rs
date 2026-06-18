@@ -54,16 +54,25 @@ fn trim_feature_appends_trim_policy_without_jit_controls() {
 #[test]
 fn trim_instructions_describe_conservative_trim_policy() {
     let instructions = SPINE_TRIM_INSTRUCTIONS;
+    let normalized = instructions
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(instructions.contains("spine.trim"));
     assert!(instructions.contains("previous completed toolcall only"));
+    assert!(instructions.contains("snip"));
+    assert!(instructions.contains("slice"));
+    assert!(instructions.contains("head"));
+    assert!(instructions.contains("tail"));
+    assert!(instructions.contains("anchor"));
     assert!(instructions.contains("active task"));
     assert!(instructions.contains("main task"));
     assert!(instructions.contains("Do not trim merely"));
-    assert!(instructions.contains("because the output is long"));
+    assert!(normalized.contains("Do not trim merely because the output is long"));
     assert!(instructions.contains("correctness"));
     assert!(instructions.contains("debugging"));
     assert!(instructions.contains("verification"));
-    assert!(instructions.contains("do not retry that `TRIM_ID`"));
+    assert!(normalized.contains("do not retry that `TRIM_ID`"));
 }
 
 #[test]

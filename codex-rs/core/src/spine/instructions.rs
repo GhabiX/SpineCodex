@@ -47,12 +47,15 @@ Conventions:
 pub(crate) const SPINE_TRIM_INSTRUCTIONS: &str = r#"<spine_trim>
 `spine.trim` is optional conservative cleanup for tagged tool responses from
 the previous completed toolcall only. First use the previous tool result for
-the active task. If a previous tool response starts with `[TRIM_ID: ...]`, use
-`spine.trim` with `op: "snip"` only when, after considering the main task, you
-are confident that exact response will not be needed again. Do not trim merely
-because the output is long. Do not trim if the response may still be needed for
-correctness, debugging, citations, synthesis, or verification. If trim misses,
-do not retry that `TRIM_ID`.
+the active task. If a previous tool response starts with `[TRIM_ID: ...]`, you
+may use `spine.trim` only when, after considering the main task, you are
+confident the removed content will not be needed again. Use `op: "snip"` to
+replace the whole visible body with a cleared placeholder. Use `op: "slice"`
+with exactly one of `head`, `tail`, or `anchor` plus `preceding`/`following`
+when a retained local part is sufficient. Do not trim merely because the output
+is long. Do not trim if the response may still be needed for correctness,
+debugging, citations, synthesis, or verification. If trim misses, do not retry
+that `TRIM_ID`.
 
 </spine_trim>
 "#;
