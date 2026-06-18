@@ -8,6 +8,7 @@ mod parse_stack;
 mod render;
 mod runtime;
 mod store;
+mod user_message_projection;
 
 pub(crate) use model::NodeId;
 pub(crate) use model::ToolCallSegmentKind;
@@ -38,11 +39,13 @@ pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::SpineTokenBaselines;
 pub(crate) use runtime::SpineTrimOutcome;
+pub(crate) use runtime::is_real_user_message;
 #[cfg(test)]
 pub(crate) use runtime::is_spine_close_like_tool_name;
 pub(crate) use runtime::is_user_message;
 pub use store::SpineCloneBoundary;
 pub(crate) use store::SpineStore;
+pub(crate) use user_message_projection::user_message_memory_body;
 
 pub(crate) use instructions::append_spine_view_instructions;
 

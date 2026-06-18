@@ -11,7 +11,7 @@ use crate::spine::model::TrimProjection;
 use crate::spine::model::TrimResponseKind;
 use crate::spine::model::TrimTarget;
 use crate::spine::parse_stack::ParseStack;
-use codex_protocol::models::ContentItem;
+use crate::spine::user_message_projection::anchored_user_message_item;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -318,44 +318,6 @@ fn render_visible_ref_to_context(
             Ok(())
         }
     }
-}
-
-fn anchored_user_message_item(
-    item: &ResponseItem,
-    user_anchor: u64,
-) -> Result<ResponseItem, SpineError> {
-    let mut item = item.clone();
-    let ResponseItem::Message { role, content, .. } = &mut item else {
-        return Err(SpineError::InvalidEvent(format!(
-            "user anchor U{user_anchor} attached to non-message response item"
-        )));
-    };
-    if role != "user" {
-        return Err(SpineError::InvalidEvent(format!(
-            "user anchor U{user_anchor} attached to non-user message"
-        )));
-    }
-    match content.as_mut_slice() {
-        [ContentItem::InputText { text }] => {
-            prefix_user_anchor(text, user_anchor);
-        }
-        [ContentItem::OutputText { text }] => {
-            prefix_user_anchor(text, user_anchor);
-        }
-        _ => {
-            return Err(SpineError::InvalidEvent(format!(
-                "user anchor U{user_anchor} requires a single text user message"
-            )));
-        }
-    }
-    Ok(item)
-}
-
-fn prefix_user_anchor(text: &mut String, user_anchor: u64) {
-    if text.starts_with(&format!("[U{user_anchor}]")) {
-        return;
-    }
-    *text = format!("[U{user_anchor}]\n{text}");
 }
 
 pub(super) fn tagged_tool_response_item(

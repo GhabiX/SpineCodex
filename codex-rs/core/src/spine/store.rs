@@ -907,6 +907,18 @@ impl SpineStore {
             }))
     }
 
+    #[cfg(test)]
+    pub(crate) fn memory_body_for_test(
+        &self,
+        node_path: &str,
+    ) -> Result<Option<String>, SpineError> {
+        self.mems()?
+            .into_iter()
+            .find(|mem| mem.node.as_path() == node_path)
+            .map(|mem| self.read_memory_body(&mem))
+            .transpose()
+    }
+
     fn checkpoint_for_raw_ordinal(&self, raw_ordinal: u64) -> Result<SpineCheckpoint, SpineError> {
         read_json_file(&self.checkpoint_path(raw_ordinal))
     }

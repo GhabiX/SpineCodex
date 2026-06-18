@@ -505,26 +505,6 @@ impl Session {
         aborted
     }
 
-    async fn current_spine_raw_items(&self) -> Result<Vec<Option<ResponseItem>>, SpineError> {
-        self.ensure_rollout_materialized().await;
-        self.flush_rollout()
-            .await
-            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
-        let rollout_path = self
-            .current_rollout_path()
-            .await
-            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
-            .ok_or_else(|| {
-                SpineError::InvalidStore("spine operation requires rollout path".to_string())
-            })?;
-        let rollout_history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
-            .await
-            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
-        Ok(spine_raw_items_after_rollback(
-            &rollout_history.get_rollout_items(),
-        ))
-    }
-
     async fn fail_closed_spine_toolcall_commit(&self, call_id: &str, reason: impl Into<String>) {
         let reason = reason.into();
         self.invalidate_spine_runtime(format!("{reason} for call_id={call_id}"))
@@ -586,16 +566,8 @@ impl Session {
             let item = items.get(append.input_index).ok_or_else(|| {
                 SpineError::InvalidEvent("context append input index outside items".to_string())
             })?;
-            if runtime.jit_enabled() && crate::spine::is_user_message(item) {
-                let raw_end = usize::try_from(raw_ordinal)
-                    .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-                let prefix = raw_items.get(..raw_end).ok_or_else(|| {
-                    SpineError::InvalidEvent(
-                        "checkpoint raw ordinal outside raw history".to_string(),
-                    )
-                })?;
-                let context = runtime.materialize_history(prefix)?;
-                runtime.checkpoint_before_user_msg(&rollout_path, raw_ordinal, &context)?;
+            if runtime.jit_enabled() && crate::spine::is_real_user_message(item) {
+                runtime.checkpoint_before_user_msg(&rollout_path, raw_ordinal, &raw_items)?;
             }
             runtime.observe_context_item(raw_ordinal, append.context_index, item)?;
             if let Some(call_id) = tool_response_call_id(item) {
@@ -1058,7 +1030,6 @@ impl Session {
                 )));
             }
         }
-        let raw_items = self.current_spine_raw_items().await?;
         let mut lock_retries = 0;
         let commit_output = loop {
             let attempt = self.try_commit_spine_tool_output_once(
@@ -1070,7 +1041,6 @@ impl Session {
                 current_turn_token_info.as_ref(),
                 completed_toolcall.clone(),
                 tool_resp_already_recorded,
-                &raw_items,
             );
             let attempt = match attempt {
                 Ok(attempt) => attempt,
@@ -1200,7 +1170,6 @@ impl Session {
         current_turn_token_info: Option<&TokenUsageInfo>,
         completed_toolcall: CompletedToolCall,
         tool_resp_already_recorded: bool,
-        raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
@@ -1236,16 +1205,23 @@ impl Session {
             Some(SpinePendingCommit::Open) => token_baselines_from_info(current_turn_token_info),
             None => SpineTokenBaselines::default(),
         };
+        let current_history = state.clone_history();
+        let raw_items = current_history
+            .raw_items()
+            .iter()
+            .cloned()
+            .map(Some)
+            .collect::<Vec<_>>();
         let commit_kind = if pending_commit.is_some() {
             spine.maybe_commit_output_with_toolcall_and_raw_items(
                 call_id,
                 memory_assembly,
                 token_baselines,
                 completed_toolcall,
-                raw_items,
+                &raw_items,
             )?
         } else {
-            spine.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
+            spine.observe_completed_toolcall_with_raw_items(completed_toolcall, &raw_items)?;
             None
         };
         let defer_tree_update_until_raw_output = matches!(
@@ -1339,15 +1315,18 @@ impl Session {
         }
         if history_update.is_none() && tool_resp_already_recorded {
             let history = state.clone_history();
-            history_update = Some(DeferredSpineHistoryUpdate {
-                call_id: call_id.to_string(),
-                operation: "spine toolcall projection",
-                suffix_start: 0,
-                expected_history: history.raw_items().to_vec(),
-                replacement: spine.materialize_history(raw_items)?,
-                reference_context_item: state.reference_context_item(),
-                replace_tool_output: false,
-            });
+            let materialized = spine.materialize_history(&raw_items)?;
+            if materialized.as_slice() != history.raw_items() {
+                history_update = Some(DeferredSpineHistoryUpdate {
+                    call_id: call_id.to_string(),
+                    operation: "spine toolcall projection",
+                    suffix_start: 0,
+                    expected_history: history.raw_items().to_vec(),
+                    replacement: materialized,
+                    reference_context_item: state.reference_context_item(),
+                    replace_tool_output: false,
+                });
+            }
         }
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
             snapshot,

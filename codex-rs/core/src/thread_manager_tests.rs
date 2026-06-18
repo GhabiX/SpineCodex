@@ -215,8 +215,9 @@ fn build_spine_source_with_checkpoint_and_future_open(
     runtime
         .capture_current_open_provider_baseline(1_000)
         .expect("capture checkpoint-visible root baseline");
+    let raw = vec![Some(first.clone())];
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, std::slice::from_ref(&first))
+        .checkpoint_before_user_msg(&rollout, 1, &raw)
         .expect("write pre-user checkpoint");
 
     let open = spine_call(crate::spine::SPINE_TOOL_OPEN, "future-open");

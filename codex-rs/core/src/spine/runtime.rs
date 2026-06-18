@@ -1168,7 +1168,8 @@ impl SpineRuntime {
         }
         let context_index = u64::try_from(context_index)
             .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
-        let user_anchor = if is_user_message(item) {
+        let from_user = is_real_user_message(item);
+        let user_anchor = if from_user {
             let user_anchor = self.next_user_anchor;
             self.next_user_anchor = self
                 .next_user_anchor
@@ -1181,7 +1182,7 @@ impl SpineRuntime {
         let msg = PendingMsg {
             raw_ordinal,
             context_index,
-            from_user: is_user_message(item),
+            from_user,
             user_anchor,
         };
         if let ResponseItem::FunctionCall {
@@ -1496,8 +1497,14 @@ impl SpineRuntime {
         &self,
         rollout_path: &Path,
         raw_ordinal: u64,
-        context: &[ResponseItem],
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
+        let raw_end = usize::try_from(raw_ordinal)
+            .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+        let prefix = raw_items.get(..raw_end).ok_or_else(|| {
+            SpineError::InvalidEvent("checkpoint raw ordinal outside raw history".to_string())
+        })?;
+        let context = self.materialize_history(prefix)?;
         let checkpoint = build_checkpoint(
             rollout_path,
             raw_ordinal,
@@ -1506,7 +1513,7 @@ impl SpineRuntime {
             self.trim_seq_watermark()?,
             &self.raw_live,
             &self.parse_stack,
-            context,
+            &context,
         )?;
         self.store.write_checkpoint(&checkpoint)
     }
@@ -1514,8 +1521,9 @@ impl SpineRuntime {
     pub(crate) fn checkpoint_initial(
         &self,
         rollout_path: &Path,
-        context: &[ResponseItem],
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
+        let context = self.materialize_history(raw_items)?;
         let mut checkpoint = build_checkpoint(
             rollout_path,
             0,
@@ -1524,7 +1532,7 @@ impl SpineRuntime {
             self.trim_seq_watermark()?,
             &self.raw_live,
             &self.parse_stack,
-            context,
+            &context,
         )?;
         checkpoint.checkpoint_id = "initial".to_string();
         self.store.write_initial_checkpoint(&checkpoint)
@@ -3147,6 +3155,10 @@ impl SpineRuntime {
         )
     }
 
+    pub(crate) fn has_pending_tool_request(&self) -> bool {
+        !self.ordinary_tool_requests.is_empty()
+    }
+
     pub(crate) fn project_raw_history_with_trim(
         &self,
         raw_items: &[ResponseItem],
@@ -4060,6 +4072,24 @@ fn mem_record_matches(existing: &MemRecord, expected: &MemRecord) -> bool {
 
 pub(crate) fn is_user_message(item: &ResponseItem) -> bool {
     matches!(item, ResponseItem::Message { role, .. } if role == "user")
+}
+
+pub(crate) fn is_real_user_message(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    role == "user"
+        && !content
+            .iter()
+            .any(crate::context::is_contextual_user_fragment)
+        && !content.iter().any(is_spine_memory_fragment)
+}
+
+fn is_spine_memory_fragment(content_item: &codex_protocol::models::ContentItem) -> bool {
+    let codex_protocol::models::ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    text.trim_start().starts_with("<spine_memory>")
 }
 
 fn is_spine_parser_control_tool_name(name: &str) -> bool {

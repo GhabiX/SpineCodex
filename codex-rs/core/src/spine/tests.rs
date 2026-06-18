@@ -10,6 +10,7 @@ use crate::spine::model::PressureEvent;
 use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegment;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
 use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
@@ -19,11 +20,66 @@ use serial_test::serial;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 // Shared raw/context fixtures.
 
 fn rollout_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("rollout.jsonl")
+}
+
+fn eventually_load_or_create_writer(rollout: &std::path::Path, raw_len: u64) -> SpineRuntime {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut last_err = None;
+    loop {
+        match SpineRuntime::load_or_create(rollout, raw_len) {
+            Ok(runtime) => return runtime,
+            Err(err) => {
+                last_err = Some(err);
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    panic!(
+        "writer lock should release after drop: {}",
+        last_err
+            .map(|err| err.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
+    );
+}
+
+fn eventually_set_replayed_writer(
+    state: &mut SpineSessionState,
+    rollout: &std::path::Path,
+    raw_len: u64,
+) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut last_err = None;
+    loop {
+        let replayed = SpineRuntime::load_for_rollout(rollout, raw_len)
+            .expect("reload read-only replay after first live runtime drops")
+            .expect("sidecar exists");
+        match state.set_replayed(raw_len, Some(replayed)) {
+            Ok(()) => return,
+            Err(err) => {
+                last_err = Some(err);
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    panic!(
+        "replayed runtime can become live writer after lock release: {}",
+        last_err
+            .map(|err| err.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
+    );
 }
 
 fn text_item(text: &str) -> ResponseItem {
@@ -33,6 +89,30 @@ fn text_item(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        phase: None,
+    }
+}
+
+fn anchored_text_item(anchor: u64, text: &str) -> ResponseItem {
+    text_item(&format!("[U{anchor}]\n{text}"))
+}
+
+fn multimodal_user_item() -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "first text".to_string(),
+            },
+            ContentItem::InputImage {
+                image_url: "data:image/png;base64,RAW_IMAGE_SHOULD_NOT_APPEAR".to_string(),
+                detail: Some(ImageDetail::High),
+            },
+            ContentItem::InputText {
+                text: "second text".to_string(),
+            },
+        ],
         phase: None,
     }
 }
@@ -461,7 +541,7 @@ fn second_live_runtime_for_same_sidecar_fails_fast() {
     );
 
     drop(runtime);
-    SpineRuntime::load_or_create(&rollout, 0).expect("writer lock should release after drop");
+    drop(eventually_load_or_create_writer(&rollout, 0));
 }
 
 #[test]
@@ -499,12 +579,7 @@ fn installing_replayed_runtime_requires_sidecar_writer_ownership() {
     );
 
     drop(runtime);
-    let replayed = SpineRuntime::load_for_rollout(&rollout, 0)
-        .expect("reload read-only replay after first live runtime drops")
-        .expect("sidecar exists");
-    state
-        .set_replayed(0, Some(replayed))
-        .expect("replayed runtime can become live writer after lock release");
+    eventually_set_replayed_writer(&mut state, &rollout, 0);
 }
 
 #[test]
@@ -2242,7 +2317,7 @@ fn checkpoint_after_root_depth_close_records_root_cursor() {
     let context = runtime.materialize_history(&raw).expect("materialize");
 
     runtime
-        .checkpoint_before_user_msg(&rollout, runtime.raw_len, &context)
+        .checkpoint_before_user_msg(&rollout, runtime.raw_len, &raw)
         .expect("write root cursor checkpoint");
     let checkpoint = runtime
         .store
@@ -2362,6 +2437,72 @@ fn ordinary_response_item_shifts_msg() {
             if matches!(
                 content.as_slice(),
                 [ContentItem::InputText { text }] if text == "[U1]\nordinary"
+            )
+    ));
+}
+
+#[test]
+fn multimodal_user_message_receives_anchor_without_dropping_image() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let item = multimodal_user_item();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(1).expect("observe raw");
+    runtime
+        .observe_context_item(0, 0, &item)
+        .expect("observe context item");
+
+    let raw = vec![Some(item)];
+    let materialized = runtime.materialize_history(&raw).expect("materialize");
+    assert!(matches!(
+        materialized.as_slice(),
+        [ResponseItem::Message { content, .. }]
+            if matches!(
+                content.as_slice(),
+                [
+                    ContentItem::InputText { text },
+                    ContentItem::InputImage { image_url, detail: Some(ImageDetail::High) },
+                    ContentItem::InputText { text: second },
+                ] if text == "[U1]\nfirst text"
+                    && image_url == "data:image/png;base64,RAW_IMAGE_SHOULD_NOT_APPEAR"
+                    && second == "second text"
+            )
+    ));
+}
+
+#[test]
+fn image_only_user_message_receives_synthetic_anchor_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputImage {
+            image_url: "data:image/png;base64,RAW_IMAGE_SHOULD_NOT_APPEAR".to_string(),
+            detail: Some(ImageDetail::Low),
+        }],
+        phase: None,
+    };
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(1).expect("observe raw");
+    runtime
+        .observe_context_item(0, 0, &item)
+        .expect("observe context item");
+
+    let raw = vec![Some(item)];
+    let materialized = runtime.materialize_history(&raw).expect("materialize");
+    assert!(matches!(
+        materialized.as_slice(),
+        [ResponseItem::Message { content, .. }]
+            if matches!(
+                content.as_slice(),
+                [
+                    ContentItem::InputText { text },
+                    ContentItem::InputImage { image_url, detail: Some(ImageDetail::Low) },
+                ] if text == "[U1]\n<image omitted detail=low>"
+                    && image_url == "data:image/png;base64,RAW_IMAGE_SHOULD_NOT_APPEAR"
             )
     ));
 }
@@ -3103,11 +3244,8 @@ fn rollback_before_trim_clear_restores_tagged_projection() {
             &raw,
         )
         .expect("observe completed toolcall");
-    let tagged_context = runtime
-        .materialize_history(&raw)
-        .expect("materialize tagged context");
     runtime
-        .checkpoint_before_user_msg(&rollout, 2, &tagged_context)
+        .checkpoint_before_user_msg(&rollout, 2, &raw)
         .expect("checkpoint before trim clear");
     runtime
         .trim_tool_response("trim_0")
@@ -3503,7 +3641,7 @@ fn spine_tree_toolcall_is_plain_toolcall_leaf_for_replay_coverage() {
         vec![
             tree_request.clone(),
             tree_output.clone(),
-            final_message.clone()
+            anchored_text_item(1, "tree done")
         ]
     );
     let replayed = SpineRuntime::load_for_rollout(&rollout, 3)
@@ -3513,7 +3651,11 @@ fn spine_tree_toolcall_is_plain_toolcall_leaf_for_replay_coverage() {
         replayed
             .materialize_history(&raw)
             .expect("replayed tree request/output stay ordinary toolcall"),
-        vec![tree_request, tree_output, final_message]
+        vec![
+            tree_request,
+            tree_output,
+            anchored_text_item(1, "tree done")
+        ]
     );
 }
 
@@ -3541,7 +3683,7 @@ fn end_token_is_retained_as_control_epsilon() {
     ));
     assert_eq!(
         render_parse_stack_to_context(&parse_stack, &raw).expect("render context"),
-        vec![item]
+        vec![anchored_text_item(1, "ordinary")]
     );
     let tree = parse_stack.render_tree().expect("render tree");
     assert!(tree.contains("Cursor: 1.1"), "{tree}");
@@ -5198,7 +5340,7 @@ fn task_tree_reduce_archive_failure_leaves_symbols_unchanged() {
                     context_index: 0,
                 },
                 from_user: true,
-                user_anchor: None,
+                user_anchor: Some(1),
             }]),
             Symbol::Control(ControlSymbol::Close(memory)),
         ],
@@ -5401,7 +5543,7 @@ fn close_failure_does_not_mutate_parse_stack() {
         .expect_err("close without compact output must fail");
     assert!(
         err.to_string()
-            .contains("spine.close requires a completed suffix compact"),
+            .contains("spine.close requires a validated source plan for memory assembly"),
         "unexpected close failure: {err}"
     );
 
@@ -6027,7 +6169,7 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
                     if text.contains("root epoch 1 memory")
             )
     ));
-    assert_eq!(materialized[1], text_item("2.1 work"));
+    assert_eq!(materialized[1], anchored_text_item(7, "2.1 work"));
 }
 
 // Fork isolation and replayed materialization.
@@ -6212,7 +6354,7 @@ fn open_close_replay_materializes_closed_child_memory() {
         .materialize_history(&raw)
         .expect("materialize history");
     assert_eq!(materialized.len(), 4);
-    assert_eq!(materialized[0], text_item("before"));
+    assert_eq!(materialized[0], anchored_text_item(1, "before"));
     assert!(matches!(
         &materialized[1],
         ResponseItem::Message { content, .. }
@@ -6395,7 +6537,7 @@ fn materialize_history_renders_from_parse_stack_memory_segments() {
 
     let materialized = runtime.materialize_history(&raw).expect("materialize");
     assert_eq!(materialized.len(), 4);
-    assert_eq!(materialized[0], text_item("before"));
+    assert_eq!(materialized[0], anchored_text_item(1, "before"));
     assert!(matches!(
         &materialized[1],
         ResponseItem::Message { content, .. }
@@ -6434,7 +6576,10 @@ fn materialization_skips_rolled_back_raw_items_without_shifting_ordinals() {
 
     assert_eq!(
         materialized,
-        vec![text_item("kept"), text_item("after rollback")]
+        vec![
+            anchored_text_item(1, "kept"),
+            anchored_text_item(2, "after rollback")
+        ]
     );
 }
 
@@ -6476,7 +6621,7 @@ fn rollback_keeps_open_when_request_item_survives() {
     assert!(tree.contains("- [1.1.1] Current child task"), "{tree}");
     assert_eq!(
         replayed.materialize_history(&raw).expect("materialize"),
-        vec![text_item("before")]
+        vec![anchored_text_item(1, "before")]
     );
 }
 
@@ -6517,7 +6662,7 @@ fn rollback_skips_open_when_request_item_is_stale() {
     assert!(tree.contains("- [1.1] Current"), "{tree}");
     assert_eq!(
         replayed.materialize_history(&raw).expect("materialize"),
-        vec![text_item("before")]
+        vec![anchored_text_item(1, "before")]
     );
 }
 
@@ -7224,11 +7369,9 @@ fn root_compact_survives_rollback_without_new_raw_items() {
 fn checkpoint_before_user_msg_records_recoverable_fields() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
-    let context = vec![text_item("kept context")];
-
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
     runtime
-        .checkpoint_before_user_msg(&rollout, 0, &context)
+        .checkpoint_before_user_msg(&rollout, 0, &[])
         .expect("write checkpoint");
     runtime.observe_raw_items(1).expect("observe raw");
     runtime
@@ -7245,7 +7388,7 @@ fn checkpoint_before_user_msg_records_recoverable_fields() {
     assert_eq!(checkpoint.raw_ordinal, 0);
     assert_eq!(checkpoint.token_seq, 2);
     assert_eq!(checkpoint.raw_live_hash, hash_raw_live(&[]));
-    assert_eq!(checkpoint.context_len, 1);
+    assert_eq!(checkpoint.context_len, 0);
     assert_eq!(checkpoint.cursor, "1.1");
     assert_eq!(
         checkpoint.parse_stack.symbols,
@@ -7275,7 +7418,7 @@ fn checkpoint_before_user_msg_records_recoverable_fields() {
     assert!(checkpoint.trajs_refs.is_empty());
     assert_eq!(
         checkpoint.h_ps_hash,
-        hash_response_items(&context).expect("hash")
+        hash_response_items(&[]).expect("hash")
     );
 }
 
@@ -7320,8 +7463,9 @@ fn rollback_checkpoint_without_provider_baseline_has_no_node_context() {
     runtime
         .observe_context_item(0, 0, &text_item("kept"))
         .expect("observe kept");
+    let raw_before_rollback = vec![Some(text_item("kept"))];
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .checkpoint_before_user_msg(&rollout, 1, &raw_before_rollback)
         .expect("write checkpoint before provider baseline");
     runtime
         .capture_current_open_provider_baseline(8_000)
@@ -7368,8 +7512,9 @@ fn assert_rollback_checkpoint_replays_checkpoint_visible_provider_baseline() {
     runtime
         .capture_current_open_provider_baseline(8_000)
         .expect("capture pre-checkpoint provider baseline");
+    let raw_before_rollback = vec![Some(text_item("kept"))];
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .checkpoint_before_user_msg(&rollout, 1, &raw_before_rollback)
         .expect("write checkpoint after provider baseline");
     runtime
         .observe_raw_items(1)
@@ -7410,8 +7555,9 @@ fn assert_rollback_uses_pre_user_checkpoint_to_restore_parse_stack() {
     runtime
         .observe_context_item(0, 0, &text_item("kept"))
         .expect("observe kept");
+    let raw_before_rollback = vec![Some(text_item("kept"))];
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .checkpoint_before_user_msg(&rollout, 1, &raw_before_rollback)
         .expect("write checkpoint");
     runtime
         .observe_raw_items(1)
@@ -7451,7 +7597,7 @@ fn assert_rollback_uses_pre_user_checkpoint_to_restore_parse_stack() {
                     context_index: 0,
                 },
                 from_user: true,
-                user_anchor: None,
+                user_anchor: Some(1),
             }]),
         ]
     );
@@ -7459,7 +7605,7 @@ fn assert_rollback_uses_pre_user_checkpoint_to_restore_parse_stack() {
         replayed
             .materialize_history(&raw_after_rollback)
             .expect("materialize"),
-        vec![text_item("kept")]
+        vec![anchored_text_item(1, "kept")]
     );
 }
 
@@ -7478,8 +7624,9 @@ fn rollback_checkpoint_replays_new_live_append_after_cut() {
     runtime
         .observe_context_item(0, 0, &text_item("kept"))
         .expect("observe kept");
+    let raw_before_rollback = vec![Some(text_item("kept"))];
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .checkpoint_before_user_msg(&rollout, 1, &raw_before_rollback)
         .expect("write checkpoint");
     runtime
         .observe_raw_items(1)
@@ -7500,7 +7647,10 @@ fn rollback_checkpoint_replays_new_live_append_after_cut() {
         replayed
             .materialize_history(&raw_after_rollback)
             .expect("materialize"),
-        vec![text_item("kept"), text_item("after rollback")]
+        vec![
+            anchored_text_item(1, "kept"),
+            anchored_text_item(3, "after rollback")
+        ]
     );
     let Some(Symbol::SpineTreeNodes(nodes)) = replayed.parse_stack().symbols.last() else {
         panic!("expected root nodes after replay")
@@ -7537,8 +7687,9 @@ fn rollback_checkpoint_rebuilds_cache_from_full_sidecar_before_new_append() {
     runtime
         .observe_context_item(0, 0, &text_item("kept"))
         .expect("observe kept");
+    let raw_before_rollback = vec![Some(text_item("kept"))];
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .checkpoint_before_user_msg(&rollout, 1, &raw_before_rollback)
         .expect("write checkpoint");
     runtime
         .observe_raw_items(1)
@@ -7556,7 +7707,7 @@ fn rollback_checkpoint_rebuilds_cache_from_full_sidecar_before_new_append() {
         replayed
             .materialize_history(&raw_after_rollback)
             .expect("materialize before append"),
-        vec![text_item("kept")]
+        vec![anchored_text_item(1, "kept")]
     );
 
     raw_after_rollback.push(Some(text_item("after rollback")));
@@ -7601,8 +7752,9 @@ fn assert_rollback_checkpoint_new_open_reuses_restored_sibling_id() {
     runtime
         .observe_context_item(0, 0, &text_item("kept"))
         .expect("observe kept");
+    let raw_before_rollback = vec![Some(text_item("kept"))];
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .checkpoint_before_user_msg(&rollout, 1, &raw_before_rollback)
         .expect("write checkpoint");
     runtime
         .observe_raw_items(1)
@@ -7713,7 +7865,7 @@ fn assert_rollback_does_not_parse_rendered_history() {
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
     append_msg(&mut runtime, &mut raw, "kept");
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .checkpoint_before_user_msg(&rollout, 1, &raw)
         .expect("write rollback checkpoint");
     append_msg(&mut runtime, &mut raw, "rolled back");
     open_task(&mut runtime, &mut raw, "rendered-open", "rendered child");
@@ -7779,8 +7931,9 @@ fn assert_checkpoint_missing_required_field_fails_closed() {
     runtime
         .observe_context_item(0, 0, &text_item("kept"))
         .expect("observe kept");
+    let raw_before_rollback = vec![Some(text_item("kept"))];
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .checkpoint_before_user_msg(&rollout, 1, &raw_before_rollback)
         .expect("write checkpoint");
     let checkpoint_path = runtime.store.checkpoint_path(1);
     let mut checkpoint = serde_json::to_value(
@@ -7829,8 +7982,9 @@ fn assert_corrupt_checkpoint_hash_fails_closed() {
     runtime
         .observe_context_item(0, 0, &text_item("kept"))
         .expect("observe kept");
+    let raw_before_rollback = vec![Some(text_item("kept"))];
     runtime
-        .checkpoint_before_user_msg(&rollout, 1, &[text_item("kept")])
+        .checkpoint_before_user_msg(&rollout, 1, &raw_before_rollback)
         .expect("write checkpoint");
     let checkpoint_path = runtime.store.checkpoint_path(1);
     let mut checkpoint = runtime

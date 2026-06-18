@@ -2,7 +2,11 @@ use crate::spine::SpineCloseMemoryAssembly;
 use crate::spine::SpineCompactSourceEntryKind;
 use crate::spine::SpineCompactSourcePlan;
 use crate::spine::SpineError;
+use crate::spine::is_real_user_message;
+use crate::spine::user_message_memory_body;
+#[cfg(test)]
 use codex_protocol::models::ContentItem;
+#[cfg(test)]
 use codex_protocol::models::ResponseItem;
 
 pub(crate) fn spine_close_memory_assembly_from_tool_arg(
@@ -29,16 +33,6 @@ pub(crate) fn spine_close_memory_assembly_from_tool_arg(
         source_raw_range: source_plan.source_raw_range.clone(),
         memory_output_tokens: None,
     })
-}
-
-fn response_item_text(item: &ResponseItem) -> Option<&str> {
-    let ResponseItem::Message { content, .. } = item else {
-        return None;
-    };
-    match content.as_slice() {
-        [ContentItem::InputText { text }] | [ContentItem::OutputText { text }] => Some(text),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -131,9 +125,11 @@ impl SpineMemoryAssemblySkeleton {
                     user_anchor,
                     ..
                 } => {
-                    if let Some(text) = response_item_text(item) {
+                    if is_real_user_message(item)
+                        && let Some(text) = user_message_memory_body(item)
+                    {
                         blocks.push(SpineMemoryAssemblyBlock::UserMessage {
-                            body: text.to_string(),
+                            body: text,
                             user_anchor: *user_anchor,
                         });
                     }
@@ -553,7 +549,7 @@ mod spine_close_slot_map_tests {
         let empty_node = skeleton
             .assemble("  ")
             .expect_err("empty node memory must fail");
-        assert!(empty_node.to_string().contains("empty node_memory"));
+        assert!(empty_node.to_string().contains("empty node memory"));
 
         let user_msg = skeleton
             .assemble("before\n<USER_MSG_1>\ndo not return this\n</USER_MSG_1>\nafter")
@@ -566,7 +562,7 @@ mod spine_close_slot_map_tests {
     }
 
     #[test]
-    fn multimodal_user_entry_is_not_exact_preserved() {
+    fn multimodal_user_entry_is_preserved_as_runtime_text() {
         let plan = source_plan(vec![crate::spine::SpineCompactSourcePlanEntry {
             context_index: 2,
             source_ordinal: 0,
@@ -582,6 +578,11 @@ mod spine_close_slot_map_tests {
                         ContentItem::InputText {
                             text: "second".to_string(),
                         },
+                        ContentItem::InputImage {
+                            image_url: "data:image/png;base64,RAW_IMAGE_SHOULD_NOT_APPEAR"
+                                .to_string(),
+                            detail: Some(codex_protocol::models::ImageDetail::High),
+                        },
                     ],
                     phase: None,
                 },
@@ -596,8 +597,9 @@ mod spine_close_slot_map_tests {
         let body = skeleton
             .assemble("node multimodal continuation")
             .expect("assembled body");
+        assert!(body.contains("## User Message [U1]\ntext\nsecond\n<image omitted detail=high>"));
         assert!(body.contains("## Node Memory\nnode multimodal continuation"));
-        assert!(!body.contains("## User Message"));
+        assert!(!body.contains("RAW_IMAGE_SHOULD_NOT_APPEAR"));
     }
 
     #[test]

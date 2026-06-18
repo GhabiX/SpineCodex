@@ -42,6 +42,7 @@ use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineError;
 use crate::spine::SpineSessionState;
+use crate::spine::is_user_message;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -2712,6 +2713,13 @@ impl Session {
                     .spine_append_fatal("observe Spine context items", err)
                     .await);
             }
+            if items.iter().any(is_user_message)
+                && let Err(err) = self.publish_spine_materialized_history_if_available().await
+            {
+                return Err(self
+                    .spine_append_fatal("publish Spine materialized history", err)
+                    .await);
+            }
         }
         if emit_raw_response_items {
             self.send_raw_response_items(turn_context, items).await;
@@ -2953,6 +2961,39 @@ impl Session {
         error!("{reason}");
         self.invalidate_spine_runtime(reason.clone()).await;
         CodexErr::SpineAppendFailure { reason }
+    }
+
+    async fn publish_spine_materialized_history_if_available(&self) -> Result<(), SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+            .ok_or_else(|| {
+                SpineError::InvalidStore("spine_jit projection requires rollout path".to_string())
+            })?;
+        let rollout_history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
+        let projected = {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(runtime) = guard.runtime() else {
+                return Ok(());
+            };
+            if runtime.has_pending_tool_request() {
+                return Ok(());
+            }
+            runtime.materialize_history(&raw_items)?
+        };
+        if projected.as_slice() != self.clone_history().await.raw_items() {
+            self.replace_history(projected, self.reference_context_item().await)
+                .await;
+        }
+        Ok(())
     }
 
     /// Append ResponseItems to the in-memory conversation history only.

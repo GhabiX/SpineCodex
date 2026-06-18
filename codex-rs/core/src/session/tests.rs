@@ -301,6 +301,10 @@ fn user_message(text: &str) -> ResponseItem {
     }
 }
 
+fn anchored_user_message(anchor: u64, text: &str) -> ResponseItem {
+    user_message(&format!("[U{anchor}]\n{text}"))
+}
+
 fn contains_user_memory_block(text: &str, expected_body: &str) -> bool {
     let lines = text.lines().collect::<Vec<_>>();
     lines.iter().enumerate().any(|(index, line)| {
@@ -3315,7 +3319,10 @@ async fn clone_spine_sidecar_for_fork_replays_interrupted_child_suffix() {
         runtime
             .materialize_history(&child_raw_items)
             .expect("materialize child h(PS)"),
-        vec![source_item, marker]
+        vec![
+            anchored_user_message(1, "source-visible"),
+            anchored_user_message(2, "interrupted child suffix"),
+        ]
     );
 }
 
@@ -9149,7 +9156,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     assert_eq!(items.len(), 4);
     assert!(message_text_contains(
         &items[0],
-        "suffix image prefix outside closed node"
+        "PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY"
     ));
     assert!(matches!(
         &items[1],
@@ -9338,6 +9345,40 @@ async fn spine_close_direct_memory_keeps_prefix_image_provenance() {
 }
 
 #[tokio::test]
+async fn spine_jit_user_append_publishes_anchor_to_live_history() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    session
+        .record_conversation_items(&turn_context, &[user_message("anchored live user")])
+        .await
+        .expect("record user");
+
+    let history = session.clone_history().await;
+    assert!(matches!(
+        history.raw_items(),
+        [ResponseItem::Message { content, .. }]
+            if matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }] if text == "[U1]\nanchored live user"
+            )
+    ));
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
 async fn spine_close_direct_memory_keeps_suffix_image_raw_provenance() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
@@ -9460,8 +9501,10 @@ async fn spine_close_direct_memory_keeps_suffix_image_raw_provenance() {
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1.1")
+                            && text.contains("## User Message [U")
+                            && text.contains("suffix multimodal user text before close")
+                            && text.contains("<image omitted detail=high>")
                             && text.contains("## Node Memory\ntest node memory")
-                            && !text.contains("## User Message")
                             && !text.contains(image_url)
                 )
     ));
@@ -9754,7 +9797,8 @@ async fn spine_next_rollback_preserves_closed_sibling_and_drops_new_live_turn() 
             .clone_history()
             .await
             .raw_items()
-            .contains(&rolled_back_user),
+            .iter()
+            .any(|item| message_text_contains(item, "post-next live user that rollback drops")),
         "test setup should append a live turn after spine.next"
     );
 
@@ -9769,7 +9813,12 @@ async fn spine_next_rollback_preserves_closed_sibling_and_drops_new_live_turn() 
 
     let history = fixture.session.clone_history().await;
     assert_eq!(history.raw_items(), fixture.expected_history.as_slice());
-    assert!(!history.raw_items().contains(&rolled_back_user));
+    assert!(
+        !history
+            .raw_items()
+            .iter()
+            .any(|item| message_text_contains(item, "post-next live user that rollback drops"))
+    );
     assert!(!history.raw_items().contains(&rolled_back_assistant));
 
     fixture.session.ensure_rollout_materialized().await;
@@ -10900,6 +10949,13 @@ async fn spine_next_direct_memory_ignores_mock_compact_response_and_opens_siblin
         .await
         .expect("stage next");
     let next_output = function_output("image-next");
+    session
+        .record_conversation_items_without_spine_observe(
+            &turn_context,
+            std::slice::from_ref(&next_output),
+        )
+        .await
+        .expect("record next output before Spine commit");
 
     let commit = session
         .maybe_commit_spine_tool_output(&turn_context, &next_output)
@@ -11151,26 +11207,8 @@ async fn spine_next_direct_memory_commit_does_not_run_overflow_compact() {
 }
 
 #[tokio::test]
-async fn spine_next_native_compact_keeps_durable_completed_toolcall_as_ordinary() {
+async fn spine_next_direct_memory_opens_sibling_and_keeps_completed_toolcall() {
     let server = start_mock_server().await;
-    let responses_mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse_failed(
-                "spine-next-durable-overflow",
-                "context_length_exceeded",
-                "Your input exceeds the context window of this model. Please adjust your input and try again.",
-            ),
-            sse(vec![
-                ev_assistant_message(
-                    "native-after-durable-next-overflow",
-                    "native compact after durable next overflow",
-                ),
-                ev_completed("native-after-durable-next-overflow-response"),
-            ]),
-        ],
-    )
-    .await;
     let base_url = format!("{}/v1", server.uri());
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -11225,7 +11263,7 @@ async fn spine_next_native_compact_keeps_durable_completed_toolcall_as_ordinary(
     session
         .stage_spine_next(
             "durable-overflow-next".to_string(),
-            "must not open durable sibling".to_string(),
+            "direct durable sibling".to_string(),
             "durable overflow next memory".to_string(),
         )
         .await
@@ -11235,14 +11273,12 @@ async fn spine_next_native_compact_keeps_durable_completed_toolcall_as_ordinary(
     let recorded_output =
         commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, next_output)
             .await
-            .expect("native compact invalidates control but keeps durable toolcall");
+            .expect("direct-memory next opens sibling and keeps durable toolcall");
     assert!(matches!(
         recorded_output,
         ResponseItem::FunctionCallOutput { ref call_id, .. } if call_id == "durable-overflow-next"
     ));
     assert_no_pending_spine_commit(&session, "durable-overflow-next").await;
-    assert_eq!(responses_mock.requests().len(), 2);
-
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -11267,38 +11303,19 @@ async fn spine_next_native_compact_keeps_durable_completed_toolcall_as_ordinary(
                     if call_id == "durable-overflow-next"
             )
         }),
-        "durable completed next toolcall must remain in ordinary h(PS)"
+        "durable completed next toolcall must remain in sibling h(PS)"
     );
     let tree = runtime.render_tree().expect("render spine tree");
-    assert!(tree.contains("[1] Done"), "{tree}");
-    assert!(tree.contains("[2.1] Current"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done"), "{tree}");
     assert!(
-        !tree.contains("must not open durable sibling"),
-        "native compact invalidates next control and must not open sibling: {tree}"
+        tree.contains("[1.1.2] Current direct durable sibling"),
+        "{tree}"
     );
 }
 
 #[tokio::test]
-async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_ordinary() {
+async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_toolcall() {
     let server = start_mock_server().await;
-    let responses_mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse_failed(
-                "grouped-spine-next-durable-overflow",
-                "context_length_exceeded",
-                "Your input exceeds the context window of this model. Please adjust your input and try again.",
-            ),
-            sse(vec![
-                ev_assistant_message(
-                    "native-after-grouped-durable-next-overflow",
-                    "native compact after grouped durable next overflow",
-                ),
-                ev_completed("native-after-grouped-durable-next-overflow-response"),
-            ]),
-        ],
-    )
-    .await;
     let base_url = format!("{}/v1", server.uri());
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -11357,7 +11374,7 @@ async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_o
     session
         .stage_spine_next(
             "grouped-durable-overflow-next".to_string(),
-            "must not open grouped durable sibling".to_string(),
+            "direct grouped durable sibling".to_string(),
             "grouped durable overflow next memory".to_string(),
         )
         .await
@@ -11377,12 +11394,10 @@ async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_o
             &[ordinary_output.clone(), next_output.clone()],
         )
         .await
-        .expect("native compact invalidates grouped control but keeps durable toolcall");
+        .expect("direct-memory grouped next opens sibling and keeps durable toolcall");
     assert!(commit.record_output);
-    assert!(commit.deferred_history_update.is_none());
+    assert!(commit.deferred_history_update.is_some());
     assert_no_pending_spine_commit(&session, "grouped-durable-overflow-next").await;
-    assert_eq!(responses_mock.requests().len(), 2);
-
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -11398,7 +11413,6 @@ async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_o
     let materialized = runtime
         .materialize_history(&raw_items)
         .expect("materialize h(PS)");
-    assert_eq!(session.clone_history().await.raw_items(), materialized);
     for expected_call_id in ["grouped-durable-ordinary", "grouped-durable-overflow-next"] {
         assert!(
             materialized.iter().any(|item| {
@@ -11409,15 +11423,14 @@ async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_o
                         if call_id == expected_call_id
                 )
             }),
-            "durable grouped completed toolcall must keep request/output for {expected_call_id} in ordinary h(PS): {materialized:#?}"
+            "durable grouped completed toolcall must keep request/output for {expected_call_id} in sibling h(PS): {materialized:#?}"
         );
     }
     let tree = runtime.render_tree().expect("render spine tree");
-    assert!(tree.contains("[1] Done"), "{tree}");
-    assert!(tree.contains("[2.1] Current"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done"), "{tree}");
     assert!(
-        !tree.contains("must not open grouped durable sibling"),
-        "native compact invalidates grouped next control and must not open sibling: {tree}"
+        tree.contains("[1.1.2] Current direct grouped durable sibling"),
+        "{tree}"
     );
 }
 
@@ -11965,17 +11978,19 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
     let history = session.clone_history().await;
     let items = history.raw_items();
     assert_eq!(items.len(), 4);
-    assert_eq!(items[0], prefix);
+    assert_eq!(
+        items[0],
+        anchored_user_message(1, "prefix before empty close")
+    );
     assert!(matches!(
         &items[1],
         ResponseItem::Message { content, .. }
             if matches!(
                 content.as_slice(),
-                [ContentItem::InputText { text }]
-                    if text.contains("Spine Memory 1.1.1")
-                        && text.contains("## Node Memory\ntest node memory")
-                        && text.contains("empty-open")
-                        && !text.contains("open toolcall compact summary")
+                    [ContentItem::InputText { text }]
+                        if text.contains("Spine Memory 1.1.1")
+                            && text.contains("## Node Memory\ntest node memory")
+                            && !text.contains("open toolcall compact summary")
             )
     ));
     assert_eq!(items[2], spine_call(SPINE_TOOL_CLOSE, "empty-close"));
@@ -12092,7 +12107,7 @@ async fn spine_close_rejects_runtime_owned_marker_memory_without_mutating_histor
     assert_eq!(
         session.clone_history().await.raw_items(),
         &[
-            prefix.clone(),
+            anchored_user_message(1, "prefix before encrypted only close"),
             open_request.clone(),
             open_output.clone(),
             child_body.clone(),
@@ -12317,13 +12332,6 @@ async fn spine_close_direct_memory_commit_does_not_run_overflow_compact() {
 
 #[tokio::test]
 async fn spine_parent_memory_assemblys_child_memory_not_child_raw_trajs() {
-    let server = start_mock_server().await;
-    let compact_mock = mount_sse_sequence(
-        &server,
-        spine_slot_summary_sse_sequence(&["inner compact summary", "outer compact summary"]),
-    )
-    .await;
-    let base_url = format!("{}/v1", server.uri());
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -12332,7 +12340,6 @@ async fn spine_parent_memory_assemblys_child_memory_not_child_raw_trajs() {
                 .features
                 .enable(Feature::SpineJit)
                 .expect("enable spine feature");
-            config.model_provider.base_url = Some(base_url.clone());
         },
     )
     .await;
@@ -12436,21 +12443,24 @@ async fn spine_parent_memory_assemblys_child_memory_not_child_raw_trajs() {
     .await
     .expect("commit outer close and record raw evidence");
 
-    let requests = compact_mock.requests();
-    assert_eq!(requests.len(), 2);
-    let inner_compact_request = &requests[0];
-    assert!(inner_compact_request.body_contains_text("inner assistant traj should be folded away"));
-    let outer_compact_request = &requests[1];
+    let store = SpineStore::for_rollout(&rollout_path).expect("load spine store");
+    let inner_memory = store
+        .memory_body_for_test("1.1.1.1")
+        .expect("read inner memory")
+        .expect("inner memory should exist");
+    assert!(inner_memory.contains("## Node Memory\ntest node memory"));
+    let outer_memory = store
+        .memory_body_for_test("1.1.1")
+        .expect("read outer memory")
+        .expect("outer memory should exist");
     assert!(
-        outer_compact_request.body_contains_text("Child memory 1.1.1.1 is preserved exactly"),
-        "outer close suffix evidence should include child memory evidence: {}",
-        outer_compact_request.body_json()
+        outer_memory.contains("## Child Memory\n# Spine Memory 1.1.1.1"),
+        "outer close suffix evidence should include child memory evidence: {outer_memory}"
     );
-    assert!(outer_compact_request.body_contains_text("# Spine Memory 1.1.1.1"));
-    assert!(outer_compact_request.body_contains_text("inner compact summary"));
-    assert!(outer_compact_request.body_contains_text("after inner in outer suffix"));
+    assert!(outer_memory.contains("## Node Memory\ntest node memory"));
     assert!(
-        !outer_compact_request.body_contains_text("inner assistant traj should be folded away")
+        !outer_memory.contains("inner assistant traj should be folded away"),
+        "outer memory must preserve child memory, not child raw trajs: {outer_memory}"
     );
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 }
@@ -12460,16 +12470,10 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
     let server = start_mock_server().await;
     let responses_mock = mount_sse_sequence(
         &server,
-        vec![
-            spine_slot_summary_sse(
-                "close-compact-summary",
-                "closed child summary before native compact",
-            ),
-            sse(vec![
-                ev_assistant_message("native-compact-summary", "native root compact summary"),
-                ev_completed("native-compact-response"),
-            ]),
-        ],
+        vec![sse(vec![
+            ev_assistant_message("native-compact-summary", "native root compact summary"),
+            ev_completed("native-compact-response"),
+        ])],
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -12557,8 +12561,8 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
     .await
     .expect("native compact succeeds");
 
-    assert_eq!(responses_mock.requests().len(), 2);
-    let native_compact_request = &responses_mock.requests()[1];
+    assert_eq!(responses_mock.requests().len(), 1);
+    let native_compact_request = &responses_mock.requests()[0];
     assert_eq!(
         native_compact_request.body_json()["tool_choice"].as_str(),
         Some("auto"),
@@ -14847,7 +14851,10 @@ async fn spine_open_control_toolcall_is_durable_context_history() {
     let history = session.clone_history().await;
     let items = history.raw_items();
     assert_eq!(items.len(), 3);
-    assert_eq!(items[0], prefix);
+    assert_eq!(
+        items[0],
+        anchored_user_message(1, "prefix before control carrier")
+    );
     assert_eq!(items[1], open_request);
     assert_eq!(items[2], recorded_open_output);
 
@@ -15711,7 +15718,7 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
     let history = session.clone_history().await;
     let items = history.raw_items();
     assert_eq!(items.len(), 4);
-    assert_eq!(items[0], prefix);
+    assert_eq!(items[0], anchored_user_message(1, "overlay close prefix"));
     assert!(matches!(
         &items[1],
         ResponseItem::Message { role, content, .. }
@@ -15720,8 +15727,8 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1.1")
-                            && text.contains("overlay close inner work")
                             && text.contains("## Node Memory\ntest node memory")
+                            && !text.contains("overlay close inner work")
                             && !text.contains("overlay secondary close memory")
                 )
     ));
@@ -17093,7 +17100,10 @@ async fn spine_raw_ordinals_follow_persisted_rollout_items_not_input_width() {
         runtime
             .materialize_history(&raw_items)
             .expect("materialize h(PS)"),
-        vec![first, second]
+        vec![
+            anchored_user_message(1, "first persisted message"),
+            anchored_user_message(2, "second persisted message"),
+        ]
     );
 }
 
