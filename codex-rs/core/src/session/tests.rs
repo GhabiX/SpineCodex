@@ -13536,6 +13536,123 @@ async fn spine_root_compact_records_close_tokens_without_next_open_baseline() {
 }
 
 #[tokio::test]
+async fn spine_root_compact_reduce_publishes_host_history_before_return() {
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let precompact_items = vec![
+        user_message("root compact publish prefix 1"),
+        assistant_message("root compact publish assistant 2"),
+        user_message("root compact publish suffix 3"),
+    ];
+    for item in &precompact_items {
+        session
+            .record_conversation_items(&turn_context, std::slice::from_ref(item))
+            .await
+            .expect("record precompact item");
+    }
+    while rx.try_recv().is_ok() {}
+
+    let replacement = vec![assistant_message("root compact publish body")];
+    let outcome = session
+        .replace_compacted_history(
+            &turn_context,
+            replacement,
+            None,
+            CompactedItem {
+                message: "native compact carrier for publication contract".to_string(),
+                replacement_history: None,
+            },
+        )
+        .await
+        .expect("root compact reduce should publish host history");
+    let snapshot = outcome
+        .spine_tree_snapshot
+        .expect("spine root compact should run");
+    assert!(
+        snapshot.active_node_id == "2.1"
+            && snapshot
+                .nodes
+                .iter()
+                .any(|node| node.node_id == "1" && node.status == SpineTreeNodeStatus::Compacted),
+        "root compact snapshot should be a post-commit effect"
+    );
+    assert_no_pending_spine_tree_update_matching(
+        &rx,
+        "root compact reduce must not emit tree updates before the caller publishes post-commit effects",
+        |snapshot| {
+            snapshot.active_node_id == "2.1"
+                && snapshot.nodes.iter().any(|node| {
+                    node.node_id == "1" && node.status == SpineTreeNodeStatus::Compacted
+                })
+        },
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    {
+        InitialHistory::Resumed(resumed) => spine_raw_items_after_rollback(&resumed.history),
+        _ => panic!("expected resumed rollout history"),
+    };
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize root compact h(PS)");
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        materialized.as_slice(),
+        "root compact reduce success must leave ContextManager.items equal to h(PS)"
+    );
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let rollout_replacement_history = resumed
+        .history
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::Compacted(compacted) => compacted.replacement_history.as_ref(),
+            _ => None,
+        })
+        .expect("native compact boundary should persist replacement_history");
+    assert_eq!(
+        rollout_replacement_history, &materialized,
+        "root compact reduce success must persist replacement_history equal to h(PS)"
+    );
+    assert_eq!(
+        materialized.len(),
+        1,
+        "root compact h(PS) should publish the single root memory item"
+    );
+    assert!(
+        materialized
+            .iter()
+            .any(|item| message_text_contains(item, "root compact publish body")),
+        "root compact memory must contain the model-authored compact body"
+    );
+}
+
+#[tokio::test]
 async fn native_compact_missing_usage_does_not_copy_stale_token_info_to_root_handoff() {
     let server = start_mock_server().await;
     let _responses_mock = mount_sse_sequence(
@@ -13613,13 +13730,10 @@ async fn replacement_history_validates_at_compact_boundary() {
     let server = start_mock_server().await;
     let responses_mock = mount_sse_sequence(
         &server,
-        vec![
-            spine_slot_summary_sse("sequence-child-summary", "sequence child compact summary"),
-            sse(vec![
-                ev_assistant_message("sequence-native-summary", "sequence native compact summary"),
-                ev_completed("sequence-native-response"),
-            ]),
-        ],
+        vec![sse(vec![
+            ev_assistant_message("sequence-native-summary", "sequence native compact summary"),
+            ev_completed("sequence-native-response"),
+        ])],
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -13690,7 +13804,11 @@ async fn replacement_history_validates_at_compact_boundary() {
     )
     .await
     .expect("commit close and record raw evidence");
-    assert_eq!(responses_mock.requests().len(), 1);
+    assert_eq!(
+        responses_mock.requests().len(),
+        0,
+        "close(memory) reduce must not request a compact summary from the model"
+    );
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 
     crate::compact::run_compact_task(
@@ -13703,7 +13821,11 @@ async fn replacement_history_validates_at_compact_boundary() {
     )
     .await
     .expect("native compact succeeds");
-    assert_eq!(responses_mock.requests().len(), 2);
+    assert_eq!(
+        responses_mock.requests().len(),
+        1,
+        "native compact should issue the only model request in this scenario"
+    );
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 
     session.ensure_rollout_materialized().await;
