@@ -1,15 +1,15 @@
-use crate::spine::SpineCloseCompact;
+use crate::spine::SpineCloseMemoryAssembly;
 use crate::spine::SpineCompactSourceEntryKind;
 use crate::spine::SpineCompactSourcePlan;
 use crate::spine::SpineError;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
-pub(crate) fn spine_close_memory_from_tool_arg(
+pub(crate) fn spine_close_memory_assembly_from_tool_arg(
     node_id: &str,
     source_plan: &SpineCompactSourcePlan,
     node_memory: &str,
-) -> Result<SpineCloseCompact, SpineError> {
+) -> Result<SpineCloseMemoryAssembly, SpineError> {
     if source_plan.node_id.to_string() != node_id {
         return Err(SpineError::CompactFailure(format!(
             "spine.close source plan node {} does not match close node {node_id}",
@@ -18,12 +18,12 @@ pub(crate) fn spine_close_memory_from_tool_arg(
     }
     if source_plan.entries.is_empty() {
         return Err(SpineError::CompactFailure(format!(
-            "spine.close compact source plan is empty for node {node_id}"
+            "spine.close memory source plan is empty for node {node_id}"
         )));
     }
-    let skeleton = SpineCompactMemorySkeleton::from_source_plan(node_id, source_plan)?;
+    let skeleton = SpineMemoryAssemblySkeleton::from_source_plan(node_id, source_plan)?;
     let body = skeleton.assemble(node_memory)?;
-    Ok(SpineCloseCompact {
+    Ok(SpineCloseMemoryAssembly {
         body,
         source_context_range: source_plan.source_context_range.clone(),
         source_raw_range: source_plan.source_raw_range.clone(),
@@ -50,7 +50,7 @@ fn validate_source_plan_against_history(
     let expected_len = source_plan.source_context_range.len();
     if source_plan.entries.len() != expected_len {
         return Err(SpineError::CompactFailure(format!(
-            "spine.close compact source entry count {} does not match source context range length {expected_len} for [{}..{})",
+            "spine.close memory source entry count {} does not match source context range length {expected_len} for [{}..{})",
             source_plan.entries.len(),
             source_plan.source_context_range.start,
             source_plan.source_context_range.end
@@ -59,7 +59,7 @@ fn validate_source_plan_against_history(
     for (expected_ordinal, entry) in source_plan.entries.iter().enumerate() {
         if entry.source_ordinal != expected_ordinal {
             return Err(SpineError::CompactFailure(format!(
-                "spine.close compact source entry ordinal {} does not match expected ordinal {expected_ordinal}",
+                "spine.close memory source entry ordinal {} does not match expected ordinal {expected_ordinal}",
                 entry.source_ordinal
             )));
         }
@@ -69,12 +69,12 @@ fn validate_source_plan_against_history(
             .checked_add(expected_ordinal)
             .ok_or_else(|| {
                 SpineError::CompactFailure(
-                    "spine.close compact source context index overflow".to_string(),
+                    "spine.close memory source context index overflow".to_string(),
                 )
             })?;
         if entry.context_index != expected_context_index {
             return Err(SpineError::CompactFailure(format!(
-                "spine.close compact source entry ordinal {} has context_index {}, expected {expected_context_index} for contiguous source context range [{}..{})",
+                "spine.close memory source entry ordinal {} has context_index {}, expected {expected_context_index} for contiguous source context range [{}..{})",
                 entry.source_ordinal,
                 entry.context_index,
                 source_plan.source_context_range.start,
@@ -83,7 +83,7 @@ fn validate_source_plan_against_history(
         }
         let Some(host_item) = raw_items.get(entry.context_index) else {
             return Err(SpineError::CompactFailure(format!(
-                "spine.close compact source entry ordinal {} context_index {} exceeds history length {}",
+                "spine.close memory source entry ordinal {} context_index {} exceeds history length {}",
                 entry.source_ordinal,
                 entry.context_index,
                 raw_items.len()
@@ -92,7 +92,7 @@ fn validate_source_plan_against_history(
         let expected_item = entry.visible_response_item();
         if host_item != &expected_item {
             return Err(SpineError::CompactFailure(format!(
-                "spine.close compact source entry mismatch at ordinal {} context_index {} source_hash {}",
+                "spine.close memory source entry mismatch at ordinal {} context_index {} source_hash {}",
                 entry.source_ordinal, entry.context_index, entry.source_hash
             )));
         }
@@ -101,13 +101,13 @@ fn validate_source_plan_against_history(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct SpineCompactMemorySkeleton {
+struct SpineMemoryAssemblySkeleton {
     node_id: String,
-    blocks: Vec<SpineCompactMemoryBlock>,
+    blocks: Vec<SpineMemoryAssemblyBlock>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum SpineCompactMemoryBlock {
+enum SpineMemoryAssemblyBlock {
     UserMessage {
         body: String,
         user_anchor: Option<u64>,
@@ -117,7 +117,7 @@ enum SpineCompactMemoryBlock {
     },
 }
 
-impl SpineCompactMemorySkeleton {
+impl SpineMemoryAssemblySkeleton {
     fn from_source_plan(
         node_id: &str,
         source_plan: &SpineCompactSourcePlan,
@@ -132,7 +132,7 @@ impl SpineCompactMemorySkeleton {
                     ..
                 } => {
                     if let Some(text) = response_item_text(item) {
-                        blocks.push(SpineCompactMemoryBlock::UserMessage {
+                        blocks.push(SpineMemoryAssemblyBlock::UserMessage {
                             body: text.to_string(),
                             user_anchor: *user_anchor,
                         });
@@ -141,13 +141,8 @@ impl SpineCompactMemorySkeleton {
                 SpineCompactSourceEntryKind::RawResponseItem {
                     from_user: false, ..
                 } => {}
-                SpineCompactSourceEntryKind::ChildMemory {
-                    body,
-                    ..
-                } => {
-                    blocks.push(SpineCompactMemoryBlock::ChildMemory {
-                        body: body.clone(),
-                    });
+                SpineCompactSourceEntryKind::ChildMemory { body, .. } => {
+                    blocks.push(SpineMemoryAssemblyBlock::ChildMemory { body: body.clone() });
                 }
             }
         }
@@ -161,7 +156,7 @@ impl SpineCompactMemorySkeleton {
         let mut body = format!("# Spine Memory {}\n", self.node_id);
         for block in &self.blocks {
             match block {
-                SpineCompactMemoryBlock::UserMessage {
+                SpineMemoryAssemblyBlock::UserMessage {
                     body: text,
                     user_anchor,
                 } => {
@@ -170,7 +165,7 @@ impl SpineCompactMemorySkeleton {
                         .unwrap_or_else(|| "## User Message".to_string());
                     push_memory_block(&mut body, &heading, text);
                 }
-                SpineCompactMemoryBlock::ChildMemory { body: child } => {
+                SpineMemoryAssemblyBlock::ChildMemory { body: child } => {
                     push_memory_block(&mut body, "## Child Memory", child);
                 }
             }
@@ -196,12 +191,12 @@ fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         return Err(SpineError::CompactFailure(
-            "spine.close compact produced empty node_memory".to_string(),
+            "spine.close memory argument produced empty node memory".to_string(),
         ));
     }
     if let Some(marker) = forbidden_generated_body_structure_marker(body) {
         return Err(SpineError::CompactFailure(format!(
-            "spine.close compact node_memory contains forbidden structure marker {marker:?}"
+            "spine.close memory argument contains forbidden structure marker {marker:?}"
         )));
     }
     Ok(())
@@ -366,7 +361,7 @@ mod spine_close_slot_map_tests {
             child_memory_entry(4, 2, "# Spine Memory 1.1.1\n\nchild body\n"),
         ]);
         let skeleton =
-            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+            SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
         let body = skeleton
             .assemble("node continuation facts")
@@ -386,7 +381,7 @@ mod spine_close_slot_map_tests {
             source_entry(3, 1, assistant_message("tool detail"), false),
         ]);
 
-        let compact = spine_close_memory_from_tool_arg(
+        let compact = spine_close_memory_assembly_from_tool_arg(
             "1.1",
             &plan,
             "After [U7], implementation continued and tests passed.",
@@ -412,7 +407,7 @@ mod spine_close_slot_map_tests {
             source_entry_with_user_anchor(4, 2, user_message("only user two"), true, Some(2)),
         ]);
         let skeleton =
-            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+            SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
         let body = skeleton
             .assemble("node memory for exact-only suffix")
@@ -432,7 +427,7 @@ mod spine_close_slot_map_tests {
             "# Spine Memory 1.1.1\n\nchild exact\n",
         )]);
         let skeleton =
-            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+            SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
         let body = skeleton
             .assemble("preserved close instruction facts")
@@ -452,7 +447,7 @@ mod spine_close_slot_map_tests {
             false,
         )]);
         let skeleton =
-            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+            SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
         let body = skeleton
             .assemble(
@@ -478,10 +473,12 @@ mod spine_close_slot_map_tests {
             false,
         )]);
         let skeleton =
-            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+            SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
         let body = skeleton
-            .assemble("The failure involved a literal <SPINE_SLOT_ substring in the node memory body.")
+            .assemble(
+                "The failure involved a literal <SPINE_SLOT_ substring in the node memory body.",
+            )
             .expect("inline protocol marker discussion should be accepted");
 
         assert!(
@@ -498,7 +495,7 @@ mod spine_close_slot_map_tests {
             false,
         )]);
         let skeleton =
-            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+            SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
         let err = skeleton
             .assemble("## User Message\npolluted")
             .expect_err("node memory pollution must be rejected");
@@ -519,7 +516,7 @@ mod spine_close_slot_map_tests {
             false,
         )]);
         let skeleton =
-            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+            SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
         let nested_slot_tag = skeleton
             .assemble("before\n<SPINE_SLOT_1>\nafter")
@@ -551,7 +548,7 @@ mod spine_close_slot_map_tests {
             false,
         )]);
         let skeleton =
-            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+            SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
 
         let empty_node = skeleton
             .assemble("  ")
@@ -595,7 +592,7 @@ mod spine_close_slot_map_tests {
         }]);
 
         let skeleton =
-            SpineCompactMemorySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
+            SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
         let body = skeleton
             .assemble("node multimodal continuation")
             .expect("assembled body");

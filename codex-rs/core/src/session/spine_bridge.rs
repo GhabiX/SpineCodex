@@ -2,16 +2,14 @@ use super::*;
 use crate::client::ModelClientSession;
 use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
-use crate::session::spine_compact::spine_close_memory_from_tool_arg;
+use crate::session::spine_memory_assembly::spine_close_memory_assembly_from_tool_arg;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
-#[cfg(test)]
-use crate::session::turn::built_tools;
 use crate::spine::CompletedToolCall;
 use crate::spine::CompletedToolCallSegment;
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineCloseCompact;
+use crate::spine::SpineCloseMemoryAssembly;
 use crate::spine::SpineCommitKind;
 use crate::spine::SpinePendingCommit;
 use crate::spine::SpineRootCompactResult;
@@ -30,11 +28,6 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
-use codex_tools::ToolSpec;
-#[cfg(test)]
-use std::collections::HashSet;
-#[cfg(test)]
-use tokio_util::sync::CancellationToken;
 
 pub(super) struct PreparedSpineReplay {
     raw_len: u64,
@@ -122,24 +115,6 @@ impl Session {
             spine_context_already_observed: false,
             deferred_history_update: None,
             deferred_tree_update: None,
-        }
-    }
-
-    fn skip_spine_tool_output_commit() -> SpineToolCommit {
-        SpineToolCommit {
-            record_output: false,
-            spine_context_already_observed: false,
-            deferred_history_update: None,
-            deferred_tree_update: None,
-        }
-    }
-
-    fn spine_tool_commit_from_commit_output(output: SpineCommitOutput) -> SpineToolCommit {
-        SpineToolCommit {
-            record_output: true,
-            spine_context_already_observed: output.spine_context_already_observed,
-            deferred_history_update: output.history_update,
-            deferred_tree_update: output.snapshot,
         }
     }
 
@@ -530,36 +505,6 @@ impl Session {
         aborted
     }
 
-    async fn abort_spine_pending_and_observe_completed_toolcall(
-        &self,
-        call_id: &str,
-        completed_toolcall: CompletedToolCall,
-        reason: &str,
-    ) -> Result<bool, SpineError> {
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(false);
-        };
-        let raw_items = self.current_spine_raw_items().await?;
-        let mut guard = spine_slot.lock().await;
-        guard.ensure_valid()?;
-        let Some(spine) = guard.runtime_mut() else {
-            return Ok(false);
-        };
-        let observed = spine.abort_pending_and_observe_completed_toolcall_with_raw_items(
-            call_id,
-            completed_toolcall,
-            &raw_items,
-        )?;
-        if observed {
-            tracing::debug!(
-                call_id,
-                reason,
-                "aborted pending Spine transition and kept completed toolcall as ordinary history"
-            );
-        }
-        Ok(observed)
-    }
-
     async fn current_spine_raw_items(&self) -> Result<Vec<Option<ResponseItem>>, SpineError> {
         self.ensure_rollout_materialized().await;
         self.flush_rollout()
@@ -578,67 +523,6 @@ impl Session {
         Ok(spine_raw_items_after_rollback(
             &rollout_history.get_rollout_items(),
         ))
-    }
-
-    async fn commit_completed_toolcall_as_ordinary(
-        &self,
-        call_id: &str,
-        completed_toolcall: CompletedToolCall,
-        reason: &str,
-    ) -> Result<SpineCommitOutput, SpineError> {
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return Err(SpineError::Invariant(
-                "spine slot missing during ordinary completed toolcall commit".to_string(),
-            ));
-        };
-        self.ensure_rollout_materialized().await;
-        self.flush_rollout()
-            .await
-            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
-        let rollout_path = self
-            .current_rollout_path()
-            .await
-            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
-            .ok_or_else(|| {
-                SpineError::InvalidStore(
-                    "spine ordinary completed toolcall commit requires rollout path".to_string(),
-                )
-            })?;
-        let rollout_history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
-            .await
-            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
-        let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
-        let (aborted_pending, materialized, snapshot) = {
-            let mut guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(spine) = guard.runtime_mut() else {
-                return Err(SpineError::Invariant(
-                    "spine runtime missing during ordinary completed toolcall commit".to_string(),
-                ));
-            };
-            let aborted_pending = spine.commit_completed_toolcall_as_ordinary_with_raw_items(
-                call_id,
-                completed_toolcall,
-                &raw_items,
-            )?;
-            let materialized = spine.materialize_history(&raw_items)?;
-            let snapshot = spine.build_tree_snapshot()?;
-            (aborted_pending, materialized, snapshot)
-        };
-        self.replace_history(materialized, self.reference_context_item().await)
-            .await;
-        tracing::debug!(
-            call_id,
-            reason,
-            aborted_pending,
-            "kept completed Spine toolcall as ordinary history"
-        );
-        Ok(SpineCommitOutput {
-            snapshot: Some(snapshot),
-            spine_context_already_observed: true,
-            history_update: None,
-            defer_tree_update_until_raw_output: false,
-        })
     }
 
     async fn fail_closed_spine_toolcall_commit(&self, call_id: &str, reason: impl Into<String>) {
@@ -872,36 +756,12 @@ impl Session {
         item: &ResponseItem,
     ) -> Result<SpineToolCommit, SpineError> {
         let mut client_session = self.services.model_client.new_session();
-        let close_compact_tools = self
-            .test_default_close_compact_tools(turn_context)
-            .await
-            .map_err(|err| {
-                SpineError::Operation(format!("failed to build test close compact tools: {err}"))
-            })?;
         self.maybe_commit_spine_tool_output_with_client_session(
             turn_context,
             &mut client_session,
             item,
-            close_compact_tools,
         )
         .await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn test_default_close_compact_tools(
-        &self,
-        turn_context: &Arc<TurnContext>,
-    ) -> codex_protocol::error::Result<Vec<ToolSpec>> {
-        Ok(built_tools(
-            self,
-            turn_context,
-            &[],
-            &HashSet::new(),
-            Some(turn_context.turn_skills.outcome.as_ref()),
-            &CancellationToken::new(),
-        )
-        .await?
-        .model_visible_specs())
     }
 
     pub(crate) async fn maybe_commit_spine_tool_output_with_client_session(
@@ -909,7 +769,6 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
         item: &ResponseItem,
-        close_compact_tools: Vec<ToolSpec>,
     ) -> Result<SpineToolCommit, SpineError> {
         let Some(call_id) = tool_response_call_id(item) else {
             return Ok(Self::no_spine_tool_commit());
@@ -975,7 +834,6 @@ impl Session {
             item,
             completed_toolcall,
             tool_resp_already_recorded,
-            close_compact_tools,
         )
         .await
     }
@@ -987,7 +845,6 @@ impl Session {
         commit_call_id: &str,
         tool_call_ids: &[String],
         output_items: &[ResponseItem],
-        close_compact_tools: Vec<ToolSpec>,
     ) -> Result<SpineToolCommit, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
@@ -1095,7 +952,6 @@ impl Session {
             commit_output,
             completed_toolcall,
             true,
-            close_compact_tools,
         )
         .await
     }
@@ -1108,7 +964,6 @@ impl Session {
         item: &ResponseItem,
         completed_toolcall: CompletedToolCall,
         tool_resp_already_recorded: bool,
-        _close_compact_tools: Vec<ToolSpec>,
     ) -> Result<SpineToolCommit, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
@@ -1131,7 +986,7 @@ impl Session {
         } else {
             None
         };
-        let close_compact = match pending_commit {
+        let memory_assembly = match pending_commit {
             Some(SpinePendingCommit::Close {
                 node,
                 suffix_start,
@@ -1155,7 +1010,7 @@ impl Session {
                     guard.ensure_valid()?;
                     let Some(spine) = guard.runtime() else {
                         return Err(SpineError::Invariant(format!(
-                            "spine runtime missing while building close compact source plan for call_id={call_id}"
+                            "spine runtime missing while building close memory source plan for call_id={call_id}"
                         )));
                     };
                     spine.build_close_source_plan(
@@ -1169,7 +1024,7 @@ impl Session {
                 let source_plan = match source_plan {
                     Ok(source_plan) => source_plan,
                     Err(err) => {
-                        let reason = "spine close source plan failed before compact";
+                        let reason = "spine close memory source plan failed before commit";
                         if tool_resp_already_recorded {
                             self.fail_closed_spine_toolcall_commit(call_id, reason)
                                 .await;
@@ -1179,13 +1034,16 @@ impl Session {
                         return Err(err);
                     }
                 };
-                let compact =
-                    spine_close_memory_from_tool_arg(&node.to_string(), &source_plan, &memory)?;
+                let compact = spine_close_memory_assembly_from_tool_arg(
+                    &node.to_string(),
+                    &source_plan,
+                    &memory,
+                )?;
                 Some((compact, expected_history))
             }
             Some(SpinePendingCommit::Open) | None => None,
         };
-        if let Some((_, expected_history)) = close_compact.as_ref() {
+        if let Some((_, expected_history)) = memory_assembly.as_ref() {
             let history = self.clone_history().await;
             if history.raw_items() != expected_history.as_slice() {
                 let reason = "spine close history changed before commit";
@@ -1207,7 +1065,7 @@ impl Session {
                 spine_slot,
                 call_id,
                 item,
-                close_compact.clone(),
+                memory_assembly.clone(),
                 pre_compact_token_baselines,
                 current_turn_token_info.as_ref(),
                 completed_toolcall.clone(),
@@ -1337,7 +1195,7 @@ impl Session {
         spine_slot: &Mutex<SpineSessionState>,
         call_id: &str,
         tool_resp_item: &ResponseItem,
-        close_compact: Option<(SpineCloseCompact, Vec<ResponseItem>)>,
+        memory_assembly: Option<(SpineCloseMemoryAssembly, Vec<ResponseItem>)>,
         pre_compact_token_baselines: Option<SpineTokenBaselines>,
         current_turn_token_info: Option<&TokenUsageInfo>,
         completed_toolcall: CompletedToolCall,
@@ -1354,7 +1212,7 @@ impl Session {
         let Ok(state) = self.state.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
         };
-        if let Some((_, expected_history)) = close_compact.as_ref()
+        if let Some((_, expected_history)) = memory_assembly.as_ref()
             && state.clone_history().raw_items() != expected_history.as_slice()
         {
             if spine.abort_pending(call_id) {
@@ -1368,7 +1226,7 @@ impl Session {
                 "spine.close history changed before suffix replacement for call_id={call_id}"
             )));
         }
-        let close_compact = close_compact.map(|(compact, _)| compact);
+        let memory_assembly = memory_assembly.map(|(compact, _)| compact);
         let pending_commit = spine.pending_commit(call_id)?;
         let token_baselines = match pending_commit.as_ref() {
             Some(SpinePendingCommit::Close { .. }) => match pre_compact_token_baselines {
@@ -1381,7 +1239,7 @@ impl Session {
         let commit_kind = if pending_commit.is_some() {
             spine.maybe_commit_output_with_toolcall_and_raw_items(
                 call_id,
-                close_compact,
+                memory_assembly,
                 token_baselines,
                 completed_toolcall,
                 raw_items,

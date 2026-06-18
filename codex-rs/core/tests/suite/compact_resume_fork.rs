@@ -33,7 +33,6 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
@@ -50,7 +49,6 @@ use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
-const SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME: &str = "submit_spine_memory";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
@@ -128,14 +126,6 @@ fn normalize_compact_prompts(requests: &mut [Value]) {
             });
         }
     }
-}
-
-fn spine_node_memory_compact_body(text: &str) -> String {
-    json!({
-        "slots": [],
-        "node_memory": text,
-    })
-    .to_string()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -761,20 +751,17 @@ async fn spine_enabled_fork_resume_rollback_compact_chain_survives() -> Result<(
     user_turn(&resumed_after_compact, FINAL_AFTER_COMPACT_RESUME).await;
 
     let requests = request_log.requests();
-    assert_eq!(requests.len(), 12);
+    assert_eq!(requests.len(), 11);
     assert!(request_log.saw_function_call("call-spine-open"));
     assert!(request_log.saw_function_call("call-spine-close"));
     let open_output = request_log
         .function_call_output_text("call-spine-open")
         .expect("missing spine open output");
-    assert!(
-        open_output.starts_with("Spine opened after this tool output is recorded."),
-        "{open_output}"
-    );
+    assert_eq!(open_output, "Spine open accepted.");
     let close_output = request_log
         .function_call_output_text("call-spine-close")
         .expect("missing spine close output");
-    assert!(close_output.starts_with("Spine closed."), "{close_output}");
+    assert_eq!(close_output, "Spine close accepted.");
 
     let rolled_back_turn_request = requests
         .iter()
@@ -973,17 +960,9 @@ async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
             "call-spine-close",
             "spine",
             "close",
-            r#"{"instruction":"keep child scope evidence"}"#,
+            r#"{"memory":"keep child scope evidence"}"#,
         ),
         ev_completed("spine-close-call"),
-    ]);
-    let close_compact = sse(vec![
-        ev_function_call(
-            "spine-close-compact-summary",
-            SPINE_CLOSE_COMPACT_MEMORY_TOOL_NAME,
-            &spine_node_memory_compact_body("spine close compact summary"),
-        ),
-        ev_completed("spine-close-compact"),
     ]);
     let close_follow_up = sse(vec![
         ev_assistant_message("spine-close-follow-up", "spine close follow-up reply"),
@@ -1018,7 +997,6 @@ async fn mount_spine_chain_sequence(server: &MockServer) -> ResponseMock {
             open_follow_up,
             child_work,
             close_call,
-            close_compact,
             close_follow_up,
             parent_after_close,
             after_resume,

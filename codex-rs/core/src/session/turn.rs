@@ -113,7 +113,6 @@ use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -2083,7 +2082,6 @@ async fn drain_in_flight(
     turn_context: Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     spine_control_overlay: &mut SpineControlOverlay,
-    close_compact_tools: Vec<ToolSpec>,
 ) -> Result<(), SamplingRequestError> {
     while let Some(res) = in_flight.next().await {
         match res {
@@ -2116,7 +2114,6 @@ async fn drain_in_flight(
                         &turn_context,
                         client_session,
                         &response_item,
-                        close_compact_tools.clone(),
                     )
                     .await
                     .map_err(|err| {
@@ -2244,7 +2241,6 @@ async fn drain_deferred_spine_tool_group(
     turn_context: Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     spine_control_overlay: &mut SpineControlOverlay,
-    close_compact_tools: Vec<ToolSpec>,
     tool_runtime: &ToolCallRuntime,
     cancellation_token: &CancellationToken,
 ) -> Result<(), SamplingRequestError> {
@@ -2291,7 +2287,6 @@ async fn drain_deferred_spine_tool_group(
             &commit_call_id,
             &tool_call_ids,
             &response_items,
-            close_compact_tools,
         )
         .await
         .map_err(|err| {
@@ -2336,7 +2331,6 @@ async fn drain_conflicting_spine_control_tool_group(
     turn_context: Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     spine_control_overlay: &mut SpineControlOverlay,
-    close_compact_tools: Vec<ToolSpec>,
     tool_runtime: &ToolCallRuntime,
     cancellation_token: &CancellationToken,
 ) -> Result<(), SamplingRequestError> {
@@ -2408,7 +2402,6 @@ async fn drain_conflicting_spine_control_tool_group(
             &commit_call_id,
             &tool_call_ids,
             &response_items,
-            close_compact_tools,
         )
         .await
         .map_err(|err| {
@@ -2984,7 +2977,6 @@ async fn try_run_sampling_request(
                     turn_context.clone(),
                     client_session,
                     &mut spine_control_overlay,
-                    prompt.tools.clone(),
                     &tool_runtime,
                     &cancellation_token,
                 )
@@ -2998,7 +2990,6 @@ async fn try_run_sampling_request(
                     turn_context.clone(),
                     client_session,
                     &mut spine_control_overlay,
-                    prompt.tools.clone(),
                     &tool_runtime,
                     &cancellation_token,
                 )
@@ -3013,7 +3004,6 @@ async fn try_run_sampling_request(
         turn_context.clone(),
         client_session,
         &mut spine_control_overlay,
-        prompt.tools.clone(),
     )
     .await?;
 

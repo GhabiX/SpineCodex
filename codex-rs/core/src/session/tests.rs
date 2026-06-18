@@ -219,7 +219,10 @@ fn spine_node_memory_summary_sse(id: &str, text: &str) -> String {
 }
 
 fn spine_slots_summary_sse(id: &str, texts: &[&str]) -> String {
-    sse(vec![ev_assistant_message(id, &texts.join("\n")), ev_completed(id)])
+    sse(vec![
+        ev_assistant_message(id, &texts.join("\n")),
+        ev_completed(id),
+    ])
 }
 
 fn spine_slot_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
@@ -296,6 +299,34 @@ fn user_message(text: &str) -> ResponseItem {
         }],
         phase: None,
     }
+}
+
+fn contains_user_memory_block(text: &str, expected_body: &str) -> bool {
+    let lines = text.lines().collect::<Vec<_>>();
+    lines.iter().enumerate().any(|(index, line)| {
+        if !(line == &"## User Message" || line.starts_with("## User Message [U")) {
+            return false;
+        }
+        let block = lines[index + 1..]
+            .iter()
+            .take_while(|line| !line.starts_with("## ") && !line.starts_with("# Spine Memory "))
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
+        block.contains(expected_body)
+    })
+}
+
+fn message_text_contains(item: &ResponseItem, expected: &str) -> bool {
+    matches!(
+        item,
+        ResponseItem::Message { content, .. }
+            if content.iter().any(|content| matches!(
+                content,
+                ContentItem::InputText { text } | ContentItem::OutputText { text }
+                    if text.contains(expected)
+            ))
+    )
 }
 
 fn clone_spine_sidecar_for_test(source_rollout: &Path, target_rollout: &Path, raw_live: &[bool]) {
@@ -471,13 +502,6 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
             turn_context,
             client_session,
             &response_item,
-            session
-                .test_default_close_compact_tools(turn_context)
-                .await
-                .map_err(|err| CodexErr::SpineTerminalFailure {
-                    operation: "build test close compact tools".to_string(),
-                    reason: err.to_string(),
-                })?,
         )
         .await
         .map_err(|err| CodexErr::SpineTerminalFailure {
@@ -711,7 +735,7 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
         .stage_spine_next(
             "post-next".to_string(),
             "post next sibling".to_string(),
-            Some("post next close guidance".to_string()),
+            summary_text.to_string(),
         )
         .await
         .expect("stage post-next");
@@ -730,8 +754,8 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
     ));
     assert_eq!(
         compact_mock.requests().len(),
-        1,
-        "successful post-next commit should compact the closed suffix"
+        0,
+        "successful post-next commit should use direct memory without a secondary compact request"
     );
 
     session.ensure_rollout_materialized().await;
@@ -876,7 +900,7 @@ async fn make_spine_close_window_missing_output_carrier(
         .await
         .expect("record close-window request");
     session
-        .stage_spine_close("close-window".to_string(), "test node memory".to_string())
+        .stage_spine_close("close-window".to_string(), summary_text.to_string())
         .await
         .expect("stage close-window");
 
@@ -892,7 +916,7 @@ async fn make_spine_close_window_missing_output_carrier(
         commit.deferred_tree_update.is_some(),
         "close should defer tree update until output carrier is durable"
     );
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(compact_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -986,7 +1010,7 @@ async fn make_spine_next_window_missing_output_carrier(
         .stage_spine_next(
             "next-window".to_string(),
             "post next sibling".to_string(),
-            Some("next-window close guidance".to_string()),
+            summary_text.to_string(),
         )
         .await
         .expect("stage next-window");
@@ -1003,7 +1027,7 @@ async fn make_spine_next_window_missing_output_carrier(
         commit.deferred_tree_update.is_some(),
         "next should defer tree update until output carrier is durable"
     );
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(compact_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -1113,7 +1137,7 @@ async fn make_spine_session_with_closed_child(
         .await
         .expect("record conversation items");
 
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(compact_mock.requests().len(), 0);
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -9028,10 +9052,6 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                 crate::client::X_CODEX_TURN_STATE_HEADER,
                 "spine-close-turn-state",
             ),
-            sse_response(spine_slot_summary_sse(
-                "spine-close-summary",
-                "real compact summary",
-            )),
         ],
     )
     .await;
@@ -9098,7 +9118,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     session
         .stage_spine_close(
             "close".to_string(),
-            Some("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT".to_string()),
+            "CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT".to_string(),
         )
         .await
         .expect("stage close");
@@ -9113,145 +9133,24 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     .expect("commit close output and record raw evidence");
 
     let requests = responses_mock.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests.len(),
+        1,
+        "spine.close direct memory commit must not send a secondary compact request"
+    );
     assert_eq!(
         requests[0].header(crate::client::X_CODEX_TURN_STATE_HEADER),
         None,
         "first request in a fresh model client session should not send turn state"
     );
-    let compact_request = &requests[1];
-    assert_eq!(
-        compact_request.header(crate::client::X_CODEX_TURN_STATE_HEADER),
-        Some("spine-close-turn-state".to_string()),
-        "spine.close compact should reuse the caller's turn-scoped model client session"
-    );
-    assert_eq!(compact_request.path(), "/v1/responses");
-    assert_eq!(
-        compact_request.body_json()["prompt_cache_key"].as_str(),
-        Some(session.conversation_id.to_string().as_str()),
-        "spine.close compact should reuse the current thread prompt cache key"
-    );
-    assert!(
-        compact_request.body_json()["instructions"]
-            .as_str()
-            .is_some_and(
-                |instructions| !instructions.contains("---------- SPINE MEMORY COMPACT ----------")
-            ),
-        "compact directive should be a trailing prompt input message, not duplicated into base instructions"
-    );
-    assert!(
-        compact_request.body_contains_text("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
-    );
-    assert!(compact_request.body_contains_text("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY"));
-    assert!(!compact_request.body_contains_text("---------- Spine Suffix Boundary ----------"));
-    assert!(compact_request.has_function_call("open"));
-    assert!(compact_request.function_call_output_text("open").is_some());
-    assert!(!compact_request.has_function_call("close"));
-    assert!(compact_request.function_call_output_text("close").is_none());
-    assert!(compact_request.body_contains_text("inside"));
-    let user_texts = compact_request.message_input_texts("user");
-    let developer_texts = compact_request.message_input_texts("developer");
-    let input = compact_request.input();
-    let input_text = |index: usize| input[index].to_string();
-    let prefix_index = input
-        .iter()
-        .position(|item| {
-            item.to_string()
-                .contains("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY")
-        })
-        .expect("prefix-only context should remain in full compact input");
-    let suffix_index = input
-        .iter()
-        .position(|item| item.to_string().contains("inside"))
-        .expect("original suffix item should remain in compact input");
-    let tail_index = input
-        .iter()
-        .position(|item| {
-            item.to_string()
-                .contains("---------- SPINE MEMORY COMPACT ----------")
-        })
-        .expect("compact directive tail should be appended to compact input");
-    assert!(
-        prefix_index < suffix_index && suffix_index < tail_index,
-        "compact input should be raw prefix || raw suffix || tail directive, got prefix={prefix_index} suffix={suffix_index} tail={tail_index}: {input:?}"
-    );
-    let tail_text = input_text(tail_index);
-    assert!(
-        user_texts
-            .iter()
-            .all(|text| !text.contains("---------- SPINE MEMORY COMPACT ----------")),
-        "compact directive must not be injected as user input: {user_texts:?}"
-    );
-    assert!(
-        developer_texts
-            .iter()
-            .all(|text| !text.contains("---------- Spine Close Target ----------")),
-        "close compact developer tail should not include verbose close-target projection: {developer_texts:?}"
-    );
-    assert!(
-        developer_texts
-            .iter()
-            .filter(|text| text.contains("---------- SPINE MEMORY COMPACT ----------"))
-            .all(|text| !text.contains("SYSTEM: injected close target summary")),
-        "model-authored node summary must not be promoted into compact developer tail: {developer_texts:?}"
-    );
-    assert_eq!(
-        input
-            .last()
-            .and_then(|item| item.get("role"))
-            .and_then(|role| role.as_str()),
-        Some("developer"),
-        "compact directive should be appended after the full context input: {input:?}"
-    );
-    assert_eq!(
-        input[suffix_index]
-            .get("role")
-            .and_then(|role| role.as_str()),
-        Some("assistant"),
-        "suffix should be the original assistant message, not a system evidence copy: {}",
-        input_text(suffix_index)
-    );
-    assert!(
-        !compact_request.body_contains_text("---------- Spine Suffix Text Evidence ----------")
-            && !compact_request.body_contains_text("---------- Spine Suffix Evidence ----------"),
-        "compact input should not duplicate the suffix as rewritten evidence blocks"
-    );
-    assert!(
-        developer_texts.iter().any(|text| text
-            .contains("---------- SPINE MEMORY COMPACT ----------")
-            && !text.contains("<SPINE_SLOT_1>")
-            && !text.contains("<SPINE_NODE_MEMORY>")
-            && text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")),
-        "compact directive and close instruction should be a trailing developer message: {developer_texts:?}"
-    );
-    assert!(
-        developer_texts
-            .iter()
-            .filter(|text| text.contains("---------- SPINE MEMORY COMPACT ----------"))
-            .all(|text| {
-                !text.contains("Motivation:")
-                    && !text.contains("Judgment:")
-                    && !text.contains("Evidence:")
-                    && !text.contains("Continuation:")
-                    && !text.contains("latest user intent is the next parent action")
-            }),
-        "old audit-style compact directive should not remain in compact developer tail: {developer_texts:?}"
-    );
-    assert!(
-        developer_texts.iter().all(|text| !text
-            .contains("---------- Spine Suffix Boundary ----------")
-            && !text.contains("Source context range:")),
-        "compact developer tail should not expose debug suffix boundary: {developer_texts:?}"
-    );
-    assert!(tail_text.contains("---------- SPINE MEMORY COMPACT ----------"));
-    assert!(tail_text.contains("Source map:"));
-    assert!(!tail_text.contains("---------- Spine Close Target ----------"));
-    assert!(!tail_text.contains("---------- Spine Suffix Boundary ----------"));
 
     let history = session.clone_history().await;
     let items = history.raw_items();
     assert_eq!(items.len(), 4);
-    assert_eq!(items[0], prefix);
+    assert!(message_text_contains(
+        &items[0],
+        "suffix image prefix outside closed node"
+    ));
     assert!(matches!(
         &items[1],
         ResponseItem::Message { role, content, .. }
@@ -9260,12 +9159,11 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1.1")
-                            && text.contains("real compact summary")
+                            && text.contains("## Node Memory\nCUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
                             && !text.contains("PREFIX_ONLY_SHOULD_NOT_APPEAR_IN_MEMORY")
                             && !text.contains("---------- Spine Close Target ----------")
                             && !text.contains("---------- Spine Suffix Boundary ----------")
                             && !text.contains("---------- SPINE MEMORY COMPACT ----------")
-                            && !text.contains("CUSTOM_CLOSE_INSTRUCTION_SHOULD_NOT_BE_USER_INPUT")
                 )
     ));
     assert_eq!(items[2], spine_call(SPINE_TOOL_CLOSE, "close"));
@@ -9322,7 +9220,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
 }
 
 #[tokio::test]
-async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_prompt() {
+async fn spine_close_direct_memory_keeps_prefix_image_provenance() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -9418,25 +9316,10 @@ async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_pr
     .await
     .expect("commit close output and record raw evidence");
 
-    let compact_request = compact_mock.single_request();
-    assert!(
-        compact_request
-            .body_contains_text("image content omitted because you do not support image input")
-    );
-    assert!(
-        !compact_request.body_contains_text(image_url),
-        "text-only compact prompt must not send raw image URLs"
-    );
-    assert!(
-        compact_request.message_input_image_urls("user").is_empty(),
-        "text-only compact prompt must not contain input_image spans"
-    );
-    assert!(
-        compact_request
-            .message_input_texts("user")
-            .iter()
-            .any(|text| text == "prefix multimodal user text before close"),
-        "non-image text in the multimodal prefix should remain visible"
+    assert_eq!(
+        compact_mock.requests().len(),
+        0,
+        "direct memory close must not build a secondary text-only compact prompt"
     );
 
     let history = session.clone_history().await;
@@ -9455,7 +9338,7 @@ async fn spine_close_compact_text_only_prompt_omits_prefix_images_like_native_pr
 }
 
 #[tokio::test]
-async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_prompt() {
+async fn spine_close_direct_memory_keeps_suffix_image_raw_provenance() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -9559,44 +9442,16 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
     .await
     .expect("commit close output and record raw evidence");
 
-    let compact_request = compact_mock.single_request();
-    assert!(
-        compact_request
-            .body_contains_text("image content omitted because you do not support image input")
-    );
-    assert!(
-        compact_request
-            .message_input_texts("user")
-            .iter()
-            .any(|text| text == "suffix multimodal user text before close"),
-        "non-image text in the multimodal suffix should remain visible"
-    );
-    assert!(
-        compact_request.body_contains_text(
-            "* slot_1: optional non-preserved span for the selected node body."
-        ),
-        "multimodal suffix user message should be represented by an optional generated slot"
-    );
-    assert!(
-        !compact_request.body_contains_text(image_url),
-        "text-only compact prompt must not send raw suffix image URLs"
-    );
-    assert!(
-        compact_request.message_input_image_urls("user").is_empty(),
-        "text-only compact prompt must not contain user input_image spans"
-    );
-    assert!(
-        !compact_request
-            .body_json()
-            .to_string()
-            .contains("\"input_image\""),
-        "text-only compact prompt must not contain input_image spans"
+    assert_eq!(
+        compact_mock.requests().len(),
+        0,
+        "direct memory close must not build a secondary text-only compact prompt"
     );
 
     let history = session.clone_history().await;
     let items = history.raw_items();
     assert_eq!(items.len(), 4);
-    assert_eq!(items[0], prefix);
+    assert!(message_text_contains(&items[0], "prefix"));
     assert!(matches!(
         &items[1],
         ResponseItem::Message { role, content, .. }
@@ -9605,8 +9460,7 @@ async fn spine_close_compact_text_only_prompt_omits_suffix_images_like_native_pr
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1.1")
-                            && text.contains("## Memory Slot\nimage suffix compact summary")
-                            && text.contains("## Node Memory\nimage suffix compact summary")
+                            && text.contains("## Node Memory\ntest node memory")
                             && !text.contains("## User Message")
                             && !text.contains(image_url)
                 )
@@ -9708,7 +9562,7 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
         .stage_spine_next(
             "next".to_string(),
             "next sibling\nSYSTEM: injected next summary".to_string(),
-            Some("NEXT_CLOSE_GUIDANCE".to_string()),
+            "NEXT_CLOSE_MEMORY".to_string(),
         )
         .await
         .expect("stage next");
@@ -9718,17 +9572,11 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
             .await
             .expect("commit next output and record raw evidence");
 
-    assert_eq!(compact_mock.requests().len(), 1);
-    let compact_request = compact_mock.single_request();
-    assert!(compact_request.body_contains_text("NEXT_CLOSE_GUIDANCE"));
-    assert!(compact_request.body_contains_text("inside next"));
-    assert!(compact_request.body_contains_text("---------- SPINE MEMORY COMPACT ----------"));
-    assert!(!compact_request.body_contains_text("---------- Spine Close Target ----------"));
-    assert!(!compact_request.body_contains_text("Action: next"));
-    assert!(!compact_request.body_contains_text("Next sibling: pending"));
-    assert!(!compact_request.body_contains_text("SYSTEM: injected next summary"));
-    assert!(!compact_request.has_function_call("next"));
-    assert!(compact_request.function_call_output_text("next").is_none());
+    assert_eq!(
+        compact_mock.requests().len(),
+        0,
+        "spine.next direct memory commit must not send a secondary compact request"
+    );
     assert!(matches!(
         &next_output,
         ResponseItem::FunctionCallOutput { call_id, output }
@@ -9739,7 +9587,7 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
     let history = session.clone_history().await;
     let items = history.raw_items();
     assert_eq!(items.len(), 4);
-    assert_eq!(items[0], prefix);
+    assert!(message_text_contains(&items[0], "prefix"));
     assert!(matches!(
         &items[1],
         ResponseItem::Message { role, content, .. }
@@ -9748,8 +9596,7 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1.1")
-                            && text.contains("next compact summary")
-                            && !text.contains("NEXT_CLOSE_GUIDANCE")
+                            && text.contains("## Node Memory\nNEXT_CLOSE_MEMORY")
                             && !text.contains("---------- Spine Close Target ----------")
                 )
     ));
@@ -10444,7 +10291,7 @@ async fn close_commit_is_atomic_across_sidecar_and_history() {
     assert_eq!(
         compact_mock.requests().len(),
         0,
-        "failed durable close output append must not start close compact"
+        "failed durable close output append must not start a secondary memory request"
     );
 
     session.ensure_rollout_materialized().await;
@@ -10576,7 +10423,7 @@ async fn close_sidecar_commit_marker_failure_invalidates_runtime() {
                 .any(|node| node.node_id == "1.1.1" && node.status == SpineTreeNodeStatus::Closed)
         },
     );
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(compact_mock.requests().len(), 0);
 }
 
 #[tokio::test]
@@ -10725,7 +10572,7 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
         err.to_string().contains("spine runtime is invalid"),
         "unexpected runtime error: {err}"
     );
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(compact_mock.requests().len(), 0);
 }
 
 #[tokio::test]
@@ -10800,7 +10647,7 @@ async fn spine_next_raw_output_append_failure_does_not_replace_host_history() {
         .stage_spine_next(
             "next-raw-fail".to_string(),
             "next raw failure sibling".to_string(),
-            None,
+            "next raw failure memory".to_string(),
         )
         .await
         .expect("stage next");
@@ -10839,7 +10686,7 @@ async fn spine_next_raw_output_append_failure_does_not_replace_host_history() {
     assert_eq!(
         compact_mock.requests().len(),
         0,
-        "failed durable tool output append must not start close compact"
+        "failed durable tool output append must not start a secondary memory request"
     );
 
     session.ensure_rollout_materialized().await;
@@ -10930,7 +10777,7 @@ async fn next_sidecar_commit_marker_failure_invalidates_runtime() {
         .stage_spine_next(
             "next-sidecar-fail".to_string(),
             "next sidecar failure sibling".to_string(),
-            None,
+            "next sidecar failure memory".to_string(),
         )
         .await
         .expect("stage next");
@@ -10966,11 +10813,11 @@ async fn next_sidecar_commit_marker_failure_invalidates_runtime() {
         "failed next sidecar commit must not publish committed next tree state",
         |snapshot| snapshot.active_node_id == "1.1.2",
     );
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(compact_mock.requests().len(), 0);
 }
 
 #[tokio::test]
-async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
+async fn spine_next_direct_memory_ignores_mock_compact_response_and_opens_sibling() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -11048,34 +10895,21 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
         .stage_spine_next(
             "image-next".to_string(),
             "bad sibling".to_string(),
-            Some("image-generation compact must fail closed".to_string()),
+            "image-generation compact must fail closed".to_string(),
         )
         .await
         .expect("stage next");
     let next_output = function_output("image-next");
 
-    let err = session
+    let commit = session
         .maybe_commit_spine_tool_output(&turn_context, &next_output)
         .await
-        .expect_err("image-generation compact output should fail closed");
+        .expect("direct memory next should not request or parse compact response");
     assert!(
-        err.to_string().contains("ImageGenerationCall") && err.to_string().contains("tool call"),
-        "unexpected error: {err}"
+        commit.deferred_history_update.is_some(),
+        "next should stage a direct-memory history replacement"
     );
-    assert_no_pending_spine_commit(&session, "image-next").await;
-
-    assert_eq!(compact_mock.requests().len(), 1);
-    let compact_request = compact_mock.single_request();
-    assert_eq!(
-        session.clone_history().await.raw_items(),
-        &[
-            prefix.clone(),
-            open_request.clone(),
-            open_output.clone(),
-            child_body.clone(),
-            next_request.clone(),
-        ]
-    );
+    assert_eq!(compact_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -11090,15 +10924,15 @@ async fn spine_next_rejects_image_generation_compact_without_opening_sibling() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let tree = runtime.render_tree().expect("render tree");
-    assert!(tree.contains("Cursor: 1.1.1"), "{tree}");
-    assert!(tree.contains("[1.1.1] Current image next child"), "{tree}");
-    assert!(!tree.contains("bad sibling"), "{tree}");
+    assert!(tree.contains("Cursor: 1.1.2"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done"), "{tree}");
+    assert!(tree.contains("[1.1.2] Current bad sibling"), "{tree}");
 }
 
 #[tokio::test]
-async fn spine_next_native_compact_partial_success_does_not_open_sibling() {
+async fn spine_next_direct_memory_commit_does_not_wait_for_compact_request() {
     let server = start_mock_server().await;
-    let delayed_next_compact = core_test_support::responses::mount_response_once(
+    let next_compact_mock = core_test_support::responses::mount_response_once(
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
@@ -11107,17 +10941,6 @@ async fn spine_next_native_compact_partial_success_does_not_open_sibling() {
                 "late next compact summary",
             ))
             .set_delay(Duration::from_secs(5)),
-    )
-    .await;
-    let native_compact_mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message(
-                "native-partial-next-summary",
-                "native compact wins during next",
-            ),
-            ev_completed("native-partial-next-response"),
-        ]),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -11179,52 +11002,17 @@ async fn spine_next_native_compact_partial_success_does_not_open_sibling() {
         .stage_spine_next(
             "partial-next".to_string(),
             "partial next sibling".to_string(),
-            Some("partial next close guidance".to_string()),
+            "partial next memory".to_string(),
         )
         .await
         .expect("stage next");
     let next_output = function_output("partial-next");
 
-    let commit_session = Arc::clone(&session);
-    let commit_turn_context = Arc::clone(&turn_context);
-    let commit_next_output = next_output.clone();
-    let commit_task = tokio::spawn(async move {
-        commit_session
-            .maybe_commit_spine_tool_output(&commit_turn_context, &commit_next_output)
-            .await
-    });
-    timeout(Duration::from_secs(10), async {
-        while delayed_next_compact.requests().is_empty() {
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("next compact request should start before native compact");
-
-    crate::compact::run_compact_task(
-        Arc::clone(&session),
-        Arc::clone(&turn_context),
-        vec![UserInput::Text {
-            text: "native compact during next".to_string(),
-            text_elements: Vec::new(),
-        }],
-    )
-    .await
-    .expect("native compact succeeds");
-
-    let err = commit_task
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, next_output)
         .await
-        .expect("next commit task should join")
-        .expect_err("late next commit must be rejected after native compact");
-    assert!(
-        err.to_string()
-            .contains("history changed while compacting suffix")
-            && err.to_string().contains("call_id=partial-next"),
-        "unexpected partial-success next error: {err}"
-    );
+        .expect("direct-memory next commit should not wait for compact request");
     assert_no_pending_spine_commit(&session, "partial-next").await;
-    assert_eq!(delayed_next_compact.requests().len(), 1);
-    assert_eq!(native_compact_mock.requests().len(), 1);
+    assert_eq!(next_compact_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -11235,62 +11023,30 @@ async fn spine_next_native_compact_partial_success_does_not_open_sibling() {
         panic!("expected resumed rollout history");
     };
     let raw_items = spine_raw_items_after_rollback(&resumed.history);
-    assert!(
-        raw_items.iter().flatten().all(|item| {
-            !matches!(
-                item,
-                ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "partial-next"
-            )
-        }),
-        "rejected late next output should not be persisted"
-    );
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
-    let materialized = runtime
-        .materialize_history(&raw_items)
-        .expect("materialize h(PS)");
-    assert_eq!(session.clone_history().await.raw_items(), materialized);
     let tree = runtime.render_tree().expect("render spine tree");
-    assert!(tree.contains("[1] Done"), "{tree}");
-    assert!(tree.contains("[2.1] Current"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done"), "{tree}");
     assert!(
-        !tree.contains("[1.1.2]") && !tree.contains("partial next sibling"),
-        "native compact must not open the pending next sibling: {tree}"
-    );
-    assert!(
-        materialized.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { content, .. }
-                if matches!(
-                    content.as_slice(),
-                    [ContentItem::InputText { text }]
-                        if text.contains("native compact wins during next")
-                )
-        )),
-        "native compact memory should be the visible h(PS)"
+        tree.contains("[1.1.2] Current partial next sibling"),
+        "{tree}"
     );
 }
 
 #[tokio::test]
-async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next() {
+async fn spine_next_direct_memory_commit_does_not_run_overflow_compact() {
     let server = start_mock_server().await;
-    let responses_mock = mount_sse_sequence(
+    let responses_mock = core_test_support::responses::mount_response_once(
         &server,
-        vec![
-            sse_failed(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(sse_failed(
                 "spine-next-overflow",
                 "context_length_exceeded",
                 "Your input exceeds the context window of this model. Please adjust your input and try again.",
-            ),
-            sse(vec![
-                ev_assistant_message(
-                    "native-after-next-overflow",
-                    "native compact after next overflow",
-                ),
-                ev_completed("native-after-next-overflow-response"),
-            ]),
-        ],
+            ))
+            .set_delay(Duration::from_secs(5)),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -11353,41 +11109,17 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         .stage_spine_next(
             "overflow-next".to_string(),
             "overflow next sibling".to_string(),
-            None,
+            "overflow next memory".to_string(),
         )
         .await
         .expect("stage next");
     let next_output = function_output("overflow-next");
 
-    let commit = session
-        .maybe_commit_spine_tool_output(&turn_context, &next_output)
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, next_output)
         .await
-        .expect("next overflow should run native compact instead of failing next");
-    assert!(
-        !commit.record_output,
-        "invalidated next output must not be appended after native compact"
-    );
+        .expect("direct-memory next commit should not run a compact request");
     assert_no_pending_spine_commit(&session, "overflow-next").await;
-
-    let requests = responses_mock.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(
-        requests[1].body_json()["tool_choice"].as_str(),
-        Some("auto")
-    );
-    assert!(
-        requests[0].body_contains_text("---------- SPINE MEMORY COMPACT ----------"),
-        "first request should be the original spine.next suffix compact"
-    );
-    assert!(
-        !requests[0].body_contains_text("Action: next")
-            && !requests[0].body_contains_text("Next sibling: pending"),
-        "first request should not expose verbose spine.next close-target metadata"
-    );
-    assert!(
-        !requests[1].body_contains_text("---------- SPINE MEMORY COMPACT ----------"),
-        "native auto compact must not reuse the spine.next compact directive"
-    );
+    assert_eq!(responses_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -11398,40 +11130,23 @@ async fn spine_next_context_window_exceeded_runs_native_compact_and_drops_next()
         panic!("expected resumed rollout history");
     };
     let raw_items = spine_raw_items_after_rollback(&resumed.history);
-    assert!(
-        raw_items.iter().flatten().all(|item| {
-            !matches!(
-                item,
-                ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "overflow-next"
-            )
-        }),
-        "invalidated next output should not be persisted"
-    );
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
         .materialize_history(&raw_items)
         .expect("materialize h(PS)");
-    assert_eq!(session.clone_history().await.raw_items(), materialized);
     let tree = runtime.render_tree().expect("render spine tree");
-    assert!(tree.contains("[1] Done"), "{tree}");
-    assert!(tree.contains("[2.1] Current"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done"), "{tree}");
     assert!(
-        !tree.contains("[1.1.2]") && !tree.contains("overflow next sibling"),
-        "context-window native compact must not open the pending next sibling: {tree}"
+        tree.contains("[1.1.2] Current overflow next sibling"),
+        "{tree}"
     );
     assert!(
-        materialized.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { content, .. }
-                if matches!(
-                    content.as_slice(),
-                    [ContentItem::InputText { text }]
-                        if text.contains("native compact after next overflow")
-                )
-        )),
-        "native compact memory should replace visible context"
+        materialized
+            .iter()
+            .any(|item| message_text_contains(item, "overflow next memory")),
+        "direct-memory next should publish the provided node memory"
     );
 }
 
@@ -11511,7 +11226,7 @@ async fn spine_next_native_compact_keeps_durable_completed_toolcall_as_ordinary(
         .stage_spine_next(
             "durable-overflow-next".to_string(),
             "must not open durable sibling".to_string(),
-            None,
+            "durable overflow next memory".to_string(),
         )
         .await
         .expect("stage next");
@@ -11643,7 +11358,7 @@ async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_o
         .stage_spine_next(
             "grouped-durable-overflow-next".to_string(),
             "must not open grouped durable sibling".to_string(),
-            None,
+            "grouped durable overflow next memory".to_string(),
         )
         .await
         .expect("stage next");
@@ -11660,10 +11375,6 @@ async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_o
                 "grouped-durable-overflow-next".to_string(),
             ],
             &[ordinary_output.clone(), next_output.clone()],
-            session
-                .test_default_close_compact_tools(&turn_context)
-                .await
-                .expect("build close compact tools"),
         )
         .await
         .expect("native compact invalidates grouped control but keeps durable toolcall");
@@ -11711,7 +11422,7 @@ async fn grouped_spine_next_native_compact_keeps_durable_completed_toolcall_as_o
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Result<()> {
+async fn spine_next_direct_memory_does_not_emit_blank_turn_complete() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config
@@ -11726,25 +11437,16 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
         vec![
             sse(vec![
                 ev_function_call_with_namespace(
-                    "call-spine-next-image-failure",
+                    "call-spine-next-direct-memory",
                     SPINE_NAMESPACE,
                     SPINE_TOOL_NEXT,
-                    r#"{"summary":"bad sibling","instruction":"compact failure should stop the turn"}"#,
+                    r#"{"summary":"direct sibling","memory":"direct next memory"}"#,
                 ),
                 ev_completed("spine-next-tool-response"),
             ]),
             sse(vec![
-                serde_json::json!({
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "image_generation_call",
-                        "id": "ig-spine-next-turn-failure",
-                        "status": "completed",
-                        "revised_prompt": "spine.next\nsummary: bad sibling\ninstruction: compact failure should stop the turn",
-                        "result": "Zm9v"
-                    }
-                }),
-                ev_completed("spine-next-compact-image-response"),
+                ev_assistant_message("spine-next-follow-up", "advanced"),
+                ev_completed("spine-next-follow-up-response"),
             ]),
         ],
     )
@@ -11762,23 +11464,12 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
         })
         .await?;
 
-    let error_message = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::Error(error)
-            if (error.message.contains("failed to commit Spine tool output")
-                || error
-                    .message
-                    .contains("failed to commit grouped Spine toolcall"))
-                && error.message.contains("ImageGenerationCall") =>
-        {
-            Some(error.message.clone())
-        }
+    let last_agent_message = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(turn_complete) => turn_complete.last_agent_message.clone(),
         _ => None,
     })
     .await;
-    assert!(
-        error_message.contains("ImageGenerationCall") && error_message.contains("tool call"),
-        "unexpected error message: {error_message}"
-    );
+    assert_eq!(last_agent_message.as_str(), "advanced");
 
     let blank_completion = tokio::time::timeout(Duration::from_millis(500), async {
         loop {
@@ -11795,20 +11486,21 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
     .await;
     assert!(
         blank_completion.is_err(),
-        "fatal Spine compact failure must not emit blank TurnComplete"
+        "direct-memory Spine next must not emit an extra blank TurnComplete"
     );
 
     let requests = responses.requests();
     assert_eq!(
         requests.len(),
         2,
-        "expected sampling request and close compact request"
+        "expected sampling request and follow-up request without secondary compact"
     );
     assert_eq!(
         requests[0].body_json()["tool_choice"].as_str(),
         Some("auto")
     );
-    assert!(requests[0].body_contains_text("---------- SPINE MEMORY COMPACT ----------"));
+    assert!(!requests[0].body_contains_text("---------- SPINE MEMORY COMPACT ----------"));
+    assert!(!requests[1].body_contains_text("---------- SPINE MEMORY COMPACT ----------"));
     test.codex.ensure_rollout_materialized().await;
     test.codex.flush_rollout().await?;
     let rollout_path = test
@@ -11823,19 +11515,37 @@ async fn spine_compact_failure_does_not_emit_blank_turn_complete() -> anyhow::Re
     };
     let raw_items = spine_raw_items_after_rollback(&resumed.history);
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
-        .expect("load spine runtime after failed compact")
+        .expect("load spine runtime after direct-memory next")
         .expect("spine sidecar should exist");
-    assert_eq!(
-        runtime.parse_stack_toolcall_leaf_count_for_test(),
-        1,
-        "failed close/next compact must still keep the completed request/output transaction as a normal toolcall"
-    );
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(tree.contains("Current direct sibling"), "{tree}");
     let materialized = runtime
         .materialize_history(&raw_items)
-        .expect("materialize h(PS) after failed compact");
-    assert_eq!(
-        materialized,
-        raw_items.iter().flatten().cloned().collect::<Vec<_>>()
+        .expect("materialize h(PS) after direct-memory next");
+    assert!(
+        materialized.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { content, .. }
+                if content.iter().any(|content| matches!(
+                    content,
+                    ContentItem::InputText { text }
+                        if text.contains("direct next memory")
+                ))
+        )),
+        "materialized h(PS) should contain direct next memory: {materialized:#?}"
+    );
+    assert!(
+        materialized.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "assistant"
+                    && content.iter().any(|content| matches!(
+                        content,
+                        ContentItem::OutputText { text }
+                            if text == "advanced"
+                    ))
+        )),
+        "materialized h(PS) should contain the follow-up assistant message: {materialized:#?}"
     );
 
     Ok(())
@@ -11884,7 +11594,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
     session
         .stage_spine_close(
             "close-root-child".to_string(),
-            "test node memory".to_string(),
+            "root child direct memory".to_string(),
         )
         .await
         .expect("stage close");
@@ -11898,21 +11608,8 @@ async fn spine_close_bridge_can_close_initial_root_child() {
 
     assert_eq!(
         compact_mock.requests().len(),
-        1,
-        "pure user suffix should request required node memory without optional slots"
-    );
-    let compact_request = compact_mock.single_request();
-    assert!(!compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
-    let compact_body = compact_request.body_json();
-    let carrier_tool = compact_body["tools"]
-        .as_array()
-        .expect("tools should be an array")
-        .last()
-        .expect("carrier tool");
-    assert_eq!(
-        carrier_tool["parameters"]["properties"]["slots"]["maxItems"],
-        serde_json::json!(0),
-        "zero-slot close compact carrier schema should only allow an empty slots array"
+        0,
+        "spine.close should use direct memory without a secondary compact request"
     );
 
     let history = session.clone_history().await;
@@ -11926,8 +11623,8 @@ async fn spine_close_bridge_can_close_initial_root_child() {
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1")
-                            && text.contains("## User Message\ninitial root child work")
-                            && text.contains("## Node Memory\nroot child compact summary")
+                            && contains_user_memory_block(text, "initial root child work")
+                            && text.contains("## Node Memory\nroot child direct memory")
                             && !text.contains("---------- SPINE MEMORY COMPACT ----------")
                 )
     ));
@@ -11970,7 +11667,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
 }
 
 #[tokio::test]
-async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix() {
+async fn spine_close_memory_uses_required_node_memory_for_exact_only_suffix() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -12012,7 +11709,7 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
     session
         .stage_spine_close(
             "close-root-child-with-instruction".to_string(),
-            Some("KEEP_CLOSE_GUIDANCE_42".to_string()),
+            "KEEP_CLOSE_MEMORY_42".to_string(),
         )
         .await
         .expect("stage close");
@@ -12024,10 +11721,7 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
     .await
     .expect("commit close output and record raw evidence");
 
-    assert_eq!(compact_mock.requests().len(), 1);
-    let compact_request = compact_mock.single_request();
-    assert!(compact_request.body_contains_text("KEEP_CLOSE_GUIDANCE_42"));
-    assert!(!compact_request.body_contains_text("<SPINE_NODE_MEMORY>"));
+    assert_eq!(compact_mock.requests().len(), 0);
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -12040,10 +11734,10 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1")
-                            && text.contains("## User Message\ninitial exact-only root child work")
-                            && text.contains("## Node Memory\npreserved close instruction: KEEP_CLOSE_GUIDANCE_42")
+                            && contains_user_memory_block(text, "initial exact-only root child work")
+                            && text.contains("## Node Memory\nKEEP_CLOSE_MEMORY_42")
                             && !text.contains("## Memory Slot")
-                            && !text.contains("## User Message\nKEEP_CLOSE_GUIDANCE_42")
+                            && !contains_user_memory_block(text, "KEEP_CLOSE_MEMORY_42")
                             && !text.contains("---------- SPINE MEMORY COMPACT ----------")
                 )
     ));
@@ -12051,17 +11745,16 @@ async fn spine_close_instruction_uses_required_node_memory_for_exact_only_suffix
 }
 
 #[tokio::test]
-async fn spine_close_aborts_if_history_changes_during_compact() {
+async fn spine_close_direct_memory_commit_rejects_deferred_history_drift() {
     let server = start_mock_server().await;
-    let delayed_compact = core_test_support::responses::mount_response_once(
+    let compact_mock = core_test_support::responses::mount_response_once(
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
             .set_body_string(spine_slot_summary_sse(
-                "delayed-spine-summary",
-                "delayed compact summary",
-            ))
-            .set_delay(Duration::from_millis(300)),
+                "unused-spine-summary",
+                "unused compact summary",
+            )),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -12120,54 +11813,44 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
         .await
         .expect("stage close");
     let close_output = function_output("close");
-
-    let commit_session = Arc::clone(&session);
-    let commit_turn_context = Arc::clone(&turn_context);
-    let commit_close_output = close_output.clone();
-    let commit_task = tokio::spawn(async move {
-        commit_session
-            .maybe_commit_spine_tool_output(&commit_turn_context, &commit_close_output)
-            .await
-    });
-    timeout(Duration::from_secs(10), async {
-        while delayed_compact.requests().is_empty() {
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("compact request should start before delayed response");
+    let commit = session
+        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .await
+        .expect("direct close commit should build staged history replacement");
+    let deferred_history_update = commit
+        .deferred_history_update
+        .expect("close commit should defer host history replacement until output is durable");
 
     let concurrent = user_message("concurrent history mutation");
     session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&concurrent))
-        .await
-        .expect("record conversation items");
+        .record_into_history(std::slice::from_ref(&concurrent), &turn_context)
+        .await;
 
-    let err = commit_task
+    let err = session
+        .apply_deferred_spine_history_update(deferred_history_update)
         .await
-        .expect("commit task should join")
-        .expect_err("close commit must reject changed history");
+        .expect_err("close replacement must reject changed history");
     assert!(
-        err.to_string()
-            .contains("spine.close history changed while compacting suffix"),
+        err.to_string().contains(
+            "spine.close history changed before deferred suffix replacement for call_id=close"
+        ),
         "unexpected close error: {err}"
     );
-    assert_no_pending_spine_commit(&session, "close").await;
-    assert_eq!(delayed_compact.requests().len(), 1);
+    assert_eq!(
+        compact_mock.requests().len(),
+        0,
+        "direct close commit must not send a secondary compact request"
+    );
 
     let history = session.clone_history().await;
     let items = history.raw_items();
-    assert_eq!(
-        items,
-        &[
-            prefix.clone(),
-            open_request.clone(),
-            open_output.clone(),
-            inner.clone(),
-            close_request.clone(),
-            concurrent.clone(),
-        ]
-    );
+    assert_eq!(items.len(), 6);
+    assert!(message_text_contains(&items[0], "prefix"));
+    assert_eq!(items[1], open_request);
+    assert_eq!(items[2], open_output);
+    assert_eq!(items[3], inner);
+    assert_eq!(items[4], close_request);
+    assert_eq!(items[5], concurrent);
     assert!(
         !items.iter().any(|item| matches!(
             item,
@@ -12176,14 +11859,11 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1.1")
-                            || text.contains("delayed compact summary")
+                            || text.contains("unused compact summary")
                 )
         )),
-        "aborted close must not install compact memory into host history"
+        "failed deferred close replacement must not install memory into host history"
     );
-    assert!(!items.iter().any(
-        |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "close")
-    ));
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
     let raw_items = match RolloutRecorder::get_rollout_history(&rollout_path)
@@ -12193,22 +11873,11 @@ async fn spine_close_aborts_if_history_changes_during_compact() {
         InitialHistory::Resumed(resumed) => spine_raw_items_after_rollback(&resumed.history),
         _ => panic!("expected resumed rollout history"),
     };
-    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
-        .expect("load spine runtime")
-        .expect("spine sidecar should exist");
-    assert_eq!(runtime.parse_stack_msg_leaf_count_for_test(), 3);
-    let expected_materialized = vec![
-        prefix.clone(),
-        open_request.clone(),
-        open_output.clone(),
-        inner.clone(),
-        concurrent.clone(),
-    ];
-    assert_eq!(
-        runtime
-            .materialize_history(&raw_items)
-            .expect("materialize h(PS)"),
-        expected_materialized
+    let err = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect_err("failed deferred close replacement should leave runtime invalidated");
+    assert!(
+        err.to_string().contains("not proved by live raw state"),
+        "unexpected runtime load error after failed deferred replacement: {err}"
     );
 }
 
@@ -12290,8 +11959,8 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
     assert_no_pending_spine_commit(&session, "empty-close").await;
     assert_eq!(
         compact_mock.requests().len(),
-        1,
-        "close after open should compact the durable spine.open toolcall leaf"
+        0,
+        "close after open must use direct memory without a secondary compact request"
     );
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -12304,7 +11973,9 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
                 content.as_slice(),
                 [ContentItem::InputText { text }]
                     if text.contains("Spine Memory 1.1.1")
-                        && text.contains("open toolcall compact summary")
+                        && text.contains("## Node Memory\ntest node memory")
+                        && text.contains("empty-open")
+                        && !text.contains("open toolcall compact summary")
             )
     ));
     assert_eq!(items[2], spine_call(SPINE_TOOL_CLOSE, "empty-close"));
@@ -12337,7 +12008,7 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
 }
 
 #[tokio::test]
-async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
+async fn spine_close_rejects_runtime_owned_marker_memory_without_mutating_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -12404,26 +12075,20 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
         .await
         .expect("record conversation items");
-    session
+    let err = session
         .stage_spine_close(
             "encrypted-close".to_string(),
-            "test node memory".to_string(),
+            "bad memory with ## Node Memory marker".to_string(),
         )
         .await
-        .expect("stage close");
-    let close_output = function_output("encrypted-close");
-
-    let err = session
-        .maybe_commit_spine_tool_output(&turn_context, &close_output)
-        .await
-        .expect_err("encrypted-only close compact should fail");
+        .expect_err("runtime-owned memory marker should be rejected at stage time");
     assert!(
         err.to_string()
-            .contains("spine.close compact produced no readable memory body"),
+            .contains("spine.close/next memory must not contain runtime-owned marker"),
         "unexpected error: {err}"
     );
     assert_no_pending_spine_commit(&session, "encrypted-close").await;
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(compact_mock.requests().len(), 0);
     assert_eq!(
         session.clone_history().await.raw_items(),
         &[
@@ -12452,25 +12117,17 @@ async fn spine_close_rejects_encrypted_only_summary_without_mutating_history() {
 }
 
 #[tokio::test]
-async fn spine_close_native_compact_partial_success_does_not_shift_close() {
+async fn spine_close_direct_memory_commit_does_not_wait_for_compact_request() {
     let server = start_mock_server().await;
-    let delayed_close_compact = core_test_support::responses::mount_response_once(
+    let memory_assembly_mock = core_test_support::responses::mount_response_once(
         &server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
             .set_body_string(spine_slot_summary_sse(
                 "late-spine-summary",
-                "late close compact summary",
+                "late close memory response",
             ))
             .set_delay(Duration::from_secs(5)),
-    )
-    .await;
-    let native_compact_mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("native-partial-summary", "native compact wins"),
-            ev_completed("native-partial-response"),
-        ]),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -12530,45 +12187,11 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
         .expect("stage close");
     let close_output = function_output("partial-close");
 
-    let commit_session = Arc::clone(&session);
-    let commit_turn_context = Arc::clone(&turn_context);
-    let commit_close_output = close_output.clone();
-    let commit_task = tokio::spawn(async move {
-        commit_session
-            .maybe_commit_spine_tool_output(&commit_turn_context, &commit_close_output)
-            .await
-    });
-    timeout(Duration::from_secs(10), async {
-        while delayed_close_compact.requests().is_empty() {
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("close compact request should start before native compact");
-
-    crate::compact::run_compact_task(
-        Arc::clone(&session),
-        Arc::clone(&turn_context),
-        vec![UserInput::Text {
-            text: "native compact during close".to_string(),
-            text_elements: Vec::new(),
-        }],
-    )
-    .await
-    .expect("native compact succeeds");
-
-    let err = commit_task
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, close_output)
         .await
-        .expect("close commit task should join")
-        .expect_err("late close commit must be rejected after native compact");
-    assert!(
-        err.to_string()
-            .contains("spine.close history changed while compacting suffix"),
-        "unexpected partial-success close error: {err}"
-    );
+        .expect("direct-memory close commit should not wait for compact request");
     assert_no_pending_spine_commit(&session, "partial-close").await;
-    assert_eq!(delayed_close_compact.requests().len(), 1);
-    assert_eq!(native_compact_mock.requests().len(), 1);
+    assert_eq!(memory_assembly_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -12582,47 +12205,24 @@ async fn spine_close_native_compact_partial_success_does_not_shift_close() {
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
-    let materialized = runtime
-        .materialize_history(&raw_items)
-        .expect("materialize h(PS)");
-    assert_eq!(session.clone_history().await.raw_items(), materialized);
     let tree = runtime.render_tree().expect("render spine tree");
-    assert!(tree.contains("[1] Done"), "{tree}");
-    assert!(tree.contains("[2.1] Current"), "{tree}");
-    assert!(!runtime.parse_stack_debug_for_test().contains("Close("));
-    assert!(
-        materialized.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { content, .. }
-                if matches!(
-                    content.as_slice(),
-                    [ContentItem::InputText { text }]
-                        if text.contains("native compact wins")
-                )
-        )),
-        "native compact memory should be the visible h(PS)"
-    );
+    assert!(tree.contains("[1.1] Current"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done partial child"), "{tree}");
 }
 
 #[tokio::test]
-async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close() {
+async fn spine_close_direct_memory_commit_does_not_run_overflow_compact() {
     let server = start_mock_server().await;
-    let responses_mock = mount_sse_sequence(
+    let responses_mock = core_test_support::responses::mount_response_once(
         &server,
-        vec![
-            sse_failed(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(sse_failed(
                 "spine-close-overflow",
                 "context_length_exceeded",
                 "Your input exceeds the context window of this model. Please adjust your input and try again.",
-            ),
-            sse(vec![
-                ev_assistant_message(
-                    "native-after-close-overflow",
-                    "native compact after close overflow",
-                ),
-                ev_completed("native-after-close-overflow-response"),
-            ]),
-        ],
+            ))
+            .set_delay(Duration::from_secs(5)),
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -12684,30 +12284,11 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
         .expect("stage close");
     let close_output = function_output("overflow-close");
 
-    let commit = session
-        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, close_output)
         .await
-        .expect("close overflow should run native compact instead of failing close");
-    assert!(
-        !commit.record_output,
-        "invalidated close output must not be appended after native compact"
-    );
+        .expect("direct-memory close commit should not run a compact request");
     assert_no_pending_spine_commit(&session, "overflow-close").await;
-
-    let requests = responses_mock.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(
-        requests[1].body_json()["tool_choice"].as_str(),
-        Some("auto")
-    );
-    assert!(
-        requests[0].body_contains_text("---------- SPINE MEMORY COMPACT ----------"),
-        "first request should be the original spine.close suffix compact"
-    );
-    assert!(
-        !requests[1].body_contains_text("---------- SPINE MEMORY COMPACT ----------"),
-        "native auto compact must not reuse the spine.close compact directive"
-    );
+    assert_eq!(responses_mock.requests().len(), 0);
 
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -12718,44 +12299,24 @@ async fn spine_close_context_window_exceeded_runs_native_compact_and_drops_close
         panic!("expected resumed rollout history");
     };
     let raw_items = spine_raw_items_after_rollback(&resumed.history);
-    assert!(
-        raw_items.iter().flatten().all(|item| {
-            !matches!(
-                item,
-                ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "overflow-close"
-            )
-        }),
-        "invalidated close output should not be persisted"
-    );
     let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
         .materialize_history(&raw_items)
         .expect("materialize h(PS)");
-    assert_eq!(session.clone_history().await.raw_items(), materialized);
     let tree = runtime.render_tree().expect("render spine tree");
-    assert!(tree.contains("[1] Done"), "{tree}");
+    assert!(tree.contains("[1.1.1] Done overflow child"), "{tree}");
     assert!(
-        !tree.contains("[1.1.1] Done"),
-        "close should not be shifted as a completed child after native compact: {tree}"
-    );
-    assert!(
-        materialized.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { content, .. }
-                if matches!(
-                    content.as_slice(),
-                    [ContentItem::InputText { text }]
-                        if text.contains("native compact after close overflow")
-                )
-        )),
-        "native compact memory should replace visible context"
+        materialized
+            .iter()
+            .any(|item| message_text_contains(item, "test node memory")),
+        "direct-memory close should publish the provided node memory"
     );
 }
 
 #[tokio::test]
-async fn spine_parent_close_compacts_child_memory_not_child_raw_trajs() {
+async fn spine_parent_memory_assemblys_child_memory_not_child_raw_trajs() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_sequence(
         &server,
@@ -14051,7 +13612,7 @@ async fn replacement_history_validates_at_compact_boundary() {
 }
 
 #[tokio::test]
-async fn replacement_history_not_compared_to_post_compact_close_h_ps() {
+async fn replacement_history_not_compared_to_post_close_h_ps() {
     assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps().await;
 }
 
@@ -14069,13 +13630,10 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
     let server = start_mock_server().await;
     let responses_mock = mount_sse_sequence(
         &server,
-        vec![
-            sse(vec![
-                ev_assistant_message("root-compact-summary", "native root compact summary"),
-                ev_completed("root-compact-response"),
-            ]),
-            spine_slot_summary_sse("post-native-close-summary", "post native close summary"),
-        ],
+        vec![sse(vec![
+            ev_assistant_message("root-compact-summary", "native root compact summary"),
+            ev_completed("root-compact-response"),
+        ])],
     )
     .await;
     let base_url = format!("{}/v1", server.uri());
@@ -14201,11 +13759,10 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
     .await
     .expect("close after native compact should use corrected root open index");
 
-    assert_eq!(responses_mock.requests().len(), 2);
-    let close_compact_request = &responses_mock.requests()[1];
-    assert!(
-        close_compact_request.body_contains_text("post native root work"),
-        "close compact should see only post-native root suffix work"
+    assert_eq!(
+        responses_mock.requests().len(),
+        1,
+        "post-native close must use direct memory without a secondary compact request"
     );
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
 
@@ -14974,12 +14531,11 @@ async fn spine_control_with_ordinary_tool_call_commits_grouped_toolcall_leaf() -
                     "mixed-close",
                     SPINE_NAMESPACE,
                     SPINE_TOOL_CLOSE,
-                    r#"{"instruction":"compact before grouped shell"}"#,
+                    r#"{"memory":"grouped close memory"}"#,
                 ),
                 ev_shell_command_call("mixed-shell", "printf grouped-ordinary-tool"),
                 ev_completed("mixed-control-and-tool-response"),
             ]),
-            spine_node_memory_summary_sse("mixed-close-compact", "grouped close memory"),
             sse(vec![
                 ev_assistant_message("mixed-follow-up", "done"),
                 ev_completed("mixed-follow-up-response"),
@@ -15010,32 +14566,13 @@ async fn spine_control_with_ordinary_tool_call_commits_grouped_toolcall_leaf() -
     let requests = responses.requests();
     assert_eq!(
         requests.len(),
-        3,
-        "expected sampling, close compact, and follow-up requests"
+        2,
+        "expected sampling and follow-up requests without secondary close memory request"
     );
-    let compact_request = &requests[1];
-    assert!(compact_request.body_contains_text("grouped close ordinary work"));
-    assert!(compact_request.body_contains_text("compact before grouped shell"));
-    assert!(
-        !compact_request.has_function_call("mixed-close"),
-        "close compact suffix must exclude the triggering close request"
-    );
-    assert!(
-        !compact_request.has_function_call("mixed-shell"),
-        "close compact suffix must exclude sibling ordinary tool requests from the same toolcall"
-    );
-    assert!(
-        compact_request
-            .function_call_output_text("mixed-close")
-            .is_none()
-    );
-    assert!(
-        compact_request
-            .function_call_output_text("mixed-shell")
-            .is_none()
-    );
+    assert!(!requests[0].body_contains_text("---------- SPINE MEMORY COMPACT ----------"));
+    assert!(!requests[1].body_contains_text("---------- SPINE MEMORY COMPACT ----------"));
 
-    let follow_up = &requests[2];
+    let follow_up = &requests[1];
     assert!(follow_up.has_function_call("mixed-close"));
     assert!(follow_up.has_function_call("mixed-shell"));
     let close_text = follow_up
@@ -15852,10 +15389,6 @@ async fn grouped_toolcall_prevalidates_request_anchors_before_recording_outputs(
                 function_output("anchored-call"),
                 function_output("missing-request"),
             ],
-            session
-                .test_default_close_compact_tools(&turn_context)
-                .await
-                .expect("build close compact tools"),
         )
         .await
         .expect_err("missing request anchor must fail before recording outputs");
@@ -15903,10 +15436,6 @@ async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
                 function_output("anchored-call"),
                 function_output("extra-call"),
             ],
-            session
-                .test_default_close_compact_tools(&turn_context)
-                .await
-                .expect("build close compact tools"),
         )
         .await
         .expect_err("unexpected grouped output must fail before recording outputs");
@@ -16102,7 +15631,7 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
         &server,
         spine_slot_summary_sse(
             "spine-close-overlay-summary",
-            "overlay close compact summary",
+            "overlay secondary close memory",
         ),
     )
     .await;
@@ -16173,12 +15702,11 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
                 && output.text_content() == Some("ok")
     ));
 
-    assert_eq!(compact_mock.requests().len(), 1);
-    let compact_request = compact_mock.single_request();
-    assert!(compact_request.body_contains_text("overlay close prefix"));
-    assert!(compact_request.body_contains_text("overlay close inner work"));
-    assert!(compact_request.has_function_call("overlay-open"));
-    assert!(!compact_request.has_function_call("overlay-close"));
+    assert_eq!(
+        compact_mock.requests().len(),
+        0,
+        "overlay close must use direct memory without a secondary compact request"
+    );
 
     let history = session.clone_history().await;
     let items = history.raw_items();
@@ -16192,8 +15720,9 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
                     content.as_slice(),
                     [ContentItem::InputText { text }]
                         if text.contains("Spine Memory 1.1.1")
-                            && text.contains("overlay close compact summary")
-                            && !text.contains("overlay close inner work")
+                            && text.contains("overlay close inner work")
+                            && text.contains("## Node Memory\ntest node memory")
+                            && !text.contains("overlay secondary close memory")
                 )
     ));
     assert_eq!(items[2], spine_call(SPINE_TOOL_CLOSE, "overlay-close"));
@@ -16564,7 +16093,7 @@ async fn spine_next_sibling_tree_uses_provider_open_baseline() {
         .stage_spine_next(
             "next-baseline".to_string(),
             "next baseline sibling".to_string(),
-            Some("next baseline close guidance".to_string()),
+            "next baseline memory".to_string(),
         )
         .await
         .expect("stage next");
@@ -16585,7 +16114,11 @@ async fn spine_next_sibling_tree_uses_provider_open_baseline() {
         .maybe_commit_spine_tool_output(&turn_context, &next_output)
         .await
         .expect("commit next");
-    assert_eq!(compact_mock.requests().len(), 1);
+    assert_eq!(
+        compact_mock.requests().len(),
+        0,
+        "next baseline commit must use direct memory without a secondary compact request"
+    );
     {
         let mut state = session.state.lock().await;
         state.set_token_info(Some(TokenUsageInfo {

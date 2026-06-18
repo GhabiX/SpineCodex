@@ -275,15 +275,6 @@ impl IntoSpineNodeMemory for String {
     }
 }
 
-#[cfg(test)]
-impl IntoSpineNodeMemory for Option<String> {
-    fn into_spine_node_memory(self) -> Result<String, SpineError> {
-        let memory = self.unwrap_or_else(|| "test node memory".to_string());
-        validate_model_node_memory(&memory)?;
-        Ok(memory)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpinePendingCommit {
     Open,
@@ -297,7 +288,7 @@ pub(crate) enum SpinePendingCommit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpineCloseCompact {
+pub(crate) struct SpineCloseMemoryAssembly {
     pub(crate) body: String,
     pub(crate) source_context_range: Range<usize>,
     pub(crate) source_raw_range: Range<u64>,
@@ -1356,14 +1347,6 @@ impl SpineRuntime {
         Ok(true)
     }
 
-    pub(crate) fn commit_completed_toolcall_as_ordinary(
-        &mut self,
-        call_id: &str,
-        toolcall: CompletedToolCall,
-    ) -> Result<bool, SpineError> {
-        self.commit_completed_toolcall_as_ordinary_with_raw_items(call_id, toolcall, &[])
-    }
-
     pub(crate) fn commit_completed_toolcall_as_ordinary_with_raw_items(
         &mut self,
         call_id: &str,
@@ -2065,12 +2048,12 @@ impl SpineRuntime {
     pub(crate) fn maybe_commit_output(
         &mut self,
         call_id: &str,
-        close_compact: Option<SpineCloseCompact>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         let completed_toolcall = self.observed_completed_toolcall(call_id)?;
         self.maybe_commit_output_impl(
             call_id,
-            close_compact,
+            memory_assembly,
             SpineTokenBaselines::default(),
             completed_toolcall,
             &[],
@@ -2081,13 +2064,13 @@ impl SpineRuntime {
     pub(crate) fn maybe_commit_output_with_open_input_tokens(
         &mut self,
         call_id: &str,
-        close_compact: Option<SpineCloseCompact>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
         input_tokens: Option<i64>,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         let completed_toolcall = self.observed_completed_toolcall(call_id)?;
         self.maybe_commit_output_impl(
             call_id,
-            close_compact,
+            memory_assembly,
             SpineTokenBaselines {
                 provider_input_tokens: input_tokens,
             },
@@ -2100,13 +2083,13 @@ impl SpineRuntime {
     pub(crate) fn maybe_commit_output_with_token_baselines(
         &mut self,
         call_id: &str,
-        close_compact: Option<SpineCloseCompact>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
         token_baselines: SpineTokenBaselines,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         let completed_toolcall = self.observed_completed_toolcall(call_id)?;
         self.maybe_commit_output_impl(
             call_id,
-            close_compact,
+            memory_assembly,
             token_baselines,
             completed_toolcall,
             &[],
@@ -2116,13 +2099,13 @@ impl SpineRuntime {
     pub(crate) fn maybe_commit_output_with_toolcall(
         &mut self,
         call_id: &str,
-        close_compact: Option<SpineCloseCompact>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: CompletedToolCall,
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         self.maybe_commit_output_with_toolcall_and_raw_items(
             call_id,
-            close_compact,
+            memory_assembly,
             token_baselines,
             completed_toolcall,
             &[],
@@ -2132,14 +2115,14 @@ impl SpineRuntime {
     pub(crate) fn maybe_commit_output_with_toolcall_and_raw_items(
         &mut self,
         call_id: &str,
-        close_compact: Option<SpineCloseCompact>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpineCommitKind>, SpineError> {
         self.maybe_commit_output_impl(
             call_id,
-            close_compact,
+            memory_assembly,
             token_baselines,
             Some(completed_toolcall),
             raw_items,
@@ -2149,7 +2132,7 @@ impl SpineRuntime {
     fn maybe_commit_output_impl(
         &mut self,
         call_id: &str,
-        close_compact: Option<SpineCloseCompact>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
@@ -2176,14 +2159,14 @@ impl SpineRuntime {
                 raw_items,
             )?,
             PendingTransition::Close { .. } => self.commit_close_pending(
-                close_compact,
+                memory_assembly,
                 token_baselines,
                 completed_toolcall,
                 raw_items,
             )?,
             PendingTransition::NextSugar { summary, .. } => self.commit_next_sugar_pending(
                 summary,
-                close_compact,
+                memory_assembly,
                 token_baselines,
                 completed_toolcall,
                 raw_items,
@@ -2272,12 +2255,12 @@ impl SpineRuntime {
 
     fn commit_close_pending(
         &mut self,
-        close_compact: Option<SpineCloseCompact>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitKind, SpineError> {
-        let prepared = self.prepare_close_commit(None, close_compact, token_baselines)?;
+        let prepared = self.prepare_close_commit(None, memory_assembly, token_baselines)?;
         let mut events = vec![prepared.close_event.clone()];
         let completed_toolcall = completed_toolcall.ok_or_else(|| {
             SpineError::InvalidEvent(
@@ -2343,12 +2326,12 @@ impl SpineRuntime {
     fn commit_next_sugar_pending(
         &mut self,
         summary: String,
-        close_compact: Option<SpineCloseCompact>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitKind, SpineError> {
-        let prepared = self.prepare_close_commit(None, close_compact, token_baselines)?;
+        let prepared = self.prepare_close_commit(None, memory_assembly, token_baselines)?;
         let mut close_reduced_parse_stack = self.parse_stack.clone();
         close_reduced_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
         close_reduced_parse_stack
@@ -2446,10 +2429,10 @@ impl SpineRuntime {
     fn prepare_close_commit(
         &self,
         _instruction: Option<String>,
-        close_compact: Option<SpineCloseCompact>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
         token_baselines: SpineTokenBaselines,
     ) -> Result<PreparedCloseCommit, SpineError> {
-        let close_compact = close_compact.ok_or_else(|| {
+        let memory_assembly = memory_assembly.ok_or_else(|| {
             SpineError::CompactFailure(
                 "spine.close requires a validated source plan for memory assembly".to_string(),
             )
@@ -2471,27 +2454,27 @@ impl SpineRuntime {
             close_context_tokens: token_baselines.provider_input_tokens,
         };
         let seq = self.ledger.next_event_seq;
-        if close_compact.source_context_range.start != suffix_start {
+        if memory_assembly.source_context_range.start != suffix_start {
             return Err(SpineError::CompactFailure(format!(
-                "spine.close compact context range starts at {}, expected suffix start {suffix_start} for node {}",
-                close_compact.source_context_range.start, open_meta.id
+                "spine.close memory source context range starts at {}, expected suffix start {suffix_start} for node {}",
+                memory_assembly.source_context_range.start, open_meta.id
             )));
         }
         let expected_raw_start = self.open_raw_start(&open_meta.id)?;
-        if close_compact.source_raw_range.start != expected_raw_start {
+        if memory_assembly.source_raw_range.start != expected_raw_start {
             return Err(SpineError::CompactFailure(format!(
-                "spine.close compact raw range starts at {}, expected raw start {expected_raw_start} for node {}",
-                close_compact.source_raw_range.start, open_meta.id
+                "spine.close memory source raw range starts at {}, expected raw start {expected_raw_start} for node {}",
+                memory_assembly.source_raw_range.start, open_meta.id
             )));
         }
-        if close_compact.source_raw_range.end > self.raw_len {
+        if memory_assembly.source_raw_range.end > self.raw_len {
             return Err(SpineError::CompactFailure(format!(
-                "spine.close compact raw range end {} exceeds raw_len {} for node {}",
-                close_compact.source_raw_range.end, self.raw_len, open_meta.id
+                "spine.close memory source raw range end {} exceeds raw_len {} for node {}",
+                memory_assembly.source_raw_range.end, self.raw_len, open_meta.id
             )));
         }
-        let body = close_compact.body.clone();
-        let mem = self.stage_close_mem(&open_meta, &close_compact, token_baselines)?;
+        let body = memory_assembly.body.clone();
+        let mem = self.stage_close_mem(&open_meta, &memory_assembly, token_baselines)?;
         let memory = memory_ref(
             &self.archive(),
             mem.compact_id.clone(),
@@ -3052,12 +3035,12 @@ impl SpineRuntime {
     fn stage_close_mem(
         &self,
         open_meta: &TreeMeta,
-        close_compact: &SpineCloseCompact,
+        memory_assembly: &SpineCloseMemoryAssembly,
         token_baselines: SpineTokenBaselines,
     ) -> Result<MemRecord, SpineError> {
         let node_id = open_meta.id.clone();
-        let raw_start = close_compact.source_raw_range.start;
-        let end = close_compact.source_raw_range.end;
+        let raw_start = memory_assembly.source_raw_range.start;
+        let end = memory_assembly.source_raw_range.end;
         let compact_id = format!(
             "mem-{}-{}-{}",
             node_id.as_path().replace('.', "-"),
@@ -3086,8 +3069,8 @@ impl SpineRuntime {
             node: node_id,
             raw_start,
             raw_end: end,
-            context_start: close_compact.source_context_range.start,
-            context_end: close_compact.source_context_range.end,
+            context_start: memory_assembly.source_context_range.start,
+            context_end: memory_assembly.source_context_range.end,
             raw_live_hash: None,
             open_input_tokens,
             close_input_tokens: token_baselines.provider_input_tokens,
@@ -3096,9 +3079,9 @@ impl SpineRuntime {
             closed_source_suffix_tokens,
             closed_memory_context_tokens: None,
             open_context_source: open_context_baseline.map(|baseline| baseline.source),
-            memory_output_tokens: close_compact.memory_output_tokens,
+            memory_output_tokens: memory_assembly.memory_output_tokens,
             body_path,
-            body_hash: sha1_hex(close_compact.body.as_bytes()),
+            body_hash: sha1_hex(memory_assembly.body.as_bytes()),
         };
         Ok(mem)
     }

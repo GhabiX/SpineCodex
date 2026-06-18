@@ -62,10 +62,6 @@ const COMMIT_FILE: &str = "commits.jsonl";
 const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
 const FEEDBACK_FILE: &str = "spine_feedback.md";
 const WRITER_LOCK_FILE: &str = ".writer.lock";
-#[cfg(debug_assertions)]
-const DEBUG_DIR: &str = ".debug";
-#[cfg(debug_assertions)]
-const COMPACT_CLOSE_DEBUG_FILE: &str = "compact-close.jsonl";
 const CHECKPOINT_DIR: &str = "checkpoints";
 const INITIAL_CHECKPOINT_FILE: &str = "initial.json";
 
@@ -762,16 +758,6 @@ impl SpineStore {
         self.compact_checkpoint_path()
     }
 
-    #[cfg(debug_assertions)]
-    fn compact_close_debug_path(&self) -> PathBuf {
-        self.root.join(DEBUG_DIR).join(COMPACT_CLOSE_DEBUG_FILE)
-    }
-
-    #[cfg(all(debug_assertions, test))]
-    pub(crate) fn compact_close_debug_path_for_test(&self) -> PathBuf {
-        self.compact_close_debug_path()
-    }
-
     fn checkpoint_dir(&self) -> PathBuf {
         self.root.join(CHECKPOINT_DIR)
     }
@@ -855,14 +841,6 @@ impl SpineStore {
         checkpoint: &SpineCompactCheckpoint,
     ) -> Result<(), SpineError> {
         append_json_line(&self.compact_checkpoint_path(), checkpoint)
-    }
-
-    #[cfg(debug_assertions)]
-    pub(crate) fn append_compact_close_debug<T: Serialize>(
-        &self,
-        record: &T,
-    ) -> Result<(), SpineError> {
-        append_json_line(&self.compact_close_debug_path(), record)
     }
 
     pub(crate) fn append_feedback_markdown(&self, entry: &str) -> Result<(), SpineError> {

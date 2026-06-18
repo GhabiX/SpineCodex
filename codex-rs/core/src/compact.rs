@@ -257,7 +257,7 @@ async fn run_compact_task_inner_impl(
                 }
             }
         }
-    };
+    }
 
     let history_snapshot = sess.clone_history().await;
     let history_items = history_snapshot.raw_items();

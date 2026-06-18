@@ -303,21 +303,21 @@ fn manual_toolcall_event(
     }
 }
 
-fn compact_body_with_context_range(
+fn memory_assembly_with_context_range(
     node_id: &str,
     source_context_range: Range<usize>,
-) -> SpineCloseCompact {
+) -> SpineCloseMemoryAssembly {
     let source_raw_range = u64::try_from(source_context_range.start).expect("range start fits u64")
         ..u64::try_from(source_context_range.end).expect("range end fits u64");
-    compact_body_with_ranges(node_id, source_context_range, source_raw_range)
+    memory_assembly_with_ranges(node_id, source_context_range, source_raw_range)
 }
 
-fn compact_body_with_ranges(
+fn memory_assembly_with_ranges(
     node_id: &str,
     source_context_range: Range<usize>,
     source_raw_range: Range<u64>,
-) -> SpineCloseCompact {
-    SpineCloseCompact {
+) -> SpineCloseMemoryAssembly {
+    SpineCloseMemoryAssembly {
         body: format!("# Spine Memory {node_id}\n\nreal compact body for {node_id}\n"),
         source_context_range,
         source_raw_range,
@@ -419,7 +419,7 @@ fn spine_error_classifies_tool_use_operation_and_compact_failures() {
         .expect("observe user msg");
     observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let err = runtime
         .maybe_commit_output("close", None)
@@ -427,7 +427,7 @@ fn spine_error_classifies_tool_use_operation_and_compact_failures() {
     assert_eq!(err.class(), SpineErrorClass::CompactFailure);
     assert!(
         err.to_string()
-            .contains("spine.close requires a completed suffix compact")
+            .contains("spine.close requires a validated source plan for memory assembly")
     );
     assert!(!err.should_invalidate_runtime());
 }
@@ -507,62 +507,6 @@ fn installing_replayed_runtime_requires_sidecar_writer_ownership() {
         .expect("replayed runtime can become live writer after lock release");
 }
 
-#[cfg(debug_assertions)]
-#[test]
-fn compact_close_debug_writes_jsonl_sidecar_under_debug_dir() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let rollout = rollout_path(&dir);
-    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
-
-    store
-        .append_compact_close_debug(&serde_json::json!({
-            "event": "request",
-            "request": {
-                "input": ["full compact request"]
-            }
-        }))
-        .expect("append request debug");
-    store
-        .append_compact_close_debug(&serde_json::json!({
-            "event": "response",
-            "output": ["compact response"]
-        }))
-        .expect("append response debug");
-
-    let path = store.compact_close_debug_path_for_test();
-    assert_eq!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some("compact-close.jsonl")
-    );
-    assert_eq!(
-        path.parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str()),
-        Some(".debug")
-    );
-
-    let lines = std::fs::read_to_string(path).expect("read debug jsonl");
-    let records = lines
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("debug json line"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        records,
-        vec![
-            serde_json::json!({
-                "event": "request",
-                "request": {
-                    "input": ["full compact request"]
-                }
-            }),
-            serde_json::json!({
-                "event": "response",
-                "output": ["compact response"]
-            }),
-        ]
-    );
-}
-
 #[test]
 fn close_commit_without_completed_toolcall_evidence_does_not_write_marker_or_clear_anchor() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -578,7 +522,10 @@ fn close_commit_without_completed_toolcall_evidence_does_not_write_marker_or_cle
         "close-missing-carrier",
     );
     runtime
-        .stage_close("close-missing-carrier".to_string(), None)
+        .stage_close(
+            "close-missing-carrier".to_string(),
+            "test node memory".to_string(),
+        )
         .expect("stage close");
     let suffix_start = match runtime
         .pending_commit("close-missing-carrier")
@@ -594,7 +541,7 @@ fn close_commit_without_completed_toolcall_evidence_does_not_write_marker_or_cle
     let err = runtime
         .maybe_commit_output(
             "close-missing-carrier",
-            Some(compact_body_with_ranges("1.1", suffix_start..1, 0..1)),
+            Some(memory_assembly_with_ranges("1.1", suffix_start..1, 0..1)),
         )
         .expect_err("close must not commit without completed toolcall evidence");
     assert!(
@@ -622,7 +569,7 @@ fn close_commit_without_completed_toolcall_evidence_does_not_write_marker_or_cle
     runtime
         .maybe_commit_output_with_toolcall(
             "close-missing-carrier",
-            Some(compact_body_with_ranges("1.1", suffix_start..1, 0..1)),
+            Some(memory_assembly_with_ranges("1.1", suffix_start..1, 0..1)),
             SpineTokenBaselines::default(),
             CompletedToolCall {
                 call_id: "close-missing-carrier".to_string(),
@@ -676,7 +623,7 @@ fn next_commit_without_completed_toolcall_evidence_does_not_write_marker_or_open
         .stage_next(
             "next-missing-carrier".to_string(),
             "retry sibling".to_string(),
-            None,
+            "test node memory".to_string(),
         )
         .expect("stage next");
     let suffix_start = match runtime
@@ -693,7 +640,7 @@ fn next_commit_without_completed_toolcall_evidence_does_not_write_marker_or_open
     let err = runtime
         .maybe_commit_output(
             "next-missing-carrier",
-            Some(compact_body_with_ranges("1.1", suffix_start..1, 0..1)),
+            Some(memory_assembly_with_ranges("1.1", suffix_start..1, 0..1)),
         )
         .expect_err("next must not commit without completed toolcall evidence");
     assert!(
@@ -721,7 +668,7 @@ fn next_commit_without_completed_toolcall_evidence_does_not_write_marker_or_open
     runtime
         .maybe_commit_output_with_toolcall(
             "next-missing-carrier",
-            Some(compact_body_with_ranges("1.1", suffix_start..1, 0..1)),
+            Some(memory_assembly_with_ranges("1.1", suffix_start..1, 0..1)),
             SpineTokenBaselines::default(),
             CompletedToolCall {
                 call_id: "next-missing-carrier".to_string(),
@@ -1063,12 +1010,12 @@ fn append_msg_with_context_index(
         .expect("observe msg");
 }
 
-fn close_compact_from_source_plan(
+fn close_memory_assembly_from_source_plan(
     runtime: &SpineRuntime,
     raw: &[Option<ResponseItem>],
     call_id: &str,
     node_id: &str,
-) -> SpineCloseCompact {
+) -> SpineCloseMemoryAssembly {
     let (node, suffix_start) = match runtime
         .pending_commit(call_id)
         .expect("pending close should be readable")
@@ -1086,7 +1033,7 @@ fn close_compact_from_source_plan(
     let source_plan = runtime
         .build_close_source_plan(&host_history, &node, suffix_start, toolcall_start, call_id)
         .expect("build close source plan");
-    compact_body_with_ranges(
+    memory_assembly_with_ranges(
         node_id,
         source_plan.source_context_range,
         source_plan.source_raw_range,
@@ -1126,13 +1073,13 @@ fn close_task(
 ) {
     observe_spine_request(runtime, raw, SPINE_TOOL_CLOSE, call_id);
     runtime
-        .stage_close(call_id.to_string(), None)
+        .stage_close(call_id.to_string(), "test node memory".to_string())
         .expect("stage close");
-    let close_compact = close_compact_from_source_plan(runtime, raw, call_id, node_id);
+    let memory_assembly = close_memory_assembly_from_source_plan(runtime, raw, call_id, node_id);
 
     observe_function_output(runtime, raw, call_id);
     runtime
-        .maybe_commit_output(call_id, Some(close_compact))
+        .maybe_commit_output(call_id, Some(memory_assembly))
         .expect("commit close");
 }
 
@@ -1145,13 +1092,13 @@ fn close_task_with_token_baselines(
 ) {
     observe_spine_request(runtime, raw, SPINE_TOOL_CLOSE, call_id);
     runtime
-        .stage_close(call_id.to_string(), None)
+        .stage_close(call_id.to_string(), "test node memory".to_string())
         .expect("stage close");
-    let close_compact = close_compact_from_source_plan(runtime, raw, call_id, node_id);
+    let memory_assembly = close_memory_assembly_from_source_plan(runtime, raw, call_id, node_id);
 
     observe_function_output(runtime, raw, call_id);
     runtime
-        .maybe_commit_output_with_token_baselines(call_id, Some(close_compact), token_baselines)
+        .maybe_commit_output_with_token_baselines(call_id, Some(memory_assembly), token_baselines)
         .expect("commit close");
 }
 
@@ -1164,13 +1111,18 @@ fn next_task(
 ) -> SpineCommitKind {
     observe_spine_request(runtime, raw, SPINE_TOOL_NEXT, call_id);
     runtime
-        .stage_next(call_id.to_string(), next_summary.to_string(), None)
+        .stage_next(
+            call_id.to_string(),
+            next_summary.to_string(),
+            "test node memory".to_string(),
+        )
         .expect("stage next");
-    let close_compact = close_compact_from_source_plan(runtime, raw, call_id, closing_node_id);
+    let memory_assembly =
+        close_memory_assembly_from_source_plan(runtime, raw, call_id, closing_node_id);
 
     observe_function_output(runtime, raw, call_id);
     runtime
-        .maybe_commit_output(call_id, Some(close_compact))
+        .maybe_commit_output(call_id, Some(memory_assembly))
         .expect("commit next")
         .expect("next should commit")
 }
@@ -1185,13 +1137,18 @@ fn next_task_with_token_baselines(
 ) -> SpineCommitKind {
     observe_spine_request(runtime, raw, SPINE_TOOL_NEXT, call_id);
     runtime
-        .stage_next(call_id.to_string(), next_summary.to_string(), None)
+        .stage_next(
+            call_id.to_string(),
+            next_summary.to_string(),
+            "test node memory".to_string(),
+        )
         .expect("stage next");
-    let close_compact = close_compact_from_source_plan(runtime, raw, call_id, closing_node_id);
+    let memory_assembly =
+        close_memory_assembly_from_source_plan(runtime, raw, call_id, closing_node_id);
 
     observe_function_output(runtime, raw, call_id);
     runtime
-        .maybe_commit_output_with_token_baselines(call_id, Some(close_compact), token_baselines)
+        .maybe_commit_output_with_token_baselines(call_id, Some(memory_assembly), token_baselines)
         .expect("commit next")
         .expect("next should commit")
 }
@@ -1402,7 +1359,7 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
         .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime.pending_commit("close").expect("pending close") {
         Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
@@ -1416,7 +1373,7 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
     runtime
         .maybe_commit_output_with_open_input_tokens(
             "close",
-            Some(compact_body_with_context_range(
+            Some(memory_assembly_with_context_range(
                 "1.1.1",
                 suffix_start..close_request_index,
             )),
@@ -1518,7 +1475,7 @@ fn close_source_plan_uses_current_hps_projection_indices() {
     append_msg(&mut runtime, &mut raw, "second live item");
     observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close-gap");
     runtime
-        .stage_close("close-gap".to_string(), None)
+        .stage_close("close-gap".to_string(), "test node memory".to_string())
         .expect("stage close");
 
     let host_history = runtime
@@ -1594,7 +1551,7 @@ fn close_source_plan_rejects_host_history_not_matching_hps_projection() {
     append_msg(&mut runtime, &mut raw, "second live item");
     observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close-dup");
     runtime
-        .stage_close("close-dup".to_string(), None)
+        .stage_close("close-dup".to_string(), "test node memory".to_string())
         .expect("stage close");
 
     let mut host_history = runtime
@@ -1679,7 +1636,7 @@ fn close_source_plan_ignores_stale_persisted_leaf_context_indices() {
 
     observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close-stale");
     runtime
-        .stage_close("close-stale".to_string(), None)
+        .stage_close("close-stale".to_string(), "test node memory".to_string())
         .expect("stage close");
     let host_history = runtime
         .materialize_history(&raw)
@@ -2232,7 +2189,11 @@ fn spine_next_close_failure_does_not_open_sibling() {
         .observe_context_item(request_ordinal, request_context_index, &request)
         .expect("observe next request");
     runtime
-        .stage_next("bad-next".to_string(), "next sibling".to_string(), None)
+        .stage_next(
+            "bad-next".to_string(),
+            "next sibling".to_string(),
+            "test node memory".to_string(),
+        )
         .expect("stage next");
     let output = function_output("bad-next");
     runtime.observe_raw_items(1).expect("record next output");
@@ -2244,7 +2205,7 @@ fn spine_next_close_failure_does_not_open_sibling() {
     let err = runtime
         .maybe_commit_output(
             "bad-next",
-            Some(compact_body_with_context_range("1.1.1", 0..raw.len())),
+            Some(memory_assembly_with_context_range("1.1.1", 0..raw.len())),
         )
         .expect_err("bad compact range should fail next");
     assert!(
@@ -2322,7 +2283,7 @@ fn close_at_root_cursor_fails_without_mutating_parse_stack() {
     let before = runtime.parse_stack().clone();
     observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close-root");
     runtime
-        .stage_close("close-root".to_string(), None)
+        .stage_close("close-root".to_string(), "test node memory".to_string())
         .expect("stage root close");
     let err = runtime
         .pending_commit("close-root")
@@ -3859,7 +3820,7 @@ fn abort_matching_pending_clears_control_call_without_durable_mutation() {
         .stage_next(
             "stale-next".to_string(),
             "interrupted sibling".to_string(),
-            None,
+            "test node memory".to_string(),
         )
         .expect("stage next");
 
@@ -3895,7 +3856,11 @@ fn abort_matching_pending_clears_control_call_without_durable_mutation() {
         .observe_context_item(next_ordinal, next_context_index, &next_request)
         .expect("observe fresh next request");
     runtime
-        .stage_next("fresh-next".to_string(), "fresh sibling".to_string(), None)
+        .stage_next(
+            "fresh-next".to_string(),
+            "fresh sibling".to_string(),
+            "test node memory".to_string(),
+        )
         .expect("fresh transition should stage after abort");
 }
 
@@ -3916,7 +3881,7 @@ fn abort_non_matching_pending_keeps_transition_until_stale_abort() {
         .observe_context_item(request_ordinal, request_context_index, &request)
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
 
     assert!(!runtime.abort_pending("other-call"));
@@ -3941,7 +3906,7 @@ fn try_commit_internal_failure_does_not_silently_abort_pending() {
     append_msg(&mut runtime, &mut raw, "work to compact");
     observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime.pending_commit("close").expect("pending close") {
         Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
@@ -3955,7 +3920,7 @@ fn try_commit_internal_failure_does_not_silently_abort_pending() {
     let err = runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_context_range(
+            Some(memory_assembly_with_context_range(
                 "1.1",
                 suffix_start..raw.len(),
             )),
@@ -3971,7 +3936,11 @@ fn try_commit_internal_failure_does_not_silently_abort_pending() {
     ));
     assert!(
         runtime
-            .stage_next("new-next".to_string(), "blocked sibling".to_string(), None)
+            .stage_next(
+                "new-next".to_string(),
+                "blocked sibling".to_string(),
+                "test node memory".to_string(),
+            )
             .expect_err("pending must still block new transition")
             .to_string()
             .contains("another spine transition is already pending")
@@ -5048,7 +5017,7 @@ fn spine_close_output_does_not_shift_msg() {
         .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime.pending_commit("close").expect("pending close") {
         Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
@@ -5061,7 +5030,7 @@ fn spine_close_output_does_not_shift_msg() {
     runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_ranges("1.1.1", suffix_start..4, 0..3)),
+            Some(memory_assembly_with_ranges("1.1.1", suffix_start..4, 0..3)),
         )
         .expect("commit close");
 
@@ -5274,7 +5243,7 @@ fn open_toolcall_leaf_makes_close_suffix_non_empty() {
         .observe_context_item(2, 2, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     runtime.observe_raw_items(1).expect("record close output");
     runtime
@@ -5284,7 +5253,7 @@ fn open_toolcall_leaf_makes_close_suffix_non_empty() {
     let commit = runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_context_range("1.1.1", 0..2)),
+            Some(memory_assembly_with_context_range("1.1.1", 0..2)),
         )
         .expect("close open-only child")
         .expect("close should commit");
@@ -5336,7 +5305,7 @@ fn duplicate_close_call_id_does_not_create_second_memory() {
         .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "dup-close"))
         .expect("observe close request");
     runtime
-        .stage_close("dup-close".to_string(), None)
+        .stage_close("dup-close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime
         .pending_commit("dup-close")
@@ -5353,7 +5322,7 @@ fn duplicate_close_call_id_does_not_create_second_memory() {
     runtime
         .maybe_commit_output(
             "dup-close",
-            Some(compact_body_with_context_range(
+            Some(memory_assembly_with_context_range(
                 "1.1.1",
                 suffix_start..close_request_index,
             )),
@@ -5367,7 +5336,7 @@ fn duplicate_close_call_id_does_not_create_second_memory() {
         runtime
             .maybe_commit_output(
                 "dup-close",
-                Some(compact_body_with_context_range("1.1.1", suffix_start..5)),
+                Some(memory_assembly_with_context_range("1.1.1", suffix_start..5)),
             )
             .expect("duplicate close output commit should be no-op"),
         None
@@ -5412,7 +5381,7 @@ fn close_failure_does_not_mutate_parse_stack() {
         .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     runtime.observe_raw_items(1).expect("record close output");
     runtime
@@ -5483,7 +5452,7 @@ fn close_artifact_write_failure_does_not_publish_parse_stack_or_ledger() {
         .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     runtime.observe_raw_items(1).expect("record close output");
     runtime
@@ -5507,7 +5476,7 @@ fn close_artifact_write_failure_does_not_publish_parse_stack_or_ledger() {
     let err = runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_context_range("1.1.1", 2..5)),
+            Some(memory_assembly_with_context_range("1.1.1", 2..5)),
         )
         .expect_err("artifact write failure should fail commit");
     assert!(
@@ -5566,7 +5535,7 @@ fn close_persistence_failure_leaves_retryable_close_token() {
         .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime.pending_commit("close").expect("pending close") {
         Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
@@ -5585,7 +5554,7 @@ fn close_persistence_failure_leaves_retryable_close_token() {
     let err = runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_context_range(
+            Some(memory_assembly_with_context_range(
                 "1.1.1",
                 suffix_start..close_request_index,
             )),
@@ -5636,7 +5605,7 @@ fn close_retry_reduces_existing_pending_close_token() {
     append_msg(&mut runtime, &mut raw, "inside");
     observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close-retry");
     runtime
-        .stage_close("close-retry".to_string(), None)
+        .stage_close("close-retry".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime
         .pending_commit("close-retry")
@@ -5647,12 +5616,13 @@ fn close_retry_reduces_existing_pending_close_token() {
     };
     let close_request_index = current_context_len(&runtime, &raw) - 1;
     observe_function_output(&mut runtime, &mut raw, "close-retry");
-    let close_compact = compact_body_with_context_range("1.1.1", suffix_start..close_request_index);
+    let memory_assembly =
+        memory_assembly_with_context_range("1.1.1", suffix_start..close_request_index);
 
     let prepared = runtime
         .prepare_close_commit(
             None,
-            Some(close_compact.clone()),
+            Some(memory_assembly.clone()),
             SpineTokenBaselines::default(),
         )
         .expect("prepare close commit");
@@ -5671,7 +5641,7 @@ fn close_retry_reduces_existing_pending_close_token() {
     ));
 
     let commit = runtime
-        .maybe_commit_output("close-retry", Some(close_compact))
+        .maybe_commit_output("close-retry", Some(memory_assembly))
         .expect("retry close")
         .expect("close should commit on retry");
     assert!(matches!(commit, SpineCommitKind::Close { .. }));
@@ -5723,7 +5693,7 @@ fn close_retry_reuses_matching_prepared_memory() {
         .observe_context_item(3, 3, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime.pending_commit("close").expect("pending close") {
         Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
@@ -5735,7 +5705,8 @@ fn close_retry_reuses_matching_prepared_memory() {
         .observe_context_item(4, 4, &function_output("close"))
         .expect("observe close output");
 
-    let close_compact = compact_body_with_context_range("1.1.1", suffix_start..close_request_index);
+    let memory_assembly =
+        memory_assembly_with_context_range("1.1.1", suffix_start..close_request_index);
     let compact_id = "mem-1-1-1-0-3";
     let prepared_mem = MemRecord {
         compact_id: compact_id.to_string(),
@@ -5753,13 +5724,13 @@ fn close_retry_reuses_matching_prepared_memory() {
         closed_source_suffix_tokens: None,
         closed_memory_context_tokens: None,
         open_context_source: None,
-        memory_output_tokens: close_compact.memory_output_tokens,
+        memory_output_tokens: memory_assembly.memory_output_tokens,
         body_path: format!("memory/{compact_id}.md"),
-        body_hash: sha1_hex(close_compact.body.as_bytes()),
+        body_hash: sha1_hex(memory_assembly.body.as_bytes()),
     };
     runtime
         .store
-        .write_memory_body(&prepared_mem.compact_id, &close_compact.body)
+        .write_memory_body(&prepared_mem.compact_id, &memory_assembly.body)
         .expect("write prepared memory body");
     runtime
         .store
@@ -5767,7 +5738,7 @@ fn close_retry_reuses_matching_prepared_memory() {
         .expect("append prepared mem");
 
     let commit = runtime
-        .maybe_commit_output("close", Some(close_compact))
+        .maybe_commit_output("close", Some(memory_assembly))
         .expect("retry close with matching prepared memory")
         .expect("close should commit");
     assert!(matches!(commit, SpineCommitKind::Close { .. }));
@@ -5845,7 +5816,7 @@ fn nested_close_reduces_inner_tree_into_parent_nodes() {
         .observe_context_item(5, 5, &spine_call(SPINE_TOOL_CLOSE, "close-inner"))
         .expect("observe inner close request");
     runtime
-        .stage_close("close-inner".to_string(), None)
+        .stage_close("close-inner".to_string(), "test node memory".to_string())
         .expect("stage inner close");
     let inner_suffix_start = match runtime
         .pending_commit("close-inner")
@@ -5863,7 +5834,7 @@ fn nested_close_reduces_inner_tree_into_parent_nodes() {
     runtime
         .maybe_commit_output(
             "close-inner",
-            Some(compact_body_with_context_range(
+            Some(memory_assembly_with_context_range(
                 "1.1.1.1",
                 inner_suffix_start..5,
             )),
@@ -5900,7 +5871,7 @@ fn nested_close_reduces_inner_tree_into_parent_nodes() {
         .observe_context_item(7, 7, &spine_call(SPINE_TOOL_CLOSE, "close-outer"))
         .expect("observe outer close request");
     runtime
-        .stage_close("close-outer".to_string(), None)
+        .stage_close("close-outer".to_string(), "test node memory".to_string())
         .expect("stage outer close");
     let outer_suffix_start = match runtime
         .pending_commit("close-outer")
@@ -5918,7 +5889,7 @@ fn nested_close_reduces_inner_tree_into_parent_nodes() {
     runtime
         .maybe_commit_output(
             "close-outer",
-            Some(compact_body_with_context_range(
+            Some(memory_assembly_with_context_range(
                 "1.1.1",
                 outer_suffix_start..7,
             )),
@@ -6213,7 +6184,7 @@ fn open_close_replay_materializes_closed_child_memory() {
         .observe_context_item(4, 4, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime.pending_commit("close").expect("pending close") {
         Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
@@ -6226,7 +6197,7 @@ fn open_close_replay_materializes_closed_child_memory() {
     runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_ranges("1.1.1", suffix_start..4, 1..4)),
+            Some(memory_assembly_with_ranges("1.1.1", suffix_start..4, 1..4)),
         )
         .expect("commit close");
 
@@ -6285,7 +6256,7 @@ fn tree_renders_from_parse_stack_without_mutating_it() {
         .observe_context_item(4, 4, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime.pending_commit("close").expect("pending close") {
         Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
@@ -6298,7 +6269,7 @@ fn tree_renders_from_parse_stack_without_mutating_it() {
     runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_ranges("1.1.1", suffix_start..4, 1..4)),
+            Some(memory_assembly_with_ranges("1.1.1", suffix_start..4, 1..4)),
         )
         .expect("commit close");
 
@@ -6363,7 +6334,7 @@ fn materialize_history_renders_from_parse_stack_memory_segments() {
         .observe_context_item(4, 4, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime.pending_commit("close").expect("pending close") {
         Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
@@ -6376,7 +6347,7 @@ fn materialize_history_renders_from_parse_stack_memory_segments() {
     runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_ranges("1.1.1", suffix_start..4, 1..4)),
+            Some(memory_assembly_with_ranges("1.1.1", suffix_start..4, 1..4)),
         )
         .expect("commit close");
 
@@ -6591,7 +6562,7 @@ fn rollback_hole_rejects_suffix_memory_span() {
         .observe_context_item(4, 4, &spine_call(SPINE_TOOL_CLOSE, "close"))
         .expect("observe close request");
     runtime
-        .stage_close("close".to_string(), None)
+        .stage_close("close".to_string(), "test node memory".to_string())
         .expect("stage close");
     let suffix_start = match runtime.pending_commit("close").expect("pending close") {
         Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
@@ -6604,7 +6575,7 @@ fn rollback_hole_rejects_suffix_memory_span() {
     runtime
         .maybe_commit_output(
             "close",
-            Some(compact_body_with_ranges("1.1.1", suffix_start..4, 1..4)),
+            Some(memory_assembly_with_ranges("1.1.1", suffix_start..4, 1..4)),
         )
         .expect("commit close");
 
