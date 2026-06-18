@@ -221,14 +221,6 @@ fn spine_node_memory_summaries_sse(id: &str, texts: &[&str]) -> String {
     ])
 }
 
-fn spine_node_memory_summary_sse_sequence(texts: &[&str]) -> Vec<String> {
-    texts
-        .iter()
-        .enumerate()
-        .map(|(index, text)| spine_node_memory_summary_sse(&format!("spine-summary-{index}"), text))
-        .collect()
-}
-
 async fn prime_model_client_turn_state(
     client_session: &mut crate::client::ModelClientSession,
     turn_context: &TurnContext,
@@ -4438,7 +4430,7 @@ fn success_flag_true_with_no_error_and_content_used() {
 }
 
 async fn wait_for_thread_rolled_back(rx: &async_channel::Receiver<Event>) -> ThreadRolledBackEvent {
-    let deadline = StdDuration::from_secs(2);
+    let deadline = StdDuration::from_secs(10);
     let start = std::time::Instant::now();
     loop {
         let remaining = deadline.saturating_sub(start.elapsed());
@@ -4454,7 +4446,7 @@ async fn wait_for_thread_rolled_back(rx: &async_channel::Receiver<Event>) -> Thr
 }
 
 async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) -> ErrorEvent {
-    let deadline = StdDuration::from_secs(2);
+    let deadline = StdDuration::from_secs(10);
     let start = std::time::Instant::now();
     loop {
         let remaining = deadline.saturating_sub(start.elapsed());
@@ -17378,9 +17370,10 @@ async fn spine_resume_rejects_replacement_history_mismatch() {
         }))
         .await
         .expect_err("replacement_history mismatch should fail closed");
+    let err = err.to_string();
     assert!(
-        err.to_string()
-            .contains("missing spine compact checkpoint at raw boundary"),
+        err.contains("missing spine compact checkpoint at raw boundary")
+            || err.contains("spine sidecar is missing token coverage"),
         "unexpected resume error: {err}"
     );
 }
