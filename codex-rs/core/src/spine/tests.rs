@@ -299,6 +299,39 @@ fn assert_parse_stack_tree_and_events_unchanged(
     assert_eq!(event_log_debug(runtime), events_before);
 }
 
+fn ledger_event_debug(runtime: &SpineRuntime) -> Vec<String> {
+    runtime
+        .ledger
+        .events
+        .iter()
+        .map(|event| format!("{event:?}"))
+        .collect()
+}
+
+fn assert_pending_close_retry_state(runtime: &SpineRuntime, ledger_before: &[String]) {
+    assert!(
+        runtime
+            .parse_stack()
+            .symbols
+            .iter()
+            .any(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Close(_)))),
+        "failed close-like reduce should retain the zero-width Close token for retry"
+    );
+    assert_eq!(ledger_event_debug(runtime), ledger_before);
+}
+
+fn assert_pending_compact_retry_state(runtime: &SpineRuntime, ledger_before: &[String]) {
+    assert!(
+        runtime
+            .parse_stack()
+            .symbols
+            .iter()
+            .any(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Compact(..)))),
+        "failed root compact reduce should retain the zero-width Compact token for retry"
+    );
+    assert_eq!(ledger_event_debug(runtime), ledger_before);
+}
+
 fn current_context_len(runtime: &SpineRuntime, raw: &[Option<ResponseItem>]) -> usize {
     runtime
         .materialize_history(raw)
@@ -781,6 +814,97 @@ fn next_commit_without_completed_toolcall_evidence_does_not_write_marker_or_open
 }
 
 #[test]
+fn close_prepare_store_failure_retains_retryable_close_without_events() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    open_task(&mut runtime, &mut raw, "open-before-close-fail", "child");
+    append_msg(&mut runtime, &mut raw, "child work before close failure");
+    let (_request, request_raw, request_context) =
+        observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close-store-fail");
+    runtime
+        .stage_close(
+            "close-store-fail".to_string(),
+            "memory that will fail before commit".to_string(),
+        )
+        .expect("stage close");
+    let memory_assembly =
+        close_memory_assembly_from_source_plan(&runtime, &raw, "close-store-fail", "1.1.1");
+    let (_output, output_raw, output_context) =
+        observe_function_output(&mut runtime, &mut raw, "close-store-fail");
+
+    let before_events = ledger_event_debug(&runtime);
+    let blocked_root = dir.path().join("not-a-dir-close");
+    std::fs::write(&blocked_root, "file blocks sidecar dir").expect("write blocker file");
+    runtime.store.root = blocked_root;
+
+    runtime
+        .prepare_commit_output_with_toolcall_and_raw_items(
+            "close-store-fail",
+            Some(memory_assembly),
+            SpineTokenBaselines::default(),
+            completed_toolcall(
+                "close-store-fail",
+                vec![
+                    tool_segment(ToolCallSegmentKind::Request, request_raw, request_context),
+                    tool_segment(ToolCallSegmentKind::Response, output_raw, output_context),
+                ],
+            ),
+            &raw,
+        )
+        .expect_err("close prepare must fail while writing sidecar memory");
+    assert_pending_close_retry_state(&runtime, &before_events);
+}
+
+#[test]
+fn next_prepare_store_failure_retains_retryable_close_without_events() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    open_task(&mut runtime, &mut raw, "open-before-next-fail", "child");
+    append_msg(&mut runtime, &mut raw, "child work before next failure");
+    let (_request, request_raw, request_context) =
+        observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_NEXT, "next-store-fail");
+    runtime
+        .stage_next(
+            "next-store-fail".to_string(),
+            "sibling that must not be installed".to_string(),
+            "memory that will fail before next commit".to_string(),
+        )
+        .expect("stage next");
+    let memory_assembly =
+        close_memory_assembly_from_source_plan(&runtime, &raw, "next-store-fail", "1.1.1");
+    let (_output, output_raw, output_context) =
+        observe_function_output(&mut runtime, &mut raw, "next-store-fail");
+
+    let before_events = ledger_event_debug(&runtime);
+    let blocked_root = dir.path().join("not-a-dir-next");
+    std::fs::write(&blocked_root, "file blocks sidecar dir").expect("write blocker file");
+    runtime.store.root = blocked_root;
+
+    runtime
+        .prepare_commit_output_with_toolcall_and_raw_items(
+            "next-store-fail",
+            Some(memory_assembly),
+            SpineTokenBaselines::default(),
+            completed_toolcall(
+                "next-store-fail",
+                vec![
+                    tool_segment(ToolCallSegmentKind::Request, request_raw, request_context),
+                    tool_segment(ToolCallSegmentKind::Response, output_raw, output_context),
+                ],
+            ),
+            &raw,
+        )
+        .expect_err("next prepare must fail while writing sidecar memory");
+    assert_pending_close_retry_state(&runtime, &before_events);
+}
+
+#[test]
 fn spine_error_classifies_missing_raw_coverage_as_sidecar_corruption() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -1231,6 +1355,84 @@ fn close_task(
         .expect("commit close");
 }
 
+#[test]
+fn prepare_close_commit_does_not_install_final_parse_stack() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    open_task(
+        &mut runtime,
+        &mut raw,
+        "open-staged-close",
+        "staged close child",
+    );
+    append_msg(&mut runtime, &mut raw, "child work before staged close");
+    let (request, request_raw, request_context) =
+        observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "staged-close");
+    runtime
+        .stage_close(
+            "staged-close".to_string(),
+            "staged close memory".to_string(),
+        )
+        .expect("stage close");
+    let memory_assembly =
+        close_memory_assembly_from_source_plan(&runtime, &raw, "staged-close", "1.1.1");
+    let (_output, output_raw, output_context) =
+        observe_function_output(&mut runtime, &mut raw, "staged-close");
+    let before_tree = runtime
+        .render_tree()
+        .expect("render before prepared commit");
+
+    let prepared = runtime
+        .prepare_commit_output_with_toolcall_and_raw_items(
+            "staged-close",
+            Some(memory_assembly),
+            SpineTokenBaselines::default(),
+            completed_toolcall(
+                "staged-close",
+                vec![
+                    tool_segment(ToolCallSegmentKind::Request, request_raw, request_context),
+                    tool_segment(ToolCallSegmentKind::Response, output_raw, output_context),
+                ],
+            ),
+            &raw,
+        )
+        .expect("prepare close commit")
+        .expect("prepared close commit");
+    assert!(matches!(prepared.kind(), SpineCommitKind::Close { .. }));
+    assert_eq!(
+        runtime.render_tree().expect("render after prepared commit"),
+        before_tree,
+        "prepared close commit must not install the reduced ParseStack before host publication"
+    );
+    let before_snapshot = runtime
+        .build_tree_snapshot()
+        .expect("snapshot before installing prepared commit");
+    let before_nodes = snapshot_nodes_by_id(&before_snapshot);
+    assert_ne!(
+        before_nodes["1.1.1"].status,
+        SpineTreeNodeStatus::Closed,
+        "live tree must not expose closed-node publication before install"
+    );
+
+    runtime
+        .persist_prepared_commit_side_effects(&prepared)
+        .expect("persist prepared close side effects");
+    runtime.install_prepared_commit(prepared);
+    let after_snapshot = runtime
+        .build_tree_snapshot()
+        .expect("snapshot after installing prepared commit");
+    let after_nodes = snapshot_nodes_by_id(&after_snapshot);
+    assert_eq!(
+        after_nodes["1.1.1"].status,
+        SpineTreeNodeStatus::Closed,
+        "installing prepared close commit should advance the live ParseStack"
+    );
+    assert_eq!(request, spine_call(SPINE_TOOL_CLOSE, "staged-close"));
+}
+
 fn close_task_with_token_baselines(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
@@ -1541,15 +1743,26 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
         .expect("closed child memory ref");
     assert_eq!(memory.open_input_tokens, Some(10_000));
     assert_eq!(memory.close_input_tokens, Some(17_500));
+    assert_eq!(memory.closed_memory_context_tokens, None);
     let memory_output_tokens = memory
         .memory_output_tokens
         .expect("memory output token count");
     assert_eq!(memory_output_tokens, 1_250);
 
+    let captured = runtime
+        .capture_closed_memory_context_accounting(1_250)
+        .expect("capture closed memory accounting");
+    assert!(captured);
+    let accounting = runtime.store.mem_accounting().expect("memory accounting");
+    assert_eq!(accounting.len(), 1);
+    assert_eq!(accounting[0].closed_memory_context_tokens, 1_250);
+    assert_eq!(accounting[0].provider_input_tokens, 1_250);
+    assert_eq!(accounting[0].replacement_prefix_baseline_tokens, 0);
+
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("[1.1.1] Done accounted child"), "{tree}");
     assert!(
-        tree.contains("(~7.50K source -> ~1.25K memory output)"),
+        tree.contains("(~7.50K source -> ~1.25K memory context)"),
         "{tree}"
     );
     let materialized_before_snapshot = runtime
@@ -1571,7 +1784,7 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
             current_node_context_problem: None,
             current_node_context_baseline_source: None,
             closed_source_suffix_tokens: Some(7_500),
-            closed_memory_context_tokens: None,
+            closed_memory_context_tokens: Some(1_250),
             memory_output_tokens: Some(1_250),
         })
     );
@@ -1581,8 +1794,14 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
         .expect("sidecar exists");
     let replayed_tree = replayed.render_tree().expect("render replayed tree");
     assert!(
-        replayed_tree.contains("(~7.50K source -> ~"),
+        replayed_tree.contains("(~7.50K source -> ~1.25K memory context)"),
         "{replayed_tree}"
+    );
+    let replayed_snapshot = replayed.build_tree_snapshot().expect("replay snapshot");
+    let replayed_nodes = snapshot_nodes_by_id(&replayed_snapshot);
+    assert_eq!(
+        replayed_nodes["1.1.1"].accounting,
+        snapshot_nodes["1.1.1"].accounting
     );
     let materialized = replayed.materialize_history(&raw).expect("materialize");
     assert_eq!(materialized.len(), 3);
@@ -1671,6 +1890,342 @@ fn close_source_plan_uses_current_hps_projection_indices() {
                 [ContentItem::InputText { text }] if text == "[U7]\nsecond live item"
             )
     ));
+}
+
+#[test]
+fn closed_memory_context_accounting_rejects_invalid_first_provider_usage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    open_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "open-accounted-child",
+        "accounted child",
+        SpineTokenBaselines {
+            provider_input_tokens: Some(10_000),
+        },
+    );
+    append_msg(&mut runtime, &mut raw, "inside");
+    close_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "close-accounted-child",
+        "1.1.1",
+        SpineTokenBaselines {
+            provider_input_tokens: Some(17_500),
+        },
+    );
+
+    let captured = runtime
+        .capture_closed_memory_context_accounting(17_500)
+        .expect("invalid provider usage should not corrupt accounting");
+    assert!(!captured);
+    assert!(
+        runtime
+            .store
+            .mem_accounting()
+            .expect("memory accounting")
+            .is_empty()
+    );
+    let tree = runtime.render_tree().expect("render tree");
+    assert!(
+        tree.contains("(~7.50K source -> ~1.25K memory output)"),
+        "{tree}"
+    );
+
+    let second_capture = runtime
+        .capture_closed_memory_context_accounting(1_250)
+        .expect("first provider usage decision is single-shot");
+    assert!(!second_capture);
+}
+
+#[test]
+fn closed_memory_context_accounting_rejects_negative_memory_delta() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let raw = vec![
+        Some(text_item("before")),
+        Some(spine_call(SPINE_TOOL_OPEN, "open")),
+        Some(function_output("open")),
+        Some(text_item("inside")),
+        Some(spine_call(SPINE_TOOL_CLOSE, "close")),
+        Some(function_output("close")),
+    ];
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(1).expect("record before");
+    runtime
+        .observe_context_item(0, 0, &text_item("before"))
+        .expect("observe before");
+    runtime.observe_raw_items(1).expect("record open request");
+    runtime
+        .observe_context_item(1, 1, &spine_call(SPINE_TOOL_OPEN, "open"))
+        .expect("observe open request");
+    runtime
+        .stage_open("open".to_string(), "accounted child".to_string())
+        .expect("stage open");
+    runtime.observe_raw_items(1).expect("record open output");
+    runtime
+        .observe_context_item(2, 2, &function_output("open"))
+        .expect("observe open output");
+    runtime
+        .maybe_commit_output_with_open_input_tokens("open", None, Some(10_000))
+        .expect("commit open");
+    runtime.observe_raw_items(1).expect("record child item");
+    runtime
+        .observe_context_item(3, 3, &text_item("inside"))
+        .expect("observe child item");
+    runtime.observe_raw_items(1).expect("record close request");
+    runtime
+        .observe_context_item(4, 4, &spine_call(SPINE_TOOL_CLOSE, "close"))
+        .expect("observe close request");
+    runtime
+        .stage_close("close".to_string(), "test node memory".to_string())
+        .expect("stage close");
+    let suffix_start = match runtime.pending_commit("close").expect("pending close") {
+        Some(SpinePendingCommit::Close { suffix_start, .. }) => suffix_start,
+        other => panic!("expected pending close, got {other:?}"),
+    };
+    runtime.observe_raw_items(1).expect("record close output");
+    runtime
+        .observe_context_item(5, 5, &function_output("close"))
+        .expect("observe close output");
+    runtime
+        .maybe_commit_output_with_open_input_tokens(
+            "close",
+            Some(memory_assembly_with_ranges("1.1.1", suffix_start..4, 1..4)),
+            Some(17_500),
+        )
+        .expect("commit close");
+
+    let captured = runtime
+        .capture_closed_memory_context_accounting(9_999)
+        .expect("negative memory delta should not corrupt accounting");
+    assert!(!captured);
+    assert!(
+        runtime
+            .store
+            .mem_accounting()
+            .expect("memory accounting")
+            .is_empty()
+    );
+
+    let materialized = runtime.materialize_history(&raw).expect("materialize");
+    assert_eq!(materialized.len(), 4);
+}
+
+#[test]
+fn closed_memory_context_accounting_missing_usage_consumes_pending() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    open_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "open-poc-missing-usage",
+        "poc missing usage",
+        SpineTokenBaselines {
+            provider_input_tokens: Some(10_000),
+        },
+    );
+    append_msg(&mut runtime, &mut raw, "inside");
+    close_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "close-poc-missing-usage",
+        "1.1.1",
+        SpineTokenBaselines {
+            provider_input_tokens: Some(17_500),
+        },
+    );
+
+    assert!(
+        runtime
+            .store
+            .mem_accounting()
+            .expect("memory accounting")
+            .is_empty(),
+        "close should only stage pending accounting until a provider usage arrives"
+    );
+
+    let consumed = runtime
+        .consume_closed_memory_context_accounting_without_provider_usage()
+        .expect("missing provider usage consumes pending accounting");
+    assert!(consumed);
+
+    let captured = runtime
+        .capture_closed_memory_context_accounting(2_500)
+        .expect("later usage must not be accepted as first provider usage");
+    assert!(
+        !captured,
+        "missing first provider usage must consume pending accounting"
+    );
+    let accounting = runtime.store.mem_accounting().expect("memory accounting");
+    assert!(
+        accounting.is_empty(),
+        "missing provider usage must not fabricate a memory context size"
+    );
+}
+
+#[test]
+fn closed_memory_context_accounting_pending_survives_reload_before_first_usage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    open_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "open-poc-reload",
+        "poc reload",
+        SpineTokenBaselines {
+            provider_input_tokens: Some(10_000),
+        },
+    );
+    append_msg(&mut runtime, &mut raw, "inside");
+    close_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "close-poc-reload",
+        "1.1.1",
+        SpineTokenBaselines {
+            provider_input_tokens: Some(17_500),
+        },
+    );
+    assert!(
+        runtime
+            .store
+            .mem_accounting()
+            .expect("memory accounting")
+            .is_empty(),
+        "fixture should close memory before post-close provider usage"
+    );
+    let raw_len = runtime.raw_len;
+    drop(runtime);
+
+    let mut reloaded = eventually_load_or_create_writer(&rollout, raw_len);
+    let captured = reloaded
+        .capture_closed_memory_context_accounting(1_250)
+        .expect("capture after reload should use durable pending accounting");
+    assert!(
+        captured,
+        "pending memory accounting must be reconstructed from the sidecar"
+    );
+    let accounting = reloaded.store.mem_accounting().expect("memory accounting");
+    assert_eq!(accounting.len(), 1);
+    assert_eq!(accounting[0].closed_memory_context_tokens, 1_250);
+}
+
+#[test]
+fn prepared_commit_side_effect_failure_leaves_parse_stack_unadvanced() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    runtime.set_trim_enabled(true);
+
+    open_task_with_token_baselines(
+        &mut runtime,
+        &mut raw,
+        "open-poc-install-fail",
+        "poc install fail",
+        SpineTokenBaselines {
+            provider_input_tokens: Some(10_000),
+        },
+    );
+    append_msg(&mut runtime, &mut raw, "inside");
+    observe_spine_request(
+        &mut runtime,
+        &mut raw,
+        SPINE_TOOL_CLOSE,
+        "close-poc-install-fail",
+    );
+    runtime
+        .stage_close(
+            "close-poc-install-fail".to_string(),
+            "test node memory".to_string(),
+        )
+        .expect("stage close");
+    let memory_assembly =
+        close_memory_assembly_from_source_plan(&runtime, &raw, "close-poc-install-fail", "1.1.1");
+    let close_output = function_output_text(
+        "close-poc-install-fail",
+        &"large close output for trim candidate ".repeat(40),
+    );
+    let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits");
+    let output_context_index = current_context_len(&runtime, &raw)
+        .checked_add(1)
+        .expect("output context index fits");
+    raw.push(Some(close_output));
+    runtime.observe_raw_items(1).expect("record output raw");
+    runtime
+        .observe_context_item(
+            output_ordinal,
+            output_context_index,
+            raw.last()
+                .and_then(Option::as_ref)
+                .expect("close output item"),
+        )
+        .expect("observe close output");
+
+    let completed_toolcall = completed_toolcall(
+        "close-poc-install-fail",
+        vec![
+            tool_req(output_ordinal - 1, output_context_index - 1),
+            tool_resp(output_ordinal, output_context_index),
+        ],
+    );
+    let prepared = runtime
+        .prepare_commit_output_with_toolcall_and_raw_items(
+            "close-poc-install-fail",
+            Some(memory_assembly),
+            SpineTokenBaselines {
+                provider_input_tokens: Some(17_500),
+            },
+            completed_toolcall,
+            &raw,
+        )
+        .expect("prepare close")
+        .expect("prepared close");
+    let parse_stack_before_install = runtime.parse_stack().clone();
+    let tree_before_install = runtime.render_tree().expect("tree before install");
+    assert!(
+        tree_before_install.contains("[1.1.1] Current poc install fail"),
+        "{tree_before_install}"
+    );
+
+    let trim_path = runtime.store.trim_path_for_test();
+    let parked_trim_path = dir.path().join("parked-trim-before-install.jsonl");
+    std::fs::rename(&trim_path, &parked_trim_path).expect("park trim ledger");
+    std::fs::create_dir_all(&trim_path).expect("block trim append with directory");
+
+    let err = runtime
+        .persist_prepared_commit_side_effects(&prepared)
+        .expect_err("trim append failure should fail before install");
+    assert!(
+        err.to_string().contains("Is a directory")
+            || err.to_string().contains("is a directory")
+            || err.to_string().contains("directory"),
+        "unexpected install error: {err}"
+    );
+    assert_eq!(
+        runtime.parse_stack(),
+        &parse_stack_before_install,
+        "failed prepared side effects must not advance the parse stack"
+    );
+    let tree_after_failed_install = runtime
+        .render_tree()
+        .expect("tree after failed install still renders");
+    assert!(
+        tree_after_failed_install.contains("[1.1.1] Current poc install fail"),
+        "{tree_after_failed_install}"
+    );
 }
 
 #[test]
@@ -6130,15 +6685,14 @@ fn close_persistence_failure_leaves_retryable_close_token() {
         events_before,
         "failed close must not publish ledger events"
     );
-    assert!(matches!(
-        runtime.parse_stack().symbols.as_slice(),
-        [
-            ..,
-            Symbol::Control(ControlSymbol::Open(_)),
-            Symbol::SpineTreeNodes(_),
-            Symbol::Control(ControlSymbol::Close(_))
-        ]
-    ));
+    assert!(
+        runtime
+            .parse_stack()
+            .symbols
+            .iter()
+            .any(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Close(_)))),
+        "failed close must retain the zero-width Close token for retry"
+    );
     assert!(
         runtime
             .pending_commit("close")
@@ -7206,6 +7760,39 @@ fn native_compact_shifts_compact_and_new_root_open() {
 }
 
 #[test]
+fn root_compact_prepare_store_failure_retains_retryable_compact_without_events() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(
+        &mut runtime,
+        &mut raw,
+        "context before root compact failure",
+    );
+    append_msg(
+        &mut runtime,
+        &mut raw,
+        "more context before root compact failure",
+    );
+    let before_events = ledger_event_debug(&runtime);
+    let blocked_root = dir.path().join("not-a-dir-root-compact");
+    std::fs::write(&blocked_root, "file blocks sidecar dir").expect("write blocker file");
+    runtime.store.root = blocked_root;
+
+    runtime
+        .prepare_root_compact_with_checkpoint(
+            &rollout,
+            "root compact memory that will fail before commit".to_string(),
+            &raw,
+            SpineRootCompactTokenMetadata::default(),
+        )
+        .expect_err("root compact prepare must fail while writing sidecar memory");
+    assert_pending_compact_retry_state(&runtime, &before_events);
+}
+
+#[test]
 fn root_depth_open_after_native_compact_can_close_and_open_sibling() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
@@ -7253,6 +7840,56 @@ fn root_depth_open_after_native_compact_can_close_and_open_sibling() {
                     if segments == &vec![tool_req(4, 4), tool_resp(5, 5)]
             )
     ));
+}
+
+#[test]
+fn prepare_root_compact_does_not_install_final_parse_stack() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "before staged root compact");
+    append_msg(&mut runtime, &mut raw, "more staged root compact context");
+    let before_tree = runtime
+        .render_tree()
+        .expect("render before prepared root compact");
+    let before_snapshot = runtime
+        .build_tree_snapshot()
+        .expect("snapshot before prepared root compact");
+
+    let prepared = runtime
+        .prepare_root_compact_with_checkpoint(
+            &rollout,
+            "staged root compact body".to_string(),
+            &raw,
+            SpineRootCompactTokenMetadata::default(),
+        )
+        .expect("prepare root compact");
+
+    assert_eq!(
+        runtime
+            .render_tree()
+            .expect("render after prepared root compact"),
+        before_tree,
+        "prepared root compact must not install the reduced ParseStack before host publication"
+    );
+    let staged_snapshot = runtime
+        .build_tree_snapshot()
+        .expect("snapshot after prepared root compact");
+    assert_eq!(
+        staged_snapshot.active_node_id, before_snapshot.active_node_id,
+        "prepared root compact must not advance the live active node"
+    );
+
+    runtime.install_prepared_root_compact(prepared);
+    let after_snapshot = runtime
+        .build_tree_snapshot()
+        .expect("snapshot after installing prepared root compact");
+    assert_ne!(
+        after_snapshot.active_node_id, before_snapshot.active_node_id,
+        "installing prepared root compact should advance the live ParseStack"
+    );
 }
 
 #[test]
@@ -7525,10 +8162,14 @@ fn root_compact_checkpoint_append_failure_can_retry_without_duplicate_mem() {
             .any(|event| matches!(event, SpineLedgerEvent::RootCompact { .. })),
         "failed checkpoint append must not commit RootCompact marker"
     );
-    assert!(matches!(
-        runtime.parse_stack().symbols.as_slice(),
-        [.., Symbol::Control(ControlSymbol::Compact(..))]
-    ));
+    assert!(
+        runtime
+            .parse_stack()
+            .symbols
+            .iter()
+            .any(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Compact(..)))),
+        "failed root compact must retain the zero-width Compact token for retry"
+    );
     let mems_after_failure = runtime.store.mems().expect("read mems after failure");
     assert_eq!(
         mems_after_failure.len(),

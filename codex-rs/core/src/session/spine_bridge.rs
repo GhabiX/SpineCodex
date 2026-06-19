@@ -12,6 +12,7 @@ use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCloseMemoryAssembly;
 use crate::spine::SpineCommitKind;
 use crate::spine::SpinePendingCommit;
+#[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
@@ -72,6 +73,10 @@ struct SpineCommitOutput {
     snapshot: Option<SpineTreeUpdateEvent>,
     spine_context_already_observed: bool,
     defer_tree_update_until_raw_output: bool,
+}
+
+pub(crate) struct PreparedSpineRootCompactInstall {
+    prepared: crate::spine::SpinePreparedRootCompact,
 }
 
 enum SpineCommitAttempt {
@@ -248,6 +253,13 @@ impl Session {
         spine_slot.lock().await.release_runtime_for_shutdown();
     }
 
+    pub(super) async fn release_spine_runtime_for_replay(&self) {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return;
+        };
+        spine_slot.lock().await.release_runtime_for_replay();
+    }
+
     pub(super) async fn clone_spine_sidecar_for_fork(
         &self,
         boundary: &SpineCloneBoundary,
@@ -355,6 +367,7 @@ impl Session {
         };
         let raw_len = u64::try_from(raw_items.len())
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
+        self.release_spine_runtime_for_replay().await;
         let mut runtime =
             SpineRuntime::load_for_rollout_items(&rollout_path, raw_items, rollback_cuts)?;
         if let Some(runtime) = runtime.as_mut() {
@@ -1287,8 +1300,8 @@ impl Session {
             Some(SpinePendingCommit::Open) => token_baselines_from_info(current_turn_token_info),
             None => SpineTokenBaselines::default(),
         };
-        let commit_kind = if pending_commit.is_some() {
-            spine.maybe_commit_output_with_toolcall_and_raw_items(
+        let prepared_commit = if pending_commit.is_some() {
+            spine.prepare_commit_output_with_toolcall_and_raw_items(
                 call_id,
                 memory_assembly,
                 token_baselines,
@@ -1299,6 +1312,9 @@ impl Session {
             spine.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
             None
         };
+        let commit_kind = prepared_commit
+            .as_ref()
+            .map(|prepared| prepared.kind().clone());
         let defer_tree_update_until_raw_output = matches!(
             commit_kind,
             Some(SpineCommitKind::Close { .. } | SpineCommitKind::CloseThenOpen { .. })
@@ -1383,8 +1399,6 @@ impl Session {
                     });
                 }
             }
-            let token_info = state.token_info();
-            snapshot = Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?);
         }
         if history_update.is_none() && tool_resp_already_recorded {
             let history = state.clone_history();
@@ -1400,9 +1414,28 @@ impl Session {
                 });
             }
         }
+        if let Some(prepared_commit) = prepared_commit.as_ref()
+            && let Err(err) = spine.persist_prepared_commit_side_effects(prepared_commit)
+        {
+            guard.invalidate(format!(
+                "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
+            ));
+            return Err(err);
+        }
         if let Some(update) = history_update.take() {
-            Self::apply_spine_history_replacement_to_locked_state(&mut state, update)
-                .map_err(SpineError::Invariant)?;
+            if let Err(err) =
+                Self::apply_spine_history_replacement_to_locked_state(&mut state, update)
+            {
+                guard.invalidate(format!(
+                    "failed to publish Spine h(PS) before installing reduced parse stack for call_id={call_id}: {err}"
+                ));
+                return Err(SpineError::Invariant(err));
+            }
+        }
+        if let Some(prepared_commit) = prepared_commit {
+            spine.install_prepared_commit(prepared_commit);
+            let token_info = state.token_info();
+            snapshot = Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?);
         }
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
             snapshot,
@@ -1477,13 +1510,27 @@ impl Session {
         &self,
         body: String,
     ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
-        self.install_spine_root_compact_impl(body).await
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(None);
+        };
+        let Some(prepared) = self.prepare_spine_root_compact_impl(body).await? else {
+            return Ok(None);
+        };
+        let result = prepared.result().clone();
+        let mut guard = spine_slot.lock().await;
+        guard.ensure_valid()?;
+        let Some(spine) = guard.runtime_mut() else {
+            return Ok(None);
+        };
+        spine.install_prepared_root_compact(prepared);
+        let snapshot = spine.build_tree_snapshot()?;
+        Ok(Some((result, snapshot)))
     }
 
-    async fn install_spine_root_compact_impl(
+    async fn prepare_spine_root_compact_impl(
         &self,
         body: String,
-    ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
+    ) -> Result<Option<crate::spine::SpinePreparedRootCompact>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -1528,16 +1575,20 @@ impl Session {
         {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let result = match guard
+            let prepared = match guard
                 .runtime_mut()
                 .ok_or_else(|| {
                     SpineError::InvalidStore(
                         "spine runtime missing after initialization".to_string(),
                     )
                 })?
-                .root_compact_with_checkpoint(&rollout_path, body, &raw_items, token_metadata)
-            {
-                Ok(result) => result,
+                .prepare_root_compact_with_checkpoint(
+                    &rollout_path,
+                    body,
+                    &raw_items,
+                    token_metadata,
+                ) {
+                Ok(prepared) => prepared,
                 Err(err) => {
                     if !err.should_invalidate_runtime() {
                         tracing::debug!(
@@ -1552,26 +1603,15 @@ impl Session {
                     return Err(err);
                 }
             };
-            let Some(spine) = guard.runtime() else {
-                return Ok(None);
-            };
-            let current_open_index = spine.current_open_index()?;
-            if current_open_index != result.materialized.len() {
-                return Err(SpineError::Invariant(format!(
-                    "spine root compact open index {current_open_index} does not match materialized history length {}",
-                    result.materialized.len()
-                )));
-            }
-            let snapshot = spine.build_tree_snapshot()?;
-            Ok(Some((result, snapshot)))
+            Ok(Some(prepared))
         }
     }
 
-    pub(crate) async fn install_spine_root_compact_after_native_compact(
+    pub(crate) async fn prepare_spine_root_compact_after_native_compact(
         &self,
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
-    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
+    ) -> CodexResult<Option<PreparedSpineRootCompactInstall>> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -1594,19 +1634,69 @@ impl Session {
                     .to_string(),
             }
         })?;
-        let Some((root_compact, snapshot)) = self
-            .install_spine_root_compact_impl(body)
-            .await
-            .map_err(|err| CodexErr::SpineTerminalFailure {
-                operation: "install Spine root compact".to_string(),
-                reason: err.to_string(),
-            })?
+        let Some(root_compact) =
+            self.prepare_spine_root_compact_impl(body)
+                .await
+                .map_err(|err| CodexErr::SpineTerminalFailure {
+                    operation: "install Spine root compact".to_string(),
+                    reason: err.to_string(),
+                })?
         else {
             return Ok(None);
         };
-        *items = root_compact.materialized;
+        *items = root_compact.result().materialized.clone();
         compacted_item.replacement_history = Some(items.clone());
-        Ok(Some(snapshot))
+        Ok(Some(PreparedSpineRootCompactInstall {
+            prepared: root_compact,
+        }))
+    }
+
+    pub(crate) async fn finalize_spine_root_compact_after_history_publish(
+        &self,
+        prepared: PreparedSpineRootCompactInstall,
+        published_history_len: usize,
+    ) -> CodexResult<SpineTreeUpdateEvent> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Err(CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: "spine runtime missing before root compact PS install".to_string(),
+            });
+        };
+        let mut guard = spine_slot.lock().await;
+        guard
+            .ensure_valid()
+            .map_err(|err| CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: err.to_string(),
+            })?;
+        let spine = guard
+            .runtime_mut()
+            .ok_or_else(|| CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: "spine runtime missing before root compact PS install".to_string(),
+            })?;
+        spine.install_prepared_root_compact(prepared.prepared);
+        let current_open_index =
+            spine
+                .current_open_index()
+                .map_err(|err| CodexErr::SpineTerminalFailure {
+                    operation: "install Spine root compact".to_string(),
+                    reason: err.to_string(),
+                })?;
+        if current_open_index != published_history_len {
+            return Err(CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: format!(
+                    "spine root compact open index {current_open_index} does not match materialized history length {published_history_len}"
+                ),
+            });
+        }
+        spine
+            .build_tree_snapshot()
+            .map_err(|err| CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: err.to_string(),
+            })
     }
 }
 

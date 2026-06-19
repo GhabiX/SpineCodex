@@ -89,15 +89,6 @@ fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
     (input_tokens > 0).then_some(input_tokens)
 }
 
-pub(crate) fn context_problem_label(problem: SpineNodeContextProblem) -> &'static str {
-    match problem {
-        SpineNodeContextProblem::MissingCurrentUsage => "missing current usage",
-        SpineNodeContextProblem::MissingOpenContextBaseline => "missing open baseline",
-        SpineNodeContextProblem::CoordinateMismatch => "coordinate mismatch",
-        SpineNodeContextProblem::CorruptPressureMetadata => "corrupt pressure metadata",
-    }
-}
-
 fn build_open_nodes_inside(
     snapshot: &SpineTreeUpdateEvent,
     current: Option<&TokenUsageInfo>,
@@ -136,15 +127,12 @@ fn format_open_node_context_annotations(
 ) -> BTreeMap<NodeId, String> {
     open_nodes
         .iter()
-        .map(|open_node| {
-            let annotation = if let Some(tokens) = open_node.current_node_context_tokens {
-                format!("(~{} inclusive context)", format_si_suffix(tokens))
-            } else if let Some(problem) = open_node.problem {
-                format!("(context problem: {})", context_problem_label(problem))
-            } else {
-                "(context problem: unknown)".to_string()
-            };
-            (open_node.node_id.clone(), annotation)
+        .filter_map(|open_node| {
+            let tokens = open_node.current_node_context_tokens?;
+            Some((
+                open_node.node_id.clone(),
+                format!("(~{} inclusive context)", format_si_suffix(tokens)),
+            ))
         })
         .collect()
 }
@@ -221,7 +209,8 @@ fn format_context_window_pressure(info: Option<&SpineContextWindowInside>) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::{TokenUsage, TokenUsageInfo};
+    use codex_protocol::protocol::TokenUsage;
+    use codex_protocol::protocol::TokenUsageInfo;
 
     fn token_info(input_tokens: i64, total_tokens: i64) -> TokenUsageInfo {
         TokenUsageInfo {

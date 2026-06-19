@@ -3073,10 +3073,10 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
         mut compacted_item: CompactedItem,
     ) -> CodexResult<ReplaceCompactedHistoryOutcome> {
-        let spine_tree_snapshot = self
-            .install_spine_root_compact_after_native_compact(&mut items, &mut compacted_item)
+        let prepared_spine_root_compact = self
+            .prepare_spine_root_compact_after_native_compact(&mut items, &mut compacted_item)
             .await?;
-        let installed_spine_root_compact = spine_tree_snapshot.is_some();
+        let installed_spine_root_compact = prepared_spine_root_compact.is_some();
         let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
         if let Some(turn_context_item) = reference_context_item.clone() {
             rollout_items.push(RolloutItem::TurnContext(turn_context_item));
@@ -3094,6 +3094,28 @@ impl Session {
         }
         self.replace_history(items, reference_context_item.clone())
             .await;
+        let spine_tree_snapshot =
+            if let Some(prepared_spine_root_compact) = prepared_spine_root_compact {
+                let published_history_len = self.clone_history().await.raw_items().len();
+                match self
+                    .finalize_spine_root_compact_after_history_publish(
+                        prepared_spine_root_compact,
+                        published_history_len,
+                    )
+                    .await
+                {
+                    Ok(snapshot) => Some(snapshot),
+                    Err(err) => {
+                        self.invalidate_spine_runtime(format!(
+                        "failed to install Spine root compact after host history publication: {err}"
+                    ))
+                    .await;
+                        return Err(err);
+                    }
+                }
+            } else {
+                None
+            };
         if installed_spine_root_compact && reference_context_item.is_some() {
             let environment_context = Self::cwd_only_environment_context_item(turn_context);
             self.record_conversation_items(
@@ -3423,6 +3445,15 @@ impl Session {
         state.clone_history()
     }
 
+    #[cfg(test)]
+    pub(crate) async fn fail_next_history_suffix_replace_for_test(
+        &self,
+        reason: impl Into<String>,
+    ) {
+        let mut state = self.state.lock().await;
+        state.fail_next_history_suffix_replace_for_test(reason);
+    }
+
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
         let state = self.state.lock().await;
         state.reference_context_item()
@@ -3489,40 +3520,68 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
-        if let Some(token_usage) = token_usage {
-            let token_info = {
-                let mut state = self.state.lock().await;
-                state
-                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
-                state.token_info()
-            };
-            if let Some(token_info) = token_info.as_ref() {
-                if let Some(spine_slot) = self.spine.as_ref() {
-                    let input_tokens = token_info.last_token_usage.input_tokens;
+        let Some(token_usage) = token_usage else {
+            if let Some(spine_slot) = self.spine.as_ref() {
+                let mut guard = spine_slot.lock().await;
+                if guard.ensure_valid().is_ok()
+                    && let Some(runtime) = guard.runtime_mut()
+                    && let Err(err) =
+                        runtime.consume_closed_memory_context_accounting_without_provider_usage()
+                {
+                    guard.invalidate(format!(
+                        "failed to consume Spine closed memory context accounting without provider usage: {err}"
+                    ));
+                }
+            }
+            return;
+        };
+        let token_info = {
+            let mut state = self.state.lock().await;
+            state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
+            state.token_info()
+        };
+        if let Some(token_info) = token_info.as_ref() {
+            if let Some(spine_slot) = self.spine.as_ref() {
+                let input_tokens = token_info.last_token_usage.input_tokens;
+                let mut guard = spine_slot.lock().await;
+                if guard.ensure_valid().is_ok()
+                    && let Some(runtime) = guard.runtime_mut()
+                {
                     if input_tokens > 0 {
-                        let mut guard = spine_slot.lock().await;
-                        if guard.ensure_valid().is_ok()
-                            && let Some(runtime) = guard.runtime_mut()
-                            && let Err(err) =
-                                runtime.capture_current_open_provider_baseline(input_tokens)
+                        if let Err(err) =
+                            runtime.capture_closed_memory_context_accounting(input_tokens)
                         {
                             guard.invalidate(format!(
-                                "failed to capture Spine open context baseline from provider input tokens: {err}"
+                                "failed to capture Spine closed memory context accounting from provider input tokens: {err}"
                             ));
+                        } else {
+                            if let Err(err) =
+                                runtime.capture_current_open_provider_baseline(input_tokens)
+                            {
+                                guard.invalidate(format!(
+                                    "failed to capture Spine open context baseline from provider input tokens: {err}"
+                                ));
+                            }
                         }
+                    } else if let Err(err) =
+                        runtime.consume_closed_memory_context_accounting_without_provider_usage()
+                    {
+                        guard.invalidate(format!(
+                            "failed to consume Spine closed memory context accounting without positive provider input tokens: {err}"
+                        ));
                     }
                 }
-                for contributor in self.services.extensions.token_usage_contributors() {
-                    contributor.on_token_usage(
-                        &self.services.session_extension_data,
-                        &self.services.thread_extension_data,
-                        turn_context.extension_data.as_ref(),
-                        token_info,
-                    );
-                }
-                self.emit_spine_tree_snapshot_cache_only_if_available()
-                    .await;
             }
+            for contributor in self.services.extensions.token_usage_contributors() {
+                contributor.on_token_usage(
+                    &self.services.session_extension_data,
+                    &self.services.thread_extension_data,
+                    turn_context.extension_data.as_ref(),
+                    token_info,
+                );
+            }
+            self.emit_spine_tree_snapshot_cache_only_if_available()
+                .await;
         }
     }
 

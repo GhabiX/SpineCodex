@@ -26,6 +26,9 @@ use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
+use crate::spine::model::MemoryContextAccountingRecord;
+use crate::spine::model::MemoryContextAccountingSkipReason;
+use crate::spine::model::MemoryContextAccountingWitnessRecord;
 use crate::spine::model::NodeId;
 use crate::spine::model::RawMask;
 use crate::spine::model::SegRef;
@@ -76,7 +79,7 @@ pub(crate) const SPINE_TOOL_NEXT: &str = "next";
 pub(crate) const SPINE_TOOL_TRIM: &str = "trim";
 pub(crate) const SPINE_TOOL_FEEDBACK: &str = "feedback";
 pub(crate) const SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX: &str =
-    "Spine parser-control tools are mutually exclusive within one model response;";
+    "Spine control tools are mutually exclusive within one response;";
 
 #[derive(Debug)]
 pub(crate) struct SpineRuntime {
@@ -97,6 +100,7 @@ pub(crate) struct SpineRuntime {
     #[cfg(test)]
     pending_tool_responses: BTreeMap<String, Vec<PendingToolResponse>>,
     pending: Option<PendingTransition>,
+    pending_memory_context_accounting: Option<PendingMemoryContextAccounting>,
     next_user_anchor: u64,
 }
 
@@ -139,6 +143,13 @@ impl SpineLedgerCache {
 struct OpenRequestAnchor {
     raw_ordinal: u64,
     context_index: u64,
+}
+
+#[derive(Clone, Debug)]
+struct PendingMemoryContextAccounting {
+    compact_id: String,
+    replacement_prefix_baseline_tokens: i64,
+    close_input_tokens: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,6 +266,34 @@ pub(crate) enum SpineCommitKind {
         toolcall_start: usize,
         open_index: usize,
     },
+}
+
+#[derive(Debug)]
+pub(crate) struct SpinePreparedCommit {
+    kind: SpineCommitKind,
+    final_parse_stack: Option<ParseStack>,
+    completed_toolcall: Option<CompletedToolCall>,
+    toolcall_seq: Option<u64>,
+    raw_items: Vec<Option<ResponseItem>>,
+    mem_for_accounting: Option<MemRecord>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SpinePreparedRootCompact {
+    result: SpineRootCompactResult,
+    final_parse_stack: ParseStack,
+}
+
+impl SpinePreparedRootCompact {
+    pub(crate) fn result(&self) -> &SpineRootCompactResult {
+        &self.result
+    }
+}
+
+impl SpinePreparedCommit {
+    pub(crate) fn kind(&self) -> &SpineCommitKind {
+        &self.kind
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -443,6 +482,11 @@ impl SpineSessionState {
         self.runtime = None;
     }
 
+    pub(crate) fn release_runtime_for_replay(&mut self) {
+        self.runtime = None;
+        self.initial_tree_snapshot_emitted = false;
+    }
+
     pub(crate) fn abort_pending_tool(&mut self, call_id: &str) -> bool {
         let Some(runtime) = self.runtime_mut() else {
             return false;
@@ -576,6 +620,7 @@ impl SpineRuntime {
             #[cfg(test)]
             pending_tool_responses: BTreeMap::new(),
             pending: None,
+            pending_memory_context_accounting: None,
             next_user_anchor,
         })
     }
@@ -814,6 +859,8 @@ impl SpineRuntime {
             None,
             None,
         )?;
+        let pending_memory_context_accounting =
+            pending_memory_context_accounting_from_store(&store)?;
         Ok(Self {
             store,
             ledger,
@@ -830,6 +877,7 @@ impl SpineRuntime {
             #[cfg(test)]
             pending_tool_responses: BTreeMap::new(),
             pending: None,
+            pending_memory_context_accounting,
             next_user_anchor,
         })
     }
@@ -908,6 +956,8 @@ impl SpineRuntime {
             Some(&checkpoint.parse_stack),
             Some(checkpoint.token_seq),
         )?;
+        let pending_memory_context_accounting =
+            pending_memory_context_accounting_from_store(&store)?;
         Ok(Self {
             store,
             ledger,
@@ -924,13 +974,15 @@ impl SpineRuntime {
             #[cfg(test)]
             pending_tool_responses: BTreeMap::new(),
             pending: None,
+            pending_memory_context_accounting,
             next_user_anchor,
         })
     }
 
     #[cfg(test)]
     pub(crate) fn render_tree(&self) -> Result<String, SpineError> {
-        self.parse_stack.render_tree()
+        self.parse_stack_with_memory_context_accounting()?
+            .render_tree()
     }
 
     pub(crate) fn render_tree_with_context_annotations(
@@ -938,19 +990,46 @@ impl SpineRuntime {
         annotations: &BTreeMap<NodeId, String>,
     ) -> Result<String, SpineError> {
         self.ensure_jit_enabled("Spine tree render")?;
-        self.parse_stack
+        self.parse_stack_with_memory_context_accounting()?
             .render_tree_with_context_annotations(annotations)
     }
 
     pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineError> {
         self.ensure_jit_enabled("Spine tree snapshot")?;
-        let nodes = self.parse_stack.tree_snapshot_nodes()?;
-        let active_node_id = self.parse_stack.current_cursor_id()?.as_path();
+        let parse_stack = self.parse_stack_with_memory_context_accounting()?;
+        let nodes = parse_stack.tree_snapshot_nodes()?;
+        let active_node_id = parse_stack.current_cursor_id()?.as_path();
         Ok(SpineTreeUpdateEvent {
             snapshot_seq: self.ledger.next_event_seq,
             active_node_id,
             nodes,
         })
+    }
+
+    fn parse_stack_with_memory_context_accounting(&self) -> Result<ParseStack, SpineError> {
+        let accounting = self.memory_context_accounting_by_id()?;
+        let mut parse_stack = self.parse_stack.clone();
+        parse_stack.apply_memory_context_accounting(&accounting);
+        Ok(parse_stack)
+    }
+
+    fn memory_context_accounting_by_id(&self) -> Result<BTreeMap<String, i64>, SpineError> {
+        let mut out = BTreeMap::new();
+        for record in self.store.mem_accounting()? {
+            match out.get(&record.compact_id).copied() {
+                Some(existing) if existing != record.closed_memory_context_tokens => {
+                    return Err(SpineError::InvalidStore(format!(
+                        "conflicting Spine memory context accounting for {}",
+                        record.compact_id
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    out.insert(record.compact_id, record.closed_memory_context_tokens);
+                }
+            }
+        }
+        Ok(out)
     }
 
     pub(crate) fn append_feedback_markdown(&self, entry: &str) -> Result<(), SpineError> {
@@ -1074,6 +1153,123 @@ impl SpineRuntime {
             input_tokens,
             ContextBaselineSource::ProviderAtOpen,
         )
+    }
+
+    pub(crate) fn capture_closed_memory_context_accounting(
+        &mut self,
+        provider_input_tokens: i64,
+    ) -> Result<bool, SpineError> {
+        if !self.jit_enabled {
+            return Ok(false);
+        }
+        let Some(pending) = self.pending_memory_context_accounting.take() else {
+            return Ok(false);
+        };
+        if provider_input_tokens <= 0 {
+            self.consume_memory_context_accounting_pending(
+                pending,
+                None,
+                MemoryContextAccountingSkipReason::MissingProviderUsage,
+            )?;
+            return Ok(false);
+        }
+        if self
+            .memory_context_accounting_by_id()?
+            .contains_key(&pending.compact_id)
+        {
+            self.consume_memory_context_accounting_pending(
+                pending,
+                Some(provider_input_tokens),
+                MemoryContextAccountingSkipReason::InvalidProviderUsage,
+            )?;
+            return Ok(false);
+        }
+        if let Some(close_input_tokens) = pending.close_input_tokens
+            && provider_input_tokens >= close_input_tokens
+        {
+            self.consume_memory_context_accounting_pending(
+                pending,
+                Some(provider_input_tokens),
+                MemoryContextAccountingSkipReason::InvalidProviderUsage,
+            )?;
+            return Ok(false);
+        }
+        let memory_tokens = provider_input_tokens - pending.replacement_prefix_baseline_tokens;
+        if memory_tokens < 0 {
+            self.consume_memory_context_accounting_pending(
+                pending,
+                Some(provider_input_tokens),
+                MemoryContextAccountingSkipReason::NegativeMemoryDelta,
+            )?;
+            return Ok(false);
+        }
+        self.store
+            .append_mem_accounting(&MemoryContextAccountingRecord {
+                compact_id: pending.compact_id.clone(),
+                closed_memory_context_tokens: memory_tokens,
+                provider_input_tokens,
+                replacement_prefix_baseline_tokens: pending.replacement_prefix_baseline_tokens,
+            })?;
+        Ok(true)
+    }
+
+    pub(crate) fn consume_closed_memory_context_accounting_without_provider_usage(
+        &mut self,
+    ) -> Result<bool, SpineError> {
+        if !self.jit_enabled {
+            return Ok(false);
+        }
+        let Some(pending) = self.pending_memory_context_accounting.take() else {
+            return Ok(false);
+        };
+        self.consume_memory_context_accounting_pending(
+            pending,
+            None,
+            MemoryContextAccountingSkipReason::MissingProviderUsage,
+        )?;
+        Ok(true)
+    }
+
+    fn consume_memory_context_accounting_pending(
+        &self,
+        pending: PendingMemoryContextAccounting,
+        provider_input_tokens: Option<i64>,
+        reason: MemoryContextAccountingSkipReason,
+    ) -> Result<(), SpineError> {
+        self.store
+            .append_mem_accounting_witness(&MemoryContextAccountingWitnessRecord::Consumed {
+                compact_id: pending.compact_id,
+                provider_input_tokens,
+                reason,
+            })
+    }
+
+    fn append_memory_context_accounting_pending(
+        &mut self,
+        pending: PendingMemoryContextAccounting,
+    ) -> Result<(), SpineError> {
+        if let Some(existing) = self.pending_memory_context_accounting.take() {
+            self.consume_memory_context_accounting_pending(
+                existing,
+                None,
+                MemoryContextAccountingSkipReason::SupersededByNewPending,
+            )?;
+        }
+        if self
+            .memory_context_accounting_by_id()?
+            .contains_key(&pending.compact_id)
+        {
+            return Ok(());
+        }
+        self.store.append_mem_accounting_witness(
+            &MemoryContextAccountingWitnessRecord::Pending {
+                compact_id: pending.compact_id.clone(),
+                replacement_prefix_baseline_tokens: pending.replacement_prefix_baseline_tokens,
+                close_input_tokens: pending.close_input_tokens,
+            },
+        )?;
+        self.pending_memory_context_accounting = Some(pending);
+        Ok(())
     }
 
     fn current_open_accepts_deferred_provider_baseline(
@@ -2085,6 +2281,7 @@ impl SpineRuntime {
             completed_toolcall,
             &[],
         )
+        .and_then(|prepared| self.install_prepared_commit_for_kind(prepared))
     }
 
     #[cfg(test)]
@@ -2104,6 +2301,7 @@ impl SpineRuntime {
             completed_toolcall,
             &[],
         )
+        .and_then(|prepared| self.install_prepared_commit_for_kind(prepared))
     }
 
     #[cfg(test)]
@@ -2121,6 +2319,7 @@ impl SpineRuntime {
             completed_toolcall,
             &[],
         )
+        .and_then(|prepared| self.install_prepared_commit_for_kind(prepared))
     }
 
     pub(crate) fn maybe_commit_output_with_toolcall(
@@ -2147,6 +2346,30 @@ impl SpineRuntime {
         completed_toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpineCommitKind>, SpineError> {
+        let Some(prepared) = self.prepare_commit_output_with_toolcall_and_raw_items(
+            call_id,
+            memory_assembly,
+            token_baselines,
+            completed_toolcall,
+            raw_items,
+        )?
+        else {
+            return Ok(None);
+        };
+        let kind = prepared.kind.clone();
+        self.persist_prepared_commit_side_effects(&prepared)?;
+        self.install_prepared_commit(prepared);
+        Ok(Some(kind))
+    }
+
+    pub(crate) fn prepare_commit_output_with_toolcall_and_raw_items(
+        &mut self,
+        call_id: &str,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
+        token_baselines: SpineTokenBaselines,
+        completed_toolcall: CompletedToolCall,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<SpinePreparedCommit>, SpineError> {
         self.maybe_commit_output_impl(
             call_id,
             memory_assembly,
@@ -2163,7 +2386,7 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<SpineCommitKind>, SpineError> {
+    ) -> Result<Option<SpinePreparedCommit>, SpineError> {
         let Some(pending) = self.pending.as_ref() else {
             return Ok(None);
         };
@@ -2204,6 +2427,27 @@ impl SpineRuntime {
         Ok(Some(commit_kind))
     }
 
+    fn install_prepared_commit_for_kind(
+        &mut self,
+        prepared: Option<SpinePreparedCommit>,
+    ) -> Result<Option<SpineCommitKind>, SpineError> {
+        let Some(prepared) = prepared else {
+            return Ok(None);
+        };
+        let kind = prepared.kind.clone();
+        self.persist_prepared_commit_side_effects(&prepared)?;
+        self.install_prepared_commit(prepared);
+        Ok(Some(kind))
+    }
+
+    fn task_tree_reduced_from(
+        &self,
+        parse_stack: ParseStack,
+        reduction: PreparedTaskTreeReduction,
+    ) -> Result<ParseStack, SpineError> {
+        parse_stack.task_tree_reduced(reduction)
+    }
+
     fn commit_open_pending(
         &mut self,
         summary: String,
@@ -2212,7 +2456,7 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineCommitKind, SpineError> {
+    ) -> Result<SpinePreparedCommit, SpineError> {
         if let Some(completed_toolcall) = completed_toolcall.as_ref() {
             let first = completed_toolcall_first_segment(completed_toolcall)?;
             boundary = first.raw_ordinal;
@@ -2264,19 +2508,33 @@ impl SpineRuntime {
                 raw_items,
             )?;
             self.clear_completed_toolcall_anchors(&completed_toolcall);
-            return Ok(SpineCommitKind::Open {
-                open_request_index: usize::try_from(index).map_err(|_| {
-                    SpineError::InvalidEvent("spine.open context index overflow".to_string())
-                })?,
+            return Ok(SpinePreparedCommit {
+                kind: SpineCommitKind::Open {
+                    open_request_index: usize::try_from(index).map_err(|_| {
+                        SpineError::InvalidEvent("spine.open context index overflow".to_string())
+                    })?,
+                },
+                final_parse_stack: None,
+                completed_toolcall: None,
+                toolcall_seq: None,
+                raw_items: Vec::new(),
+                mem_for_accounting: None,
             });
         }
         let events = vec![event];
         self.append_committed_events_no_marker(events)?;
         self.parse_stack = staged_parse_stack;
-        Ok(SpineCommitKind::Open {
-            open_request_index: usize::try_from(index).map_err(|_| {
-                SpineError::InvalidEvent("spine.open context index overflow".to_string())
-            })?,
+        Ok(SpinePreparedCommit {
+            kind: SpineCommitKind::Open {
+                open_request_index: usize::try_from(index).map_err(|_| {
+                    SpineError::InvalidEvent("spine.open context index overflow".to_string())
+                })?,
+            },
+            final_parse_stack: None,
+            completed_toolcall: None,
+            toolcall_seq: None,
+            raw_items: Vec::new(),
+            mem_for_accounting: None,
         })
     }
 
@@ -2286,7 +2544,7 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineCommitKind, SpineError> {
+    ) -> Result<SpinePreparedCommit, SpineError> {
         let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
         let mut events = vec![prepared.close_event.clone()];
         let completed_toolcall = completed_toolcall.ok_or_else(|| {
@@ -2319,15 +2577,21 @@ impl SpineRuntime {
             .ok_or_else(|| {
                 SpineError::InvalidEvent("spine.close toolcall seq overflow".to_string())
             })?;
-        self.parse_stack
-            .shift_pending_close(prepared.memory.clone(), &self.archive())?;
-        let mut final_parse_stack = self
-            .parse_stack
-            .task_tree_reduced(prepared.task_tree_reduction)?;
+        let mut pending_close_parse_stack = self.parse_stack.clone();
+        pending_close_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
+        let mut final_parse_stack = self.task_tree_reduced_from(
+            pending_close_parse_stack.clone(),
+            prepared.task_tree_reduction,
+        )?;
         final_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
-        self.write_prepared_memory_body(&prepared.mem, &prepared.memory_body)?;
-        flush_archive_writes(&prepared.archive_writes)?;
-        self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body)?;
+        if let Err(err) = self
+            .write_prepared_memory_body(&prepared.mem, &prepared.memory_body)
+            .and_then(|()| flush_archive_writes(&prepared.archive_writes))
+            .and_then(|()| self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body))
+        {
+            self.parse_stack = pending_close_parse_stack;
+            return Err(err);
+        }
         let marker = close_commit_marker(
             self.ledger.next_event_seq,
             &prepared.mem,
@@ -2336,17 +2600,17 @@ impl SpineRuntime {
             event_count,
         )?;
         self.append_committed_events(events, marker)?;
-        self.parse_stack = final_parse_stack;
-        self.append_trim_candidates_for_completed_toolcall(
-            &completed_toolcall,
-            toolcall_seq,
-            raw_items,
-        )?;
-        self.clear_completed_toolcall_anchors(&completed_toolcall);
-        Ok(SpineCommitKind::Close {
-            suffix_start: prepared.suffix_start,
-            replacement: prepared.replacement,
-            toolcall_start,
+        Ok(SpinePreparedCommit {
+            kind: SpineCommitKind::Close {
+                suffix_start: prepared.suffix_start,
+                replacement: prepared.replacement,
+                toolcall_start,
+            },
+            final_parse_stack: Some(final_parse_stack),
+            completed_toolcall: Some(completed_toolcall),
+            toolcall_seq: Some(toolcall_seq),
+            raw_items: raw_items.to_vec(),
+            mem_for_accounting: Some(prepared.mem),
         })
     }
 
@@ -2357,7 +2621,7 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineCommitKind, SpineError> {
+    ) -> Result<SpinePreparedCommit, SpineError> {
         let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
         let mut close_reduced_parse_stack = self.parse_stack.clone();
         close_reduced_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
@@ -2404,11 +2668,12 @@ impl SpineRuntime {
             .ok_or_else(|| {
                 SpineError::InvalidEvent("spine.next toolcall seq overflow".to_string())
             })?;
-        self.parse_stack
-            .shift_pending_close(prepared.memory.clone(), &self.archive())?;
-        let mut final_parse_stack = self
-            .parse_stack
-            .task_tree_reduced(prepared.task_tree_reduction)?;
+        let mut pending_close_parse_stack = self.parse_stack.clone();
+        pending_close_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
+        let mut final_parse_stack = self.task_tree_reduced_from(
+            pending_close_parse_stack.clone(),
+            prepared.task_tree_reduction,
+        )?;
         final_parse_stack.shift(
             SpineToken::Open {
                 meta: tree_meta_with_token_baselines(
@@ -2423,9 +2688,14 @@ impl SpineRuntime {
             &self.archive(),
         )?;
         final_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
-        self.write_prepared_memory_body(&prepared.mem, &prepared.memory_body)?;
-        flush_archive_writes(&prepared.archive_writes)?;
-        self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body)?;
+        if let Err(err) = self
+            .write_prepared_memory_body(&prepared.mem, &prepared.memory_body)
+            .and_then(|()| flush_archive_writes(&prepared.archive_writes))
+            .and_then(|()| self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body))
+        {
+            self.parse_stack = pending_close_parse_stack;
+            return Err(err);
+        }
         let marker = close_commit_marker(
             self.ledger.next_event_seq,
             &prepared.mem,
@@ -2434,19 +2704,47 @@ impl SpineRuntime {
             event_count,
         )?;
         self.append_committed_events(events, marker)?;
-        self.parse_stack = final_parse_stack;
-        self.append_trim_candidates_for_completed_toolcall(
-            &completed_toolcall,
-            toolcall_seq,
-            raw_items,
-        )?;
-        self.clear_completed_toolcall_anchors(&completed_toolcall);
-        Ok(SpineCommitKind::CloseThenOpen {
-            suffix_start: prepared.suffix_start,
-            replacement: prepared.replacement,
-            toolcall_start,
-            open_index,
+        Ok(SpinePreparedCommit {
+            kind: SpineCommitKind::CloseThenOpen {
+                suffix_start: prepared.suffix_start,
+                replacement: prepared.replacement,
+                toolcall_start,
+                open_index,
+            },
+            final_parse_stack: Some(final_parse_stack),
+            completed_toolcall: Some(completed_toolcall),
+            toolcall_seq: Some(toolcall_seq),
+            raw_items: raw_items.to_vec(),
+            mem_for_accounting: Some(prepared.mem),
         })
+    }
+
+    pub(crate) fn persist_prepared_commit_side_effects(
+        &mut self,
+        prepared: &SpinePreparedCommit,
+    ) -> Result<(), SpineError> {
+        if let (Some(completed_toolcall), Some(toolcall_seq)) =
+            (prepared.completed_toolcall.as_ref(), prepared.toolcall_seq)
+        {
+            self.append_trim_candidates_for_completed_toolcall(
+                completed_toolcall,
+                toolcall_seq,
+                &prepared.raw_items,
+            )?;
+        }
+        if let Some(mem) = prepared.mem_for_accounting.as_ref() {
+            self.register_pending_memory_context_accounting(mem)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn install_prepared_commit(&mut self, prepared: SpinePreparedCommit) {
+        if let Some(final_parse_stack) = prepared.final_parse_stack {
+            self.parse_stack = final_parse_stack;
+        }
+        if let Some(completed_toolcall) = prepared.completed_toolcall.as_ref() {
+            self.clear_completed_toolcall_anchors(completed_toolcall);
+        }
     }
 
     fn prepare_close_commit(
@@ -2797,13 +3095,15 @@ impl SpineRuntime {
         body: String,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        self.root_compact_impl(
+        let prepared = self.root_compact_impl(
             body,
             raw_items,
             SpineRootCompactTokenMetadata::default(),
             None,
-        )
-        .map(|result| result.materialized)
+        )?;
+        let result = prepared.result.clone();
+        self.install_prepared_root_compact(prepared);
+        Ok(result.materialized)
     }
 
     pub(crate) fn root_compact_with_checkpoint(
@@ -2813,6 +3113,24 @@ impl SpineRuntime {
         raw_items: &[Option<ResponseItem>],
         token_metadata: SpineRootCompactTokenMetadata,
     ) -> Result<SpineRootCompactResult, SpineError> {
+        let prepared = self.prepare_root_compact_with_checkpoint(
+            rollout_path,
+            body,
+            raw_items,
+            token_metadata,
+        )?;
+        let result = prepared.result.clone();
+        self.install_prepared_root_compact(prepared);
+        Ok(result)
+    }
+
+    pub(crate) fn prepare_root_compact_with_checkpoint(
+        &mut self,
+        rollout_path: &Path,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        token_metadata: SpineRootCompactTokenMetadata,
+    ) -> Result<SpinePreparedRootCompact, SpineError> {
         self.root_compact_impl(body, raw_items, token_metadata, Some(rollout_path))
     }
 
@@ -2822,7 +3140,7 @@ impl SpineRuntime {
         raw_items: &[Option<ResponseItem>],
         token_metadata: SpineRootCompactTokenMetadata,
         checkpoint_rollout_path: Option<&Path>,
-    ) -> Result<SpineRootCompactResult, SpineError> {
+    ) -> Result<SpinePreparedRootCompact, SpineError> {
         let token_metadata = SpineRootCompactTokenMetadata {
             next_open_input_tokens: None,
             next_open_context_tokens: None,
@@ -2834,26 +3152,50 @@ impl SpineRuntime {
             token_metadata,
             checkpoint_rollout_path,
         )?;
-        self.parse_stack.shift_pending_compact(
+        let mut pending_compact_parse_stack = self.parse_stack.clone();
+        pending_compact_parse_stack.shift_pending_compact(
             prepared.memory.clone(),
             prepared.next_open_index,
             token_metadata.next_open_input_tokens,
             token_metadata.next_open_context_tokens,
             &self.archive(),
         )?;
-        let final_parse_stack = self
-            .parse_stack
-            .root_epoch_reduced(prepared.root_epoch_reduction)?;
-        self.write_prepared_memory_body(&prepared.mem, &prepared.memory_body)?;
-        self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body)?;
-        if let Some(checkpoint) = prepared.compact_checkpoint.as_ref() {
-            self.store.append_compact_checkpoint(checkpoint)?;
+        let final_parse_stack = self.root_epoch_reduced_from(
+            pending_compact_parse_stack.clone(),
+            prepared.root_epoch_reduction,
+        )?;
+        if let Err(err) = self
+            .write_prepared_memory_body(&prepared.mem, &prepared.memory_body)
+            .and_then(|()| self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body))
+            .and_then(|()| {
+                if let Some(checkpoint) = prepared.compact_checkpoint.as_ref() {
+                    self.store.append_compact_checkpoint(checkpoint)?;
+                }
+                Ok(())
+            })
+        {
+            self.parse_stack = pending_compact_parse_stack;
+            return Err(err);
         }
         let marker = root_compact_commit_marker(self.ledger.next_event_seq, &prepared.mem)?;
         self.append_committed_events(vec![prepared.root_compact_event], marker)?;
-        self.parse_stack = final_parse_stack;
         self.pending = None;
-        Ok(prepared.result)
+        Ok(SpinePreparedRootCompact {
+            result: prepared.result,
+            final_parse_stack,
+        })
+    }
+
+    fn root_epoch_reduced_from(
+        &self,
+        parse_stack: ParseStack,
+        reduction: PreparedRootEpochReduction,
+    ) -> Result<ParseStack, SpineError> {
+        parse_stack.root_epoch_reduced(reduction)
+    }
+
+    pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
+        self.parse_stack = prepared.final_parse_stack;
     }
 
     fn write_prepared_memory_body(&self, mem: &MemRecord, body: &str) -> Result<(), SpineError> {
@@ -3105,6 +3447,27 @@ impl SpineRuntime {
             body_hash: sha1_hex(memory_assembly.body.as_bytes()),
         };
         Ok(mem)
+    }
+
+    fn register_pending_memory_context_accounting(
+        &mut self,
+        mem: &MemRecord,
+    ) -> Result<(), SpineError> {
+        let Some(baseline) = replacement_prefix_baseline_tokens(mem) else {
+            if let Some(existing) = self.pending_memory_context_accounting.take() {
+                self.consume_memory_context_accounting_pending(
+                    existing,
+                    None,
+                    MemoryContextAccountingSkipReason::SupersededByNewPending,
+                )?;
+            }
+            return Ok(());
+        };
+        self.append_memory_context_accounting_pending(PendingMemoryContextAccounting {
+            compact_id: mem.compact_id.clone(),
+            replacement_prefix_baseline_tokens: baseline,
+            close_input_tokens: mem.close_input_tokens,
+        })
     }
 
     fn open_raw_start(&self, node_id: &NodeId) -> Result<u64, SpineError> {
@@ -3850,21 +4213,6 @@ fn validate_model_node_memory(memory: &str) -> Result<(), SpineError> {
             "spine.close/next memory must not be empty".to_string(),
         ));
     }
-    for marker in [
-        "# Spine Memory ",
-        "## User Message",
-        "## Child Memory",
-        "## Memory Slot",
-        "## Node Memory",
-        "<spine_memory>",
-        "</spine_memory>",
-    ] {
-        if memory.contains(marker) {
-            return Err(SpineError::ToolUse(format!(
-                "spine.close/next memory must not contain runtime-owned marker {marker:?}"
-            )));
-        }
-    }
     Ok(())
 }
 
@@ -3937,6 +4285,57 @@ fn close_event_boundary(event: &SpineLedgerEvent) -> Result<u64, SpineError> {
         SpineLedgerEvent::Close { boundary, .. } => Ok(*boundary),
         _ => Err(SpineError::Invariant(
             "close commit marker requested for non-close event".to_string(),
+        )),
+    }
+}
+
+fn replacement_prefix_baseline_tokens(mem: &MemRecord) -> Option<i64> {
+    if mem.context_start == 0 {
+        return Some(0);
+    }
+    mem.open_context_tokens
+}
+
+fn pending_memory_context_accounting_from_store(
+    store: &SpineStore,
+) -> Result<Option<PendingMemoryContextAccounting>, SpineError> {
+    let accounted = store
+        .mem_accounting()?
+        .into_iter()
+        .map(|record| record.compact_id)
+        .collect::<BTreeSet<_>>();
+    let mut pending_by_id = BTreeMap::new();
+    for witness in store.mem_accounting_witnesses()? {
+        match witness {
+            MemoryContextAccountingWitnessRecord::Pending {
+                compact_id,
+                replacement_prefix_baseline_tokens,
+                close_input_tokens,
+            } => {
+                if !accounted.contains(&compact_id) {
+                    pending_by_id.insert(
+                        compact_id.clone(),
+                        PendingMemoryContextAccounting {
+                            compact_id,
+                            replacement_prefix_baseline_tokens,
+                            close_input_tokens,
+                        },
+                    );
+                }
+            }
+            MemoryContextAccountingWitnessRecord::Consumed { compact_id, .. } => {
+                pending_by_id.remove(&compact_id);
+            }
+        }
+    }
+    for compact_id in accounted {
+        pending_by_id.remove(&compact_id);
+    }
+    match pending_by_id.len() {
+        0 => Ok(None),
+        1 => Ok(pending_by_id.into_values().next()),
+        _ => Err(SpineError::InvalidStore(
+            "multiple unconsumed Spine memory context accounting pending witnesses".to_string(),
         )),
     }
 }

@@ -2790,7 +2790,7 @@ async fn try_run_sampling_request(
                             .collect::<Vec<_>>()
                             .join(", ");
                         let message = format!(
-                            "{SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX} received {names}. spine.open, spine.close, and spine.next are mutually exclusive within one toolreq. No Spine control action was applied and no Spine control token was emitted for this toolreq. Non-control tools in the same toolreq may execute normally. Please resend at most one Spine control request if you still want to change the Spine cursor."
+                            "{SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX} received {names}. No Spine control action was applied. Ordinary non-Spine tools may have run. If you still need to change the Spine cursor, retry with at most one of spine.open, spine.close, or spine.next."
                         );
                         deferred_spine_tool_group =
                             Some(DeferredSpineToolGroup::ConflictingControls {

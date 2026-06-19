@@ -36,6 +36,8 @@ pub(crate) struct SessionState {
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     granted_permissions: Option<AdditionalPermissionProfile>,
     next_turn_is_first: bool,
+    #[cfg(test)]
+    fail_next_history_suffix_replace: Option<String>,
 }
 
 impl SessionState {
@@ -55,7 +57,14 @@ impl SessionState {
             pending_session_start_source: None,
             granted_permissions: None,
             next_turn_is_first: true,
+            #[cfg(test)]
+            fail_next_history_suffix_replace: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_history_suffix_replace_for_test(&mut self, reason: impl Into<String>) {
+        self.fail_next_history_suffix_replace = Some(reason.into());
     }
 
     // History helpers
@@ -111,6 +120,10 @@ impl SessionState {
         replacement: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(reason) = self.fail_next_history_suffix_replace.take() {
+            return Err(reason);
+        }
         self.history.replace_suffix(range, replacement)?;
         self.history
             .set_reference_context_item(reference_context_item);

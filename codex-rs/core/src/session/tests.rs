@@ -4440,6 +4440,11 @@ async fn wait_for_thread_rolled_back(rx: &async_channel::Receiver<Event>) -> Thr
             .expect("event");
         match evt.msg {
             EventMsg::ThreadRolledBack(payload) => return payload,
+            EventMsg::Error(payload)
+                if payload.codex_error_info == Some(CodexErrorInfo::ThreadRollbackFailed) =>
+            {
+                panic!("rollback failed while waiting for ThreadRolledBack: {payload:?}");
+            }
             _ => continue,
         }
     }
@@ -10571,6 +10576,234 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
 }
 
 #[tokio::test]
+async fn spine_close_host_publish_failure_does_not_install_live_parse_stack() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_node_memory_summary_sse(
+            "spine-close-host-publish-failure",
+            "close host publish failure compact summary",
+        ),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let prefix = user_message("prefix before close host publish failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "close-host-publish-fail-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "close-host-publish-fail-open".to_string(),
+            "close host publish failure child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("close-host-publish-fail-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let inner = assistant_message("child body before close host publish failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
+        .await
+        .expect("record inner");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "close-host-publish-fail");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .stage_spine_close(
+            "close-host-publish-fail".to_string(),
+            "host publish failure memory".to_string(),
+        )
+        .await
+        .expect("stage close");
+    let close_output = function_output("close-host-publish-fail");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_output))
+        .await
+        .expect("record close output before commit");
+    let original_history = session.clone_history().await.raw_items().to_vec();
+    while rx.try_recv().is_ok() {}
+
+    session
+        .fail_next_history_suffix_replace_for_test("forced host publish failure")
+        .await;
+    let err = session
+        .maybe_commit_spine_tool_output(&turn_context, &close_output)
+        .await
+        .expect_err("host publish failure should fail close reduce");
+    assert!(
+        err.should_invalidate_runtime(),
+        "host publish failure after durable reduce must invalidate runtime: {err}"
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        original_history.as_slice(),
+        "host publish failure must leave host history unchanged"
+    );
+    let err = session
+        .spine_tree()
+        .await
+        .expect_err("host publish failure should leave no continuable advanced runtime");
+    assert!(
+        err.to_string().contains("spine runtime is invalid"),
+        "unexpected runtime error: {err}"
+    );
+    assert_no_pending_spine_tree_update_matching(
+        &rx,
+        "host publish failure must not emit a closed-node tree update",
+        |snapshot| {
+            snapshot
+                .nodes
+                .iter()
+                .any(|node| node.node_id == "1.1.1" && node.status == SpineTreeNodeStatus::Closed)
+        },
+    );
+    assert_eq!(compact_mock.requests().len(), 0);
+}
+
+#[tokio::test]
+async fn spine_next_host_publish_failure_does_not_install_live_parse_stack() {
+    let server = start_mock_server().await;
+    let compact_mock = mount_sse_once(
+        &server,
+        spine_node_memory_summary_sse(
+            "spine-next-host-publish-failure",
+            "next host publish failure compact summary",
+        ),
+    )
+    .await;
+    let base_url = format!("{}/v1", server.uri());
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.model_provider.base_url = Some(base_url.clone());
+            config.model_provider.supports_websockets = false;
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    let prefix = user_message("prefix before next host publish failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+    let open_request = spine_call(SPINE_TOOL_OPEN, "next-host-publish-fail-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "next-host-publish-fail-open".to_string(),
+            "next host publish failure child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    let open_output = function_output("next-host-publish-fail-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .await
+        .expect("record open output");
+    session
+        .maybe_commit_spine_tool_output(&turn_context, &open_output)
+        .await
+        .expect("commit open");
+
+    let inner = assistant_message("child body before next host publish failure");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&inner))
+        .await
+        .expect("record inner");
+    let next_request = spine_call(SPINE_TOOL_NEXT, "next-host-publish-fail");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_request))
+        .await
+        .expect("record next request");
+    session
+        .stage_spine_next(
+            "next-host-publish-fail".to_string(),
+            "next host publish failure sibling".to_string(),
+            "next host publish failure memory".to_string(),
+        )
+        .await
+        .expect("stage next");
+    let next_output = function_output("next-host-publish-fail");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&next_output))
+        .await
+        .expect("record next output before commit");
+    let original_history = session.clone_history().await.raw_items().to_vec();
+    while rx.try_recv().is_ok() {}
+
+    session
+        .fail_next_history_suffix_replace_for_test("forced next host publish failure")
+        .await;
+    let err = session
+        .maybe_commit_spine_tool_output(&turn_context, &next_output)
+        .await
+        .expect_err("host publish failure should fail next reduce");
+    assert!(
+        err.should_invalidate_runtime(),
+        "host publish failure after durable next reduce must invalidate runtime: {err}"
+    );
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        original_history.as_slice(),
+        "host publish failure must leave host history unchanged"
+    );
+    let err = session
+        .spine_tree()
+        .await
+        .expect_err("host publish failure should leave no continuable advanced runtime");
+    assert!(
+        err.to_string().contains("spine runtime is invalid"),
+        "unexpected runtime error: {err}"
+    );
+    assert_no_pending_spine_tree_update_matching(
+        &rx,
+        "host publish failure must not emit a next-sibling tree update",
+        |snapshot| snapshot.active_node_id == "1.1.2",
+    );
+    assert_eq!(compact_mock.requests().len(), 0);
+}
+
+#[tokio::test]
 async fn spine_next_raw_output_append_failure_does_not_replace_host_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
@@ -12124,7 +12357,7 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
 }
 
 #[tokio::test]
-async fn spine_close_rejects_runtime_owned_marker_memory_without_mutating_history() {
+async fn spine_close_accepts_marker_like_memory_as_opaque_text_without_mutating_history() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -12191,19 +12424,14 @@ async fn spine_close_rejects_runtime_owned_marker_memory_without_mutating_histor
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
         .await
         .expect("record conversation items");
-    let err = session
+    session
         .stage_spine_close(
             "encrypted-close".to_string(),
             "bad memory with ## Node Memory marker".to_string(),
         )
         .await
-        .expect_err("runtime-owned memory marker should be rejected at stage time");
-    assert!(
-        err.to_string()
-            .contains("spine.close/next memory must not contain runtime-owned marker"),
-        "unexpected error: {err}"
-    );
-    assert_no_pending_spine_commit(&session, "encrypted-close").await;
+        .expect("node memory text is opaque except for non-empty validation");
+    assert_pending_spine_commit(&session, "encrypted-close").await;
     assert_eq!(compact_mock.requests().len(), 0);
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -14340,19 +14568,19 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
         assert!(
             output
                 .to_string()
-                .contains("no Spine control token was emitted"),
-            "rejection output must say no Spine control token was emitted for {call_id}: {output}"
+                .contains("Ordinary non-Spine tools may have run"),
+            "rejection output must preserve ordinary-tool uncertainty for {call_id}: {output}"
         );
         assert!(
             output
                 .to_string()
-                .contains("Please resend at most one Spine control request"),
+                .contains("retry with at most one of spine.open, spine.close, or spine.next"),
             "rejection output must ask the model to resend one control for {call_id}: {output}"
         );
         assert!(
             !output
                 .to_string()
-                .contains("No tool in this toolreq was executed"),
+                .contains("No tool in this response was executed"),
             "rejection output must not claim ordinary tools were skipped for {call_id}: {output}"
         );
     }
@@ -16059,9 +16287,10 @@ async fn spine_status_overlay_is_injected_into_sampling_prompt_only() -> anyhow:
     assert!(status.contains(r#"cursor="1.1""#), "{status}");
     assert!(status.contains(r#"parent="1""#), "{status}");
     assert!(
-        status.contains(r#"cursor_node_context_tokens="unavailable""#),
+        status.contains(r#"cursor_context="unavailable""#),
         "{status}"
     );
+    assert!(!status.contains("cursor_context_problem"), "{status}");
     assert!(!status.contains(r#"live_node=""#), "{status}");
     assert!(
         status.contains(r#"context_left=""#) || status.contains(r#"context_left="unavailable""#),
@@ -16847,7 +17076,7 @@ async fn record_token_usage_refreshes_spine_tree_cache_only_snapshot() {
 }
 
 #[tokio::test]
-async fn spine_tree_tool_keeps_missing_open_baseline_without_provider_sample() {
+async fn spine_tree_tool_hides_context_problem_but_snapshot_keeps_it() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -16884,10 +17113,8 @@ async fn spine_tree_tool_keeps_missing_open_baseline_without_provider_sample() {
     while rx.try_recv().is_ok() {}
     let history_before = session.clone_history().await.raw_items().to_vec();
     let tree = session.spine_tree().await.expect("tree");
-    assert!(
-        tree.contains("(context problem: missing current usage)"),
-        "{tree}"
-    );
+    assert!(!tree.contains("context problem"), "{tree}");
+    assert!(tree.contains("[1.1.1] Current invalid range"), "{tree}");
 
     session
         .record_token_usage_info(
@@ -17105,10 +17332,7 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
         "{text}"
     );
     assert!(text.contains(r#"parent="1.1""#), "{text}");
-    assert!(
-        text.contains(r#"cursor_node_context_tokens="32.0K""#),
-        "{text}"
-    );
+    assert!(text.contains(r#"cursor_context="32.0K""#), "{text}");
     assert!(!text.contains(r#"live_node=""#), "{text}");
     assert!(
         text.contains(&format!(

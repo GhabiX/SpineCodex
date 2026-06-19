@@ -358,6 +358,48 @@ pub(super) struct MemRecord {
     pub(super) body_hash: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct MemoryContextAccountingRecord {
+    pub(super) compact_id: String,
+    pub(super) closed_memory_context_tokens: i64,
+    pub(super) provider_input_tokens: i64,
+    pub(super) replacement_prefix_baseline_tokens: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum MemoryContextAccountingSkipReason {
+    MissingProviderUsage,
+    InvalidProviderUsage,
+    NegativeMemoryDelta,
+    SupersededByNewPending,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum MemoryContextAccountingWitnessRecord {
+    Pending {
+        compact_id: String,
+        replacement_prefix_baseline_tokens: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        close_input_tokens: Option<i64>,
+    },
+    Consumed {
+        compact_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_input_tokens: Option<i64>,
+        reason: MemoryContextAccountingSkipReason,
+    },
+}
+
+impl MemoryContextAccountingWitnessRecord {
+    pub(super) fn compact_id(&self) -> &str {
+        match self {
+            Self::Pending { compact_id, .. } | Self::Consumed { compact_id, .. } => compact_id,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum SpineCommitKindMarker {

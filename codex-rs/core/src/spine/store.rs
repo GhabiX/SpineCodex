@@ -22,6 +22,8 @@ use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
+use crate::spine::model::MemoryContextAccountingRecord;
+use crate::spine::model::MemoryContextAccountingWitnessRecord;
 use crate::spine::model::MemoryRef;
 #[cfg(test)]
 use crate::spine::model::PressureEvent;
@@ -58,6 +60,8 @@ const TREE_FILE: &str = "tree.jsonl";
 const PRESSURE_FILE: &str = "pressure.jsonl";
 const TRIM_FILE: &str = "trim.jsonl";
 const MEM_FILE: &str = "mem.jsonl";
+const MEM_ACCOUNTING_FILE: &str = "mem_accounting.jsonl";
+const MEM_ACCOUNTING_WITNESS_FILE: &str = "mem_accounting_witness.jsonl";
 const COMMIT_FILE: &str = "commits.jsonl";
 const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
 const FEEDBACK_FILE: &str = "spine_feedback.md";
@@ -621,6 +625,16 @@ fn clone_for_rollout_into_store(
             }
         }
     }
+    for accounting in source.mem_accounting()? {
+        if cloned_memory_paths.contains_key(&accounting.compact_id) {
+            target.append_mem_accounting(&accounting)?;
+        }
+    }
+    for witness in source.mem_accounting_witnesses()? {
+        if cloned_memory_paths.contains_key(witness.compact_id()) {
+            target.append_mem_accounting_witness(&witness)?;
+        }
+    }
     for checkpoint in cloned_compact_checkpoints {
         let checkpoint = clone_compact_checkpoint_for_target(
             checkpoint,
@@ -719,6 +733,14 @@ impl SpineStore {
 
     pub(super) fn mem_path(&self) -> PathBuf {
         self.root.join(MEM_FILE)
+    }
+
+    fn mem_accounting_path(&self) -> PathBuf {
+        self.root.join(MEM_ACCOUNTING_FILE)
+    }
+
+    fn mem_accounting_witness_path(&self) -> PathBuf {
+        self.root.join(MEM_ACCOUNTING_WITNESS_FILE)
     }
 
     fn commit_path(&self) -> PathBuf {
@@ -826,6 +848,20 @@ impl SpineStore {
 
     pub(super) fn append_mem(&self, mem: &MemRecord) -> Result<(), SpineError> {
         append_json_line(&self.mem_path(), mem)
+    }
+
+    pub(super) fn append_mem_accounting(
+        &self,
+        accounting: &MemoryContextAccountingRecord,
+    ) -> Result<(), SpineError> {
+        append_json_line(&self.mem_accounting_path(), accounting)
+    }
+
+    pub(super) fn append_mem_accounting_witness(
+        &self,
+        witness: &MemoryContextAccountingWitnessRecord,
+    ) -> Result<(), SpineError> {
+        append_json_line(&self.mem_accounting_witness_path(), witness)
     }
 
     pub(super) fn append_commit_marker(
@@ -998,6 +1034,22 @@ impl SpineStore {
             return Ok(Vec::new());
         }
         read_json_lines(&self.mem_path())
+    }
+
+    pub(super) fn mem_accounting(&self) -> Result<Vec<MemoryContextAccountingRecord>, SpineError> {
+        if !self.mem_accounting_path().exists() {
+            return Ok(Vec::new());
+        }
+        read_json_lines(&self.mem_accounting_path())
+    }
+
+    pub(super) fn mem_accounting_witnesses(
+        &self,
+    ) -> Result<Vec<MemoryContextAccountingWitnessRecord>, SpineError> {
+        if !self.mem_accounting_witness_path().exists() {
+            return Ok(Vec::new());
+        }
+        read_json_lines(&self.mem_accounting_witness_path())
     }
 
     pub(super) fn commit_markers(&self) -> Result<Vec<SpineCommitMarker>, SpineError> {

@@ -22,7 +22,7 @@ pub(crate) fn create_spine_namespace_tool(
     if include_jit_tools {
         tools.push(ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: SPINE_TOOL_TREE.to_string(),
-            description: "Inspect the current Spine tree, cursor, current live-node context pressure, and overall context-window pressure without moving the cursor.".to_string(),
+            description: "Inspect the current Spine tree, cursor, and context status without moving the cursor.".to_string(),
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(
@@ -40,16 +40,14 @@ pub(crate) fn create_spine_namespace_tool(
         tools.extend([
             ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                 name: SPINE_TOOL_OPEN.to_string(),
-                description: "Open a focused child task under the current Spine cursor."
+                description: "Open a focused child node under the current Spine cursor."
                     .to_string(),
                 strict: false,
                 defer_loading: None,
                 parameters: JsonSchema::object(
                     BTreeMap::from([(
                         "summary".to_string(),
-                        JsonSchema::string(Some(
-                            "Short label for the new Spine task node.".to_string(),
-                        )),
+                        JsonSchema::string(Some("Short label for the new Spine node.".to_string())),
                     )]),
                     Some(vec!["summary".to_string()]),
                     Some(false.into()),
@@ -156,15 +154,20 @@ fn spine_close_tool() -> ResponsesApiTool {
     let properties = BTreeMap::from([(
         "memory".to_string(),
         JsonSchema::string(Some(
-            "Required Node Memory body for closing the current Spine task. Include stable continuation facts, decisions, evidence, unresolved risks, and next actions. Do not include runtime-owned Spine Memory/User Message/Child Memory headings.".to_string(),
+            "Required continuation memory for closing the current Spine node. Summarize current progress, key decisions, evidence, constraints, unresolved risks, remaining next steps, critical files/tests/references, and the final state of relevant user requests. Use [U#] anchors when referring to preserved user messages.".to_string(),
         )),
     )]);
     ResponsesApiTool {
         name: SPINE_TOOL_CLOSE.to_string(),
-        description: "Close the current Spine task node with model-authored Node Memory and resume its parent.".to_string(),
+        description: "Close the current Spine node with continuation memory and resume its parent."
+            .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(vec!["memory".to_string()]), Some(false.into())),
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["memory".to_string()]),
+            Some(false.into()),
+        ),
         output_schema: None,
     }
 }
@@ -174,20 +177,20 @@ fn spine_next_tool() -> ResponsesApiTool {
         (
             "summary".to_string(),
             JsonSchema::string(Some(
-                "Short label for the next sibling Spine task node.".to_string(),
+                "Short label for the next sibling Spine node.".to_string(),
             )),
         ),
         (
             "memory".to_string(),
             JsonSchema::string(Some(
-                "Required Node Memory body for closing the current Spine task before opening the sibling. Do not include runtime-owned Spine Memory/User Message/Child Memory headings."
+                "Required continuation memory for the current Spine node before opening the sibling. Summarize current progress, key decisions, evidence, constraints, unresolved risks, remaining next steps, critical files/tests/references, and the final state of relevant user requests. Use [U#] anchors when referring to preserved user messages."
                     .to_string(),
             )),
         ),
     ]);
     ResponsesApiTool {
         name: SPINE_TOOL_NEXT.to_string(),
-        description: "Close the current node with model-authored Node Memory, then continue in a new sibling under the resumed parent.".to_string(),
+        description: "Close the current node with continuation memory, then continue in a new sibling under the resumed parent.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["summary".to_string(), "memory".to_string()]), Some(false.into())),

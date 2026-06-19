@@ -190,48 +190,7 @@ fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
             "spine.close memory argument produced empty node memory".to_string(),
         ));
     }
-    if let Some(marker) = forbidden_generated_body_structure_marker(body) {
-        return Err(SpineError::CompactFailure(format!(
-            "spine.close memory argument contains forbidden structure marker {marker:?}"
-        )));
-    }
     Ok(())
-}
-
-fn forbidden_generated_body_structure_marker(body: &str) -> Option<String> {
-    const FORBIDDEN_SUBSTRINGS: &[&str] = &[
-        "# Spine Memory ",
-        "---------- SPINE MEMORY COMPACT ----------",
-        "---------- Spine Compact Directive ----------",
-        "---------- Spine Close Target ----------",
-        "## User Message",
-        "## Child Memory",
-        "## Memory Slot",
-        "## Node Memory",
-        "USER_MSG",
-    ];
-    if let Some(marker) = FORBIDDEN_SUBSTRINGS
-        .iter()
-        .find(|marker| body.contains(**marker))
-    {
-        return Some((*marker).to_string());
-    }
-
-    body.lines()
-        .map(str::trim)
-        .find(|line| is_forbidden_generated_body_tag_line(line))
-        .map(str::to_string)
-}
-
-fn is_forbidden_generated_body_tag_line(line: &str) -> bool {
-    line == "<spine_memory>"
-        || line == "</spine_memory>"
-        || line.starts_with("<SPINE_SLOT_")
-        || line.starts_with("</SPINE_SLOT_")
-        || line.starts_with("<SPINE_NODE_MEMORY")
-        || line.starts_with("</SPINE_NODE_MEMORY")
-        || line.starts_with("<USER_MSG_")
-        || line.starts_with("</USER_MSG_")
 }
 
 #[cfg(test)]
@@ -483,7 +442,7 @@ mod spine_close_slot_map_tests {
     }
 
     #[test]
-    fn direct_node_memory_rejects_structure_pollution() {
+    fn direct_node_memory_treats_structure_markers_as_opaque_content() {
         let plan = source_plan(vec![source_entry(
             2,
             0,
@@ -492,19 +451,15 @@ mod spine_close_slot_map_tests {
         )]);
         let skeleton =
             SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
-        let err = skeleton
-            .assemble("## User Message\npolluted")
-            .expect_err("node memory pollution must be rejected");
+        let body = skeleton
+            .assemble("## User Message\nquoted historical text")
+            .expect("node memory body is opaque text except for non-empty validation");
 
-        assert!(
-            err.to_string()
-                .contains("contains forbidden structure marker"),
-            "unexpected error: {err}"
-        );
+        assert!(body.contains("## Node Memory\n## User Message\nquoted historical text"));
     }
 
     #[test]
-    fn direct_node_memory_rejects_standalone_body_control_tags() {
+    fn direct_node_memory_allows_standalone_body_control_tags_as_text() {
         let plan = source_plan(vec![source_entry(
             2,
             0,
@@ -516,27 +471,17 @@ mod spine_close_slot_map_tests {
 
         let nested_slot_tag = skeleton
             .assemble("before\n<SPINE_SLOT_1>\nafter")
-            .expect_err("standalone slot tag inside node memory must fail");
-        assert!(
-            nested_slot_tag
-                .to_string()
-                .contains("contains forbidden structure marker"),
-            "unexpected error: {nested_slot_tag}"
-        );
+            .expect("standalone slot-like tag is opaque node memory text");
+        assert!(nested_slot_tag.contains("## Node Memory\nbefore\n<SPINE_SLOT_1>\nafter"));
 
         let runtime_tag = skeleton
             .assemble("before\n<spine_memory>\nafter")
-            .expect_err("standalone runtime memory tag inside node memory must fail");
-        assert!(
-            runtime_tag
-                .to_string()
-                .contains("contains forbidden structure marker"),
-            "unexpected error: {runtime_tag}"
-        );
+            .expect("standalone runtime-like tag is opaque node memory text");
+        assert!(runtime_tag.contains("## Node Memory\nbefore\n<spine_memory>\nafter"));
     }
 
     #[test]
-    fn direct_node_memory_rejects_empty_and_user_msg_structure() {
+    fn direct_node_memory_rejects_empty_and_allows_user_msg_text() {
         let plan = source_plan(vec![source_entry(
             2,
             0,
@@ -553,12 +498,8 @@ mod spine_close_slot_map_tests {
 
         let user_msg = skeleton
             .assemble("before\n<USER_MSG_1>\ndo not return this\n</USER_MSG_1>\nafter")
-            .expect_err("returned USER_MSG must fail");
-        assert!(
-            user_msg
-                .to_string()
-                .contains("contains forbidden structure marker")
-        );
+            .expect("user-msg-like tags are opaque node memory text");
+        assert!(user_msg.contains("## Node Memory\nbefore\n<USER_MSG_1>\ndo not return this"));
     }
 
     #[test]

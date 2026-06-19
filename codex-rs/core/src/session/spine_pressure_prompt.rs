@@ -9,7 +9,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::spine_tree::SpineNodeContextProblem;
 
 const SPINE_BOUNDARY_HINT_FIRST_TOKENS: i64 = 50_000;
 const SPINE_BOUNDARY_HINT_STEP_TOKENS: i64 = 25_000;
@@ -46,7 +45,6 @@ struct SpineStatusPromptSignal {
     node_summary: Option<String>,
     parent: Option<String>,
     cursor_node_context_tokens: Option<i64>,
-    cursor_node_context_problem: Option<SpineNodeContextProblem>,
     context_left_tokens: Option<i64>,
 }
 
@@ -168,20 +166,19 @@ fn status_prompt_signal(
     let active_open_node = open_nodes
         .iter()
         .find(|node| node.node_id.to_string() == snapshot.active_node_id);
-    let (cursor_node_context_tokens, cursor_node_context_problem) = match active_open_node {
-        Some(node) if node.problem.is_some() => (None, node.problem),
+    let cursor_node_context_tokens = match active_open_node {
+        Some(node) if node.problem.is_some() => None,
         Some(node) => match node_context_tokens(token_info, node.provider_input_tokens) {
-            Ok(tokens) => (Some(tokens), None),
-            Err(problem) => (None, Some(problem)),
+            Ok(tokens) => Some(tokens),
+            Err(_) => None,
         },
-        None => (None, None),
+        None => None,
     };
     Ok(SpineStatusPromptSignal {
         cursor: snapshot.active_node_id,
         node_summary,
         parent,
         cursor_node_context_tokens,
-        cursor_node_context_problem,
         context_left_tokens,
     })
 }
@@ -194,31 +191,14 @@ fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> Strin
     let context_left = format_context_left_status(signal.context_left_tokens)
         .unwrap_or_else(|| "unavailable".to_string());
     let summary = format_spine_status_summary(signal.node_summary.as_deref());
-    let mut text = format!(
-        r#"<spine_status cursor="{}" summary="{}" parent="{}" cursor_node_context_tokens="{}" context_left="{}""#,
+    format!(
+        r#"<spine_status cursor="{}" summary="{}" parent="{}" cursor_context="{}" context_left="{}""#,
         signal.cursor,
         summary,
         signal.parent.as_deref().unwrap_or("none"),
         cursor_node_context,
         context_left,
-    );
-    if let Some(problem) = signal.cursor_node_context_problem {
-        text.push_str(&format!(
-            r#" cursor_node_context_problem="{}""#,
-            context_problem_attr(problem)
-        ));
-    }
-    text.push_str(" />");
-    text
-}
-
-fn context_problem_attr(problem: SpineNodeContextProblem) -> &'static str {
-    match problem {
-        SpineNodeContextProblem::MissingCurrentUsage => "missing_current_usage",
-        SpineNodeContextProblem::MissingOpenContextBaseline => "missing_open_context_baseline",
-        SpineNodeContextProblem::CoordinateMismatch => "coordinate_mismatch",
-        SpineNodeContextProblem::CorruptPressureMetadata => "corrupt_pressure_metadata",
-    }
+    ) + " />"
 }
 
 fn format_spine_status_summary(summary: Option<&str>) -> String {
@@ -366,7 +346,7 @@ fn format_spine_pressure_prompt_overlay(signal: &SpinePressurePromptSignal) -> O
 fn format_boundary_hint(signal: &SpinePressurePromptSignal) -> Option<String> {
     let cursor_tokens = signal.cursor_node_context_tokens?;
     let mut text = format!(
-        "Spine boundary hint: current cursor node {}{} is using ~{} context tokens",
+        "Spine node context hint: current cursor node {}{} is using ~{} context tokens",
         signal.node_id,
         format_node_summary(signal.node_summary.as_deref()),
         format_si_suffix(cursor_tokens),
@@ -376,7 +356,7 @@ fn format_boundary_hint(signal: &SpinePressurePromptSignal) -> Option<String> {
         text.push_str(&context_window);
     }
     text.push_str(
-        ".\nBefore broadening the work, pause and check whether there is a completed handoff boundary.\nIf there is, close with one short sentence naming what later work should remember, then continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.",
+        ".\nBefore broadening the work, check whether the current node can be closed with useful continuation memory.\nIf it can, close it and continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.",
     );
     Some(text)
 }
@@ -396,7 +376,7 @@ fn format_context_warning(signal: &SpinePressurePromptSignal) -> Option<String> 
     );
     if signal.mode_allows_spine_close {
         text.push_str(
-            "\nBefore broadening the work, pause and check whether there is a completed handoff boundary.\nIf there is, close with one short sentence naming what later work should remember, then continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.",
+            "\nBefore broadening the work, check whether the current node can be closed with useful continuation memory.\nIf it can, close it and continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.",
         );
     } else {
         text.push_str(
