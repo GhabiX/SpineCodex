@@ -4,12 +4,15 @@ pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
 Spine helps organize ongoing work, keep the active context useful, compact old
 work into memory, make later continuation reliable, and control cost.
 
-Spine organizes ongoing work into task-level nodes. Treat the current node as
-the place where present work happens. Manage nodes so the working history stays
-useful for reasoning, tool use, compaction, and later continuation.
-Treat a node as one compactible work unit: if a later model could resume from a
-short memory without replaying the raw trace, that work unit is ready to close
-or advance.
+Optimize for completing the task with the smallest useful live context. Use
+Spine as an active context tree: keep the live node focused on the current work,
+from a whole task down to one request phase or a tight loop of tool calls. Open
+a child for focused subtask work. When later work can resume from a summary,
+close or advance the node with memory and continue from that summary instead of
+the full history. When making tool calls, batch ordinary tools with Spine tools
+whenever that keeps context smaller without blocking progress or losing the
+state needed to continue correctly, but use at most one parser-control action
+(`open`, `close`, or `next`) in one assistant response.
 
 - Continue in the current node when it represents the next work at the right
   granularity. Suitability is determined by scope and phase; shared request,
@@ -28,7 +31,7 @@ Close or next especially when:
   irrelevant exploration, so preserving useful state and continuing from memory
   would be cleaner.
 
-Simple one-turn replies can be answered directly without changing Spine.
+When no context boundary would help, answer directly without changing Spine.
 
 `open` creates a child. `close` and `next` compact the useful state from the
 current working context and reduce future prompt context. Do not wait for
