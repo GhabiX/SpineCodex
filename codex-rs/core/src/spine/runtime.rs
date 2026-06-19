@@ -1057,12 +1057,7 @@ impl SpineRuntime {
         if open_meta.open_context_tokens.is_some() {
             return Ok(false);
         }
-        if !(open_meta.summary == "root"
-            && open_meta
-                .id
-                .parent()
-                .is_some_and(|parent| parent.is_root_epoch()))
-        {
+        if !self.current_open_accepts_deferred_provider_baseline(&open_meta)? {
             return Ok(false);
         }
         let event = SpineLedgerEvent::OpenContextBaseline {
@@ -1079,6 +1074,39 @@ impl SpineRuntime {
             input_tokens,
             ContextBaselineSource::ProviderAtOpen,
         )
+    }
+
+    fn current_open_accepts_deferred_provider_baseline(
+        &self,
+        open_meta: &TreeMeta,
+    ) -> Result<bool, SpineError> {
+        if open_meta.summary == "root"
+            && open_meta
+                .id
+                .parent()
+                .is_some_and(|parent| parent.is_root_epoch())
+        {
+            return Ok(true);
+        }
+        let Some(open_seq) = self
+            .ledger
+            .events
+            .iter()
+            .rev()
+            .find_map(|event| match &event.event {
+                SpineLedgerEvent::Open { child, .. } if child == &open_meta.id => Some(event.seq),
+                _ => None,
+            })
+        else {
+            return Ok(false);
+        };
+        Ok(self.store.commit_markers()?.iter().any(|marker| {
+            marker.kind == SpineCommitKindMarker::CloseThenOpen
+                && marker
+                    .token_seq_start
+                    .checked_add(1)
+                    .is_some_and(|seq| seq == open_seq)
+        }))
     }
 
     fn current_close_open_meta(&self) -> Result<&TreeMeta, SpineError> {
@@ -2348,11 +2376,9 @@ impl SpineRuntime {
             boundary: self.raw_len,
             index: open_index_u64,
             summary: summary.clone(),
-            open_input_tokens: token_baselines.provider_input_tokens,
-            open_context_tokens: token_baselines.provider_input_tokens,
-            open_context_source: token_baselines
-                .provider_input_tokens
-                .map(|_| ContextBaselineSource::ProviderAtOpen),
+            open_input_tokens: None,
+            open_context_tokens: None,
+            open_context_source: None,
         };
         let mut events = vec![prepared.close_event.clone(), open_event];
         let completed_toolcall = completed_toolcall.ok_or_else(|| {
@@ -2388,10 +2414,8 @@ impl SpineRuntime {
                     child,
                     open_index_u64,
                     summary,
-                    token_baselines.provider_input_tokens,
-                    token_baselines
-                        .provider_input_tokens
-                        .map(|_| ContextBaselineSource::ProviderAtOpen),
+                    None,
+                    None,
                 )?,
             },
             &self.archive(),

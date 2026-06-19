@@ -16482,7 +16482,7 @@ async fn assert_spine_tree_tool_node_context_uses_provider_context_delta() {
 }
 
 #[tokio::test]
-async fn spine_next_sibling_tree_uses_provider_open_baseline() {
+async fn spine_next_sibling_tree_defers_provider_open_baseline_until_post_replacement_usage() {
     let server = start_mock_server().await;
     let compact_mock = mount_sse_once(
         &server,
@@ -16567,23 +16567,37 @@ async fn spine_next_sibling_tree_uses_provider_open_baseline() {
         0,
         "next baseline commit must use direct memory without a secondary compact request"
     );
-    {
-        let mut state = session.state.lock().await;
-        state.set_token_info(Some(TokenUsageInfo {
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage {
-                input_tokens: 55_500,
-                total_tokens: 55_500,
-                ..TokenUsage::default()
-            },
-            model_context_window: None,
-        }));
-    }
+    let tree = session
+        .spine_tree()
+        .await
+        .expect("tree before post baseline");
+    assert!(
+        !tree.contains("[1.1.2] Current next baseline sibling (~"),
+        "{tree}"
+    );
+
+    let post_replacement_usage = TokenUsage {
+        input_tokens: 55_500,
+        total_tokens: 55_500,
+        ..TokenUsage::default()
+    };
+    session
+        .record_token_usage_info(&turn_context, Some(&post_replacement_usage))
+        .await;
     while rx.try_recv().is_ok() {}
 
+    let later_same_epoch_usage = TokenUsage {
+        input_tokens: 72_000,
+        total_tokens: 72_000,
+        ..TokenUsage::default()
+    };
+    session
+        .record_token_usage_info(&turn_context, Some(&later_same_epoch_usage))
+        .await;
+    while rx.try_recv().is_ok() {}
     let tree = session.spine_tree().await.expect("tree");
     assert!(
-        tree.contains("[1.1.2] Current next baseline sibling (~15.5K inclusive context)"),
+        tree.contains("[1.1.2] Current next baseline sibling (~16.5K inclusive context)"),
         "{tree}"
     );
 
@@ -16606,7 +16620,7 @@ async fn spine_next_sibling_tree_uses_provider_open_baseline() {
         .expect("active node");
     assert_eq!(active.node_id, "1.1.2");
     let accounting = active.accounting.as_ref().expect("active accounting");
-    assert_eq!(accounting.current_node_context_tokens, Some(15_500));
+    assert_eq!(accounting.current_node_context_tokens, Some(16_500));
     assert_eq!(
         accounting.current_node_context_baseline_source,
         Some(SpineNodeContextBaselineSource::ProviderAtOpen)

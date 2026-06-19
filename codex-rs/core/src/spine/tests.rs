@@ -2230,7 +2230,7 @@ fn spine_next_equivalent_to_close_then_open() {
 }
 
 #[test]
-fn spine_next_records_provider_baseline_for_sibling_open() {
+fn spine_next_defers_sibling_open_provider_baseline_until_post_replacement_usage() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let mut raw = Vec::new();
@@ -2256,12 +2256,9 @@ fn spine_next_records_provider_baseline_for_sibling_open() {
         commit,
         SpineCommitKind::CloseThenOpen { open_index: 2, .. }
     ));
-    assert_eq!(runtime.current_open_input_tokens(), Some(12_345));
-    assert_eq!(runtime.current_open_provider_input_tokens(), Some(12_345));
-    assert_eq!(
-        runtime.current_open_context_baseline_source(),
-        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
-    );
+    assert_eq!(runtime.current_open_input_tokens(), None);
+    assert_eq!(runtime.current_open_provider_input_tokens(), None);
+    assert_eq!(runtime.current_open_context_baseline_source(), None);
     assert!(matches!(
         runtime.parse_stack().symbols.as_slice(),
         [
@@ -2273,9 +2270,9 @@ fn spine_next_records_provider_baseline_for_sibling_open() {
         ] if next_sibling.id == NodeId::root_epoch(1).child(1).child(2)
             && next_sibling.summary == "next sibling"
             && next_sibling.index == 2
-            && next_sibling.open_input_tokens == Some(12_345)
-            && next_sibling.open_context_tokens == Some(12_345)
-            && next_sibling.open_context_source == Some(ContextBaselineSource::ProviderAtOpen)
+            && next_sibling.open_input_tokens.is_none()
+            && next_sibling.open_context_tokens.is_none()
+            && next_sibling.open_context_source.is_none()
             && matches!(
                 next_nodes.as_slice(),
                 [SpineTreeNode::ToolCallAsLeafNode { segments }]
@@ -2297,20 +2294,43 @@ fn spine_next_records_provider_baseline_for_sibling_open() {
             SpineLedgerEvent::Open {
                 child: next,
                 index: 2,
-                open_input_tokens: Some(12_345),
-                open_context_tokens: Some(12_345),
-                open_context_source: Some(ContextBaselineSource::ProviderAtOpen),
+                open_input_tokens: None,
+                open_context_tokens: None,
+                open_context_source: None,
                 ..
             },
             SpineLedgerEvent::ToolCall { .. },
         ] if *next == NodeId::root_epoch(1).child(1).child(2)
     ));
 
+    runtime
+        .capture_current_open_provider_baseline(7_913)
+        .expect("capture post-replacement provider baseline for next sibling");
+    assert_eq!(runtime.current_open_input_tokens(), Some(7_913));
+    assert_eq!(runtime.current_open_provider_input_tokens(), Some(7_913));
+    assert_eq!(
+        runtime.current_open_context_baseline_source(),
+        Some(SpineNodeContextBaselineSource::ProviderAtOpen)
+    );
+    assert!(matches!(
+        event_log(&runtime).as_slice(),
+        [
+            ..,
+            SpineLedgerEvent::OpenContextBaseline {
+                node,
+                open_input_tokens: 7_913,
+                open_context_tokens: 7_913,
+                open_context_source: ContextBaselineSource::ProviderAtOpen,
+                ..
+            },
+        ] if *node == NodeId::root_epoch(1).child(1).child(2)
+    ));
+
     let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
         .expect("load spine")
         .expect("sidecar exists");
-    assert_eq!(replayed.current_open_input_tokens(), Some(12_345));
-    assert_eq!(replayed.current_open_provider_input_tokens(), Some(12_345));
+    assert_eq!(replayed.current_open_input_tokens(), Some(7_913));
+    assert_eq!(replayed.current_open_provider_input_tokens(), Some(7_913));
     assert_eq!(
         replayed.current_open_context_baseline_source(),
         Some(SpineNodeContextBaselineSource::ProviderAtOpen)
