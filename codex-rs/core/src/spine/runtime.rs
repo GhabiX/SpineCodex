@@ -250,6 +250,29 @@ struct OpenContextBaseline {
     source: ContextBaselineSource,
 }
 
+enum CloseFamilyAfterClose {
+    None,
+    Open { summary: String },
+}
+
+struct CloseFamilyOpenPlan {
+    child: NodeId,
+    open_index_u64: u64,
+    summary: String,
+    event: SpineLedgerEvent,
+}
+
+struct CloseFamilyPlan {
+    operation: &'static str,
+    missing_toolcall_error: &'static str,
+    event_count_underflow_error: &'static str,
+    toolcall_seq_overflow_error: &'static str,
+    marker_kind: SpineCommitKindMarker,
+    kind: SpineCommitKind,
+    toolcall_context_index: Option<usize>,
+    open: Option<CloseFamilyOpenPlan>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
     Open { open_request_index: usize },
@@ -2572,17 +2595,52 @@ impl SpineRuntime {
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpinePreparedCommit, SpineError> {
-        let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
-        let mut events = vec![prepared.close_event.clone()];
-        let completed_toolcall = completed_toolcall.ok_or_else(|| {
-            SpineError::InvalidEvent(
-                "spine.close commit requires completed toolcall evidence".to_string(),
-            )
-        })?;
-        let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
-        let completed_toolcall = self.remap_completed_toolcall_context_indices(
+        self.commit_close_family_pending(
+            CloseFamilyAfterClose::None,
+            memory_assembly,
+            token_baselines,
             completed_toolcall,
-            prepared
+            raw_items,
+        )
+    }
+
+    fn commit_next_sugar_pending(
+        &mut self,
+        summary: String,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
+        token_baselines: SpineTokenBaselines,
+        completed_toolcall: Option<CompletedToolCall>,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpinePreparedCommit, SpineError> {
+        self.commit_close_family_pending(
+            CloseFamilyAfterClose::Open { summary },
+            memory_assembly,
+            token_baselines,
+            completed_toolcall,
+            raw_items,
+        )
+    }
+
+    fn commit_close_family_pending(
+        &mut self,
+        after_close: CloseFamilyAfterClose,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
+        token_baselines: SpineTokenBaselines,
+        completed_toolcall: Option<CompletedToolCall>,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpinePreparedCommit, SpineError> {
+        let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
+        let plan = self.close_family_plan(&prepared, after_close)?;
+        let mut events = vec![prepared.close_event.clone()];
+        if let Some(open) = plan.open.as_ref() {
+            events.push(open.event.clone());
+        }
+        let completed_toolcall = completed_toolcall
+            .ok_or_else(|| SpineError::InvalidEvent(plan.missing_toolcall_error.to_string()))?;
+        let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
+        let toolcall_context_index = match plan.toolcall_context_index {
+            Some(index) => index,
+            None => prepared
                 .suffix_start
                 .checked_add(prepared.replacement.len())
                 .ok_or_else(|| {
@@ -2590,7 +2648,9 @@ impl SpineRuntime {
                         "spine.close toolcall context index overflow".to_string(),
                     )
                 })?,
-        )?;
+        };
+        let completed_toolcall = self
+            .remap_completed_toolcall_context_indices(completed_toolcall, toolcall_context_index)?;
         let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
         events.push(toolcall_event);
         let event_count = u64::try_from(events.len())
@@ -2599,10 +2659,10 @@ impl SpineRuntime {
             .ledger
             .next_event_seq
             .checked_add(event_count.checked_sub(1).ok_or_else(|| {
-                SpineError::InvalidEvent("spine close event count underflow".to_string())
+                SpineError::InvalidEvent(plan.event_count_underflow_error.to_string())
             })?)
             .ok_or_else(|| {
-                SpineError::InvalidEvent("spine.close toolcall seq overflow".to_string())
+                SpineError::InvalidEvent(plan.toolcall_seq_overflow_error.to_string())
             })?;
         let mut pending_close_parse_stack = self.parse_stack.clone();
         pending_close_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
@@ -2610,6 +2670,21 @@ impl SpineRuntime {
             pending_close_parse_stack.clone(),
             prepared.task_tree_reduction,
         )?;
+        if let Some(open) = plan.open.as_ref() {
+            final_parse_stack.shift(
+                SpineToken::Open {
+                    meta: tree_meta_with_token_baselines(
+                        &self.archive(),
+                        open.child.clone(),
+                        open.open_index_u64,
+                        open.summary.clone(),
+                        None,
+                        None,
+                    )?,
+                },
+                &self.archive(),
+            )?;
+        }
         final_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
         if let Err(err) = self
             .write_prepared_memory_body(&prepared.mem, &prepared.memory_body)
@@ -2622,15 +2697,15 @@ impl SpineRuntime {
         let marker = close_commit_marker(
             self.ledger.next_event_seq,
             &prepared.mem,
-            SpineCommitKindMarker::Close,
+            plan.marker_kind,
             close_event_boundary(&prepared.close_event)?,
             event_count,
         )?;
         self.append_committed_events(events, marker)?;
         Ok(SpinePreparedCommit {
-            kind: SpineCommitKind::Close,
+            kind: plan.kind,
             publication_plan: Some(HistoryPublicationPlan {
-                operation: "spine.close",
+                operation: plan.operation,
                 suffix_start: prepared.suffix_start,
                 replacement_prefix: prepared.replacement,
                 preserve_host_history_from: toolcall_start,
@@ -2644,111 +2719,66 @@ impl SpineRuntime {
         })
     }
 
-    fn commit_next_sugar_pending(
-        &mut self,
-        summary: String,
-        memory_assembly: Option<SpineCloseMemoryAssembly>,
-        token_baselines: SpineTokenBaselines,
-        completed_toolcall: Option<CompletedToolCall>,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpinePreparedCommit, SpineError> {
-        let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
-        let mut close_reduced_parse_stack = self.parse_stack.clone();
-        close_reduced_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
-        close_reduced_parse_stack
-            .apply_prevalidated_task_tree_reduction(prepared.task_tree_reduction.clone());
-        let child = close_reduced_parse_stack.next_child_id()?;
-        let open_index = prepared
-            .suffix_start
-            .checked_add(prepared.replacement.len())
-            .ok_or_else(|| {
-                SpineError::InvalidEvent("spine.next synthetic open index overflow".to_string())
-            })?;
-        let open_index_u64 = u64::try_from(open_index).map_err(|_| {
-            SpineError::InvalidEvent("spine.next synthetic open index overflow".to_string())
-        })?;
-        let open_event = SpineLedgerEvent::Open {
-            child: child.clone(),
-            boundary: self.raw_len,
-            index: open_index_u64,
-            summary: summary.clone(),
-            open_input_tokens: None,
-            open_context_tokens: None,
-            open_context_source: None,
-        };
-        let mut events = vec![prepared.close_event.clone(), open_event];
-        let completed_toolcall = completed_toolcall.ok_or_else(|| {
-            SpineError::InvalidEvent(
-                "spine.next commit requires completed toolcall evidence".to_string(),
-            )
-        })?;
-        let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
-        let completed_toolcall =
-            self.remap_completed_toolcall_context_indices(completed_toolcall, open_index)?;
-        let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
-        events.push(toolcall_event);
-        let event_count = u64::try_from(events.len())
-            .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?;
-        let toolcall_seq = self
-            .ledger
-            .next_event_seq
-            .checked_add(event_count.checked_sub(1).ok_or_else(|| {
-                SpineError::InvalidEvent("spine next event count underflow".to_string())
-            })?)
-            .ok_or_else(|| {
-                SpineError::InvalidEvent("spine.next toolcall seq overflow".to_string())
-            })?;
-        let mut pending_close_parse_stack = self.parse_stack.clone();
-        pending_close_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
-        let mut final_parse_stack = self.task_tree_reduced_from(
-            pending_close_parse_stack.clone(),
-            prepared.task_tree_reduction,
-        )?;
-        final_parse_stack.shift(
-            SpineToken::Open {
-                meta: tree_meta_with_token_baselines(
-                    &self.archive(),
-                    child,
-                    open_index_u64,
-                    summary,
-                    None,
-                    None,
-                )?,
-            },
-            &self.archive(),
-        )?;
-        final_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
-        if let Err(err) = self
-            .write_prepared_memory_body(&prepared.mem, &prepared.memory_body)
-            .and_then(|()| flush_archive_writes(&prepared.archive_writes))
-            .and_then(|()| self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body))
-        {
-            self.parse_stack = pending_close_parse_stack;
-            return Err(err);
-        }
-        let marker = close_commit_marker(
-            self.ledger.next_event_seq,
-            &prepared.mem,
-            SpineCommitKindMarker::CloseThenOpen,
-            close_event_boundary(&prepared.close_event)?,
-            event_count,
-        )?;
-        self.append_committed_events(events, marker)?;
-        Ok(SpinePreparedCommit {
-            kind: SpineCommitKind::CloseThenOpen { open_index },
-            publication_plan: Some(HistoryPublicationPlan {
-                operation: "spine.next",
-                suffix_start: prepared.suffix_start,
-                replacement_prefix: prepared.replacement,
-                preserve_host_history_from: toolcall_start,
-                append_current_tool_response_if_missing: true,
+    fn close_family_plan(
+        &self,
+        prepared: &PreparedCloseCommit,
+        after_close: CloseFamilyAfterClose,
+    ) -> Result<CloseFamilyPlan, SpineError> {
+        match after_close {
+            CloseFamilyAfterClose::None => Ok(CloseFamilyPlan {
+                operation: "spine.close",
+                missing_toolcall_error: "spine.close commit requires completed toolcall evidence",
+                event_count_underflow_error: "spine close event count underflow",
+                toolcall_seq_overflow_error: "spine.close toolcall seq overflow",
+                marker_kind: SpineCommitKindMarker::Close,
+                kind: SpineCommitKind::Close,
+                toolcall_context_index: None,
+                open: None,
             }),
-            final_parse_stack: Some(final_parse_stack),
-            completed_toolcall: Some(completed_toolcall),
-            toolcall_seq: Some(toolcall_seq),
-            raw_items: raw_items.to_vec(),
-            mem_for_accounting: Some(prepared.mem),
-        })
+            CloseFamilyAfterClose::Open { summary } => {
+                let mut close_reduced_parse_stack = self.parse_stack.clone();
+                close_reduced_parse_stack
+                    .shift_pending_close(prepared.memory.clone(), &self.archive())?;
+                close_reduced_parse_stack
+                    .apply_prevalidated_task_tree_reduction(prepared.task_tree_reduction.clone());
+                let child = close_reduced_parse_stack.next_child_id()?;
+                let open_index = prepared
+                    .suffix_start
+                    .checked_add(prepared.replacement.len())
+                    .ok_or_else(|| {
+                        SpineError::InvalidEvent(
+                            "spine.next synthetic open index overflow".to_string(),
+                        )
+                    })?;
+                let open_index_u64 = u64::try_from(open_index).map_err(|_| {
+                    SpineError::InvalidEvent("spine.next synthetic open index overflow".to_string())
+                })?;
+                let event = SpineLedgerEvent::Open {
+                    child: child.clone(),
+                    boundary: self.raw_len,
+                    index: open_index_u64,
+                    summary: summary.clone(),
+                    open_input_tokens: None,
+                    open_context_tokens: None,
+                    open_context_source: None,
+                };
+                Ok(CloseFamilyPlan {
+                    operation: "spine.next",
+                    missing_toolcall_error: "spine.next commit requires completed toolcall evidence",
+                    event_count_underflow_error: "spine next event count underflow",
+                    toolcall_seq_overflow_error: "spine.next toolcall seq overflow",
+                    marker_kind: SpineCommitKindMarker::CloseThenOpen,
+                    kind: SpineCommitKind::CloseThenOpen { open_index },
+                    toolcall_context_index: Some(open_index),
+                    open: Some(CloseFamilyOpenPlan {
+                        child,
+                        open_index_u64,
+                        summary,
+                        event,
+                    }),
+                })
+            }
+        }
     }
 
     pub(crate) fn persist_prepared_commit_side_effects(
