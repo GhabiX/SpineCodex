@@ -47,7 +47,11 @@ Conventions:
   critical files, tests, commands, or references. When relevant preserved user
   messages have `[U#]` anchors, cite those anchors and state what was done
   after each request and whether it is completed, partial, blocked, or pending
-  at node close.
+  at node close. Also record user-visible conclusions or final replies already
+  delivered, so a later continuation does not repeat them as new work.
+- Before replying after `<spine_memory>` continuity or a node transition, check
+  what has already been told to the user and only report new status, changes, or
+  requested details.
 - `<spine_status>` gives Spine node context and orientation when present.
 - `<spine_memory>` provides continuity from closed work.
 - Choose at most one of `open`, `close`, or `next` in one assistant response.
