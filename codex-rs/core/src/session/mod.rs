@@ -2723,25 +2723,30 @@ impl Session {
         }
     }
 
+    async fn assign_spine_raw_ordinals_for_append(
+        &self,
+        items: &[ResponseItem],
+    ) -> CodexResult<(Vec<Option<u64>>, usize)> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok((Vec::new(), 0));
+        };
+        let raw_start = spine_slot.lock().await.raw_len();
+        match assign_spine_raw_ordinals(raw_start, items) {
+            Ok(mapped) => Ok(mapped),
+            Err(err) => Err(self
+                .spine_append_fatal("assign Spine raw ordinals", err)
+                .await),
+        }
+    }
+
     async fn record_conversation_items_base_with_event_policy(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
         emit_raw_response_items: bool,
     ) -> CodexResult<()> {
-        let (raw_ordinals, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
-            let raw_start = spine_slot.lock().await.raw_len();
-            match assign_spine_raw_ordinals(raw_start, items) {
-                Ok(mapped) => mapped,
-                Err(err) => {
-                    return Err(self
-                        .spine_append_fatal("assign Spine raw ordinals", err)
-                        .await);
-                }
-            }
-        } else {
-            (Vec::new(), 0)
-        };
+        let (raw_ordinals, persisted_raw_count) =
+            self.assign_spine_raw_ordinals_for_append(items).await?;
         let appends = self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
         self.ensure_rollout_materialized_for_spine_append().await?;
@@ -2829,19 +2834,7 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        let persisted_raw_count = if let Some(spine_slot) = self.spine.as_ref() {
-            let raw_start = spine_slot.lock().await.raw_len();
-            match assign_spine_raw_ordinals(raw_start, items) {
-                Ok((_, count)) => count,
-                Err(err) => {
-                    return Err(self
-                        .spine_append_fatal("assign Spine raw ordinals", err)
-                        .await);
-                }
-            }
-        } else {
-            0
-        };
+        let (_, persisted_raw_count) = self.assign_spine_raw_ordinals_for_append(items).await?;
         if let Err(err) = self.try_persist_rollout_response_items(items).await {
             return Err(self
                 .spine_append_fatal(
@@ -2872,19 +2865,7 @@ impl Session {
         require_durable_append: bool,
         emit_raw_response_items: bool,
     ) -> CodexResult<()> {
-        let (_, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
-            let raw_start = spine_slot.lock().await.raw_len();
-            match assign_spine_raw_ordinals(raw_start, items) {
-                Ok(mapped) => mapped,
-                Err(err) => {
-                    return Err(self
-                        .spine_append_fatal("assign Spine raw ordinals", err)
-                        .await);
-                }
-            }
-        } else {
-            (Vec::new(), 0)
-        };
+        let (_, persisted_raw_count) = self.assign_spine_raw_ordinals_for_append(items).await?;
         if require_durable_append {
             if let Err(err) = self.try_persist_rollout_response_items(items).await {
                 return Err(self
@@ -2943,19 +2924,8 @@ impl Session {
                 )
                 .await;
         }
-        let (raw_ordinals, persisted_raw_count) = if let Some(spine_slot) = self.spine.as_ref() {
-            let raw_start = spine_slot.lock().await.raw_len();
-            match assign_spine_raw_ordinals(raw_start, items) {
-                Ok(mapped) => mapped,
-                Err(err) => {
-                    return Err(self
-                        .spine_append_fatal("assign Spine raw ordinals", err)
-                        .await);
-                }
-            }
-        } else {
-            (Vec::new(), 0)
-        };
+        let (raw_ordinals, persisted_raw_count) =
+            self.assign_spine_raw_ordinals_for_append(items).await?;
         let context_index = self.clone_history().await.raw_items().len();
         let appends = items
             .iter()
