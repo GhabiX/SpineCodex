@@ -2739,6 +2739,23 @@ impl Session {
         }
     }
 
+    async fn observe_spine_raw_items_for_append(
+        &self,
+        persisted_raw_count: usize,
+    ) -> CodexResult<()> {
+        if let Err(err) = self.ensure_spine_runtime_if_available().await {
+            return Err(self
+                .spine_append_fatal("initialize Spine runtime", err)
+                .await);
+        }
+        if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
+            return Err(self
+                .spine_append_fatal("observe Spine raw items", err)
+                .await);
+        }
+        Ok(())
+    }
+
     async fn record_conversation_items_base_with_event_policy(
         &self,
         turn_context: &TurnContext,
@@ -2750,32 +2767,23 @@ impl Session {
         let appends = self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
         self.ensure_rollout_materialized_for_spine_append().await?;
-        if let Err(err) = self.ensure_spine_runtime_if_available().await {
+        self.observe_spine_raw_items_for_append(persisted_raw_count)
+            .await?;
+        if !raw_ordinals.is_empty()
+            && let Err(err) = self
+                .observe_spine_context_items(&raw_ordinals, items, &appends)
+                .await
+        {
             return Err(self
-                .spine_append_fatal("initialize Spine runtime", err)
+                .spine_append_fatal("observe Spine context items", err)
                 .await);
-        } else {
-            if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
-                return Err(self
-                    .spine_append_fatal("observe Spine raw items", err)
-                    .await);
-            }
-            if !raw_ordinals.is_empty()
-                && let Err(err) = self
-                    .observe_spine_context_items(&raw_ordinals, items, &appends)
-                    .await
-            {
-                return Err(self
-                    .spine_append_fatal("observe Spine context items", err)
-                    .await);
-            }
-            if items.iter().any(is_user_message)
-                && let Err(err) = self.publish_spine_materialized_history_if_available().await
-            {
-                return Err(self
-                    .spine_append_fatal("publish Spine materialized history", err)
-                    .await);
-            }
+        }
+        if items.iter().any(is_user_message)
+            && let Err(err) = self.publish_spine_materialized_history_if_available().await
+        {
+            return Err(self
+                .spine_append_fatal("publish Spine materialized history", err)
+                .await);
         }
         if emit_raw_response_items {
             self.send_raw_response_items(turn_context, items).await;
@@ -2845,15 +2853,8 @@ impl Session {
         }
         self.ensure_rollout_materialized_for_spine_append().await?;
         self.record_into_history(items, turn_context).await;
-        if let Err(err) = self.ensure_spine_runtime_if_available().await {
-            return Err(self
-                .spine_append_fatal("initialize Spine runtime", err)
-                .await);
-        } else if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
-            return Err(self
-                .spine_append_fatal("observe Spine raw items", err)
-                .await);
-        }
+        self.observe_spine_raw_items_for_append(persisted_raw_count)
+            .await?;
         self.send_raw_response_items(turn_context, items).await;
         Ok(())
     }
@@ -2879,15 +2880,8 @@ impl Session {
             self.persist_rollout_response_items(items).await;
         }
         self.ensure_rollout_materialized_for_spine_append().await?;
-        if let Err(err) = self.ensure_spine_runtime_if_available().await {
-            return Err(self
-                .spine_append_fatal("initialize Spine runtime", err)
-                .await);
-        } else if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
-            return Err(self
-                .spine_append_fatal("observe Spine raw items", err)
-                .await);
-        }
+        self.observe_spine_raw_items_for_append(persisted_raw_count)
+            .await?;
         if emit_raw_response_items {
             self.send_raw_response_items(turn_context, items).await;
         }
@@ -2941,25 +2935,16 @@ impl Session {
             .collect::<Vec<_>>();
         self.persist_rollout_response_items(items).await;
         self.ensure_rollout_materialized_for_spine_append().await?;
-        if let Err(err) = self.ensure_spine_runtime_if_available().await {
+        self.observe_spine_raw_items_for_append(persisted_raw_count)
+            .await?;
+        if !appends.is_empty()
+            && let Err(err) = self
+                .observe_spine_context_items(&raw_ordinals, items, &appends)
+                .await
+        {
             return Err(self
-                .spine_append_fatal("initialize Spine runtime", err)
+                .spine_append_fatal("observe Spine control items", err)
                 .await);
-        } else {
-            if let Err(err) = self.observe_spine_raw_items(persisted_raw_count).await {
-                return Err(self
-                    .spine_append_fatal("observe Spine raw items", err)
-                    .await);
-            }
-            if !appends.is_empty()
-                && let Err(err) = self
-                    .observe_spine_context_items(&raw_ordinals, items, &appends)
-                    .await
-            {
-                return Err(self
-                    .spine_append_fatal("observe Spine control items", err)
-                    .await);
-            }
         }
         if emit_raw_response_items {
             self.send_raw_response_items(turn_context, items).await;
