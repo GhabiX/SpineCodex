@@ -1963,6 +1963,7 @@ impl SpineRuntime {
                 "missing spine.close request anchor for call_id={call_id}"
             )));
         }
+        self.current_close_open_meta()?;
         self.stage(PendingTransition::Close { call_id, memory })
     }
 
@@ -1986,6 +1987,7 @@ impl SpineRuntime {
                 "missing spine.next request anchor for call_id={call_id}"
             )));
         }
+        self.current_close_open_meta()?;
         self.stage(PendingTransition::NextSugar {
             call_id,
             summary,
