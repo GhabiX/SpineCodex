@@ -252,25 +252,46 @@ struct OpenContextBaseline {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
-    Open {
-        open_request_index: usize,
-    },
-    Close {
-        suffix_start: usize,
-        replacement: Vec<ResponseItem>,
-        toolcall_start: usize,
-    },
-    CloseThenOpen {
-        suffix_start: usize,
-        replacement: Vec<ResponseItem>,
-        toolcall_start: usize,
-        open_index: usize,
-    },
+    Open { open_request_index: usize },
+    Close,
+    CloseThenOpen { open_index: usize },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HistoryPublicationPlan {
+    operation: &'static str,
+    suffix_start: usize,
+    replacement_prefix: Vec<ResponseItem>,
+    preserve_host_history_from: usize,
+    append_current_tool_response_if_missing: bool,
+}
+
+impl HistoryPublicationPlan {
+    pub(crate) fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    pub(crate) fn suffix_start(&self) -> usize {
+        self.suffix_start
+    }
+
+    pub(crate) fn replacement_prefix(&self) -> &[ResponseItem] {
+        &self.replacement_prefix
+    }
+
+    pub(crate) fn preserve_host_history_from(&self) -> usize {
+        self.preserve_host_history_from
+    }
+
+    pub(crate) fn append_current_tool_response_if_missing(&self) -> bool {
+        self.append_current_tool_response_if_missing
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct SpinePreparedCommit {
     kind: SpineCommitKind,
+    publication_plan: Option<HistoryPublicationPlan>,
     final_parse_stack: Option<ParseStack>,
     completed_toolcall: Option<CompletedToolCall>,
     toolcall_seq: Option<u64>,
@@ -293,6 +314,10 @@ impl SpinePreparedRootCompact {
 impl SpinePreparedCommit {
     pub(crate) fn kind(&self) -> &SpineCommitKind {
         &self.kind
+    }
+
+    pub(crate) fn publication_plan(&self) -> Option<&HistoryPublicationPlan> {
+        self.publication_plan.as_ref()
     }
 }
 
@@ -2514,6 +2539,7 @@ impl SpineRuntime {
                         SpineError::InvalidEvent("spine.open context index overflow".to_string())
                     })?,
                 },
+                publication_plan: None,
                 final_parse_stack: None,
                 completed_toolcall: None,
                 toolcall_seq: None,
@@ -2530,6 +2556,7 @@ impl SpineRuntime {
                     SpineError::InvalidEvent("spine.open context index overflow".to_string())
                 })?,
             },
+            publication_plan: None,
             final_parse_stack: None,
             completed_toolcall: None,
             toolcall_seq: None,
@@ -2601,11 +2628,14 @@ impl SpineRuntime {
         )?;
         self.append_committed_events(events, marker)?;
         Ok(SpinePreparedCommit {
-            kind: SpineCommitKind::Close {
+            kind: SpineCommitKind::Close,
+            publication_plan: Some(HistoryPublicationPlan {
+                operation: "spine.close",
                 suffix_start: prepared.suffix_start,
-                replacement: prepared.replacement,
-                toolcall_start,
-            },
+                replacement_prefix: prepared.replacement,
+                preserve_host_history_from: toolcall_start,
+                append_current_tool_response_if_missing: true,
+            }),
             final_parse_stack: Some(final_parse_stack),
             completed_toolcall: Some(completed_toolcall),
             toolcall_seq: Some(toolcall_seq),
@@ -2705,12 +2735,14 @@ impl SpineRuntime {
         )?;
         self.append_committed_events(events, marker)?;
         Ok(SpinePreparedCommit {
-            kind: SpineCommitKind::CloseThenOpen {
+            kind: SpineCommitKind::CloseThenOpen { open_index },
+            publication_plan: Some(HistoryPublicationPlan {
+                operation: "spine.next",
                 suffix_start: prepared.suffix_start,
-                replacement: prepared.replacement,
-                toolcall_start,
-                open_index,
-            },
+                replacement_prefix: prepared.replacement,
+                preserve_host_history_from: toolcall_start,
+                append_current_tool_response_if_missing: true,
+            }),
             final_parse_stack: Some(final_parse_stack),
             completed_toolcall: Some(completed_toolcall),
             toolcall_seq: Some(toolcall_seq),

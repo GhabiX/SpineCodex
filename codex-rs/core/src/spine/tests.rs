@@ -1659,6 +1659,20 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
         .expect("prepare close commit")
         .expect("prepared close commit");
     assert!(matches!(prepared.kind(), SpineCommitKind::Close { .. }));
+    let publication_plan = prepared
+        .publication_plan()
+        .expect("close commit should carry publication plan");
+    assert_eq!(publication_plan.operation(), "spine.close");
+    assert_eq!(publication_plan.suffix_start(), 0);
+    assert_eq!(publication_plan.replacement_prefix().len(), 1);
+    assert_eq!(
+        publication_plan.preserve_host_history_from(),
+        request_context
+    );
+    assert!(
+        publication_plan.append_current_tool_response_if_missing(),
+        "close publication should append current output when host has not recorded it"
+    );
     assert_eq!(
         runtime.render_tree().expect("render after prepared commit"),
         before_tree,
@@ -2955,12 +2969,7 @@ fn spine_next_equivalent_to_close_then_open() {
 
     assert!(matches!(
         commit,
-        SpineCommitKind::CloseThenOpen {
-            suffix_start,
-            ref replacement,
-            open_index,
-            ..
-        } if suffix_start == 1 && replacement.len() == 1 && open_index == 2
+        SpineCommitKind::CloseThenOpen { open_index: 2 }
     ));
     assert!(matches!(
         runtime.parse_stack().symbols.as_slice(),
@@ -6622,14 +6631,7 @@ fn open_toolcall_leaf_makes_close_suffix_non_empty() {
         )
         .expect("close open-only child")
         .expect("close should commit");
-    assert!(matches!(
-        commit,
-        SpineCommitKind::Close {
-            suffix_start: 0,
-            toolcall_start: 2,
-            ..
-        }
-    ));
+    assert!(matches!(commit, SpineCommitKind::Close));
     assert_eq!(runtime.store.mems().expect("read mems").len(), 1);
     assert!(
         runtime.store.root.join("memory/mem-1-1-1-0-2.md").exists(),

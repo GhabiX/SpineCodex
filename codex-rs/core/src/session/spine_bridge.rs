@@ -1315,6 +1315,9 @@ impl Session {
         let commit_kind = prepared_commit
             .as_ref()
             .map(|prepared| prepared.kind().clone());
+        let publication_plan = prepared_commit
+            .as_ref()
+            .and_then(|prepared| prepared.publication_plan().cloned());
         let defer_tree_update_until_raw_output = matches!(
             commit_kind,
             Some(SpineCommitKind::Close { .. } | SpineCommitKind::CloseThenOpen { .. })
@@ -1333,72 +1336,44 @@ impl Session {
                         )));
                     }
                 }
-                SpineCommitKind::Close {
-                    suffix_start,
-                    replacement,
-                    toolcall_start,
-                } => {
-                    let history = state.clone_history();
-                    let history_items = history.raw_items();
-                    let suffix_end = history_items.len();
-                    if *suffix_start > suffix_end {
-                        return Err(SpineError::Invariant(format!(
-                            "spine.close suffix start {suffix_start} exceeds history length {suffix_end} for call_id={call_id}"
-                        )));
-                    }
-                    if *toolcall_start > suffix_end {
-                        return Err(SpineError::Invariant(format!(
-                            "spine.close toolcall start {toolcall_start} exceeds history length {suffix_end} for call_id={call_id}"
-                        )));
-                    }
-                    let mut replacement = replacement.clone();
-                    replacement.extend_from_slice(&history_items[*toolcall_start..]);
-                    if !tool_resp_already_recorded {
-                        replacement.push(tool_resp_item.clone());
-                    }
-                    history_update = Some(SpineHistoryUpdate {
-                        call_id: call_id.to_string(),
-                        operation: "spine.close",
-                        suffix_start: *suffix_start,
-                        expected_history: history_items.to_vec(),
-                        replacement,
-                        reference_context_item: state.reference_context_item(),
-                    });
-                }
-                SpineCommitKind::CloseThenOpen {
-                    suffix_start,
-                    replacement,
-                    toolcall_start,
-                    ..
-                } => {
-                    let history = state.clone_history();
-                    let history_items = history.raw_items();
-                    let suffix_end = history_items.len();
-                    if *suffix_start > suffix_end {
-                        return Err(SpineError::Invariant(format!(
-                            "spine.next suffix start {suffix_start} exceeds history length {suffix_end} for call_id={call_id}"
-                        )));
-                    }
-                    if *toolcall_start > suffix_end {
-                        return Err(SpineError::Invariant(format!(
-                            "spine.next toolcall start {toolcall_start} exceeds history length {suffix_end} for call_id={call_id}"
-                        )));
-                    }
-                    let mut replacement = replacement.clone();
-                    replacement.extend_from_slice(&history_items[*toolcall_start..]);
-                    if !tool_resp_already_recorded {
-                        replacement.push(tool_resp_item.clone());
-                    }
-                    history_update = Some(SpineHistoryUpdate {
-                        call_id: call_id.to_string(),
-                        operation: "spine.next",
-                        suffix_start: *suffix_start,
-                        expected_history: history_items.to_vec(),
-                        replacement,
-                        reference_context_item: state.reference_context_item(),
-                    });
-                }
+                SpineCommitKind::Close | SpineCommitKind::CloseThenOpen { .. } => {}
             }
+        }
+        if let Some(plan) = publication_plan.as_ref() {
+            let history = state.clone_history();
+            let history_items = history.raw_items();
+            let suffix_end = history_items.len();
+            if plan.suffix_start() > suffix_end {
+                return Err(SpineError::Invariant(format!(
+                    "{} suffix start {} exceeds history length {} for call_id={}",
+                    plan.operation(),
+                    plan.suffix_start(),
+                    suffix_end,
+                    call_id
+                )));
+            }
+            if plan.preserve_host_history_from() > suffix_end {
+                return Err(SpineError::Invariant(format!(
+                    "{} preserve-host-history index {} exceeds history length {} for call_id={}",
+                    plan.operation(),
+                    plan.preserve_host_history_from(),
+                    suffix_end,
+                    call_id
+                )));
+            }
+            let mut replacement = plan.replacement_prefix().to_vec();
+            replacement.extend_from_slice(&history_items[plan.preserve_host_history_from()..]);
+            if plan.append_current_tool_response_if_missing() && !tool_resp_already_recorded {
+                replacement.push(tool_resp_item.clone());
+            }
+            history_update = Some(SpineHistoryUpdate {
+                call_id: call_id.to_string(),
+                operation: plan.operation(),
+                suffix_start: plan.suffix_start(),
+                expected_history: history_items.to_vec(),
+                replacement,
+                reference_context_item: state.reference_context_item(),
+            });
         }
         if history_update.is_none() && tool_resp_already_recorded {
             let history = state.clone_history();
