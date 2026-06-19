@@ -40,6 +40,8 @@ continuation from memory. The compact memory is authored by you in the `memory`
 argument of `close`/`next`; runtime preserves exact user messages and child
 memories, then appends your continuation memory. Choose based on whether the
 current node remains useful for continued work, not raw context size alone.
+Use close or next only from non-root task nodes like `1.1`; at root-epoch ids
+like `1` or `2`, open first.
 If the child already has a user-relevant conclusion, surface it before closing.
 
 Conventions:
