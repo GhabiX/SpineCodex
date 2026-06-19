@@ -2037,6 +2037,7 @@ async fn slash_spinetree_renders_cached_snapshot() {
                 }),
             },
         ],
+        planned_nodes: Vec::new(),
     });
 
     chat.dispatch_command(SlashCommand::Spinetree);
@@ -2105,6 +2106,7 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
                 }),
             },
         ],
+        planned_nodes: Vec::new(),
     });
 
     chat.dispatch_command(SlashCommand::DebugSpine);
@@ -2152,6 +2154,7 @@ async fn slash_spinetree_uses_startup_seeded_snapshot() {
             status: SpineTreeNodeStatus::Live,
             accounting: None,
         }],
+        planned_nodes: Vec::new(),
     });
     assert!(
         drain_insert_history(&mut rx).is_empty(),

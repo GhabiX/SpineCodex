@@ -71,7 +71,11 @@ pub(crate) mod prompt_debug;
 #[doc(hidden)]
 pub use prompt_debug::PromptDebugOutput;
 #[doc(hidden)]
+pub use prompt_debug::SpineScalingLevel;
+#[doc(hidden)]
 pub use prompt_debug::build_prompt_input;
+#[doc(hidden)]
+pub use prompt_debug::build_prompt_input_with_spine_scaling;
 pub(crate) mod mentions {
     pub(crate) use crate::plugins::build_connector_slug_counts;
     pub(crate) use crate::plugins::build_skill_name_counts;

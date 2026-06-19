@@ -27,8 +27,12 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::spine_tree::SpinePlannedNodeSnapshot;
+use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 pub(super) struct PreparedSpineReplay {
     raw_len: u64,
@@ -641,7 +645,15 @@ impl Session {
         Ok(spine_slot)
     }
 
+    #[cfg(test)]
     pub(crate) async fn spine_tree(&self) -> Result<String, SpineError> {
+        self.spine_tree_with_plan(None).await
+    }
+
+    pub(crate) async fn spine_tree_with_plan(
+        &self,
+        planned_nodes: Option<Vec<SpinePlannedNodeSnapshot>>,
+    ) -> Result<String, SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let token_info = self.token_usage_info().await;
         let guard = spine.lock().await;
@@ -651,7 +663,22 @@ impl Session {
                 "spine runtime missing after initialization".to_string(),
             ));
         };
-        render_spine_tree_for_model(runtime, token_info)
+        let view = build_spine_tree_inside_view(runtime, token_info.as_ref())?;
+        drop(guard);
+
+        if let Some(planned_nodes) = planned_nodes {
+            let planned_nodes = validate_planned_nodes(&view.snapshot, planned_nodes)?;
+            let mut guard = self.spine_planned_nodes.lock().await;
+            *guard = planned_nodes;
+        } else {
+            self.prune_spine_planned_nodes(&view.snapshot).await;
+        }
+
+        let planned_nodes = self.spine_planned_nodes.lock().await.clone();
+        Ok(render_spine_tree_for_model_with_plan(
+            view.rendered_tree,
+            &planned_nodes,
+        ))
     }
 
     pub(crate) async fn emit_spine_tree_snapshot(
@@ -660,7 +687,7 @@ impl Session {
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let token_info = self.token_usage_info().await;
-        let snapshot = {
+        let mut snapshot = {
             let guard = spine.lock().await;
             guard.ensure_valid()?;
             let Some(runtime) = guard.runtime() else {
@@ -670,8 +697,15 @@ impl Session {
             };
             build_annotated_tree_snapshot(runtime, token_info.as_ref())?
         };
+        self.prune_spine_planned_nodes(&snapshot).await;
+        snapshot.planned_nodes = self.spine_planned_nodes.lock().await.clone();
         self.send_spine_tree_update(turn_context, snapshot).await;
         Ok(())
+    }
+
+    async fn prune_spine_planned_nodes(&self, snapshot: &SpineTreeUpdateEvent) {
+        let mut planned_nodes = self.spine_planned_nodes.lock().await;
+        *planned_nodes = retain_still_valid_planned_nodes(snapshot, &planned_nodes);
     }
 
     pub(crate) async fn stage_spine_open(
@@ -1962,11 +1996,235 @@ fn build_annotated_tree_snapshot(
     Ok(build_spine_tree_inside_view(runtime, token_info)?.snapshot)
 }
 
-fn render_spine_tree_for_model(
-    runtime: &SpineRuntime,
-    token_info: Option<TokenUsageInfo>,
-) -> Result<String, SpineError> {
-    Ok(build_spine_tree_inside_view(runtime, token_info.as_ref())?.rendered_tree)
+fn render_spine_tree_for_model_with_plan(
+    mut rendered_tree: String,
+    planned_nodes: &[SpinePlannedNodeSnapshot],
+) -> String {
+    if planned_nodes.is_empty() {
+        return rendered_tree;
+    }
+    rendered_tree.push_str("\n\nPlanned future nodes:");
+    let planned_by_parent = planned_nodes_by_parent(planned_nodes);
+    append_planned_nodes_for_model(&mut rendered_tree, &planned_by_parent, None, 0);
+    rendered_tree
+}
+
+fn append_planned_nodes_for_model(
+    rendered_tree: &mut String,
+    planned_by_parent: &BTreeMap<Option<String>, Vec<&SpinePlannedNodeSnapshot>>,
+    parent_id: Option<&str>,
+    depth: usize,
+) {
+    let key = parent_id.map(str::to_string);
+    let Some(nodes) = planned_by_parent.get(&key) else {
+        return;
+    };
+    for node in nodes {
+        rendered_tree.push('\n');
+        rendered_tree.push_str(&"  ".repeat(depth));
+        rendered_tree.push_str("[planned] ");
+        rendered_tree.push_str(&node.node_id);
+        rendered_tree.push(' ');
+        rendered_tree.push_str(node.summary.trim());
+        append_planned_nodes_for_model(
+            rendered_tree,
+            planned_by_parent,
+            Some(&node.node_id),
+            depth + 1,
+        );
+    }
+}
+
+fn planned_nodes_by_parent(
+    planned_nodes: &[SpinePlannedNodeSnapshot],
+) -> BTreeMap<Option<String>, Vec<&SpinePlannedNodeSnapshot>> {
+    let planned_ids = planned_nodes
+        .iter()
+        .map(|node| node.node_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut out: BTreeMap<Option<String>, Vec<&SpinePlannedNodeSnapshot>> = BTreeMap::new();
+    for node in planned_nodes {
+        let parent = node
+            .parent_id
+            .as_deref()
+            .filter(|parent_id| planned_ids.contains(parent_id))
+            .map(str::to_string);
+        out.entry(parent).or_default().push(node);
+    }
+    out
+}
+
+fn retain_still_valid_planned_nodes(
+    snapshot: &SpineTreeUpdateEvent,
+    planned_nodes: &[SpinePlannedNodeSnapshot],
+) -> Vec<SpinePlannedNodeSnapshot> {
+    validate_planned_nodes(snapshot, planned_nodes.to_vec()).unwrap_or_default()
+}
+
+fn validate_planned_nodes(
+    snapshot: &SpineTreeUpdateEvent,
+    planned_nodes: Vec<SpinePlannedNodeSnapshot>,
+) -> Result<Vec<SpinePlannedNodeSnapshot>, SpineError> {
+    let committed_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let committed_nodes = snapshot
+        .nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let active = parse_spine_node_path(&snapshot.active_node_id)?;
+    let active_parent = parent_path(&active);
+    let active_index = *active
+        .last()
+        .ok_or_else(|| SpineError::InvalidEvent("active Spine node id is empty".to_string()))?;
+
+    let max_committed_child_by_parent = max_committed_child_by_parent(&snapshot.nodes)?;
+    let mut planned_ids = BTreeSet::new();
+    let mut parsed_planned = BTreeMap::new();
+    for node in &planned_nodes {
+        if node.summary.trim().is_empty() {
+            return Err(SpineError::InvalidEvent(format!(
+                "planned Spine node {} requires a non-empty summary",
+                node.node_id
+            )));
+        }
+        let path = parse_spine_node_path(&node.node_id)?;
+        if committed_ids.contains(node.node_id.as_str()) {
+            return Err(SpineError::InvalidEvent(format!(
+                "planned Spine node {} already exists in the committed tree",
+                node.node_id
+            )));
+        }
+        if !planned_ids.insert(node.node_id.as_str()) {
+            return Err(SpineError::InvalidEvent(format!(
+                "duplicate planned Spine node id {}",
+                node.node_id
+            )));
+        }
+        parsed_planned.insert(node.node_id.as_str(), path);
+    }
+
+    for node in &planned_nodes {
+        let path = parsed_planned
+            .get(node.node_id.as_str())
+            .expect("planned path was parsed");
+        let parent = parent_path(path);
+        let parent_id = parent.as_ref().map(|parent| path_to_string(parent));
+        if node.parent_id != parent_id {
+            return Err(SpineError::InvalidEvent(format!(
+                "planned Spine node {} parent_id must be {:?}",
+                node.node_id, parent_id
+            )));
+        }
+        let index = *path.last().ok_or_else(|| {
+            SpineError::InvalidEvent("planned Spine node id is empty".to_string())
+        })?;
+        if planned_parent_contains(&parsed_planned, parent.as_deref()) {
+            continue;
+        }
+
+        if parent.as_deref() == Some(active.as_slice()) {
+            let max_existing = max_committed_child_by_parent
+                .get(active.as_slice())
+                .copied()
+                .unwrap_or(0);
+            if index > max_existing {
+                continue;
+            }
+        }
+
+        if parent.as_deref() == active_parent.as_deref() && index > active_index {
+            continue;
+        }
+
+        let parent_key = parent_id.as_deref();
+        if let Some(parent_key) = parent_key
+            && committed_nodes.contains_key(parent_key)
+        {
+            return Err(SpineError::InvalidEvent(format!(
+                "planned Spine node {} is not on the right side of the current active frontier",
+                node.node_id
+            )));
+        }
+
+        return Err(SpineError::InvalidEvent(format!(
+            "planned Spine node {} must be a future child of the active node, a future sibling of the active node, or a descendant of another planned node",
+            node.node_id
+        )));
+    }
+
+    Ok(planned_nodes)
+}
+
+fn planned_parent_contains<'a>(
+    parsed_planned: &BTreeMap<&'a str, Vec<u32>>,
+    parent: Option<&[u32]>,
+) -> bool {
+    let Some(parent) = parent else {
+        return false;
+    };
+    parsed_planned
+        .values()
+        .any(|path| path.as_slice() == parent)
+}
+
+fn max_committed_child_by_parent(
+    nodes: &[SpineTreeNodeSnapshot],
+) -> Result<BTreeMap<Vec<u32>, u32>, SpineError> {
+    let mut out: BTreeMap<Vec<u32>, u32> = BTreeMap::new();
+    for node in nodes {
+        let path = parse_spine_node_path(&node.node_id)?;
+        let Some(parent) = parent_path(&path) else {
+            continue;
+        };
+        let Some(index) = path.last().copied() else {
+            continue;
+        };
+        out.entry(parent)
+            .and_modify(|existing| *existing = (*existing).max(index))
+            .or_insert(index);
+    }
+    Ok(out)
+}
+
+fn parse_spine_node_path(node_id: &str) -> Result<Vec<u32>, SpineError> {
+    let mut path = Vec::new();
+    for part in node_id.split('.') {
+        if part.is_empty() {
+            return Err(SpineError::InvalidEvent(format!(
+                "malformed Spine node id {node_id:?}"
+            )));
+        }
+        let index = part.parse::<u32>().map_err(|_| {
+            SpineError::InvalidEvent(format!("malformed Spine node id {node_id:?}"))
+        })?;
+        if index == 0 {
+            return Err(SpineError::InvalidEvent(format!(
+                "malformed Spine node id {node_id:?}: indexes are 1-based"
+            )));
+        }
+        path.push(index);
+    }
+    if path.is_empty() {
+        return Err(SpineError::InvalidEvent(
+            "malformed empty Spine node id".to_string(),
+        ));
+    }
+    Ok(path)
+}
+
+fn parent_path(path: &[u32]) -> Option<Vec<u32>> {
+    (path.len() > 1).then(|| path[..path.len() - 1].to_vec())
+}
+
+fn path_to_string(path: &[u32]) -> String {
+    path.iter()
+        .map(|part| part.to_string())
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {

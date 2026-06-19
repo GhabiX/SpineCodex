@@ -12,6 +12,7 @@ use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource as CoreSpineNodeContextBaselineSource;
 use codex_protocol::spine_tree::SpineNodeContextProblem as CoreSpineNodeContextProblem;
+use codex_protocol::spine_tree::SpinePlannedNodeSnapshot as CoreSpinePlannedNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot as CoreSpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot as CoreSpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus as CoreSpineTreeNodeStatus;
@@ -372,6 +373,8 @@ pub struct SpineTreeUpdatedNotification {
     pub snapshot_seq: u64,
     pub active_node_id: String,
     pub nodes: Vec<SpineTreeNode>,
+    #[serde(default)]
+    pub planned_nodes: Vec<SpinePlannedNode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -383,6 +386,15 @@ pub struct SpineTreeNode {
     pub summary: Option<String>,
     pub status: SpineTreeNodeStatus,
     pub accounting: Option<SpineTreeNodeAccounting>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpinePlannedNode {
+    pub node_id: String,
+    pub parent_id: Option<String>,
+    pub summary: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -471,6 +483,16 @@ impl From<CoreSpineTreeNodeSnapshot> for SpineTreeNode {
             summary: value.summary,
             status: value.status.into(),
             accounting: value.accounting.map(Into::into),
+        }
+    }
+}
+
+impl From<CoreSpinePlannedNodeSnapshot> for SpinePlannedNode {
+    fn from(value: CoreSpinePlannedNodeSnapshot) -> Self {
+        Self {
+            node_id: value.node_id,
+            parent_id: value.parent_id,
+            summary: value.summary,
         }
     }
 }

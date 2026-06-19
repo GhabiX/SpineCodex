@@ -16,6 +16,7 @@ use crate::tools::handlers::spine_spec::create_spine_namespace_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::spine_tree::SpinePlannedNodeSnapshot;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Deserialize;
@@ -95,7 +96,41 @@ impl SpineTool {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EmptyArgs {}
+struct TreeArgs {
+    plan: Option<TreePlanArgs>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TreePlanArgs {
+    #[allow(dead_code)]
+    note: Option<String>,
+    nodes: Vec<TreePlanNodeArg>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TreePlanNodeArg {
+    node_id: String,
+    summary: String,
+}
+
+impl From<TreePlanNodeArg> for SpinePlannedNodeSnapshot {
+    fn from(value: TreePlanNodeArg) -> Self {
+        let parent_id = planned_parent_id(value.node_id.as_str());
+        Self {
+            node_id: value.node_id,
+            parent_id,
+            summary: value.summary,
+        }
+    }
+}
+
+fn planned_parent_id(node_id: &str) -> Option<String> {
+    node_id
+        .rsplit_once('.')
+        .map(|(parent, _)| parent.to_string())
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -311,9 +346,12 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
         }
         match self.tool {
             SpineTool::Tree => {
-                let _args: EmptyArgs = parse_arguments(&arguments)?;
+                let args: TreeArgs = parse_arguments(&arguments)?;
+                let planned_nodes = args
+                    .plan
+                    .map(|plan| plan.nodes.into_iter().map(Into::into).collect());
                 let tree = session
-                    .spine_tree()
+                    .spine_tree_with_plan(planned_nodes)
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 session

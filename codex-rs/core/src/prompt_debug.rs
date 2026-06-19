@@ -12,6 +12,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use serde::Serialize;
+use std::str::FromStr;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
@@ -31,15 +32,50 @@ pub struct PromptDebugOutput {
     pub input: Vec<ResponseItem>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpineScalingLevel {
+    Low,
+    Medium,
+    High,
+    Auto,
+}
+
+impl FromStr for SpineScalingLevel {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "auto" => Ok(Self::Auto),
+            other => Err(format!(
+                "unsupported Spine scaling level {other:?}; use low, medium, high, or auto"
+            )),
+        }
+    }
+}
+
 /// Build the model-visible prompt payload for a single debug turn.
 #[doc(hidden)]
 pub async fn build_prompt_input(
-    mut config: Config,
+    config: Config,
     input: Vec<UserInput>,
     state_db: Option<StateDbHandle>,
 ) -> CodexResult<PromptDebugOutput> {
+    build_prompt_input_with_spine_scaling(config, input, state_db, None).await
+}
+
+#[doc(hidden)]
+pub async fn build_prompt_input_with_spine_scaling(
+    mut config: Config,
+    input: Vec<UserInput>,
+    state_db: Option<StateDbHandle>,
+    spine_scaling: Option<SpineScalingLevel>,
+) -> CodexResult<PromptDebugOutput> {
+    let spine_jit_enabled = config.features.enabled(Feature::SpineJit);
     // SpineJit needs a rollout path for its sidecar even in prompt-debug mode.
-    config.ephemeral = !config.features.enabled(Feature::SpineJit);
+    config.ephemeral = !spine_jit_enabled;
     config.dev_debug_prompt_overrides = true;
 
     let auth_manager =
@@ -70,13 +106,47 @@ pub async fn build_prompt_input(
     );
     let thread = thread_manager.start_thread(config).await?;
 
-    let output =
-        build_prompt_debug_output_from_session(thread.thread.codex.session.as_ref(), input).await;
+    let mut output =
+        build_prompt_debug_output_from_session(thread.thread.codex.session.as_ref(), input).await?;
+    if spine_jit_enabled {
+        append_spine_scaling_prompt(&mut output.instructions, spine_scaling);
+    }
     let shutdown = thread.thread.shutdown_and_wait().await;
     let _removed = thread_manager.remove_thread(&thread.thread_id).await;
 
     shutdown?;
-    output
+    Ok(output)
+}
+
+fn append_spine_scaling_prompt(
+    instructions: &mut String,
+    spine_scaling: Option<SpineScalingLevel>,
+) {
+    let Some(spine_scaling) = spine_scaling else {
+        return;
+    };
+    let Some(block) = spine_scaling_prompt_block(spine_scaling) else {
+        return;
+    };
+    if !instructions.is_empty() {
+        instructions.push_str("\n\n");
+    }
+    instructions.push_str(block);
+}
+
+fn spine_scaling_prompt_block(spine_scaling: SpineScalingLevel) -> Option<&'static str> {
+    match spine_scaling {
+        SpineScalingLevel::Low => None,
+        SpineScalingLevel::Medium => Some(
+            "<spine_scaling>\nTask-level scaling: medium.\nBudget: depth 2 x branch 2; plan up to 4 bottom exploration leaves.\n</spine_scaling>",
+        ),
+        SpineScalingLevel::High => Some(
+            "<spine_scaling>\nTask-level scaling: high.\nBudget: depth 3 x branch 3; plan up to 27 bottom exploration leaves.\n</spine_scaling>",
+        ),
+        SpineScalingLevel::Auto => Some(
+            "<spine_scaling>\nTask-level scaling: auto.\nBudget: choose reasonable depth and branch count for the task.\n</spine_scaling>",
+        ),
+    }
 }
 
 #[cfg(test)]

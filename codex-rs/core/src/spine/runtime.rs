@@ -1066,6 +1066,7 @@ impl SpineRuntime {
             snapshot_seq: self.ledger.next_event_seq,
             active_node_id,
             nodes,
+            planned_nodes: Vec::new(),
         })
     }
 

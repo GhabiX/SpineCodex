@@ -9,6 +9,7 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::spine_tree::SpinePlannedNodeSnapshot;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -37,6 +38,7 @@ pub(crate) struct Session {
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(crate) spine: Option<Mutex<SpineSessionState>>,
+    pub(super) spine_planned_nodes: Mutex<Vec<SpinePlannedNodeSnapshot>>,
     pub(super) spine_pressure_prompt_state: Mutex<SpinePressurePromptState>,
     pub(super) next_internal_sub_id: AtomicU64,
 }
@@ -975,6 +977,7 @@ impl Session {
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 spine,
+                spine_planned_nodes: Mutex::new(Vec::new()),
                 spine_pressure_prompt_state: Mutex::new(SpinePressurePromptState::default()),
                 next_internal_sub_id: AtomicU64::new(0),
             });

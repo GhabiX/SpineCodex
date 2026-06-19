@@ -1,11 +1,12 @@
 use std::path::Path;
 
 pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
-Spine helps organize ongoing work, keep the active context useful, compact old
-work into memory, make later continuation reliable, and control cost.
+Optimize for solving the task efficiently with the smallest useful working
+context. For complex tasks, Spine is also a task-level test-time scaling
+framework: use the task tree to allocate focused work to task nodes and reduce
+completed work into memory.
 
-Optimize for completing the task with the smallest useful live context. Use
-Spine as an active context tree: keep the live node focused on the current work,
+Use Spine as an active context tree: keep the live node focused on the current work,
 from a whole task down to one request phase or a tight loop of tool calls. Open
 a child for focused subtask work. When later work can resume from a summary,
 close or advance the node with memory and continue from that summary instead of
@@ -33,13 +34,17 @@ Close or next especially when:
 
 When no context boundary would help, answer directly without changing Spine.
 
-`open` creates a child. `close` and `next` compact the useful state from the
-current working context and reduce future prompt context. Do not wait for
-perfect completion when the current useful state is already enough for clean
-continuation from memory. The compact memory is authored by you in the `memory`
-argument of `close`/`next`; runtime preserves exact user messages and child
-memories, then appends your continuation memory. Choose based on whether the
-current node remains useful for continued work, not raw context size alone.
+Parser-control actions operate on the current active frontier leaf: `open`
+creates a child leaf, `close` reduces the current leaf and returns to its
+parent, and `next` reduces the current leaf and opens a sibling.
+
+`close` and `next` compact the useful state from the current working context
+and reduce future prompt context. Do not wait for perfect completion when the
+current useful state is already enough for clean continuation from memory. The
+compact memory is authored by you in the `memory` argument of `close`/`next`;
+runtime preserves exact user messages and child memories, then appends your
+continuation memory. Choose based on whether the current node remains useful for
+continued work, not raw context size alone.
 Use close or next only from non-root task nodes like `1.1`; at root-epoch ids
 like `1` or `2`, open first.
 If the child already has a user-relevant conclusion, surface it before closing.
@@ -60,7 +65,10 @@ Conventions:
 - `<spine_status>` gives Spine node context and orientation when present.
 - `<spine_memory>` provides continuity from closed work.
 - Choose at most one of `open`, `close`, or `next` in one assistant response.
-- `spine.tree` is a read-only inspector for unclear tree/cursor state.
+- `spine.tree` is the task-level test-time scaling controller: it shows the
+  committed task tree and cursor, and may maintain an ongoing/future right-side
+  node plan. Actual tree transitions still happen only through `open`,
+  `close`, and `next`.
 
 </spine_view>
 "#;

@@ -251,6 +251,10 @@ struct DebugPromptInputCommand {
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
 
+    /// Optional debug-only Spine task-level scaling prompt to inject.
+    #[arg(long = "spine-scaling", value_name = "low|medium|high|auto")]
+    spine_scaling: Option<String>,
+
     /// Optional image(s) to attach to the user prompt.
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     images: Vec<PathBuf>,
@@ -1655,7 +1659,19 @@ async fn run_debug_prompt_input_command(
         });
     }
 
-    let prompt_input = codex_core::build_prompt_input(config, input, /*state_db*/ None).await?;
+    let spine_scaling = cmd
+        .spine_scaling
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let prompt_input = codex_core::build_prompt_input_with_spine_scaling(
+        config,
+        input,
+        /*state_db*/ None,
+        spine_scaling,
+    )
+    .await?;
     println!("{}", serde_json::to_string_pretty(&prompt_input)?);
 
     Ok(())

@@ -144,6 +144,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
+use codex_protocol::spine_tree::SpinePlannedNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rmcp_client::ElicitationAction;
@@ -5941,6 +5942,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
                 config.features.enabled(Feature::SpineTrim),
             ))
         }),
+        spine_planned_nodes: Mutex::new(Vec::new()),
         spine_pressure_prompt_state: Mutex::new(Default::default()),
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -7850,6 +7852,7 @@ where
                 config.features.enabled(Feature::SpineTrim),
             ))
         }),
+        spine_planned_nodes: Mutex::new(Vec::new()),
         spine_pressure_prompt_state: Mutex::new(Default::default()),
         next_internal_sub_id: AtomicU64::new(0),
     });
@@ -15259,6 +15262,75 @@ async fn init_new_session_creates_root_and_1_1() {
         "tool tree should preserve pure runtime tree prefix\nbefore:\n{tree_before}\nafter:\n{tree_from_tool}"
     );
     assert_eq!(events_after, events_before);
+}
+
+#[tokio::test]
+async fn spine_tree_plan_overlay_is_model_visible_and_non_durable() {
+    let (mut session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    session
+        .initialize_spine_for_new_session()
+        .await
+        .expect("initialize spine");
+    let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
+    let events_before = store.event_count_for_test().expect("events before");
+
+    let tree = session
+        .spine_tree_with_plan(Some(vec![
+            SpinePlannedNodeSnapshot {
+                node_id: "1.1.1".to_string(),
+                parent_id: Some("1.1".to_string()),
+                summary: "Explore implementation surface".to_string(),
+            },
+            SpinePlannedNodeSnapshot {
+                node_id: "1.1.1.1".to_string(),
+                parent_id: Some("1.1.1".to_string()),
+                summary: "Validate parser-state isolation".to_string(),
+            },
+        ]))
+        .await
+        .expect("planned tree");
+    assert!(tree.contains("Planned future nodes:"), "{tree}");
+    assert!(
+        tree.contains("[planned] 1.1.1 Explore implementation surface"),
+        "{tree}"
+    );
+    assert!(
+        tree.contains("  [planned] 1.1.1.1 Validate parser-state isolation"),
+        "{tree}"
+    );
+    assert_eq!(
+        store.event_count_for_test().expect("events after plan"),
+        events_before,
+        "planned nodes are session overlay metadata, not Spine parser events"
+    );
+
+    let err = session
+        .spine_tree_with_plan(Some(vec![SpinePlannedNodeSnapshot {
+            node_id: "1.1".to_string(),
+            parent_id: Some("1".to_string()),
+            summary: "Reuse committed active node".to_string(),
+        }]))
+        .await
+        .expect_err("committed node ids cannot be planned");
+    assert!(
+        err.to_string()
+            .contains("already exists in the committed tree"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]

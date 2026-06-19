@@ -1,6 +1,7 @@
 //! Host-only Spine tree projection history cell.
 
 use super::*;
+use codex_app_server_protocol::SpinePlannedNode;
 use codex_app_server_protocol::SpineTreeNode;
 use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
@@ -107,7 +108,8 @@ fn pretty_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> 
     }
 
     let root_nodes = child_nodes(snapshot, None);
-    if root_nodes.is_empty() {
+    let root_planned_nodes = planned_child_nodes(snapshot, None);
+    if root_nodes.is_empty() && root_planned_nodes.is_empty() {
         lines.push(
             vec![
                 format!("  {}", pretty_branch(true)).dim(),
@@ -120,6 +122,7 @@ fn pretty_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> 
 
     let active_path = active_path_ids(snapshot);
     render_pretty_nodes(snapshot, &root_nodes, &active_path, "  ", width, &mut lines);
+    render_pretty_planned_nodes(snapshot, &root_planned_nodes, "  ", width, &mut lines);
     lines
 }
 
@@ -132,18 +135,30 @@ fn debug_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> V
     }
 
     let root_nodes = child_nodes(snapshot, None);
-    if root_nodes.is_empty() {
+    let root_planned_nodes = planned_child_nodes(snapshot, None);
+    if root_nodes.is_empty() && root_planned_nodes.is_empty() {
         lines.push(vec!["  └ ".dim(), "(empty)".dim().italic()].into());
         return lines;
     }
 
-    let root_count = root_nodes.len();
+    let root_count = root_nodes.len() + root_planned_nodes.len();
+    let committed_root_count = root_nodes.len();
     for (index, node) in root_nodes.into_iter().enumerate() {
         render_debug_node(
             snapshot,
             node,
             0,
             index + 1 == root_count,
+            width,
+            &mut lines,
+        );
+    }
+    for (index, node) in root_planned_nodes.into_iter().enumerate() {
+        render_debug_planned_node(
+            snapshot,
+            node,
+            0,
+            committed_root_count + index + 1 == root_count,
             width,
             &mut lines,
         );
@@ -159,13 +174,15 @@ fn pretty_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static
     }
 
     let root_nodes = child_nodes(snapshot, None);
-    if root_nodes.is_empty() {
+    let root_planned_nodes = planned_child_nodes(snapshot, None);
+    if root_nodes.is_empty() && root_planned_nodes.is_empty() {
         lines.push(Line::from(format!("  {}(empty)", pretty_branch(true))));
         return lines;
     }
 
     let active_path = active_path_ids(snapshot);
     append_pretty_raw_nodes(snapshot, &root_nodes, &active_path, "  ", &mut lines);
+    append_pretty_raw_planned_nodes(snapshot, &root_planned_nodes, "  ", &mut lines);
     lines
 }
 
@@ -180,6 +197,7 @@ fn debug_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static>
         return lines;
     }
     append_debug_raw_children(snapshot, None, 0, &mut lines);
+    append_debug_raw_planned_children(snapshot, None, 0, &mut lines);
     lines
 }
 
@@ -209,12 +227,17 @@ fn render_pretty_node(
     out: &mut Vec<Line<'static>>,
 ) {
     let children = child_nodes(snapshot, Some(node.node_id.as_str()));
+    let planned_children = planned_child_nodes(snapshot, Some(node.node_id.as_str()));
     let active = node.node_id == snapshot.active_node_id;
     let line_prefix = format!("{}{}", prefix, pretty_branch(is_last));
     let child_prefix = format!("{}{}", prefix, pretty_child_prefix(is_last));
     let mut spans = vec![
         Span::from(line_prefix).dim(),
-        pretty_marker(node, active, !children.is_empty()),
+        pretty_marker(
+            node,
+            active,
+            !children.is_empty() || !planned_children.is_empty(),
+        ),
         Span::from(" "),
     ];
     spans.push(pretty_node_label(node, active));
@@ -228,6 +251,7 @@ fn render_pretty_node(
     push_owned_lines(&wrapped, out);
 
     render_pretty_nodes(snapshot, &children, active_path, &child_prefix, width, out);
+    render_pretty_planned_nodes(snapshot, &planned_children, &child_prefix, width, out);
 }
 
 fn render_pretty_nodes(
@@ -273,8 +297,13 @@ fn append_pretty_raw_nodes(
             ))),
             PrettySiblingItem::Node(node) => {
                 let children = child_nodes(snapshot, Some(node.node_id.as_str()));
+                let planned_children = planned_child_nodes(snapshot, Some(node.node_id.as_str()));
                 let active = node.node_id == snapshot.active_node_id;
-                let marker = pretty_marker_text(node, active, !children.is_empty());
+                let marker = pretty_marker_text(
+                    node,
+                    active,
+                    !children.is_empty() || !planned_children.is_empty(),
+                );
                 out.push(Line::from(format!(
                     "{}{}{} {}",
                     prefix,
@@ -284,8 +313,69 @@ fn append_pretty_raw_nodes(
                 )));
                 let child_prefix = format!("{}{}", prefix, pretty_child_prefix(is_last));
                 append_pretty_raw_nodes(snapshot, &children, active_path, &child_prefix, out);
+                append_pretty_raw_planned_nodes(snapshot, &planned_children, &child_prefix, out);
             }
         }
+    }
+}
+
+fn render_pretty_planned_node(
+    snapshot: &SpineTreeUpdatedNotification,
+    node: &SpinePlannedNode,
+    prefix: &str,
+    is_last: bool,
+    width: u16,
+    out: &mut Vec<Line<'static>>,
+) {
+    let children = planned_child_nodes(snapshot, Some(node.node_id.as_str()));
+    let line_prefix = format!("{}{}", prefix, pretty_branch(is_last));
+    let child_prefix = format!("{}{}", prefix, pretty_child_prefix(is_last));
+    let line = Line::from(vec![
+        Span::from(line_prefix).dim(),
+        "○".dim(),
+        " ".into(),
+        Span::from(node.summary.trim().to_string()).dim(),
+    ]);
+    let wrapped = adaptive_wrap_line(
+        &line,
+        RtOptions::new(width.saturating_sub(2).max(1) as usize)
+            .subsequent_indent(format!("{child_prefix}  ").into()),
+    );
+    push_owned_lines(&wrapped, out);
+    render_pretty_planned_nodes(snapshot, &children, &child_prefix, width, out);
+}
+
+fn render_pretty_planned_nodes(
+    snapshot: &SpineTreeUpdatedNotification,
+    nodes: &[&SpinePlannedNode],
+    prefix: &str,
+    width: u16,
+    out: &mut Vec<Line<'static>>,
+) {
+    let item_count = nodes.len();
+    for (index, node) in nodes.iter().copied().enumerate() {
+        render_pretty_planned_node(snapshot, node, prefix, index + 1 == item_count, width, out);
+    }
+}
+
+fn append_pretty_raw_planned_nodes(
+    snapshot: &SpineTreeUpdatedNotification,
+    nodes: &[&SpinePlannedNode],
+    prefix: &str,
+    out: &mut Vec<Line<'static>>,
+) {
+    let item_count = nodes.len();
+    for (index, node) in nodes.iter().copied().enumerate() {
+        let is_last = index + 1 == item_count;
+        out.push(Line::from(format!(
+            "{}{}○ {}",
+            prefix,
+            pretty_branch(is_last),
+            node.summary.trim()
+        )));
+        let child_prefix = format!("{}{}", prefix, pretty_child_prefix(is_last));
+        let children = planned_child_nodes(snapshot, Some(node.node_id.as_str()));
+        append_pretty_raw_planned_nodes(snapshot, &children, &child_prefix, out);
     }
 }
 
@@ -306,8 +396,11 @@ fn append_visible_pretty_nodes<'a>(
 ) {
     for node in nodes.iter().copied() {
         let children = child_nodes(snapshot, Some(node.node_id.as_str()));
+        let planned_children = planned_child_nodes(snapshot, Some(node.node_id.as_str()));
         let active = node.node_id == snapshot.active_node_id;
-        if should_elide_pretty_node(node, !children.is_empty(), active) {
+        if planned_children.is_empty()
+            && should_elide_pretty_node(node, !children.is_empty(), active)
+        {
             append_visible_pretty_nodes(snapshot, &children, out);
         } else {
             out.push(node);
@@ -563,6 +656,25 @@ fn validate_spine_tree_snapshot(
         }
     }
 
+    let mut planned_ids = HashSet::new();
+    for node in &snapshot.planned_nodes {
+        if !planned_ids.insert(node.node_id.as_str()) {
+            return Err(SpineTreeSnapshotValidationError::DuplicateNodeId);
+        }
+        if node_ids.contains(node.node_id.as_str()) {
+            return Err(SpineTreeSnapshotValidationError::DuplicateNodeId);
+        }
+    }
+
+    for node in &snapshot.planned_nodes {
+        if let Some(parent_id) = node.parent_id.as_deref()
+            && !node_ids.contains(parent_id)
+            && !planned_ids.contains(parent_id)
+        {
+            return Err(SpineTreeSnapshotValidationError::MissingParent);
+        }
+    }
+
     Ok(())
 }
 
@@ -632,9 +744,59 @@ fn render_debug_node(
     push_owned_lines(&wrapped, out);
 
     let children = child_nodes(snapshot, Some(node.node_id.as_str()));
-    let child_count = children.len();
+    let planned_children = planned_child_nodes(snapshot, Some(node.node_id.as_str()));
+    let committed_child_count = children.len();
+    let child_count = committed_child_count + planned_children.len();
     for (index, child) in children.into_iter().enumerate() {
         render_debug_node(
+            snapshot,
+            child,
+            depth + 1,
+            index + 1 == child_count,
+            width,
+            out,
+        );
+    }
+    for (index, child) in planned_children.into_iter().enumerate() {
+        render_debug_planned_node(
+            snapshot,
+            child,
+            depth + 1,
+            committed_child_count + index + 1 == child_count,
+            width,
+            out,
+        );
+    }
+}
+
+#[cfg(debug_assertions)]
+fn render_debug_planned_node(
+    snapshot: &SpineTreeUpdatedNotification,
+    node: &SpinePlannedNode,
+    depth: usize,
+    is_last: bool,
+    width: u16,
+    out: &mut Vec<Line<'static>>,
+) {
+    let spans = vec![
+        Span::from(format!("  {}{}", "  ".repeat(depth), branch(is_last))).dim(),
+        Span::from(node.node_id.clone()).dim(),
+        Span::from(" "),
+        Span::from(node.summary.trim().to_string()).dim(),
+        Span::from(" planned").dim(),
+    ];
+    let line = Line::from(spans);
+    let wrapped = adaptive_wrap_line(
+        &line,
+        RtOptions::new(width.saturating_sub(2).max(1) as usize)
+            .subsequent_indent(format!("{}  ", "  ".repeat(depth + 1)).into()),
+    );
+    push_owned_lines(&wrapped, out);
+
+    let children = planned_child_nodes(snapshot, Some(node.node_id.as_str()));
+    let child_count = children.len();
+    for (index, child) in children.into_iter().enumerate() {
+        render_debug_planned_node(
             snapshot,
             child,
             depth + 1,
@@ -679,6 +841,25 @@ fn append_debug_raw_children(
             accounting
         )));
         append_debug_raw_children(snapshot, Some(node.node_id.as_str()), depth + 1, out);
+        append_debug_raw_planned_children(snapshot, Some(node.node_id.as_str()), depth + 1, out);
+    }
+}
+
+#[cfg(debug_assertions)]
+fn append_debug_raw_planned_children(
+    snapshot: &SpineTreeUpdatedNotification,
+    parent_id: Option<&str>,
+    depth: usize,
+    out: &mut Vec<Line<'static>>,
+) {
+    for node in planned_child_nodes(snapshot, parent_id) {
+        out.push(Line::from(format!(
+            "{}{} {} planned",
+            "  ".repeat(depth),
+            node.node_id,
+            node.summary.trim()
+        )));
+        append_debug_raw_planned_children(snapshot, Some(node.node_id.as_str()), depth + 1, out);
     }
 }
 
@@ -764,6 +945,17 @@ fn child_nodes<'a>(
         .collect()
 }
 
+fn planned_child_nodes<'a>(
+    snapshot: &'a SpineTreeUpdatedNotification,
+    parent_id: Option<&str>,
+) -> Vec<&'a SpinePlannedNode> {
+    snapshot
+        .planned_nodes
+        .iter()
+        .filter(|node| node.parent_id.as_deref() == parent_id)
+        .collect()
+}
+
 fn pretty_branch(is_last: bool) -> &'static str {
     if is_last { "└ " } else { "├ " }
 }
@@ -790,6 +982,7 @@ fn status_label(status: SpineTreeNodeStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::SpinePlannedNode;
     use codex_app_server_protocol::SpineTreeNodeAccounting;
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -818,6 +1011,7 @@ mod tests {
             snapshot_seq: 7,
             active_node_id: active_node_id.to_string(),
             nodes,
+            planned_nodes: Vec::new(),
         }
     }
 
@@ -833,6 +1027,14 @@ mod tests {
             summary: summary.map(str::to_string),
             status,
             accounting: None,
+        }
+    }
+
+    fn planned_node(node_id: &str, parent_id: Option<&str>, summary: &str) -> SpinePlannedNode {
+        SpinePlannedNode {
+            node_id: node_id.to_string(),
+            parent_id: parent_id.map(str::to_string),
+            summary: summary.to_string(),
         }
     }
 
@@ -1066,6 +1268,64 @@ mod tests {
           └ ◉ active
         "###);
         assert!(!rendered.contains("Previous context"));
+        assert!(!rendered.contains("Previous task"));
+    }
+
+    #[test]
+    fn pretty_renders_planned_nodes_under_current_task_without_expanding_history() {
+        let mut snapshot = snapshot_with_active(
+            "2",
+            vec![
+                node("1", None, None, SpineTreeNodeStatus::Compacted),
+                node("2", None, None, SpineTreeNodeStatus::Live),
+            ],
+        );
+        snapshot.planned_nodes = vec![
+            planned_node(
+                "2.1",
+                Some("2"),
+                "Implement core plan overlay and validation",
+            ),
+            planned_node(
+                "2.1.1",
+                Some("2.1"),
+                "Parse and reject invalid right-side node ids",
+            ),
+            planned_node("2.1.2", Some("2.1"), "Store session-only planned nodes"),
+            planned_node(
+                "2.2",
+                Some("2"),
+                "Wire planned nodes through protocol and TUI",
+            ),
+            planned_node(
+                "2.2.1",
+                Some("2.2"),
+                "Add planned_nodes to protocol notifications",
+            ),
+            planned_node("2.2.2", Some("2.2"), "Render planned nodes inline in TUI"),
+            planned_node(
+                "2.3",
+                Some("2"),
+                "Verify parser state is unchanged by planning",
+            ),
+        ];
+        let cell = new_spine_tree_update("turn".to_string(), snapshot);
+
+        let rendered = render_lines(&cell.display_lines(100)).join("\n");
+        insta::assert_snapshot!(rendered, @r###"
+        • Spine Tree
+          ├ ◌ 1 previous task
+          └ ◉ Current task
+            ├ ○ Implement core plan overlay and validation
+            │ ├ ○ Parse and reject invalid right-side node ids
+            │ └ ○ Store session-only planned nodes
+            ├ ○ Wire planned nodes through protocol and TUI
+            │ ├ ○ Add planned_nodes to protocol notifications
+            │ └ ○ Render planned nodes inline in TUI
+            └ ○ Verify parser state is unchanged by planning
+        "###);
+        assert!(rendered.contains("1 previous task"));
+        assert!(rendered.contains("Current task"));
         assert!(!rendered.contains("Previous task"));
     }
 
