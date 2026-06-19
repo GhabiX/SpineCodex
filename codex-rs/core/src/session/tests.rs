@@ -619,6 +619,358 @@ async fn assert_session_history_matches_spine_materialization(
     );
 }
 
+#[derive(Clone, Copy)]
+enum AppendEqualityHarnessCase {
+    BaseConversation,
+    BaseConversationWithoutRawEvent,
+    RawOnlyBestEffort,
+    RawOnlyDurableWithoutEmission,
+    WithoutSpineObserve,
+    SpineControlOverlayOnly,
+}
+
+impl AppendEqualityHarnessCase {
+    fn name(self) -> &'static str {
+        match self {
+            AppendEqualityHarnessCase::BaseConversation => "base_conversation",
+            AppendEqualityHarnessCase::BaseConversationWithoutRawEvent => {
+                "base_conversation_without_raw_event"
+            }
+            AppendEqualityHarnessCase::RawOnlyBestEffort => "raw_only_best_effort",
+            AppendEqualityHarnessCase::RawOnlyDurableWithoutEmission => {
+                "raw_only_durable_without_emission"
+            }
+            AppendEqualityHarnessCase::WithoutSpineObserve => "without_spine_observe",
+            AppendEqualityHarnessCase::SpineControlOverlayOnly => "spine_control_overlay_only",
+        }
+    }
+
+    fn items(self) -> Vec<ResponseItem> {
+        match self {
+            AppendEqualityHarnessCase::BaseConversation
+            | AppendEqualityHarnessCase::BaseConversationWithoutRawEvent => vec![
+                user_message("append equality user"),
+                function_call("append_eq_tool", "append-eq-tool"),
+                function_output("append-eq-tool"),
+                assistant_message("append equality assistant"),
+            ],
+            AppendEqualityHarnessCase::RawOnlyBestEffort
+            | AppendEqualityHarnessCase::RawOnlyDurableWithoutEmission
+            | AppendEqualityHarnessCase::WithoutSpineObserve => {
+                vec![function_output("append-eq-raw-output")]
+            }
+            AppendEqualityHarnessCase::SpineControlOverlayOnly => vec![
+                spine_call(SPINE_TOOL_TREE, "append-eq-tree"),
+                function_call("ordinary_overlay_tool", "append-eq-ordinary"),
+                function_output("append-eq-tree"),
+                function_output("append-eq-ordinary"),
+            ],
+        }
+    }
+
+    fn setup_items(self) -> Vec<ResponseItem> {
+        match self {
+            AppendEqualityHarnessCase::RawOnlyBestEffort
+            | AppendEqualityHarnessCase::RawOnlyDurableWithoutEmission
+            | AppendEqualityHarnessCase::WithoutSpineObserve => {
+                vec![function_call("append_eq_raw_tool", "append-eq-raw-output")]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
+async fn run_append_equality_harness_case(
+    session: &Session,
+    turn_context: &TurnContext,
+    case: AppendEqualityHarnessCase,
+    items: &[ResponseItem],
+) {
+    match case {
+        AppendEqualityHarnessCase::BaseConversation => {
+            session
+                .record_conversation_items(turn_context, items)
+                .await
+                .unwrap_or_else(|err| panic!("{} append failed: {err}", case.name()));
+        }
+        AppendEqualityHarnessCase::BaseConversationWithoutRawEvent => {
+            session
+                .record_conversation_items_without_raw_event(turn_context, items)
+                .await
+                .unwrap_or_else(|err| panic!("{} append failed: {err}", case.name()));
+        }
+        AppendEqualityHarnessCase::RawOnlyBestEffort => {
+            session
+                .record_conversation_items_raw_only(turn_context, items)
+                .await
+                .unwrap_or_else(|err| panic!("{} append failed: {err}", case.name()));
+        }
+        AppendEqualityHarnessCase::RawOnlyDurableWithoutEmission => {
+            session
+                .record_conversation_items_raw_only_durable_without_emission(turn_context, items)
+                .await
+                .unwrap_or_else(|err| panic!("{} append failed: {err}", case.name()));
+        }
+        AppendEqualityHarnessCase::WithoutSpineObserve => {
+            session
+                .record_conversation_items_without_spine_observe(turn_context, items)
+                .await
+                .unwrap_or_else(|err| panic!("{} append failed: {err}", case.name()));
+        }
+        AppendEqualityHarnessCase::SpineControlOverlayOnly => {
+            session
+                .record_conversation_items_spine_control_overlay_only(turn_context, items)
+                .await
+                .unwrap_or_else(|err| panic!("{} append failed: {err}", case.name()));
+        }
+    }
+}
+
+async fn reconstructed_rollout_history_for_append_harness(
+    session: &Session,
+    turn_context: &TurnContext,
+    rollout_path: &Path,
+) -> (Vec<ResponseItem>, bool, Vec<usize>) {
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let reconstructed = session
+        .reconstruct_history_from_rollout(turn_context, &resumed.history)
+        .await;
+    (
+        reconstructed.history,
+        reconstructed.used_replacement_history,
+        reconstructed.spine_rollback_cuts,
+    )
+}
+
+async fn assert_append_case_history_matches_spine_materialization(
+    session: &Session,
+    rollout_path: &Path,
+    case: AppendEqualityHarnessCase,
+) {
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("{} expected resumed rollout history", case.name());
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(rollout_path, &raw_items, &[])
+        .unwrap_or_else(|err| {
+            panic!(
+                "{} load spine runtime from rollout failed: {err}",
+                case.name()
+            )
+        })
+        .unwrap_or_else(|| panic!("{} spine sidecar should exist", case.name()));
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .unwrap_or_else(|err| panic!("{} materialize h(PS) failed: {err}", case.name()));
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        materialized.as_slice(),
+        "{} live history differs from replayed h(PS)",
+        case.name()
+    );
+}
+
+#[tokio::test]
+async fn append_equality_harness_feature_off_matches_base_for_current_variants() {
+    let cases = [
+        AppendEqualityHarnessCase::BaseConversation,
+        AppendEqualityHarnessCase::BaseConversationWithoutRawEvent,
+        AppendEqualityHarnessCase::RawOnlyBestEffort,
+        AppendEqualityHarnessCase::RawOnlyDurableWithoutEmission,
+        AppendEqualityHarnessCase::WithoutSpineObserve,
+        AppendEqualityHarnessCase::SpineControlOverlayOnly,
+    ];
+
+    for case in cases {
+        let setup_items = case.setup_items();
+        let items = case.items();
+        let (mut base_session, base_turn_context, _base_rx) =
+            make_session_and_context_with_auth_and_config_and_rx(
+                CodexAuth::from_api_key("Test API Key"),
+                Vec::new(),
+                |_config| {},
+            )
+            .await;
+        let base_rollout_path = attach_thread_persistence(
+            Arc::get_mut(&mut base_session).expect("base session should be unique"),
+        )
+        .await;
+        assert!(
+            base_session.spine.is_none(),
+            "{} base session should not have Spine state",
+            case.name()
+        );
+
+        let (mut feature_off_session, feature_off_turn_context, _feature_off_rx) =
+            make_session_and_context_with_auth_and_config_and_rx(
+                CodexAuth::from_api_key("Test API Key"),
+                Vec::new(),
+                |config| {
+                    config
+                        .features
+                        .disable(Feature::SpineJit)
+                        .expect("disable spine feature");
+                },
+            )
+            .await;
+        let feature_off_rollout_path = attach_thread_persistence(
+            Arc::get_mut(&mut feature_off_session).expect("feature-off session should be unique"),
+        )
+        .await;
+        assert!(
+            feature_off_session.spine.is_none(),
+            "{} feature-off session should not have Spine state",
+            case.name()
+        );
+
+        if !setup_items.is_empty() {
+            base_session
+                .record_conversation_items(&base_turn_context, &setup_items)
+                .await
+                .unwrap_or_else(|err| panic!("{} base setup append failed: {err}", case.name()));
+            feature_off_session
+                .record_conversation_items(&feature_off_turn_context, &setup_items)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("{} feature-off setup append failed: {err}", case.name())
+                });
+        }
+        run_append_equality_harness_case(&base_session, &base_turn_context, case, &items).await;
+        run_append_equality_harness_case(
+            &feature_off_session,
+            &feature_off_turn_context,
+            case,
+            &items,
+        )
+        .await;
+
+        let base_history = base_session.clone_history().await;
+        let feature_off_history = feature_off_session.clone_history().await;
+        assert_eq!(
+            serde_json::to_vec(base_history.raw_items()).expect("base raw history json"),
+            serde_json::to_vec(feature_off_history.raw_items())
+                .expect("feature-off raw history json"),
+            "{} raw history differs",
+            case.name()
+        );
+        assert_eq!(
+            serde_json::to_vec(
+                &base_history
+                    .clone()
+                    .for_prompt(&base_turn_context.model_info.input_modalities)
+            )
+            .expect("base prompt history json"),
+            serde_json::to_vec(
+                &feature_off_history
+                    .clone()
+                    .for_prompt(&feature_off_turn_context.model_info.input_modalities)
+            )
+            .expect("feature-off prompt history json"),
+            "{} prompt history differs",
+            case.name()
+        );
+
+        let base_reconstructed = reconstructed_rollout_history_for_append_harness(
+            &base_session,
+            &base_turn_context,
+            &base_rollout_path,
+        )
+        .await;
+        let feature_off_reconstructed = reconstructed_rollout_history_for_append_harness(
+            &feature_off_session,
+            &feature_off_turn_context,
+            &feature_off_rollout_path,
+        )
+        .await;
+        assert_eq!(
+            serde_json::to_vec(&base_reconstructed.0).expect("base reconstructed json"),
+            serde_json::to_vec(&feature_off_reconstructed.0)
+                .expect("feature-off reconstructed json"),
+            "{} reconstructed history differs",
+            case.name()
+        );
+        assert_eq!(
+            base_reconstructed.1,
+            feature_off_reconstructed.1,
+            "{} replacement-history usage differs",
+            case.name()
+        );
+        assert_eq!(
+            base_reconstructed.2,
+            feature_off_reconstructed.2,
+            "{} rollback cuts differ",
+            case.name()
+        );
+        assert!(
+            !SpineStore::has_for_rollout(&base_rollout_path).expect("check base sidecar"),
+            "{} base rollout should not have Spine sidecar",
+            case.name()
+        );
+        assert!(
+            !SpineStore::has_for_rollout(&feature_off_rollout_path)
+                .expect("check feature-off sidecar"),
+            "{} feature-off rollout should not have Spine sidecar",
+            case.name()
+        );
+    }
+}
+
+#[tokio::test]
+async fn append_equality_harness_spine_on_variants_replay_to_live_projection() {
+    let cases = [
+        AppendEqualityHarnessCase::BaseConversation,
+        AppendEqualityHarnessCase::BaseConversationWithoutRawEvent,
+    ];
+
+    for case in cases {
+        let setup_items = case.setup_items();
+        let items = case.items();
+        let (mut session, turn_context, _rx) =
+            make_session_and_context_with_auth_and_config_and_rx(
+                CodexAuth::from_api_key("Test API Key"),
+                Vec::new(),
+                |config| {
+                    config
+                        .features
+                        .enable(Feature::SpineJit)
+                        .expect("enable spine feature");
+                },
+            )
+            .await;
+        let rollout_path = attach_thread_persistence(
+            Arc::get_mut(&mut session).expect("session should be unique"),
+        )
+        .await;
+        assert!(
+            session.spine.is_some(),
+            "{} Spine-on session should have Spine state",
+            case.name()
+        );
+
+        if !setup_items.is_empty() {
+            session
+                .record_conversation_items(&turn_context, &setup_items)
+                .await
+                .unwrap_or_else(|err| panic!("{} setup append failed: {err}", case.name()));
+        }
+        run_append_equality_harness_case(&session, &turn_context, case, &items).await;
+        assert_append_case_history_matches_spine_materialization(&session, &rollout_path, case)
+            .await;
+    }
+}
+
 struct PostNextFixture {
     session: Arc<Session>,
     turn_context: Arc<TurnContext>,
