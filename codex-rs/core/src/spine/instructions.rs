@@ -61,17 +61,20 @@ Conventions:
 "#;
 
 pub(crate) const SPINE_TRIM_INSTRUCTIONS: &str = r#"<spine_trim>
-`spine.trim` is optional conservative cleanup for tagged tool responses from
-the previous completed toolcall only. First use the previous tool result for
-the active task. If a previous tool response starts with `[TRIM_ID: ...]`, you
-may use `spine.trim` only when, after considering the main task, you are
-confident the removed content will not be needed again. Use `op: "snip"` to
-replace the whole visible body with a cleared placeholder. Use `op: "slice"`
-with exactly one of `head`, `tail`, or `anchor` plus `preceding`/`following`
-when a retained local part is sufficient. Do not trim merely because the output
-is long. Do not trim if the response may still be needed for correctness,
-debugging, citations, synthesis, or verification. If trim misses, do not retry
-that `TRIM_ID`.
+`spine.trim` keeps tagged tool responses small in the visible context. A
+`TRIM_ID` is eligible only for the most recent completed toolcall: the tool
+request you just made and the tool responses that just came back. After any
+later toolcall completes, older `TRIM_ID`s expire.
+
+After reading a tagged tool response, keep the evidence needed for the current
+task and trim the rest in your next assistant response that calls tools.
+`spine.trim` can be called alongside other useful tools in that response.
+
+Use `slice` to retain a sufficient head, tail, or anchor window. Use `snip`
+when the useful facts are already captured in notes, code, tests, or your
+response.
+
+If trim misses, treat that `TRIM_ID` as expired.
 
 </spine_trim>
 "#;
@@ -90,15 +93,20 @@ pub(crate) fn append_spine_view_instructions(
         return base_instructions;
     }
 
-    let instructions = if cfg!(debug_assertions) && dev_debug_prompt_overrides {
+    let override_contents = if cfg!(debug_assertions) && dev_debug_prompt_overrides {
         let override_path = codex_home.join(SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME);
         match std::fs::read_to_string(override_path) {
-            Ok(contents) if !contents.is_empty() => contents,
-            _ => joined_spine_instructions(spine_jit_enabled, spine_trim_enabled),
+            Ok(contents) if !contents.trim().is_empty() => Some(contents),
+            _ => None,
         }
     } else {
-        joined_spine_instructions(spine_jit_enabled, spine_trim_enabled)
+        None
     };
+    let instructions = joined_spine_instructions(
+        spine_jit_enabled,
+        spine_trim_enabled,
+        override_contents.as_deref(),
+    );
 
     if base_instructions.contains(&instructions) {
         return base_instructions;
@@ -118,15 +126,39 @@ pub(crate) fn append_spine_view_instructions(
     base_instructions
 }
 
-fn joined_spine_instructions(spine_jit_enabled: bool, spine_trim_enabled: bool) -> String {
+fn joined_spine_instructions(
+    spine_jit_enabled: bool,
+    spine_trim_enabled: bool,
+    override_contents: Option<&str>,
+) -> String {
     let mut sections = Vec::new();
     if spine_jit_enabled {
-        sections.push(SPINE_JIT_INSTRUCTIONS);
+        sections.push(
+            override_contents
+                .and_then(|contents| extract_section(contents, "spine_view"))
+                .unwrap_or_else(|| SPINE_JIT_INSTRUCTIONS.to_string()),
+        );
     }
     if spine_trim_enabled {
-        sections.push(SPINE_TRIM_INSTRUCTIONS);
+        sections.push(
+            override_contents
+                .and_then(|contents| extract_section(contents, "spine_trim"))
+                .unwrap_or_else(|| SPINE_TRIM_INSTRUCTIONS.to_string()),
+        );
     }
     sections.join("\n\n")
+}
+
+fn extract_section(contents: &str, tag: &str) -> Option<String> {
+    let start_marker = format!("<{tag}>");
+    let end_marker = format!("</{tag}>");
+    let start = contents.find(&start_marker)?;
+    let body_start = start.checked_add(start_marker.len())?;
+    let relative_end = contents.get(body_start..)?.find(&end_marker)?;
+    let end = body_start
+        .checked_add(relative_end)?
+        .checked_add(end_marker.len())?;
+    Some(contents.get(start..end)?.trim().to_string())
 }
 
 #[cfg(test)]
