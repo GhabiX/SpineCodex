@@ -275,6 +275,21 @@ impl SteerInputError {
     }
 }
 
+#[derive(Clone, Copy)]
+enum AppendPolicy {
+    BaseConversation {
+        emit_raw_response_items: bool,
+    },
+    RawOnly {
+        require_durable_append: bool,
+        emit_raw_response_items: bool,
+    },
+    WithoutSpineObserve,
+    SpineControlOverlayOnly {
+        emit_raw_response_items: bool,
+    },
+}
+
 /// Notes from the previous real user turn.
 ///
 /// Conceptually this is the same role that `previous_model` used to fill, but
@@ -2637,10 +2652,12 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        self.record_conversation_items_with_event_policy(
+        self.record_conversation_items_with_policy(
             turn_context,
             items,
-            true, /* emit_raw_response_items */
+            AppendPolicy::BaseConversation {
+                emit_raw_response_items: true,
+            },
         )
         .await
     }
@@ -2650,26 +2667,60 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        self.record_conversation_items_with_event_policy(
+        self.record_conversation_items_with_policy(
             turn_context,
             items,
-            false, /* emit_raw_response_items */
+            AppendPolicy::BaseConversation {
+                emit_raw_response_items: false,
+            },
         )
         .await
     }
 
-    async fn record_conversation_items_with_event_policy(
+    async fn record_conversation_items_with_policy(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
-        emit_raw_response_items: bool,
+        policy: AppendPolicy,
     ) -> CodexResult<()> {
-        self.record_conversation_items_base_with_event_policy(
-            turn_context,
-            items,
-            emit_raw_response_items,
-        )
-        .await
+        match policy {
+            AppendPolicy::BaseConversation {
+                emit_raw_response_items,
+            } => {
+                self.record_conversation_items_base_with_event_policy(
+                    turn_context,
+                    items,
+                    emit_raw_response_items,
+                )
+                .await
+            }
+            AppendPolicy::RawOnly {
+                require_durable_append,
+                emit_raw_response_items,
+            } => {
+                self.record_conversation_items_raw_only_with_policy(
+                    turn_context,
+                    items,
+                    require_durable_append,
+                    emit_raw_response_items,
+                )
+                .await
+            }
+            AppendPolicy::WithoutSpineObserve => {
+                self.record_conversation_items_without_spine_observe_impl(turn_context, items)
+                    .await
+            }
+            AppendPolicy::SpineControlOverlayOnly {
+                emit_raw_response_items,
+            } => {
+                self.record_conversation_items_spine_control_overlay_only_with_event_policy(
+                    turn_context,
+                    items,
+                    emit_raw_response_items,
+                )
+                .await
+            }
+        }
     }
 
     async fn record_conversation_items_base_with_event_policy(
@@ -2733,11 +2784,13 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        self.record_conversation_items_raw_only_with_policy(
+        self.record_conversation_items_with_policy(
             turn_context,
             items,
-            false, /* require_durable_append */
-            true,  /* emit_raw_response_items */
+            AppendPolicy::RawOnly {
+                require_durable_append: false,
+                emit_raw_response_items: true,
+            },
         )
         .await
     }
@@ -2747,15 +2800,31 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        self.record_conversation_items_raw_only_durable_with_emission(
+        self.record_conversation_items_with_policy(
             turn_context,
             items,
-            false, /* emit_raw_response_items */
+            AppendPolicy::RawOnly {
+                require_durable_append: true,
+                emit_raw_response_items: false,
+            },
         )
         .await
     }
 
     pub(crate) async fn record_conversation_items_without_spine_observe(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) -> CodexResult<()> {
+        self.record_conversation_items_with_policy(
+            turn_context,
+            items,
+            AppendPolicy::WithoutSpineObserve,
+        )
+        .await
+    }
+
+    async fn record_conversation_items_without_spine_observe_impl(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
@@ -2794,21 +2863,6 @@ impl Session {
         }
         self.send_raw_response_items(turn_context, items).await;
         Ok(())
-    }
-
-    async fn record_conversation_items_raw_only_durable_with_emission(
-        &self,
-        turn_context: &TurnContext,
-        items: &[ResponseItem],
-        emit_raw_response_items: bool,
-    ) -> CodexResult<()> {
-        self.record_conversation_items_raw_only_with_policy(
-            turn_context,
-            items,
-            true, /* require_durable_append */
-            emit_raw_response_items,
-        )
-        .await
     }
 
     async fn record_conversation_items_raw_only_with_policy(
@@ -2864,10 +2918,12 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        self.record_conversation_items_spine_control_overlay_only_with_event_policy(
+        self.record_conversation_items_with_policy(
             turn_context,
             items,
-            true, /* emit_raw_response_items */
+            AppendPolicy::SpineControlOverlayOnly {
+                emit_raw_response_items: true,
+            },
         )
         .await
     }
