@@ -1,33 +1,31 @@
 use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::archive_task_tree;
-use crate::spine::archive::memory_ref;
 use crate::spine::archive::next_root_open_symbol;
-use crate::spine::archive::tree_meta;
-use crate::spine::archive::tree_meta_with_token_baselines;
 use crate::spine::model::ControlSymbol;
-use crate::spine::model::LoggedSpineLedgerEvent;
-use crate::spine::model::MemRecord;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
-use crate::spine::model::NodeStatus;
-use crate::spine::model::RawMask;
 use crate::spine::model::RootEpoch;
-use crate::spine::model::SegRef;
-use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
-use codex_protocol::num_format::format_si_suffix;
-use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
-use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
-use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+mod accounting;
+mod replay;
+mod tree;
+
+pub(super) use replay::apply_metadata_event;
+pub(super) use replay::event_to_token;
+pub(super) use replay::parse_stack_from_events_with_forced_events;
+#[cfg(test)]
+pub(super) use tree::parse_stack_msg_leaf_count;
+#[cfg(test)]
+pub(super) use tree::parse_stack_toolcall_leaf_count;
 
 #[derive(Clone, Debug)]
 pub(super) struct PreparedTaskTreeReduction {
@@ -103,7 +101,7 @@ impl ParseStack {
             return;
         }
         for symbol in &mut self.symbols {
-            apply_memory_context_accounting_to_symbol(symbol, accounting);
+            accounting::apply_memory_context_accounting_to_symbol(symbol, accounting);
         }
     }
 
@@ -523,47 +521,20 @@ impl ParseStack {
 
     #[cfg(test)]
     pub(super) fn render_tree(&self) -> Result<String, SpineError> {
-        let rows = self.tree_rows()?;
-        Ok(format_tree_rows(rows, &BTreeMap::new()))
+        tree::render_tree(self)
     }
 
     pub(super) fn render_tree_with_context_annotations(
         &self,
         annotations: &BTreeMap<NodeId, String>,
     ) -> Result<String, SpineError> {
-        let rows = self.tree_rows()?;
-        Ok(format_tree_rows(rows, annotations))
+        tree::render_tree_with_context_annotations(self, annotations)
     }
 
-    pub(super) fn tree_snapshot_nodes(&self) -> Result<Vec<SpineTreeNodeSnapshot>, SpineError> {
-        let rows = self.tree_rows()?;
-        let rows = tree_rows_by_id(rows);
-        let Some((_, projected_ids)) = visible_tree_row_ids(&rows) else {
-            return Ok(Vec::new());
-        };
-        Ok(rows
-            .into_iter()
-            .filter(|(id, _)| projected_ids.contains(id))
-            .map(|row| {
-                let (_, row) = row;
-                let status = row.snapshot_status();
-                let summary = visible_summary(&row).map(str::to_string);
-                // Snapshot parents describe this projected forest, not hidden
-                // ParseStack ancestors such as the root epoch holder.
-                let parent_id = row
-                    .id
-                    .parent()
-                    .filter(|parent| projected_ids.contains(parent))
-                    .map(|id| id.as_path());
-                SpineTreeNodeSnapshot {
-                    parent_id,
-                    node_id: row.id.as_path(),
-                    summary,
-                    status,
-                    accounting: row.accounting.as_ref().and_then(snapshot_accounting),
-                }
-            })
-            .collect())
+    pub(super) fn tree_snapshot_nodes(
+        &self,
+    ) -> Result<Vec<codex_protocol::spine_tree::SpineTreeNodeSnapshot>, SpineError> {
+        tree::tree_snapshot_nodes(self)
     }
 
     pub(super) fn current_open_meta(&self) -> Result<&TreeMeta, SpineError> {
@@ -763,12 +734,12 @@ impl ParseStack {
         for symbol in self.symbols.iter().rev() {
             match symbol {
                 Symbol::SpineTreeNodes(nodes) => {
-                    if let Some(root) = root_epoch_from_nodes(nodes) {
+                    if let Some(root) = tree::root_epoch_from_nodes(nodes) {
                         return Ok(root);
                     }
                 }
                 Symbol::SpineTreeNode(node) => {
-                    if let Some(root) = root_epoch_from_node(node) {
+                    if let Some(root) = tree::root_epoch_from_node(node) {
                         return Ok(root);
                     }
                 }
@@ -794,650 +765,6 @@ impl ParseStack {
     }
 
     pub(super) fn next_child_id(&self) -> Result<NodeId, SpineError> {
-        let parent = self.current_cursor_id()?;
-        let rows = self.tree_rows()?;
-        let child_count = rows
-            .iter()
-            .filter(|row| row.id.parent().as_ref() == Some(&parent))
-            .count();
-        let index = u32::try_from(child_count + 1)
-            .map_err(|_| SpineError::InvalidEvent("too many child nodes".to_string()))?;
-        Ok(parent.child(index))
+        tree::next_child_id(self)
     }
-
-    fn tree_rows(&self) -> Result<Vec<TreeRenderRow>, SpineError> {
-        let mut rows = Vec::<TreeRenderRow>::new();
-        collect_tree_render_rows(&self.symbols, &mut rows)?;
-        project_current_root_epoch_row(self.current_cursor_id()?, &mut rows);
-        mark_cursor_statuses(self.current_cursor_id()?, &mut rows);
-        Ok(rows)
-    }
-}
-
-fn apply_memory_context_accounting_to_symbol(
-    symbol: &mut Symbol,
-    accounting: &BTreeMap<String, i64>,
-) {
-    match symbol {
-        Symbol::Control(ControlSymbol::Close(memory))
-        | Symbol::Control(ControlSymbol::Compact(memory, _, _, _)) => {
-            apply_memory_context_accounting_to_memory(memory, accounting);
-        }
-        Symbol::Control(ControlSymbol::Init(_))
-        | Symbol::Control(ControlSymbol::End)
-        | Symbol::Control(ControlSymbol::Open(_)) => {}
-        Symbol::SpineTreeNode(node) => {
-            apply_memory_context_accounting_to_node(node, accounting);
-        }
-        Symbol::SpineTreeNodes(nodes) => {
-            for node in nodes {
-                apply_memory_context_accounting_to_node(node, accounting);
-            }
-        }
-        Symbol::RootEpoches(root_epochs) => {
-            for root_epoch in root_epochs {
-                apply_memory_context_accounting_to_memory(&mut root_epoch.memory, accounting);
-            }
-        }
-    }
-}
-
-fn apply_memory_context_accounting_to_node(
-    node: &mut SpineTreeNode,
-    accounting: &BTreeMap<String, i64>,
-) {
-    match node {
-        SpineTreeNode::MsgAsLeafNode { .. } | SpineTreeNode::ToolCallAsLeafNode { .. } => {}
-        SpineTreeNode::SpineTree {
-            memory, children, ..
-        } => {
-            apply_memory_context_accounting_to_memory(memory, accounting);
-            for child in children {
-                apply_memory_context_accounting_to_node(child, accounting);
-            }
-        }
-    }
-}
-
-fn apply_memory_context_accounting_to_memory(
-    memory: &mut MemoryRef,
-    accounting: &BTreeMap<String, i64>,
-) {
-    if memory.closed_memory_context_tokens.is_some() {
-        return;
-    }
-    if let Some(tokens) = accounting.get(&memory.compact_id).copied() {
-        memory.closed_memory_context_tokens = Some(tokens);
-    }
-}
-
-impl From<NodeStatus> for SpineTreeNodeStatus {
-    fn from(value: NodeStatus) -> Self {
-        match value {
-            NodeStatus::Live => Self::Live,
-            NodeStatus::Opened => Self::Opened,
-            NodeStatus::Closed => Self::Closed,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct TreeRenderRow {
-    id: NodeId,
-    status: NodeStatus,
-    summary: String,
-    memory_path: Option<PathBuf>,
-    trajs_path: Option<PathBuf>,
-    accounting: Option<NodeAccounting>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct NodeAccounting {
-    closed_source_suffix_tokens: Option<i64>,
-    closed_memory_context_tokens: Option<i64>,
-    memory_output_tokens: Option<i64>,
-}
-
-fn root_epoch_from_nodes(nodes: &[SpineTreeNode]) -> Option<NodeId> {
-    nodes.iter().find_map(root_epoch_from_node)
-}
-
-fn root_epoch_from_node(node: &SpineTreeNode) -> Option<NodeId> {
-    match node {
-        SpineTreeNode::MsgAsLeafNode { .. } | SpineTreeNode::ToolCallAsLeafNode { .. } => None,
-        SpineTreeNode::SpineTree { meta, .. } => meta.id.0.first().copied().map(NodeId::root_epoch),
-    }
-}
-
-fn project_current_root_epoch_row(cursor: NodeId, rows: &mut Vec<TreeRenderRow>) {
-    let Some(root) = cursor.0.first().copied().map(NodeId::root_epoch) else {
-        return;
-    };
-    if rows.iter().any(|row| row.id == root) {
-        return;
-    }
-    rows.push(TreeRenderRow {
-        id: root,
-        status: NodeStatus::Opened,
-        summary: String::new(),
-        memory_path: None,
-        trajs_path: None,
-        accounting: None,
-    });
-}
-
-fn mark_cursor_statuses(cursor: NodeId, rows: &mut [TreeRenderRow]) {
-    for row in rows {
-        if row.id == cursor {
-            row.status = NodeStatus::Live;
-        } else if row.status == NodeStatus::Live || node_is_ancestor_of(&row.id, &cursor) {
-            row.status = NodeStatus::Opened;
-        }
-    }
-}
-
-fn node_is_ancestor_of(ancestor: &NodeId, descendant: &NodeId) -> bool {
-    ancestor.0.len() < descendant.0.len() && descendant.0.starts_with(ancestor.0.as_slice())
-}
-
-impl TreeRenderRow {
-    fn snapshot_status(&self) -> SpineTreeNodeStatus {
-        if self.status == NodeStatus::Closed
-            && self.id.is_root_epoch()
-            && self.memory_path.is_some()
-            && self.trajs_path.is_none()
-        {
-            return SpineTreeNodeStatus::Compacted;
-        }
-        self.status.into()
-    }
-}
-
-fn collect_tree_render_rows(
-    symbols: &[Symbol],
-    rows: &mut Vec<TreeRenderRow>,
-) -> Result<(), SpineError> {
-    for symbol in symbols {
-        match symbol {
-            Symbol::Control(ControlSymbol::Init(_))
-            | Symbol::Control(ControlSymbol::End)
-            | Symbol::Control(ControlSymbol::Close(_))
-            | Symbol::Control(ControlSymbol::Compact(_, _, _, _)) => {}
-            Symbol::Control(ControlSymbol::Open(meta)) => {
-                rows.push(TreeRenderRow {
-                    id: meta.id.clone(),
-                    status: NodeStatus::Live,
-                    summary: meta.summary.clone(),
-                    memory_path: None,
-                    trajs_path: None,
-                    accounting: None,
-                });
-            }
-            Symbol::SpineTreeNode(node) => {
-                collect_tree_render_node(node, rows)?;
-            }
-            Symbol::SpineTreeNodes(nodes) => {
-                for node in nodes {
-                    collect_tree_render_node(node, rows)?;
-                }
-            }
-            Symbol::RootEpoches(root_epochs) => {
-                for root_epoch in root_epochs {
-                    rows.push(TreeRenderRow {
-                        id: root_epoch.memory.node_id.clone(),
-                        status: NodeStatus::Closed,
-                        summary: String::new(),
-                        memory_path: Some(root_epoch.memory.body_path.clone()),
-                        trajs_path: None,
-                        accounting: memory_accounting(&root_epoch.memory),
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn collect_tree_render_node(
-    node: &SpineTreeNode,
-    rows: &mut Vec<TreeRenderRow>,
-) -> Result<(), SpineError> {
-    match node {
-        SpineTreeNode::MsgAsLeafNode { .. } | SpineTreeNode::ToolCallAsLeafNode { .. } => {}
-        SpineTreeNode::SpineTree {
-            memory,
-            meta,
-            children,
-            memory_path,
-            trajs_path,
-            ..
-        } => {
-            rows.push(TreeRenderRow {
-                id: meta.id.clone(),
-                status: NodeStatus::Closed,
-                summary: meta.summary.clone(),
-                memory_path: Some(memory_path.clone()),
-                trajs_path: Some(trajs_path.clone()),
-                accounting: memory_accounting(memory),
-            });
-            for child in children {
-                collect_tree_render_node(child, rows)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-pub(super) fn parse_stack_msg_leaf_count(symbols: &[Symbol]) -> usize {
-    symbols
-        .iter()
-        .map(|symbol| match symbol {
-            Symbol::SpineTreeNode(node) => spine_tree_node_msg_leaf_count(node),
-            Symbol::SpineTreeNodes(nodes) => nodes.iter().map(spine_tree_node_msg_leaf_count).sum(),
-            Symbol::Control(_) | Symbol::RootEpoches(_) => 0,
-        })
-        .sum()
-}
-
-#[cfg(test)]
-fn spine_tree_node_msg_leaf_count(node: &SpineTreeNode) -> usize {
-    match node {
-        SpineTreeNode::MsgAsLeafNode { .. } => 1,
-        SpineTreeNode::ToolCallAsLeafNode { .. } => 0,
-        SpineTreeNode::SpineTree { children, .. } => {
-            children.iter().map(spine_tree_node_msg_leaf_count).sum()
-        }
-    }
-}
-
-#[cfg(test)]
-pub(super) fn parse_stack_toolcall_leaf_count(symbols: &[Symbol]) -> usize {
-    symbols
-        .iter()
-        .map(|symbol| match symbol {
-            Symbol::SpineTreeNode(node) => spine_tree_node_toolcall_leaf_count(node),
-            Symbol::SpineTreeNodes(nodes) => {
-                nodes.iter().map(spine_tree_node_toolcall_leaf_count).sum()
-            }
-            Symbol::Control(_) | Symbol::RootEpoches(_) => 0,
-        })
-        .sum()
-}
-
-#[cfg(test)]
-fn spine_tree_node_toolcall_leaf_count(node: &SpineTreeNode) -> usize {
-    match node {
-        SpineTreeNode::MsgAsLeafNode { .. } => 0,
-        SpineTreeNode::ToolCallAsLeafNode { .. } => 1,
-        SpineTreeNode::SpineTree { children, .. } => children
-            .iter()
-            .map(spine_tree_node_toolcall_leaf_count)
-            .sum(),
-    }
-}
-
-fn format_tree_rows(
-    rows: Vec<TreeRenderRow>,
-    context_annotations: &BTreeMap<NodeId, String>,
-) -> String {
-    let rows = tree_rows_by_id(rows);
-    let Some((cursor, visible)) = visible_tree_row_ids(&rows) else {
-        return String::new();
-    };
-
-    let mut lines = vec![
-        format!("Cursor: {cursor}"),
-        String::new(),
-        "Spine Task Tree:".to_string(),
-    ];
-    for (id, row) in rows {
-        if !visible.contains(&id) {
-            continue;
-        }
-        let marker = match row.status {
-            NodeStatus::Live => "Current",
-            NodeStatus::Opened => "Open",
-            NodeStatus::Closed => "Done",
-        };
-        let mut detail = String::new();
-        if let Some(memory_path) = row.memory_path.as_ref() {
-            detail.push_str(&format!(" memory={}", memory_path.display()));
-        }
-        if let Some(trajs_path) = row.trajs_path.as_ref() {
-            detail.push_str(&format!(" trajs={}", trajs_path.display()));
-        }
-        if let Some(accounting) = row.accounting.as_ref().and_then(format_node_accounting) {
-            detail.push_str(&format!(" {accounting}"));
-        }
-        let summary = visible_summary(&row)
-            .map(|summary| format!(" {summary}"))
-            .unwrap_or_default();
-        let annotation = context_annotations
-            .get(&id)
-            .map(|annotation| annotation.trim())
-            .filter(|annotation| !annotation.is_empty())
-            .map(|annotation| format!(" {annotation}"))
-            .unwrap_or_default();
-        lines.push(format!(
-            "{}- [{}] {}{}{}{}",
-            "  ".repeat(id.0.len().saturating_sub(1)),
-            id,
-            marker,
-            summary,
-            detail,
-            annotation
-        ));
-    }
-    lines.join("\n")
-}
-
-fn tree_rows_by_id(rows: Vec<TreeRenderRow>) -> BTreeMap<NodeId, TreeRenderRow> {
-    rows.into_iter()
-        .map(|row| (row.id.clone(), row))
-        .collect::<BTreeMap<_, _>>()
-}
-
-fn visible_tree_row_ids(
-    rows: &BTreeMap<NodeId, TreeRenderRow>,
-) -> Option<(NodeId, BTreeSet<NodeId>)> {
-    let cursor = rows
-        .values()
-        .find(|row| row.status == NodeStatus::Live)
-        .map(|row| row.id.clone())?;
-    let mut visible = BTreeSet::<NodeId>::new();
-    let mut path = Vec::<NodeId>::new();
-    let mut current = Some(cursor.clone());
-    while let Some(id) = current {
-        path.push(id.clone());
-        current = id.parent();
-    }
-    path.reverse();
-
-    for node_id in &path {
-        visible.insert(node_id.clone());
-        if node_id.is_root_epoch() {
-            for sibling in rows.keys() {
-                if sibling.is_root_epoch() && sibling < node_id {
-                    visible.insert(sibling.clone());
-                }
-            }
-        }
-        if let Some(parent) = node_id.parent() {
-            for sibling in rows.keys() {
-                if sibling.parent() == Some(parent.clone()) && sibling < node_id {
-                    visible.insert(sibling.clone());
-                }
-            }
-        }
-    }
-    for (id, row) in rows {
-        if id.parent().as_ref() == Some(&cursor) && row.status == NodeStatus::Closed {
-            visible.insert(id.clone());
-        }
-    }
-
-    Some((cursor, visible))
-}
-
-fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
-    Some(NodeAccounting {
-        closed_source_suffix_tokens: memory.closed_source_suffix_tokens,
-        closed_memory_context_tokens: memory.closed_memory_context_tokens,
-        memory_output_tokens: memory.memory_output_tokens.filter(|tokens| *tokens > 0),
-    })
-    .filter(|accounting| {
-        accounting.closed_source_suffix_tokens.is_some()
-            || accounting.closed_memory_context_tokens.is_some()
-            || accounting.memory_output_tokens.is_some()
-    })
-}
-
-fn snapshot_accounting(accounting: &NodeAccounting) -> Option<SpineTreeNodeAccountingSnapshot> {
-    Some(SpineTreeNodeAccountingSnapshot {
-        current_node_context_tokens: None,
-        current_node_context_problem: None,
-        current_node_context_baseline_source: None,
-        closed_source_suffix_tokens: accounting.closed_source_suffix_tokens,
-        closed_memory_context_tokens: accounting.closed_memory_context_tokens,
-        memory_output_tokens: accounting.memory_output_tokens,
-    })
-    .filter(|accounting| {
-        accounting.closed_source_suffix_tokens.is_some()
-            || accounting.closed_memory_context_tokens.is_some()
-            || accounting.memory_output_tokens.is_some()
-    })
-}
-
-fn format_node_accounting(accounting: &NodeAccounting) -> Option<String> {
-    match (
-        accounting.closed_source_suffix_tokens,
-        accounting.closed_memory_context_tokens,
-        accounting.memory_output_tokens,
-    ) {
-        (Some(source), Some(memory), _) => Some(format!(
-            "(~{} source -> ~{} memory context)",
-            format_si_suffix(source),
-            format_si_suffix(memory)
-        )),
-        (Some(source), None, Some(output)) => Some(format!(
-            "(~{} source -> ~{} memory output)",
-            format_si_suffix(source),
-            format_si_suffix(output)
-        )),
-        (Some(source), None, None) => Some(format!("(~{} source)", format_si_suffix(source))),
-        (None, Some(memory), _) => Some(format!("(~{} memory context)", format_si_suffix(memory))),
-        (None, None, Some(output)) => {
-            Some(format!("(~{} memory output)", format_si_suffix(output)))
-        }
-        (None, None, None) => None,
-    }
-}
-
-fn visible_summary(row: &TreeRenderRow) -> Option<&str> {
-    let summary = row.summary.trim();
-    if summary.is_empty() || summary == "root" {
-        return None;
-    }
-    Some(summary)
-}
-
-pub(super) fn event_to_token(
-    event: &LoggedSpineLedgerEvent,
-    archive: &SpineArchive,
-    mems: &BTreeMap<String, MemRecord>,
-    raw_mask: RawMask<'_>,
-) -> Result<SpineToken, SpineError> {
-    match &event.event {
-        SpineLedgerEvent::Init { raw_start } => Ok(SpineToken::Init {
-            meta: tree_meta(
-                archive,
-                NodeId::root_epoch(1),
-                *raw_start,
-                "root".to_string(),
-            )?,
-        }),
-        SpineLedgerEvent::Msg {
-            raw_ordinal,
-            context_index,
-            from_user,
-            user_anchor,
-        } => Ok(SpineToken::Msg {
-            seg: SegRef::ResponseItem {
-                raw_ordinal: *raw_ordinal,
-                context_index: usize::try_from(*context_index)
-                    .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?,
-            },
-            from_user: *from_user,
-            user_anchor: *user_anchor,
-        }),
-        SpineLedgerEvent::ToolCall { segments } => Ok(SpineToken::ToolCall {
-            segments: segments
-                .iter()
-                .map(|segment| {
-                    Ok(crate::spine::model::ToolCallSegment {
-                        kind: segment.kind,
-                        seg: SegRef::ResponseItem {
-                            raw_ordinal: segment.raw_ordinal,
-                            context_index: usize::try_from(segment.context_index).map_err(
-                                |_| SpineError::InvalidEvent("context index overflow".to_string()),
-                            )?,
-                        },
-                    })
-                })
-                .collect::<Result<Vec<_>, SpineError>>()?,
-        }),
-        SpineLedgerEvent::Open {
-            child,
-            index,
-            summary,
-            open_input_tokens,
-            open_context_tokens,
-            open_context_source,
-            ..
-        } => {
-            if open_input_tokens != open_context_tokens {
-                return Err(SpineError::InvalidEvent(format!(
-                    "open event for node {child} has mismatched provider input baseline encoding"
-                )));
-            }
-            Ok(SpineToken::Open {
-                meta: tree_meta_with_token_baselines(
-                    archive,
-                    child.clone(),
-                    *index,
-                    summary.clone(),
-                    *open_input_tokens,
-                    *open_context_source,
-                )?,
-            })
-        }
-        SpineLedgerEvent::Close { node, .. } => {
-            let mem = mems.values().find(|mem| &mem.node == node).ok_or_else(|| {
-                SpineError::InvalidEvent(format!("missing memory for close node {node}"))
-            })?;
-            if !mem.allowed_by(raw_mask)? {
-                return Err(SpineError::InvalidEvent(format!(
-                    "memory {} does not cover live raw evidence",
-                    mem.compact_id
-                )));
-            }
-            Ok(SpineToken::Close {
-                memory: memory_ref(
-                    archive,
-                    mem.compact_id.clone(),
-                    mem.node.clone(),
-                    mem.body_hash.clone(),
-                    mem.raw_start..mem.raw_end,
-                    mem.context_start..mem.context_end,
-                    event.seq..event.seq + 1,
-                    mem.open_input_tokens,
-                    mem.close_input_tokens,
-                    mem.open_context_tokens,
-                    mem.close_context_tokens,
-                    mem.closed_source_suffix_tokens,
-                    mem.closed_memory_context_tokens,
-                    mem.open_context_source,
-                    mem.memory_output_tokens,
-                ),
-            })
-        }
-        SpineLedgerEvent::RootCompact {
-            mem,
-            next_open_index,
-            ..
-        } => {
-            let mem = mems.get(mem).ok_or_else(|| {
-                SpineError::InvalidEvent("missing memory for root compact".to_string())
-            })?;
-            if !mem.allowed_by(raw_mask)? {
-                return Err(SpineError::InvalidEvent(format!(
-                    "memory {} does not cover live raw evidence",
-                    mem.compact_id
-                )));
-            }
-            Ok(SpineToken::Compact {
-                memory: memory_ref(
-                    archive,
-                    mem.compact_id.clone(),
-                    mem.node.clone(),
-                    mem.body_hash.clone(),
-                    mem.raw_start..mem.raw_end,
-                    mem.context_start..mem.context_end,
-                    event.seq..event.seq + 1,
-                    mem.open_input_tokens,
-                    mem.close_input_tokens,
-                    mem.open_context_tokens,
-                    mem.close_context_tokens,
-                    mem.closed_source_suffix_tokens,
-                    mem.closed_memory_context_tokens,
-                    mem.open_context_source,
-                    mem.memory_output_tokens,
-                ),
-                next_open_index: usize::try_from(*next_open_index).map_err(|_| {
-                    SpineError::InvalidEvent("root open index overflow".to_string())
-                })?,
-                next_open_input_tokens: None,
-                next_open_context_tokens: None,
-            })
-        }
-        SpineLedgerEvent::OpenContextBaseline { .. } => Err(SpineError::InvalidEvent(
-            "OpenContextBaseline is metadata and cannot be converted to a SpineToken".to_string(),
-        )),
-    }
-}
-
-pub(super) fn apply_metadata_event(
-    ps: &mut ParseStack,
-    event: &LoggedSpineLedgerEvent,
-) -> Result<bool, SpineError> {
-    match &event.event {
-        SpineLedgerEvent::OpenContextBaseline {
-            node,
-            open_input_tokens,
-            open_context_tokens,
-            open_context_source,
-            ..
-        } => {
-            if open_input_tokens != open_context_tokens {
-                return Err(SpineError::InvalidEvent(format!(
-                    "open context baseline for node {node} has mismatched provider input encoding"
-                )));
-            }
-            ps.set_live_open_context_baseline(node, *open_input_tokens, *open_context_source)
-        }
-        _ => Ok(false),
-    }
-}
-
-pub(super) fn parse_stack_from_events_with_forced_events(
-    events: &[LoggedSpineLedgerEvent],
-    archive: &SpineArchive,
-    mems: &[MemRecord],
-    raw_mask: RawMask<'_>,
-    forced_event_seqs: &BTreeSet<u64>,
-    marker_structural_event_seqs: &BTreeSet<u64>,
-) -> Result<ParseStack, SpineError> {
-    let mems = mems
-        .iter()
-        .cloned()
-        .map(|mem| (mem.compact_id.clone(), mem))
-        .collect::<BTreeMap<_, _>>();
-    let mut ps = ParseStack::new();
-    for event in events {
-        if forced_event_seqs.contains(&event.seq) {
-            if !apply_metadata_event(&mut ps, event)? {
-                ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;
-            }
-            continue;
-        }
-        if marker_structural_event_seqs.contains(&event.seq) || !event.allowed_by(raw_mask)? {
-            continue;
-        }
-        if !apply_metadata_event(&mut ps, event)? {
-            ps.shift(event_to_token(event, archive, &mems, raw_mask)?, archive)?;
-        }
-    }
-    Ok(ps)
 }
