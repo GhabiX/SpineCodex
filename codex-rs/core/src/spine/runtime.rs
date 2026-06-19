@@ -273,6 +273,21 @@ struct CloseFamilyPlan {
     open: Option<CloseFamilyOpenPlan>,
 }
 
+struct CloseFamilyTransaction<'a> {
+    mem: &'a MemRecord,
+    memory_body: &'a str,
+    archive_writes: &'a [StagedArchiveWrite],
+    events: Vec<SpineLedgerEvent>,
+    marker_kind: SpineCommitKindMarker,
+    close_event: &'a SpineLedgerEvent,
+    event_count: u64,
+}
+
+enum CloseFamilyTransactionError {
+    PreparedSideEffect(SpineError),
+    CommitProof(SpineError),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
     Open { open_request_index: usize },
@@ -2686,22 +2701,23 @@ impl SpineRuntime {
             )?;
         }
         final_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
-        if let Err(err) = self
-            .write_prepared_memory_body(&prepared.mem, &prepared.memory_body)
-            .and_then(|()| flush_archive_writes(&prepared.archive_writes))
-            .and_then(|()| self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body))
-        {
-            self.parse_stack = pending_close_parse_stack;
-            return Err(err);
-        }
-        let marker = close_commit_marker(
-            self.ledger.next_event_seq,
-            &prepared.mem,
-            plan.marker_kind,
-            close_event_boundary(&prepared.close_event)?,
+        if let Err(err) = self.commit_close_family_transaction(CloseFamilyTransaction {
+            mem: &prepared.mem,
+            memory_body: &prepared.memory_body,
+            archive_writes: &prepared.archive_writes,
+            events,
+            marker_kind: plan.marker_kind,
+            close_event: &prepared.close_event,
             event_count,
-        )?;
-        self.append_committed_events(events, marker)?;
+        }) {
+            match err {
+                CloseFamilyTransactionError::PreparedSideEffect(err) => {
+                    self.parse_stack = pending_close_parse_stack;
+                    return Err(err);
+                }
+                CloseFamilyTransactionError::CommitProof(err) => return Err(err),
+            }
+        }
         Ok(SpinePreparedCommit {
             kind: plan.kind,
             publication_plan: Some(HistoryPublicationPlan {
@@ -2779,6 +2795,28 @@ impl SpineRuntime {
                 })
             }
         }
+    }
+
+    fn commit_close_family_transaction(
+        &mut self,
+        tx: CloseFamilyTransaction<'_>,
+    ) -> Result<(), CloseFamilyTransactionError> {
+        self.write_prepared_memory_body(tx.mem, tx.memory_body)
+            .and_then(|()| flush_archive_writes(tx.archive_writes))
+            .and_then(|()| self.commit_prepared_memory_record(tx.mem, tx.memory_body))
+            .map_err(CloseFamilyTransactionError::PreparedSideEffect)?;
+        let marker = close_commit_marker(
+            self.ledger.next_event_seq,
+            tx.mem,
+            tx.marker_kind,
+            close_event_boundary(tx.close_event)
+                .map_err(CloseFamilyTransactionError::CommitProof)?,
+            tx.event_count,
+        )
+        .map_err(CloseFamilyTransactionError::CommitProof)?;
+        self.append_committed_events(tx.events, marker)
+            .map_err(CloseFamilyTransactionError::CommitProof)?;
+        Ok(())
     }
 
     pub(crate) fn persist_prepared_commit_side_effects(
