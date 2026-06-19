@@ -1,42 +1,54 @@
 use std::path::Path;
 
 pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
-Spine is the primary control frame for nontrivial work: task management,
-attention allocation, context compaction, resume quality, and cost control.
+Spine helps organize ongoing work, keep the active context useful, compact old
+work into memory, make later continuation reliable, and control cost.
 
-Use the current Spine node as the active task boundary. Nontrivial work includes
-repository inspection, tools, edits, tests, commits, long reasoning, research,
-or multi-turn task state. Trivial one-turn replies can be answered directly.
-
-Before nontrivial work, choose the matching boundary:
+Spine organizes ongoing work into task-level nodes. Treat the current node as
+the place where present work happens. Manage nodes so the working history stays
+useful for reasoning, tool use, compaction, and later continuation.
+Treat a node as one compactible work unit: if a later model could resume from a
+short memory without replaying the raw trace, that work unit is ready to close
+or advance.
 
 - Continue in the current node when it represents the next work at the right
   granularity. Suitability is determined by scope and phase; shared request,
   issue, milestone, or feature is only weak evidence.
-- Use `open` for a focused boundary before work grows, or for a focused
-  subproblem inside the current phase. Close the child when resolved.
-- Use `next` when moving from a completed phase to a peer phase.
-- Use `close` when the current scope should be compacted now and no peer phase
-  needs to start immediately.
+- Use `open` when the next work is better handled in a focused child node.
+- Use `close` when the current node has useful state worth preserving as memory
+  and its full local history is no longer needed.
+- Use `next` when the current node should be closed and the next work is better
+  handled in a peer node.
+
+Close or next especially when:
+- a focused phase of work has produced useful state that memory can preserve;
+- the next work is a peer phase and the current phase can be resumed from
+  memory;
+- the current node has become noisy, stale, repetitive, or dominated by
+  irrelevant exploration, so preserving useful state and continuing from memory
+  would be cleaner.
+
+Simple one-turn replies can be answered directly without changing Spine.
 
 `open` creates a child. `close` and `next` compact the useful state from the
 current working context and reduce future prompt context. Do not wait for
-perfect completion if the current working context is becoming noisy,
-repetitive, or dominated by stale exploration; close or next early and keep
-the useful state. The compact memory is authored by you in the `memory`
+perfect completion when the current useful state is already enough for clean
+continuation from memory. The compact memory is authored by you in the `memory`
 argument of `close`/`next`; runtime preserves exact user messages and child
-memories, then appends your Node Memory body. Choose based on the semantic
-boundary and context hygiene, not raw context size alone.
+memories, then appends your continuation memory. Choose based on whether the
+current node remains useful for continued work, not raw context size alone.
 If the child already has a user-relevant conclusion, surface it before closing.
 
 Conventions:
 - `summary` is a short user-facing label in the conversation language.
-- `memory` on `close`/`next` is required and must contain only the Node Memory
-  body: stable continuation facts, decisions, evidence, constraints,
-  unresolved risks, and next actions.
-- Do not include runtime-owned headings such as `# Spine Memory`,
-  `## User Message`, `## Child Memory`, or `## Node Memory` inside `memory`.
-- `<spine_status>` gives cursor orientation.
+- `memory` on `close`/`next` is required. Write concise continuation memory for
+  the next LLM that may resume this task: current progress, stable facts,
+  decisions, evidence, constraints, unresolved risks, remaining work, and
+  critical files, tests, commands, or references. When relevant preserved user
+  messages have `[U#]` anchors, cite those anchors and state what was done
+  after each request and whether it is completed, partial, blocked, or pending
+  at node close.
+- `<spine_status>` gives Spine node context and orientation when present.
 - `<spine_memory>` provides continuity from closed work.
 - Choose at most one of `open`, `close`, or `next` in one assistant response.
 - `spine.tree` is a read-only inspector for unclear tree/cursor state.
