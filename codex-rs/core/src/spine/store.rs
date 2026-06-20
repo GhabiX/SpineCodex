@@ -24,15 +24,10 @@ use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::TrimEvent;
 use crate::spine::model::commit_marker_structural_event_seqs;
-use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::io::Read;
-use std::io::Seek;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -41,6 +36,7 @@ mod checkpoint_proof;
 mod clone_rewrite;
 mod commit_marker;
 mod locator;
+mod pressure;
 
 const TREE_FILE: &str = "tree.jsonl";
 const PRESSURE_FILE: &str = "pressure.jsonl";
@@ -662,7 +658,7 @@ impl SpineStore {
         &self,
         event: &LoggedPressureEvent,
     ) -> Result<(), SpineError> {
-        append_pressure_json_line(&self.pressure_path(), event)
+        pressure::append_json_line(&self.pressure_path(), event)
     }
 
     pub(super) fn append_logged_trim_event(
@@ -726,7 +722,7 @@ impl SpineStore {
         if !self.pressure_path().exists() {
             return Ok(Vec::new());
         }
-        read_pressure_json_lines(&self.pressure_path())
+        pressure::read_json_lines(&self.pressure_path())
     }
 
     pub(super) fn trim_events(&self) -> Result<Vec<LoggedTrimEvent>, SpineError> {
@@ -1127,72 +1123,6 @@ fn sidecar_store_path(store_root: &Path, path: &str) -> PathBuf {
     } else {
         store_root.join(path)
     }
-}
-
-fn append_pressure_json_line<T: Serialize>(path: &Path, value: &T) -> Result<(), SpineError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    if file.metadata()?.len() > 0 && last_byte(path)? != Some(b'\n') {
-        file.write_all(b"\n")?;
-    }
-    serde_json::to_writer(&mut file, value)?;
-    file.write_all(b"\n")?;
-    Ok(())
-}
-
-fn last_byte(path: &Path) -> Result<Option<u8>, SpineError> {
-    let mut file = File::open(path)?;
-    if file.metadata()?.len() == 0 {
-        return Ok(None);
-    }
-    file.seek(std::io::SeekFrom::End(-1))?;
-    let mut byte = [0u8; 1];
-    file.read_exact(&mut byte)?;
-    Ok(Some(byte[0]))
-}
-
-fn read_pressure_json_lines(path: &Path) -> Result<Vec<LoggedPressureEvent>, SpineError> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(err) => {
-            tracing::debug!(
-                "skipping Spine pressure metadata: failed to open {}: {err}",
-                path.display()
-            );
-            return Ok(Vec::new());
-        }
-    };
-    let reader = BufReader::new(file);
-    let mut out = Vec::new();
-    for (line_index, line) in reader.lines().enumerate() {
-        let line = match line {
-            Ok(line) => line,
-            Err(err) => {
-                tracing::debug!(
-                    "skipping Spine pressure metadata line {} in {}: {err}",
-                    line_index + 1,
-                    path.display()
-                );
-                continue;
-            }
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str(&line) {
-            Ok(event) => out.push(event),
-            Err(err) => {
-                tracing::debug!(
-                    "skipping malformed Spine pressure metadata line {} in {}: {err}",
-                    line_index + 1,
-                    path.display()
-                );
-            }
-        }
-    }
-    Ok(out)
 }
 
 fn required_memory_ids_for_cloned_events(
