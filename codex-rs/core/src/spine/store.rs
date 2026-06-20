@@ -25,7 +25,6 @@ use crate::spine::model::commit_marker_structural_event_seqs;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -37,6 +36,7 @@ mod locator;
 mod memory_body;
 mod pressure;
 mod trim;
+mod writer_lock;
 
 const TREE_FILE: &str = "tree.jsonl";
 const PRESSURE_FILE: &str = "pressure.jsonl";
@@ -47,7 +47,6 @@ const MEM_ACCOUNTING_WITNESS_FILE: &str = "mem_accounting_witness.jsonl";
 const COMMIT_FILE: &str = "commits.jsonl";
 const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
 const FEEDBACK_FILE: &str = "spine_feedback.md";
-const WRITER_LOCK_FILE: &str = ".writer.lock";
 const CHECKPOINT_DIR: &str = "checkpoints";
 const INITIAL_CHECKPOINT_FILE: &str = "initial.json";
 
@@ -215,14 +214,7 @@ impl SpineStore {
     }
 
     fn ensure_trim_ledger_exists(&self) -> Result<(), SpineError> {
-        if let Some(parent) = self.trim_path().parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.trim_path())?;
-        Ok(())
+        trim::ensure_ledger_exists(&self.trim_path())
     }
 
     fn trim_only_clone_boundary_for_raw_ordinal(
@@ -253,24 +245,8 @@ impl SpineStore {
         if self._writer_lock.is_some() {
             return Ok(());
         }
-        std::fs::create_dir_all(&self.root)?;
-        let lock_path = self.root.join(WRITER_LOCK_FILE);
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&lock_path)?;
-        match lock.try_lock() {
-            Ok(()) => {
-                self._writer_lock = Some(lock);
-                Ok(())
-            }
-            Err(std::fs::TryLockError::WouldBlock) => Err(SpineError::InvalidStore(format!(
-                "Spine sidecar {} is already owned by another live Codex process",
-                self.root.display()
-            ))),
-            Err(std::fs::TryLockError::Error(err)) => Err(err.into()),
-        }
+        self._writer_lock = Some(writer_lock::acquire(&self.root)?);
+        Ok(())
     }
 }
 

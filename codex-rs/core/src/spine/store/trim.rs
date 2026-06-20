@@ -1,6 +1,16 @@
 use crate::spine::SpineError;
 use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::TrimEvent;
+use std::fs::OpenOptions;
+use std::path::Path;
+
+pub(super) fn ensure_ledger_exists(path: &Path) -> Result<(), SpineError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    OpenOptions::new().create(true).append(true).open(path)?;
+    Ok(())
+}
 
 pub(super) fn event_within_toolcall_boundary(
     event: &LoggedTrimEvent,
