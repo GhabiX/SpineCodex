@@ -60,6 +60,7 @@ mod accounting;
 mod coverage;
 mod load;
 mod observe;
+mod prepared;
 mod replay;
 mod session_state;
 mod support;
@@ -67,6 +68,10 @@ mod trim;
 
 #[cfg(test)]
 use crate::spine::model::commit_marker_structural_event_seqs;
+pub(crate) use prepared::HistoryPublicationPlan;
+pub(crate) use prepared::SpineCommitKind;
+pub(crate) use prepared::SpinePreparedCommit;
+pub(crate) use prepared::SpinePreparedRootCompact;
 #[cfg(test)]
 use replay::ReplayCommitClassification;
 #[cfg(test)]
@@ -305,77 +310,6 @@ struct CloseFamilyTransaction<'a> {
 enum CloseFamilyTransactionError {
     PreparedSideEffect(SpineError),
     CommitProof(SpineError),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum SpineCommitKind {
-    Open { open_request_index: usize },
-    Close,
-    CloseThenOpen { open_index: usize },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct HistoryPublicationPlan {
-    operation: &'static str,
-    suffix_start: usize,
-    replacement_prefix: Vec<ResponseItem>,
-    preserve_host_history_from: usize,
-    append_current_tool_response_if_missing: bool,
-}
-
-impl HistoryPublicationPlan {
-    pub(crate) fn operation(&self) -> &'static str {
-        self.operation
-    }
-
-    pub(crate) fn suffix_start(&self) -> usize {
-        self.suffix_start
-    }
-
-    pub(crate) fn replacement_prefix(&self) -> &[ResponseItem] {
-        &self.replacement_prefix
-    }
-
-    pub(crate) fn preserve_host_history_from(&self) -> usize {
-        self.preserve_host_history_from
-    }
-
-    pub(crate) fn append_current_tool_response_if_missing(&self) -> bool {
-        self.append_current_tool_response_if_missing
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct SpinePreparedCommit {
-    kind: SpineCommitKind,
-    publication_plan: Option<HistoryPublicationPlan>,
-    final_parse_stack: Option<ParseStack>,
-    completed_toolcall: Option<CompletedToolCall>,
-    toolcall_seq: Option<u64>,
-    raw_items: Vec<Option<ResponseItem>>,
-    mem_for_accounting: Option<MemRecord>,
-}
-
-#[derive(Debug)]
-pub(crate) struct SpinePreparedRootCompact {
-    result: SpineRootCompactResult,
-    final_parse_stack: ParseStack,
-}
-
-impl SpinePreparedRootCompact {
-    pub(crate) fn result(&self) -> &SpineRootCompactResult {
-        &self.result
-    }
-}
-
-impl SpinePreparedCommit {
-    pub(crate) fn kind(&self) -> &SpineCommitKind {
-        &self.kind
-    }
-
-    pub(crate) fn publication_plan(&self) -> Option<&HistoryPublicationPlan> {
-        self.publication_plan.as_ref()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
