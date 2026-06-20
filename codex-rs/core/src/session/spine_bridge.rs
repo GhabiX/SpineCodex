@@ -96,6 +96,28 @@ struct SpineHostEffects {
     effects: Vec<SpineHostEffect>,
 }
 
+impl SpineHostEffects {
+    fn none() -> Self {
+        Self {
+            effects: Vec::new(),
+        }
+    }
+
+    fn replace_history(update: SpineHistoryUpdate) -> Self {
+        Self {
+            effects: vec![SpineHostEffect::ReplaceHistory(update)],
+        }
+    }
+
+    fn from_optional_history_update(update: Option<SpineHistoryUpdate>) -> Self {
+        update.map_or_else(Self::none, Self::replace_history)
+    }
+
+    fn into_effects(self) -> Vec<SpineHostEffect> {
+        self.effects
+    }
+}
+
 enum SpineHostEffect {
     ReplaceHistory(SpineHistoryUpdate),
 }
@@ -217,7 +239,7 @@ impl Session {
         state: &mut crate::state::SessionState,
         effects: SpineHostEffects,
     ) -> Result<(), String> {
-        for effect in effects.effects {
+        for effect in effects.into_effects() {
             Self::apply_spine_host_effect_to_locked_state(state, effect)?;
         }
         Ok(())
@@ -2589,12 +2611,9 @@ fn spine_host_effects_for_commit_publication(
         history_items,
         reference_context_item,
     )?;
-    Ok(SpineHostEffects {
-        effects: history_update
-            .map(SpineHostEffect::ReplaceHistory)
-            .into_iter()
-            .collect(),
-    })
+    Ok(SpineHostEffects::from_optional_history_update(
+        history_update,
+    ))
 }
 
 fn spine_history_update_for_commit_publication(
