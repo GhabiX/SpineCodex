@@ -79,6 +79,15 @@ struct SpineCommitOutput {
     defer_tree_update_until_raw_output: bool,
 }
 
+struct CompletedToolCallEvidenceParts {
+    call_id: String,
+    request_call_ids: Vec<String>,
+    request_segments: Vec<CompletedToolCallSegment>,
+    response_segments: Vec<CompletedToolCallSegment>,
+    missing_request_error: &'static str,
+    missing_response_error: &'static str,
+}
+
 pub(crate) struct PreparedSpineRootCompactInstall {
     prepared: crate::spine::SpinePreparedRootCompact,
 }
@@ -954,22 +963,20 @@ impl Session {
             };
             spine.pending_tool_request_anchor(call_id)?
         };
-        let completed_toolcall = CompletedToolCall {
+        let completed_toolcall = completed_toolcall_evidence(CompletedToolCallEvidenceParts {
             call_id: call_id.to_string(),
             request_call_ids: vec![call_id.to_string()],
-            segments: vec![
-                CompletedToolCallSegment {
-                    kind: ToolCallSegmentKind::Request,
-                    raw_ordinal: request_anchor.raw_ordinal,
-                    context_index: request_anchor.context_index,
-                },
-                CompletedToolCallSegment {
-                    kind: ToolCallSegmentKind::Response,
-                    raw_ordinal: tool_resp_raw_ordinal,
-                    context_index: tool_resp_context_index,
-                },
-            ],
-        };
+            request_segments: vec![completed_toolcall_request_segment(
+                request_anchor.raw_ordinal,
+                request_anchor.context_index,
+            )],
+            response_segments: vec![completed_toolcall_response_segment(
+                tool_resp_raw_ordinal,
+                tool_resp_context_index,
+            )],
+            missing_request_error: "completed toolcall must contain a request",
+            missing_response_error: "completed toolcall must contain a response",
+        })?;
         self.commit_spine_completed_toolcall_with_client_session(
             turn_context,
             client_session,
@@ -993,39 +1000,8 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
         };
-        let expected_call_ids = tool_call_ids
-            .iter()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
-        let mut output_call_ids = std::collections::BTreeSet::new();
-        for item in output_items {
-            let Some(call_id) = tool_response_call_id(item) else {
-                return Err(SpineError::InvalidEvent(
-                    "grouped Spine toolcall output item is not a tool response".to_string(),
-                ));
-            };
-            if !expected_call_ids.contains(call_id) {
-                return Err(SpineError::InvalidEvent(format!(
-                    "grouped Spine toolcall unexpected output for call_id={call_id}"
-                )));
-            }
-            output_call_ids.insert(call_id.to_string());
-        }
-        for call_id in tool_call_ids {
-            if !output_call_ids.contains(call_id) {
-                return Err(SpineError::InvalidEvent(format!(
-                    "grouped Spine toolcall missing output for call_id={call_id}"
-                )));
-            }
-        }
-        let commit_output = output_items
-            .iter()
-            .find(|item| tool_response_call_id(item) == Some(commit_call_id))
-            .ok_or_else(|| {
-                SpineError::InvalidEvent(format!(
-                    "grouped Spine toolcall missing output for commit call_id={commit_call_id}"
-                ))
-            })?;
+        let commit_output =
+            validate_grouped_spine_toolcall_outputs(commit_call_id, tool_call_ids, output_items)?;
         let request_anchors = {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
@@ -1049,46 +1025,30 @@ impl Session {
                     "failed to record grouped Spine tool outputs before commit: {err}"
                 ))
             })?;
-        let mut request_segments = request_anchors
+        let request_segments = request_anchors
             .iter()
-            .map(|anchor| CompletedToolCallSegment {
-                kind: ToolCallSegmentKind::Request,
-                raw_ordinal: anchor.raw_ordinal,
-                context_index: anchor.context_index,
+            .map(|anchor| {
+                completed_toolcall_request_segment(anchor.raw_ordinal, anchor.context_index)
             })
             .collect::<Vec<_>>();
-        request_segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
         let mut response_segments = Vec::new();
         for (index, raw_ordinal) in output_raw_ordinals.iter().enumerate() {
             let Some(raw_ordinal) = raw_ordinal else {
                 continue;
             };
-            response_segments.push(CompletedToolCallSegment {
-                kind: ToolCallSegmentKind::Response,
-                raw_ordinal: *raw_ordinal,
-                context_index: output_context_start + index,
-            });
-        }
-        response_segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
-        if request_segments.is_empty() {
-            return Err(SpineError::InvalidEvent(
-                "completed grouped toolcall must contain at least one request".to_string(),
+            response_segments.push(completed_toolcall_response_segment(
+                *raw_ordinal,
+                output_context_start + index,
             ));
         }
-        if response_segments.is_empty() {
-            return Err(SpineError::InvalidEvent(
-                "completed grouped toolcall must contain at least one response".to_string(),
-            ));
-        }
-        let mut group_segments =
-            Vec::with_capacity(request_segments.len() + response_segments.len());
-        group_segments.extend(request_segments);
-        group_segments.extend(response_segments);
-        let completed_toolcall = CompletedToolCall {
+        let completed_toolcall = completed_toolcall_evidence(CompletedToolCallEvidenceParts {
             call_id: commit_call_id.to_string(),
             request_call_ids: tool_call_ids.to_vec(),
-            segments: group_segments,
-        };
+            request_segments,
+            response_segments,
+            missing_request_error: "completed grouped toolcall must contain at least one request",
+            missing_response_error: "completed grouped toolcall must contain at least one response",
+        })?;
         self.commit_spine_completed_toolcall_with_client_session(
             turn_context,
             client_session,
@@ -2262,6 +2222,94 @@ impl Session {
             || (turn_started_from_zero && last_tokens > 0);
         has_fresh_turn_usage.then_some(current)
     }
+}
+
+fn validate_grouped_spine_toolcall_outputs<'a>(
+    commit_call_id: &str,
+    tool_call_ids: &[String],
+    output_items: &'a [ResponseItem],
+) -> Result<&'a ResponseItem, SpineError> {
+    let expected_call_ids = tool_call_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut output_call_ids = BTreeSet::new();
+    for item in output_items {
+        let Some(call_id) = tool_response_call_id(item) else {
+            return Err(SpineError::InvalidEvent(
+                "grouped Spine toolcall output item is not a tool response".to_string(),
+            ));
+        };
+        if !expected_call_ids.contains(call_id) {
+            return Err(SpineError::InvalidEvent(format!(
+                "grouped Spine toolcall unexpected output for call_id={call_id}"
+            )));
+        }
+        output_call_ids.insert(call_id.to_string());
+    }
+    for call_id in tool_call_ids {
+        if !output_call_ids.contains(call_id) {
+            return Err(SpineError::InvalidEvent(format!(
+                "grouped Spine toolcall missing output for call_id={call_id}"
+            )));
+        }
+    }
+    output_items
+        .iter()
+        .find(|item| tool_response_call_id(item) == Some(commit_call_id))
+        .ok_or_else(|| {
+            SpineError::InvalidEvent(format!(
+                "grouped Spine toolcall missing output for commit call_id={commit_call_id}"
+            ))
+        })
+}
+
+fn completed_toolcall_request_segment(
+    raw_ordinal: u64,
+    context_index: usize,
+) -> CompletedToolCallSegment {
+    CompletedToolCallSegment {
+        kind: ToolCallSegmentKind::Request,
+        raw_ordinal,
+        context_index,
+    }
+}
+
+fn completed_toolcall_response_segment(
+    raw_ordinal: u64,
+    context_index: usize,
+) -> CompletedToolCallSegment {
+    CompletedToolCallSegment {
+        kind: ToolCallSegmentKind::Response,
+        raw_ordinal,
+        context_index,
+    }
+}
+
+fn completed_toolcall_evidence(
+    parts: CompletedToolCallEvidenceParts,
+) -> Result<CompletedToolCall, SpineError> {
+    let CompletedToolCallEvidenceParts {
+        call_id,
+        request_call_ids,
+        mut request_segments,
+        mut response_segments,
+        missing_request_error,
+        missing_response_error,
+    } = parts;
+    request_segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
+    response_segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
+    if request_segments.is_empty() {
+        return Err(SpineError::InvalidEvent(missing_request_error.to_string()));
+    }
+    if response_segments.is_empty() {
+        return Err(SpineError::InvalidEvent(missing_response_error.to_string()));
+    }
+    let mut segments = Vec::with_capacity(request_segments.len() + response_segments.len());
+    segments.extend(request_segments);
+    segments.extend(response_segments);
+    Ok(CompletedToolCall {
+        call_id,
+        request_call_ids,
+        segments,
+    })
 }
 
 pub(super) fn assign_spine_raw_ordinals(
