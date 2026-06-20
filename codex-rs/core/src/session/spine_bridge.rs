@@ -89,6 +89,15 @@ struct CompletedToolCallEvidenceParts {
     missing_response_error: &'static str,
 }
 
+struct CompletedSpineToolCall<'a> {
+    call_id: &'a str,
+    response_item: &'a ResponseItem,
+    evidence: CompletedToolCall,
+    response_already_recorded: bool,
+    response_recorded_inside_reduce: bool,
+    history_before_recorded_output: Option<crate::context_manager::ContextManager>,
+}
+
 pub(crate) struct PreparedSpineRootCompactInstall {
     prepared: crate::spine::SpinePreparedRootCompact,
 }
@@ -991,12 +1000,14 @@ impl Session {
         self.record_completed_spine_toolcall_with_client_session(
             turn_context,
             client_session,
-            call_id,
-            item,
-            completed_toolcall,
-            tool_resp_already_recorded,
-            recorded_output_inside_reduce,
-            history_before_recorded_output,
+            CompletedSpineToolCall {
+                call_id,
+                response_item: item,
+                evidence: completed_toolcall,
+                response_already_recorded: tool_resp_already_recorded,
+                response_recorded_inside_reduce: recorded_output_inside_reduce,
+                history_before_recorded_output,
+            },
         )
         .await
     }
@@ -1049,12 +1060,14 @@ impl Session {
         self.record_completed_spine_toolcall_with_client_session(
             turn_context,
             client_session,
-            commit_call_id,
-            commit_output,
-            completed_toolcall,
-            true,
-            false,
-            None,
+            CompletedSpineToolCall {
+                call_id: commit_call_id,
+                response_item: commit_output,
+                evidence: completed_toolcall,
+                response_already_recorded: true,
+                response_recorded_inside_reduce: false,
+                history_before_recorded_output: None,
+            },
         )
         .await
     }
@@ -1063,22 +1076,17 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
-        call_id: &str,
-        item: &ResponseItem,
-        completed_toolcall: CompletedToolCall,
-        tool_resp_already_recorded: bool,
-        recorded_output_inside_reduce: bool,
-        history_before_recorded_output: Option<crate::context_manager::ContextManager>,
+        toolcall: CompletedSpineToolCall<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
         self.commit_spine_completed_toolcall_with_client_session(
             turn_context,
             client_session,
-            call_id,
-            item,
-            completed_toolcall,
-            tool_resp_already_recorded,
-            recorded_output_inside_reduce,
-            history_before_recorded_output,
+            toolcall.call_id,
+            toolcall.response_item,
+            toolcall.evidence,
+            toolcall.response_already_recorded,
+            toolcall.response_recorded_inside_reduce,
+            toolcall.history_before_recorded_output,
         )
         .await
     }
