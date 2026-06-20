@@ -2111,7 +2111,7 @@ async fn drain_in_flight(
                     false
                 };
                 let commit = if spine_jit_enabled {
-                    sess.on_completed_spine_toolcall_outputs_with_client_session(
+                    sess.on_spine_toolcall_with_client_session(
                         &turn_context,
                         client_session,
                         SpineCompletedToolCallOutputs::Single {
@@ -2270,7 +2270,7 @@ async fn drain_deferred_spine_tool_group(
         }
     }
     let commit = sess
-        .on_completed_spine_toolcall_outputs_with_client_session(
+        .on_spine_toolcall_with_client_session(
             &turn_context,
             client_session,
             SpineCompletedToolCallOutputs::Grouped {
@@ -2374,7 +2374,7 @@ async fn drain_conflicting_spine_control_tool_group(
     }
 
     let commit = sess
-        .on_completed_spine_toolcall_outputs_with_client_session(
+        .on_spine_toolcall_with_client_session(
             &turn_context,
             client_session,
             SpineCompletedToolCallOutputs::Grouped {

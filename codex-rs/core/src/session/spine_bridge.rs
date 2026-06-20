@@ -957,7 +957,7 @@ impl Session {
     ) -> Result<SpineToolCommit, SpineError> {
         // TODO(spine-hook-refactor): remove this compatibility wrapper once
         // tests call the unified completed-toolcall hook.
-        self.on_completed_spine_toolcall_outputs_with_client_session(
+        self.on_spine_toolcall_with_client_session(
             turn_context,
             client_session,
             SpineCompletedToolCallOutputs::Single { item },
@@ -965,7 +965,7 @@ impl Session {
         .await
     }
 
-    pub(crate) async fn on_completed_spine_toolcall_outputs_with_client_session(
+    pub(crate) async fn on_spine_toolcall_with_client_session(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
@@ -1113,7 +1113,7 @@ impl Session {
     ) -> Result<SpineToolCommit, SpineError> {
         // TODO(spine-hook-refactor): remove this compatibility wrapper once
         // tests call the unified completed-toolcall hook.
-        self.on_completed_spine_toolcall_outputs_with_client_session(
+        self.on_spine_toolcall_with_client_session(
             turn_context,
             client_session,
             SpineCompletedToolCallOutputs::Grouped {
