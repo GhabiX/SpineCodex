@@ -15,6 +15,7 @@ pub(crate) use model::NodeId;
 pub(crate) use model::ToolCallSegmentKind;
 pub(crate) use runtime::CompletedToolCall;
 pub(crate) use runtime::CompletedToolCallSegment;
+#[cfg(test)]
 pub(crate) use runtime::IntoSpineNodeMemory;
 pub(crate) use runtime::LiveRootCompact;
 pub(crate) use runtime::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;

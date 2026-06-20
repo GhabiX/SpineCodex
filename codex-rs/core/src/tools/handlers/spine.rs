@@ -1,4 +1,5 @@
 use crate::function_tool::FunctionCallError;
+use crate::session::SpineControlToolReceiptInput;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_FEEDBACK;
@@ -428,7 +429,12 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
             SpineTool::Open => {
                 let args: OpenArgs = parse_arguments(&arguments)?;
                 session
-                    .stage_spine_open(call_id, args.summary)
+                    .record_spine_control_tool_receipt(
+                        call_id,
+                        SpineControlToolReceiptInput::Open {
+                            summary: args.summary,
+                        },
+                    )
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
@@ -440,7 +446,10 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                 let args: CloseArgs = parse_arguments(&arguments)?;
                 let memory = normalize_memory_arg(args.memory, "spine.close")?;
                 session
-                    .stage_spine_close(call_id, memory)
+                    .record_spine_control_tool_receipt(
+                        call_id,
+                        SpineControlToolReceiptInput::Close { memory },
+                    )
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
@@ -452,7 +461,13 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                 let args: NextArgs = parse_arguments(&arguments)?;
                 let memory = normalize_memory_arg(args.memory, "spine.next")?;
                 session
-                    .stage_spine_next(call_id, args.summary, memory)
+                    .record_spine_control_tool_receipt(
+                        call_id,
+                        SpineControlToolReceiptInput::Next {
+                            summary: args.summary,
+                            memory,
+                        },
+                    )
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(

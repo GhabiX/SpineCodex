@@ -1,6 +1,7 @@
 use codex_protocol::models::ResponseItem;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::btree_map::Entry;
 #[cfg(test)]
 use std::ops::Range;
 use std::path::Path;
@@ -138,6 +139,7 @@ pub(crate) struct SpineRuntime {
     #[cfg(test)]
     pending_tool_responses: BTreeMap<String, Vec<PendingToolResponse>>,
     pending: Option<PendingTransition>,
+    control_receipts: BTreeMap<String, SpineControlToolReceipt>,
     pending_memory_context_accounting: Option<PendingMemoryContextAccounting>,
     next_user_anchor: u64,
 }
@@ -222,6 +224,19 @@ impl PendingTransition {
             | Self::Close { call_id, .. }
             | Self::NextSugar { call_id, .. } => call_id,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum SpineControlToolReceipt {
+    Open { summary: String },
+    Close { memory: String },
+    Next { summary: String, memory: String },
+}
+
+impl SpineControlToolReceipt {
+    fn is_close_like(&self) -> bool {
+        matches!(self, Self::Close { .. } | Self::Next { .. })
     }
 }
 
@@ -338,6 +353,35 @@ impl IntoSpineNodeMemory for String {
 }
 
 impl SpineRuntime {
+    fn validate_control_tool_receipt_pending_view(
+        &self,
+        receipt: &SpineControlToolReceipt,
+    ) -> Result<(), SpineError> {
+        match receipt {
+            SpineControlToolReceipt::Open { summary } => {
+                if summary.trim().is_empty() {
+                    return Err(SpineError::ToolUse(
+                        "spine.open summary must not be empty".to_string(),
+                    ));
+                }
+            }
+            SpineControlToolReceipt::Close { memory } => {
+                validate_model_node_memory(memory)?;
+                self.validate_memory_user_anchor_refs(memory)?;
+            }
+            SpineControlToolReceipt::Next { summary, memory } => {
+                if summary.trim().is_empty() {
+                    return Err(SpineError::ToolUse(
+                        "spine.next summary must not be empty".to_string(),
+                    ));
+                }
+                validate_model_node_memory(memory)?;
+                self.validate_memory_user_anchor_refs(memory)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn append_feedback_markdown(&self, entry: &str) -> Result<(), SpineError> {
         self.store.append_feedback_markdown(entry)
     }
@@ -673,6 +717,81 @@ impl SpineRuntime {
         Ok(())
     }
 
+    pub(crate) fn record_open_tool_receipt(
+        &mut self,
+        call_id: String,
+        summary: String,
+    ) -> Result<(), SpineError> {
+        self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Open { summary })
+    }
+
+    pub(crate) fn record_close_tool_receipt(
+        &mut self,
+        call_id: String,
+        memory: String,
+    ) -> Result<(), SpineError> {
+        self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Close { memory })
+    }
+
+    pub(crate) fn record_next_tool_receipt(
+        &mut self,
+        call_id: String,
+        summary: String,
+        memory: String,
+    ) -> Result<(), SpineError> {
+        self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Next { summary, memory })
+    }
+
+    fn record_control_tool_receipt(
+        &mut self,
+        call_id: String,
+        receipt: SpineControlToolReceipt,
+    ) -> Result<(), SpineError> {
+        self.ensure_jit_enabled("Spine control tool receipt")?;
+        if !self.control_call_ids.contains(&call_id) {
+            return Err(SpineError::Operation(format!(
+                "missing Spine control request anchor for call_id={call_id}"
+            )));
+        }
+        match self.control_receipts.entry(call_id.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(receipt);
+            }
+            Entry::Occupied(_) => {
+                return Err(SpineError::InvalidEvent(format!(
+                    "duplicate Spine control receipt for call_id={call_id}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_pending_from_receipt(&mut self, call_id: &str) -> Result<(), SpineError> {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.call_id() == call_id)
+        {
+            return Ok(());
+        }
+        let Some(receipt) = self.control_receipts.get(call_id).cloned() else {
+            return Ok(());
+        };
+        match receipt {
+            SpineControlToolReceipt::Open { summary } => {
+                self.stage_open(call_id.to_string(), summary)?;
+            }
+            SpineControlToolReceipt::Close { memory } => {
+                self.stage_close(call_id.to_string(), memory)?;
+            }
+            SpineControlToolReceipt::Next { summary, memory } => {
+                self.stage_next(call_id.to_string(), summary, memory)?;
+            }
+        };
+        self.control_receipts.remove(call_id);
+        Ok(())
+    }
+
     fn ensure_no_pending_transition(&self) -> Result<(), SpineError> {
         if self.pending.is_some() {
             let pending_call_id = self
@@ -688,15 +807,22 @@ impl SpineRuntime {
     }
 
     pub(crate) fn abort_pending(&mut self, call_id: &str) -> bool {
+        let removed_receipt = self.control_receipts.remove(call_id).is_some();
         if self
             .pending
             .as_ref()
             .is_none_or(|pending| pending.call_id() != call_id)
         {
-            return false;
+            if removed_receipt {
+                self.control_call_ids.remove(call_id);
+            }
+            return removed_receipt;
         }
         let Some(pending) = self.pending.take() else {
-            return false;
+            if removed_receipt {
+                self.control_call_ids.remove(call_id);
+            }
+            return removed_receipt;
         };
         self.control_call_ids.remove(pending.call_id());
         true
@@ -706,6 +832,7 @@ impl SpineRuntime {
         let pending = self.pending.take()?;
         let call_id = pending.call_id().to_string();
         self.control_call_ids.remove(&call_id);
+        self.control_receipts.remove(&call_id);
         Some(call_id)
     }
 
@@ -829,6 +956,7 @@ impl SpineRuntime {
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpinePreparedCommit>, SpineError> {
+        self.ensure_pending_from_receipt(call_id)?;
         let Some(pending) = self.pending.as_ref() else {
             return Ok(None);
         };
@@ -866,6 +994,7 @@ impl SpineRuntime {
         };
         self.pending = None;
         self.control_call_ids.remove(call_id);
+        self.control_receipts.remove(call_id);
         Ok(Some(commit_kind))
     }
 
@@ -1316,37 +1445,80 @@ impl SpineRuntime {
         &self,
         call_id: &str,
     ) -> Result<Option<SpinePendingCommit>, SpineError> {
-        let Some(pending) = self.pending.as_ref() else {
-            return Ok(None);
-        };
-        if pending.call_id() != call_id {
-            return Ok(None);
+        if let Some(pending) = self.pending.as_ref()
+            && pending.call_id() == call_id
+        {
+            return Ok(Some(match pending {
+                PendingTransition::Open { .. } => SpinePendingCommit::Open,
+                PendingTransition::Close { memory, .. } => {
+                    let open_meta = self.current_close_open_meta()?;
+                    SpinePendingCommit::Close {
+                        action: SpinePendingCloseAction::Close,
+                        node: open_meta.id.clone(),
+                        suffix_start: open_meta.index,
+                        memory: memory.clone(),
+                        next_summary: None,
+                    }
+                }
+                PendingTransition::NextSugar {
+                    summary, memory, ..
+                } => {
+                    let open_meta = self.current_close_open_meta()?;
+                    SpinePendingCommit::Close {
+                        action: SpinePendingCloseAction::Next,
+                        node: open_meta.id.clone(),
+                        suffix_start: open_meta.index,
+                        memory: memory.clone(),
+                        next_summary: Some(summary.clone()),
+                    }
+                }
+            }));
         }
-        Ok(Some(match pending {
-            PendingTransition::Open { .. } => SpinePendingCommit::Open,
-            PendingTransition::Close { memory, .. } => {
-                let open_meta = self.current_close_open_meta()?;
-                SpinePendingCommit::Close {
-                    action: SpinePendingCloseAction::Close,
-                    node: open_meta.id.clone(),
-                    suffix_start: open_meta.index,
-                    memory: memory.clone(),
-                    next_summary: None,
+        Ok(self
+            .control_receipts
+            .get(call_id)
+            .map(|receipt| {
+                self.validate_control_tool_receipt_pending_view(receipt)?;
+                match receipt {
+                    SpineControlToolReceipt::Open { .. } => {
+                        Ok::<SpinePendingCommit, SpineError>(SpinePendingCommit::Open)
+                    }
+                    SpineControlToolReceipt::Close { memory } => {
+                        let open_meta = self.current_close_open_meta()?;
+                        Ok(SpinePendingCommit::Close {
+                            action: SpinePendingCloseAction::Close,
+                            node: open_meta.id.clone(),
+                            suffix_start: open_meta.index,
+                            memory: memory.clone(),
+                            next_summary: None,
+                        })
+                    }
+                    SpineControlToolReceipt::Next { summary, memory } => {
+                        let open_meta = self.current_close_open_meta()?;
+                        Ok(SpinePendingCommit::Close {
+                            action: SpinePendingCloseAction::Next,
+                            node: open_meta.id.clone(),
+                            suffix_start: open_meta.index,
+                            memory: memory.clone(),
+                            next_summary: Some(summary.clone()),
+                        })
+                    }
                 }
-            }
-            PendingTransition::NextSugar {
-                summary, memory, ..
-            } => {
-                let open_meta = self.current_close_open_meta()?;
-                SpinePendingCommit::Close {
-                    action: SpinePendingCloseAction::Next,
-                    node: open_meta.id.clone(),
-                    suffix_start: open_meta.index,
-                    memory: memory.clone(),
-                    next_summary: Some(summary.clone()),
-                }
-            }
-        }))
+            })
+            .transpose()?)
+    }
+
+    pub(crate) fn has_close_like_control_receipt(&self, call_id: &str) -> bool {
+        self.control_receipts
+            .get(call_id)
+            .is_some_and(SpineControlToolReceipt::is_close_like)
+            || self.pending.as_ref().is_some_and(|pending| {
+                pending.call_id() == call_id
+                    && matches!(
+                        pending,
+                        PendingTransition::Close { .. } | PendingTransition::NextSugar { .. }
+                    )
+            })
     }
 
     pub(crate) fn pending_tool_request_anchor(

@@ -6,6 +6,7 @@ use crate::session::spine_memory_assembly::spine_close_memory_assembly_from_tool
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
 use crate::spine::CompletedToolCall;
 use crate::spine::CompletedToolCallSegment;
+#[cfg(test)]
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
@@ -71,6 +72,12 @@ pub(crate) enum SpineCompletedToolCallOutputs<'a> {
         tool_call_ids: &'a [String],
         output_items: &'a [ResponseItem],
     },
+}
+
+pub(crate) enum SpineControlToolReceiptInput {
+    Open { summary: String },
+    Close { memory: String },
+    Next { summary: String, memory: String },
 }
 
 const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
@@ -749,6 +756,7 @@ impl Session {
         *planned_nodes = retain_still_valid_planned_nodes(snapshot, &planned_nodes);
     }
 
+    #[cfg(test)]
     pub(crate) async fn stage_spine_open(
         &self,
         call_id: String,
@@ -765,6 +773,7 @@ impl Session {
         runtime.stage_open(call_id, summary)
     }
 
+    #[cfg(test)]
     pub(crate) async fn stage_spine_close<M: IntoSpineNodeMemory>(
         &self,
         call_id: String,
@@ -781,6 +790,7 @@ impl Session {
         runtime.stage_close(call_id, memory)
     }
 
+    #[cfg(test)]
     pub(crate) async fn stage_spine_next<M: IntoSpineNodeMemory>(
         &self,
         call_id: String,
@@ -796,6 +806,32 @@ impl Session {
             ));
         };
         runtime.stage_next(call_id, summary, memory)
+    }
+
+    pub(crate) async fn record_spine_control_tool_receipt(
+        &self,
+        call_id: String,
+        receipt: SpineControlToolReceiptInput,
+    ) -> Result<(), SpineError> {
+        let spine = self.ensure_spine_runtime().await?;
+        let mut guard = spine.lock().await;
+        guard.ensure_valid()?;
+        let Some(runtime) = guard.runtime_mut() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing after initialization".to_string(),
+            ));
+        };
+        match receipt {
+            SpineControlToolReceiptInput::Open { summary } => {
+                runtime.record_open_tool_receipt(call_id, summary)
+            }
+            SpineControlToolReceiptInput::Close { memory } => {
+                runtime.record_close_tool_receipt(call_id, memory)
+            }
+            SpineControlToolReceiptInput::Next { summary, memory } => {
+                runtime.record_next_tool_receipt(call_id, summary, memory)
+            }
+        }
     }
 
     pub(crate) async fn trim_spine_tool_response(
@@ -1498,10 +1534,7 @@ impl Session {
         let Some(spine) = guard.runtime() else {
             return Ok(false);
         };
-        Ok(matches!(
-            spine.pending_commit(call_id)?,
-            Some(SpinePendingCommit::Close { .. })
-        ))
+        Ok(spine.has_close_like_control_receipt(call_id))
     }
 
     pub(crate) async fn is_spine_control_output_response_item(
