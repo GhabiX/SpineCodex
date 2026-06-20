@@ -109,8 +109,21 @@ impl SpineHostEffects {
         }
     }
 
+    fn tree_update(snapshot: SpineTreeUpdateEvent, delivery: SpineTreeUpdateDelivery) -> Self {
+        Self {
+            effects: vec![SpineHostEffect::TreeUpdate { snapshot, delivery }],
+        }
+    }
+
     fn from_optional_history_update(update: Option<SpineHistoryUpdate>) -> Self {
         update.map_or_else(Self::none, Self::replace_history)
+    }
+
+    fn from_optional_tree_update(
+        snapshot: Option<SpineTreeUpdateEvent>,
+        delivery: SpineTreeUpdateDelivery,
+    ) -> Self {
+        snapshot.map_or_else(Self::none, |snapshot| Self::tree_update(snapshot, delivery))
     }
 
     fn into_effects(self) -> Vec<SpineHostEffect> {
@@ -120,12 +133,20 @@ impl SpineHostEffects {
 
 enum SpineHostEffect {
     ReplaceHistory(SpineHistoryUpdate),
+    TreeUpdate {
+        snapshot: SpineTreeUpdateEvent,
+        delivery: SpineTreeUpdateDelivery,
+    },
+}
+
+enum SpineTreeUpdateDelivery {
+    Immediate,
+    AfterRawOutputDurable,
 }
 
 struct SpineCommitOutput {
-    snapshot: Option<SpineTreeUpdateEvent>,
+    post_commit_effects: SpineHostEffects,
     spine_context_already_observed: bool,
-    defer_tree_update_until_raw_output: bool,
 }
 
 struct CompletedToolCallEvidenceParts {
@@ -232,6 +253,7 @@ impl Session {
             SpineHostEffect::ReplaceHistory(update) => {
                 Self::apply_spine_history_replacement_to_locked_state(state, update)
             }
+            SpineHostEffect::TreeUpdate { .. } => Ok(()),
         }
     }
 
@@ -263,6 +285,28 @@ impl Session {
             self.send_spine_tree_update(turn_context, snapshot).await;
         }
         Ok(())
+    }
+
+    async fn apply_spine_post_commit_effects(
+        &self,
+        turn_context: &TurnContext,
+        effects: SpineHostEffects,
+    ) -> Option<SpineTreeUpdateEvent> {
+        let mut deferred_tree_update = None;
+        for effect in effects.into_effects() {
+            match effect {
+                SpineHostEffect::ReplaceHistory(_) => {}
+                SpineHostEffect::TreeUpdate { snapshot, delivery } => match delivery {
+                    SpineTreeUpdateDelivery::Immediate => {
+                        self.send_spine_tree_update(turn_context, snapshot).await;
+                    }
+                    SpineTreeUpdateDelivery::AfterRawOutputDurable => {
+                        deferred_tree_update = Some(snapshot);
+                    }
+                },
+            }
+        }
+        deferred_tree_update
     }
 
     pub(crate) async fn seed_spine_tree_snapshot_if_available(&self) -> Result<(), SpineError> {
@@ -1405,18 +1449,12 @@ impl Session {
             }
         };
         let SpineCommitOutput {
-            snapshot,
+            post_commit_effects,
             spine_context_already_observed,
-            defer_tree_update_until_raw_output,
         } = commit_output;
-        let deferred_tree_update = if defer_tree_update_until_raw_output {
-            snapshot
-        } else {
-            if let Some(snapshot) = snapshot {
-                self.send_spine_tree_update(turn_context, snapshot).await;
-            }
-            None
-        };
+        let deferred_tree_update = self
+            .apply_spine_post_commit_effects(turn_context, post_commit_effects)
+            .await;
         if deferred_tree_update.is_some() {
             tracing::debug!(
                 call_id,
@@ -1517,10 +1555,17 @@ impl Session {
         } else {
             None
         };
+        let tree_update_delivery = if defer_tree_update_until_raw_output {
+            SpineTreeUpdateDelivery::AfterRawOutputDurable
+        } else {
+            SpineTreeUpdateDelivery::Immediate
+        };
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
-            snapshot,
+            post_commit_effects: SpineHostEffects::from_optional_tree_update(
+                snapshot,
+                tree_update_delivery,
+            ),
             spine_context_already_observed: true,
-            defer_tree_update_until_raw_output,
         }))
     }
 
