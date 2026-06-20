@@ -7,7 +7,6 @@ use crate::spine::io::append_json_line;
 use crate::spine::io::hash_raw_live;
 use crate::spine::io::read_json_file;
 use crate::spine::io::read_json_lines;
-use crate::spine::io::sha1_hex;
 #[cfg(test)]
 use crate::spine::io::write_json_file;
 use crate::spine::io::write_json_file_if_unchanged;
@@ -35,6 +34,7 @@ mod clone_rewrite;
 mod commit_marker;
 mod feedback;
 mod locator;
+mod memory_body;
 mod pressure;
 mod trim;
 
@@ -51,7 +51,7 @@ const WRITER_LOCK_FILE: &str = ".writer.lock";
 const CHECKPOINT_DIR: &str = "checkpoints";
 const INITIAL_CHECKPOINT_FILE: &str = "initial.json";
 
-pub(super) const BODY_DIR: &str = "memory";
+pub(crate) const BODY_DIR: &str = "memory";
 
 #[derive(Clone, Debug)]
 pub struct SpineCloneBoundary {
@@ -1000,33 +1000,11 @@ impl SpineStore {
         compact_id: &str,
         body: &str,
     ) -> Result<String, SpineError> {
-        let dir = self.root.join(BODY_DIR);
-        std::fs::create_dir_all(&dir)?;
-        let rel = format!("{BODY_DIR}/{compact_id}.md");
-        let path = self.root.join(&rel);
-        if path.exists() {
-            let existing = std::fs::read_to_string(&path)?;
-            if existing == body {
-                return Ok(rel);
-            }
-            return Err(SpineError::InvalidStore(format!(
-                "memory body {} already exists with different content",
-                path.display()
-            )));
-        }
-        std::fs::write(path, body)?;
-        Ok(rel)
+        memory_body::write_body(&self.root, compact_id, body)
     }
 
     pub(super) fn read_memory_body(&self, mem: &MemRecord) -> Result<String, SpineError> {
-        let body = std::fs::read_to_string(self.root.join(&mem.body_path))?;
-        if sha1_hex(body.as_bytes()) != mem.body_hash {
-            return Err(SpineError::InvalidStore(format!(
-                "memory body hash mismatch for {}",
-                mem.compact_id
-            )));
-        }
-        Ok(body)
+        memory_body::read_body(&self.root, mem)
     }
 
     pub(super) fn validate_commit_markers_for_replay(
