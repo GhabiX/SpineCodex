@@ -5,7 +5,6 @@ use super::commit_marker;
 use super::locator;
 use super::trim;
 use crate::spine::SpineError;
-use crate::spine::io::hash_raw_live;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
@@ -14,6 +13,8 @@ use crate::spine::model::commit_marker_structural_event_seqs;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
+
+mod checkpoints;
 
 impl SpineStore {
     pub(crate) fn clone_boundary_for_rollout(
@@ -180,32 +181,13 @@ fn clone_for_rollout_into_store(
         .iter()
         .map(|event| (event.seq, event))
         .collect::<BTreeMap<_, _>>();
-    let mut cloned_checkpoints = Vec::new();
-    for checkpoint in source_checkpoints {
-        let checkpoint_boundary = usize::try_from(checkpoint.raw_ordinal)
-            .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
-        if checkpoint.checkpoint_id != "initial"
-            && checkpoint.token_seq <= boundary.structural_seq_limit
-            && checkpoint.raw_ordinal <= boundary.raw_ordinal_limit
-            && checkpoint_boundary <= source_raw_live.len()
-            && checkpoint.raw_live_hash == hash_raw_live(&source_raw_live[..checkpoint_boundary])
-        {
-            cloned_checkpoints.push(checkpoint);
-        }
-    }
-    let mut cloned_compact_checkpoints = Vec::new();
-    for checkpoint in source_compact_checkpoints {
-        let checkpoint_boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
-            SpineError::InvalidEvent("compact checkpoint raw boundary overflow".to_string())
-        })?;
-        if checkpoint.token_seq <= boundary.structural_seq_limit
-            && checkpoint.raw_boundary <= boundary.raw_ordinal_limit
-            && checkpoint_boundary <= source_raw_live.len()
-            && checkpoint.raw_live_hash == hash_raw_live(&source_raw_live[..checkpoint_boundary])
-        {
-            cloned_compact_checkpoints.push(checkpoint);
-        }
-    }
+    let cloned_checkpoints =
+        checkpoints::select_cloned_checkpoints(source_checkpoints, boundary, source_raw_live)?;
+    let cloned_compact_checkpoints = checkpoints::select_cloned_compact_checkpoints(
+        source_compact_checkpoints,
+        boundary,
+        source_raw_live,
+    )?;
     let mut all_marker_structural_event_seqs = BTreeSet::new();
     let mut cloned_commit_markers = Vec::new();
     for marker in source_commit_markers {
