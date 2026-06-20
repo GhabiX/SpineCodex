@@ -58,6 +58,7 @@ use crate::spine::store::BODY_DIR;
 use crate::spine::store::SpineStore;
 
 mod accounting;
+mod coverage;
 mod load;
 mod observe;
 mod replay;
@@ -74,7 +75,6 @@ use replay::next_event_seq_from;
 use replay::next_pressure_seq_from;
 use replay::next_trim_seq_from;
 pub(crate) use replay::trim_projection_from_events_for_checkpoint;
-use support::ToolRawItemKind;
 use support::close_commit_marker;
 use support::close_event_boundary;
 use support::collect_source_plan_entries_from_visible_refs;
@@ -82,15 +82,9 @@ use support::completed_toolcall_first_segment;
 pub(crate) use support::is_real_user_message;
 #[cfg(test)]
 pub(crate) use support::is_spine_close_like_tool_name;
-use support::is_spine_parser_control_tool_name;
 pub(crate) use support::is_user_message;
-use support::mark_raw_covered;
-use support::mark_raw_prefix_covered;
 use support::mem_record_matches;
-use support::raw_item_requires_spine_coverage;
 use support::root_compact_commit_marker;
-use support::tool_request_call_id;
-use support::tool_response_call_id;
 use support::user_anchor_refs_in_memory;
 use support::validate_model_node_memory;
 use support::validate_source_plan_context_index;
@@ -2309,158 +2303,6 @@ impl SpineRuntime {
 
     pub(crate) fn has_pending_tool_request(&self) -> bool {
         !self.ordinary_tool_requests.is_empty()
-    }
-
-    pub(crate) fn validate_raw_coverage(
-        &self,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
-        if !self.jit_enabled {
-            return Ok(());
-        }
-        let (
-            spine_control_call_ids,
-            spine_tree_call_ids,
-            tool_request_call_ids,
-            tool_response_call_ids,
-        ) = raw_items
-            .iter()
-            .filter_map(|item| match item.as_ref()? {
-                ResponseItem::FunctionCall {
-                    call_id,
-                    namespace: Some(namespace),
-                    name,
-                    ..
-                } if namespace == SPINE_NAMESPACE && is_spine_parser_control_tool_name(name) => {
-                    Some((call_id.clone(), ToolRawItemKind::SpineControlRequest))
-                }
-                ResponseItem::FunctionCall {
-                    call_id,
-                    namespace: Some(namespace),
-                    name,
-                    ..
-                } if namespace == SPINE_NAMESPACE && name == SPINE_TOOL_TREE => {
-                    Some((call_id.clone(), ToolRawItemKind::SpineTreeRequest))
-                }
-                item => tool_request_call_id(item)
-                    .map(|call_id| (call_id.to_string(), ToolRawItemKind::Request))
-                    .or_else(|| {
-                        tool_response_call_id(item)
-                            .map(|call_id| (call_id.to_string(), ToolRawItemKind::Response))
-                    }),
-            })
-            .fold(
-                (
-                    BTreeSet::new(),
-                    BTreeSet::new(),
-                    BTreeSet::new(),
-                    BTreeSet::new(),
-                ),
-                |(
-                    mut spine_call_ids,
-                    mut spine_tree_call_ids,
-                    mut request_call_ids,
-                    mut response_call_ids,
-                ),
-                 (call_id, kind)| {
-                    match kind {
-                        ToolRawItemKind::SpineControlRequest => {
-                            spine_call_ids.insert(call_id.clone());
-                            request_call_ids.insert(call_id);
-                        }
-                        ToolRawItemKind::SpineTreeRequest => {
-                            spine_tree_call_ids.insert(call_id.clone());
-                            request_call_ids.insert(call_id);
-                        }
-                        ToolRawItemKind::Request => {
-                            request_call_ids.insert(call_id);
-                        }
-                        ToolRawItemKind::Response => {
-                            response_call_ids.insert(call_id);
-                        }
-                    }
-                    (
-                        spine_call_ids,
-                        spine_tree_call_ids,
-                        request_call_ids,
-                        response_call_ids,
-                    )
-                },
-            );
-        let completed_tool_call_ids = tool_request_call_ids
-            .intersection(&tool_response_call_ids)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let mut covered = vec![false; raw_items.len()];
-        for event in &self.ledger.events {
-            if !event.allowed_by(RawMask::new(&self.raw_live))? {
-                continue;
-            }
-            match &event.event {
-                SpineLedgerEvent::Msg { raw_ordinal, .. } => {
-                    mark_raw_covered(&mut covered, *raw_ordinal)?;
-                }
-                SpineLedgerEvent::ToolCall { segments } => {
-                    for segment in segments {
-                        mark_raw_covered(&mut covered, segment.raw_ordinal)?;
-                    }
-                }
-                SpineLedgerEvent::Open {
-                    child,
-                    boundary,
-                    summary,
-                    ..
-                } => {
-                    if !(summary == "root"
-                        && child.parent().is_some_and(|parent| parent.is_root_epoch()))
-                    {
-                        mark_raw_covered(&mut covered, *boundary)?;
-                    }
-                }
-                SpineLedgerEvent::Close { boundary, .. }
-                | SpineLedgerEvent::RootCompact { boundary, .. } => {
-                    mark_raw_prefix_covered(&mut covered, *boundary)?;
-                }
-                SpineLedgerEvent::Init { .. } | SpineLedgerEvent::OpenContextBaseline { .. } => {}
-            }
-        }
-        for (index, item) in raw_items.iter().enumerate() {
-            if item.as_ref().is_some_and(|item| {
-                raw_item_requires_spine_coverage(
-                    item,
-                    &spine_control_call_ids,
-                    &spine_tree_call_ids,
-                    &completed_tool_call_ids,
-                )
-            }) && !covered[index]
-            {
-                return Err(SpineError::SidecarCorruption(format!(
-                    "spine sidecar is missing token coverage for raw ordinal {index}; raw_len={} token_seq={}",
-                    raw_items.len(),
-                    self.ledger.next_event_seq
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn live_root_compacts(&self) -> Result<Vec<LiveRootCompact>, SpineError> {
-        if !self.jit_enabled {
-            return Ok(Vec::new());
-        }
-        let raw_mask = RawMask::new(&self.raw_live);
-        let mut compacts = Vec::new();
-        for event in &self.ledger.events {
-            if event.allowed_by(raw_mask)?
-                && let SpineLedgerEvent::RootCompact { boundary, .. } = event.event
-            {
-                compacts.push(LiveRootCompact {
-                    raw_boundary: boundary,
-                    token_seq: event.seq,
-                });
-            }
-        }
-        Ok(compacts)
     }
 }
 
