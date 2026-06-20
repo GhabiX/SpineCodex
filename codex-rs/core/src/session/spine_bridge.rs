@@ -1657,7 +1657,7 @@ impl Session {
         }
     }
 
-    pub(crate) async fn prepare_spine_root_compact_after_native_compact(
+    pub(crate) async fn on_spine_compact_after_native_compact(
         &self,
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,

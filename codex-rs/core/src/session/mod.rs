@@ -3086,7 +3086,7 @@ impl Session {
         mut compacted_item: CompactedItem,
     ) -> CodexResult<ReplaceCompactedHistoryOutcome> {
         let prepared_spine_root_compact = self
-            .prepare_spine_root_compact_after_native_compact(&mut items, &mut compacted_item)
+            .on_spine_compact_after_native_compact(&mut items, &mut compacted_item)
             .await?;
         let installed_spine_root_compact = prepared_spine_root_compact.is_some();
         let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
