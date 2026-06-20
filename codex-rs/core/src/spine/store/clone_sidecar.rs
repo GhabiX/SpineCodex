@@ -5,16 +5,15 @@ use super::commit_marker;
 use super::locator;
 use super::trim;
 use crate::spine::SpineError;
-use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
-use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 
 mod checkpoints;
+mod memory_ids;
 
 impl SpineStore {
     pub(crate) fn clone_boundary_for_rollout(
@@ -246,7 +245,7 @@ fn clone_for_rollout_into_store(
         target.append_logged_event(event)?;
     }
     let mut required_memory_ids =
-        required_memory_ids_for_cloned_events(&cloned_events, &source_mems, mask)?;
+        memory_ids::required_memory_ids_for_cloned_events(&cloned_events, &source_mems, mask)?;
     for checkpoint in &cloned_compact_checkpoints {
         for memory in &checkpoint.memory_refs {
             required_memory_ids.insert(memory.compact_id.clone());
@@ -328,55 +327,4 @@ fn clone_for_rollout_into_store(
         target.append_commit_marker(&marker)?;
     }
     Ok(())
-}
-
-fn required_memory_ids_for_cloned_events(
-    events: &[LoggedSpineLedgerEvent],
-    mems: &[MemRecord],
-    raw_mask: RawMask<'_>,
-) -> Result<BTreeSet<String>, SpineError> {
-    let mut ids = BTreeSet::new();
-    for event in events {
-        match &event.event {
-            SpineLedgerEvent::Close { node, .. } => {
-                let mut candidates = mems
-                    .iter()
-                    .filter(|mem| &mem.node == node)
-                    .collect::<Vec<_>>();
-                candidates.sort_by(|left, right| left.compact_id.cmp(&right.compact_id));
-                let mut selected = None;
-                for mem in candidates {
-                    if mem.allowed_by(raw_mask)? {
-                        selected = Some(mem);
-                        break;
-                    }
-                }
-                let mem = selected.ok_or_else(|| {
-                    SpineError::InvalidEvent(format!("missing memory for close node {node}"))
-                })?;
-                ids.insert(mem.compact_id.clone());
-            }
-            SpineLedgerEvent::RootCompact { mem, .. } => {
-                let mem_record = mems
-                    .iter()
-                    .find(|record| record.compact_id == *mem)
-                    .ok_or_else(|| {
-                        SpineError::InvalidEvent("missing memory for root compact".to_string())
-                    })?;
-                if !mem_record.allowed_by(raw_mask)? {
-                    return Err(SpineError::InvalidEvent(format!(
-                        "memory {} does not cover live raw evidence",
-                        mem_record.compact_id
-                    )));
-                }
-                ids.insert(mem.clone());
-            }
-            SpineLedgerEvent::Init { .. }
-            | SpineLedgerEvent::Msg { .. }
-            | SpineLedgerEvent::ToolCall { .. }
-            | SpineLedgerEvent::Open { .. }
-            | SpineLedgerEvent::OpenContextBaseline { .. } => {}
-        }
-    }
-    Ok(ids)
 }
