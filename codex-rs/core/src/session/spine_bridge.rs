@@ -92,6 +92,14 @@ struct SpineHistoryUpdate {
     reference_context_item: Option<TurnContextItem>,
 }
 
+struct SpineHostEffects {
+    effects: Vec<SpineHostEffect>,
+}
+
+enum SpineHostEffect {
+    ReplaceHistory(SpineHistoryUpdate),
+}
+
 struct SpineCommitOutput {
     snapshot: Option<SpineTreeUpdateEvent>,
     spine_context_already_observed: bool,
@@ -194,15 +202,25 @@ impl Session {
         }
     }
 
-    fn publish_spine_history_update_to_locked_state(
+    fn apply_spine_host_effect_to_locked_state(
         state: &mut crate::state::SessionState,
-        update: Option<SpineHistoryUpdate>,
+        effect: SpineHostEffect,
     ) -> Result<(), String> {
-        if let Some(update) = update {
-            Self::apply_spine_history_replacement_to_locked_state(state, update)
-        } else {
-            Ok(())
+        match effect {
+            SpineHostEffect::ReplaceHistory(update) => {
+                Self::apply_spine_history_replacement_to_locked_state(state, update)
+            }
         }
+    }
+
+    fn apply_spine_host_effects_to_locked_state(
+        state: &mut crate::state::SessionState,
+        effects: SpineHostEffects,
+    ) -> Result<(), String> {
+        for effect in effects.effects {
+            Self::apply_spine_host_effect_to_locked_state(state, effect)?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn emit_initial_spine_tree_snapshot_if_needed(
@@ -1446,7 +1464,7 @@ impl Session {
                 state.clone_history().raw_items(),
             )?;
         }
-        let history_update = spine_history_update_for_commit_publication(
+        let host_effects = spine_host_effects_for_commit_publication(
             spine,
             call_id,
             prepared_commit.as_ref(),
@@ -1464,9 +1482,7 @@ impl Session {
             ));
             return Err(err);
         }
-        if let Err(err) =
-            Self::publish_spine_history_update_to_locked_state(&mut state, history_update)
-        {
+        if let Err(err) = Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects) {
             guard.invalidate(format!(
                 "failed to publish Spine h(PS) before installing reduced parse stack for call_id={call_id}: {err}"
             ));
@@ -2551,6 +2567,34 @@ fn prepare_or_observe_completed_toolcall_for_commit(
         spine.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
         Ok(None)
     }
+}
+
+fn spine_host_effects_for_commit_publication(
+    spine: &mut SpineRuntime,
+    call_id: &str,
+    prepared_commit: Option<&SpinePreparedCommit>,
+    tool_resp_item: &ResponseItem,
+    tool_resp_already_recorded: bool,
+    raw_items: &[Option<ResponseItem>],
+    history_items: &[ResponseItem],
+    reference_context_item: Option<TurnContextItem>,
+) -> Result<SpineHostEffects, SpineError> {
+    let history_update = spine_history_update_for_commit_publication(
+        spine,
+        call_id,
+        prepared_commit,
+        tool_resp_item,
+        tool_resp_already_recorded,
+        raw_items,
+        history_items,
+        reference_context_item,
+    )?;
+    Ok(SpineHostEffects {
+        effects: history_update
+            .map(SpineHostEffect::ReplaceHistory)
+            .into_iter()
+            .collect(),
+    })
 }
 
 fn spine_history_update_for_commit_publication(
