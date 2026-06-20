@@ -15,7 +15,7 @@ impl SpineStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn checkpoint_for_test(
+    pub(in crate::spine) fn checkpoint_for_test(
         &self,
         raw_ordinal: u64,
     ) -> Result<SpineCheckpoint, SpineError> {
@@ -23,7 +23,9 @@ impl SpineStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn initial_checkpoint_for_test(&self) -> Result<SpineCheckpoint, SpineError> {
+    pub(in crate::spine) fn initial_checkpoint_for_test(
+        &self,
+    ) -> Result<SpineCheckpoint, SpineError> {
         read_json_file(&self.initial_checkpoint_path())
     }
 

@@ -1,6 +1,4 @@
 use crate::spine::SpineError;
-use crate::spine::compact_checkpoint::compact_checkpoint_replacement_history_hash;
-use crate::spine::compact_checkpoint::validate_compact_checkpoint;
 use crate::spine::io::hash_raw_live;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
@@ -19,6 +17,7 @@ mod checkpoint_proof;
 mod checkpoints;
 mod clone_rewrite;
 mod commit_marker;
+mod compact_validation;
 mod feedback;
 mod ledger;
 mod locator;
@@ -514,75 +513,6 @@ impl SpineStore {
                 _ => None,
             })
             .collect())
-    }
-
-    pub(crate) fn validate_compact_checkpoint_for_boundary(
-        &self,
-        rollout_path: &Path,
-        raw_live: &[bool],
-        raw_items: &[Option<codex_protocol::models::ResponseItem>],
-        raw_boundary: u64,
-        replacement_history: &[codex_protocol::models::ResponseItem],
-    ) -> Result<u64, SpineError> {
-        let replacement_history_hash =
-            compact_checkpoint_replacement_history_hash(replacement_history)?;
-        let checkpoints = self
-            .compact_checkpoints()?
-            .into_iter()
-            .filter(|checkpoint| checkpoint.raw_boundary == raw_boundary)
-            .collect::<Vec<_>>();
-        if checkpoints.is_empty() {
-            return Err(SpineError::InvalidStore(format!(
-                "missing spine compact checkpoint at raw boundary {raw_boundary}"
-            )));
-        }
-        let checkpoints = checkpoints
-            .into_iter()
-            .filter(|checkpoint| {
-                checkpoint.replacement_history_hash == replacement_history_hash
-                    && checkpoint.h_ps_hash == replacement_history_hash
-            })
-            .collect::<Vec<_>>();
-        if checkpoints.is_empty() {
-            return Err(SpineError::InvalidStore(format!(
-                "spine_jit replacement_history does not match sidecar h(PS) compact checkpoint at raw boundary {raw_boundary}"
-            )));
-        }
-        let token_seqs = checkpoints
-            .iter()
-            .map(|checkpoint| checkpoint.token_seq)
-            .collect::<BTreeSet<_>>();
-        if token_seqs.len() != 1 {
-            return Err(SpineError::InvalidStore(format!(
-                "ambiguous spine compact checkpoint token_seq for raw boundary {raw_boundary}"
-            )));
-        }
-        if checkpoints.len() != 1 {
-            return Err(SpineError::InvalidStore(format!(
-                "ambiguous spine compact checkpoint proof for raw boundary {raw_boundary}"
-            )));
-        }
-        let checkpoint = checkpoints
-            .into_iter()
-            .next()
-            .expect("checkpoint length checked above");
-        validate_compact_checkpoint(
-            &checkpoint,
-            rollout_path,
-            raw_live,
-            raw_items,
-            replacement_history,
-        )?;
-        let events = self.events()?;
-        let mems = self.mems()?;
-        checkpoint_proof::validate_compact_checkpoint_root_marker(
-            &self.root,
-            &checkpoint,
-            &events,
-            &mems,
-        )?;
-        checkpoint_proof::validate_compact_checkpoint_memory_refs(&self.root, &checkpoint, &mems)?;
-        Ok(checkpoint.token_seq)
     }
 
     pub(super) fn write_memory_body(
