@@ -1281,13 +1281,9 @@ impl Session {
         let commit_kind = prepared_commit
             .as_ref()
             .map(|prepared| prepared.kind().clone());
-        let publication_plan = prepared_commit
-            .as_ref()
-            .and_then(|prepared| prepared.publication_plan().cloned());
         let defer_tree_update_until_raw_output =
             should_defer_tree_update_until_raw_output(commit_kind.as_ref());
         let mut snapshot = None;
-        let mut history_update = None;
         if let Some(commit_kind) = commit_kind.as_ref() {
             validate_commit_kind_against_history(
                 call_id,
@@ -1295,31 +1291,16 @@ impl Session {
                 state.clone_history().raw_items(),
             )?;
         }
-        if let Some(plan) = publication_plan.as_ref() {
-            let history = state.clone_history();
-            let history_items = history.raw_items();
-            history_update = Some(spine_history_update_from_publication_plan(
-                call_id,
-                plan.operation(),
-                plan.suffix_start(),
-                plan.replacement_prefix(),
-                plan.preserve_host_history_from(),
-                plan.append_current_tool_response_if_missing(),
-                tool_resp_item,
-                tool_resp_already_recorded,
-                history_items,
-                state.reference_context_item(),
-            )?);
-        }
-        if history_update.is_none() && tool_resp_already_recorded {
-            let history = state.clone_history();
-            history_update = spine_history_update_from_materialized_projection(
-                call_id,
-                history.raw_items(),
-                spine.materialize_history(raw_items)?,
-                state.reference_context_item(),
-            );
-        }
+        let history_update = spine_history_update_for_commit_publication(
+            spine,
+            call_id,
+            prepared_commit.as_ref(),
+            tool_resp_item,
+            tool_resp_already_recorded,
+            raw_items,
+            state.clone_history().raw_items(),
+            state.reference_context_item(),
+        )?;
         if let Some(prepared_commit) = prepared_commit.as_ref()
             && let Err(err) = spine.persist_prepared_commit_side_effects(prepared_commit)
         {
@@ -1328,7 +1309,7 @@ impl Session {
             ));
             return Err(err);
         }
-        if let Some(update) = history_update.take() {
+        if let Some(update) = history_update {
             if let Err(err) =
                 Self::apply_spine_history_replacement_to_locked_state(&mut state, update)
             {
@@ -2346,6 +2327,42 @@ fn prepare_or_observe_completed_toolcall_for_commit(
         spine.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
         Ok(None)
     }
+}
+
+fn spine_history_update_for_commit_publication(
+    spine: &mut SpineRuntime,
+    call_id: &str,
+    prepared_commit: Option<&SpinePreparedCommit>,
+    tool_resp_item: &ResponseItem,
+    tool_resp_already_recorded: bool,
+    raw_items: &[Option<ResponseItem>],
+    history_items: &[ResponseItem],
+    reference_context_item: Option<TurnContextItem>,
+) -> Result<Option<SpineHistoryUpdate>, SpineError> {
+    if let Some(plan) = prepared_commit.and_then(|prepared| prepared.publication_plan()) {
+        return spine_history_update_from_publication_plan(
+            call_id,
+            plan.operation(),
+            plan.suffix_start(),
+            plan.replacement_prefix(),
+            plan.preserve_host_history_from(),
+            plan.append_current_tool_response_if_missing(),
+            tool_resp_item,
+            tool_resp_already_recorded,
+            history_items,
+            reference_context_item,
+        )
+        .map(Some);
+    }
+    if tool_resp_already_recorded {
+        return Ok(spine_history_update_from_materialized_projection(
+            call_id,
+            history_items,
+            spine.materialize_history(raw_items)?,
+            reference_context_item,
+        ));
+    }
+    Ok(None)
 }
 
 fn spine_history_update_from_publication_plan(
