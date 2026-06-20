@@ -167,6 +167,17 @@ impl Session {
         }
     }
 
+    fn publish_spine_history_update_to_locked_state(
+        state: &mut crate::state::SessionState,
+        update: Option<SpineHistoryUpdate>,
+    ) -> Result<(), String> {
+        if let Some(update) = update {
+            Self::apply_spine_history_replacement_to_locked_state(state, update)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) async fn emit_initial_spine_tree_snapshot_if_needed(
         &self,
         turn_context: &TurnContext,
@@ -1283,7 +1294,6 @@ impl Session {
             .map(|prepared| prepared.kind().clone());
         let defer_tree_update_until_raw_output =
             should_defer_tree_update_until_raw_output(commit_kind.as_ref());
-        let mut snapshot = None;
         if let Some(commit_kind) = commit_kind.as_ref() {
             validate_commit_kind_against_history(
                 call_id,
@@ -1309,21 +1319,21 @@ impl Session {
             ));
             return Err(err);
         }
-        if let Some(update) = history_update {
-            if let Err(err) =
-                Self::apply_spine_history_replacement_to_locked_state(&mut state, update)
-            {
-                guard.invalidate(format!(
-                    "failed to publish Spine h(PS) before installing reduced parse stack for call_id={call_id}: {err}"
-                ));
-                return Err(SpineError::Invariant(err));
-            }
+        if let Err(err) =
+            Self::publish_spine_history_update_to_locked_state(&mut state, history_update)
+        {
+            guard.invalidate(format!(
+                "failed to publish Spine h(PS) before installing reduced parse stack for call_id={call_id}: {err}"
+            ));
+            return Err(SpineError::Invariant(err));
         }
-        if let Some(prepared_commit) = prepared_commit {
+        let snapshot = if let Some(prepared_commit) = prepared_commit {
             spine.install_prepared_commit(prepared_commit);
             let token_info = state.token_info();
-            snapshot = Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?);
-        }
+            Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?)
+        } else {
+            None
+        };
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
             snapshot,
             spine_context_already_observed: true,
