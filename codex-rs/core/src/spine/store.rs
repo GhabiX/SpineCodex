@@ -27,13 +27,13 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
 mod checkpoint_proof;
 mod clone_rewrite;
 mod commit_marker;
+mod feedback;
 mod locator;
 mod pressure;
 mod trim;
@@ -639,17 +639,7 @@ impl SpineStore {
     }
 
     pub(crate) fn append_feedback_markdown(&self, entry: &str) -> Result<(), SpineError> {
-        let path = self.feedback_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-        if file.metadata()?.len() > 0 {
-            file.write_all(b"\n")?;
-        }
-        file.write_all(entry.as_bytes())?;
-        file.write_all(b"\n")?;
-        Ok(())
+        feedback::append_markdown_entry(&self.feedback_path(), entry)
     }
 
     pub(super) fn events(&self) -> Result<Vec<LoggedSpineLedgerEvent>, SpineError> {
