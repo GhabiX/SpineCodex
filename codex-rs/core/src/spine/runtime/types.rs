@@ -1,0 +1,105 @@
+use codex_protocol::models::ResponseItem;
+use std::ops::Range;
+
+use crate::spine::model::NodeId;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpinePendingCloseAction {
+    Close,
+    Next,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SpinePendingCommit {
+    Open,
+    Close {
+        action: SpinePendingCloseAction,
+        node: NodeId,
+        suffix_start: usize,
+        memory: String,
+        next_summary: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpineCloseMemoryAssembly {
+    pub(crate) body: String,
+    pub(crate) source_context_range: Range<usize>,
+    pub(crate) source_raw_range: Range<u64>,
+    pub(crate) memory_output_tokens: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpineCompactSourcePlan {
+    pub(crate) node_id: NodeId,
+    pub(crate) source_context_range: Range<usize>,
+    pub(crate) source_raw_range: Range<u64>,
+    pub(crate) entries: Vec<SpineCompactSourcePlanEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpineCompactSourcePlanEntry {
+    pub(crate) context_index: usize,
+    pub(crate) source_ordinal: usize,
+    pub(crate) source_hash: String,
+    pub(crate) kind: SpineCompactSourceEntryKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SpineCompactSourceEntryKind {
+    RawResponseItem {
+        item: ResponseItem,
+        raw_ordinal: u64,
+        from_user: bool,
+        user_anchor: Option<u64>,
+    },
+    ChildMemory {
+        node_id: NodeId,
+        compact_id: String,
+        source_raw_range: Range<u64>,
+        body: String,
+        body_hash: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SpineTokenBaselines {
+    pub(crate) provider_input_tokens: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SpineRootCompactTokenMetadata {
+    pub(crate) close_input_tokens: Option<i64>,
+    pub(crate) close_context_tokens: Option<i64>,
+    pub(crate) next_open_input_tokens: Option<i64>,
+    pub(crate) next_open_context_tokens: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpineOpenNodeContextProjection {
+    pub(crate) node_id: NodeId,
+    pub(crate) provider_input_tokens: Option<i64>,
+    pub(crate) baseline_source: Option<codex_protocol::spine_tree::SpineNodeContextBaselineSource>,
+    pub(crate) problem: Option<codex_protocol::spine_tree::SpineNodeContextProblem>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SpineRootCompactResult {
+    pub(crate) materialized: Vec<ResponseItem>,
+    pub(crate) raw_boundary: u64,
+    pub(crate) token_seq_after: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SpineTrimOutcome {
+    Cleared { trim_id: String },
+    AlreadyCleared { trim_id: String },
+    Sliced { trim_id: String },
+    Miss { trim_id: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct LiveRootCompact {
+    pub(crate) raw_boundary: u64,
+    pub(crate) token_seq: u64,
+}
