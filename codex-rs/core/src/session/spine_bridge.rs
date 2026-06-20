@@ -1044,43 +1044,45 @@ impl Session {
         client_session: &mut ModelClientSession,
         outputs: SpineCompletedToolCallOutputs<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
-        match outputs {
+        let Some(completed) = (match outputs {
             SpineCompletedToolCallOutputs::Single { item } => {
-                self.commit_single_completed_spine_toolcall_output_with_client_session(
-                    turn_context,
-                    client_session,
-                    item,
-                )
-                .await
+                self.single_completed_spine_toolcall_output(turn_context, item)
+                    .await?
             }
             SpineCompletedToolCallOutputs::Grouped {
                 commit_call_id,
                 tool_call_ids,
                 output_items,
             } => {
-                self.commit_grouped_completed_spine_toolcall_outputs_with_client_session(
+                self.grouped_completed_spine_toolcall_outputs(
                     turn_context,
-                    client_session,
                     commit_call_id,
                     tool_call_ids,
                     output_items,
                 )
-                .await
+                .await?
             }
-        }
-    }
-
-    async fn commit_single_completed_spine_toolcall_output_with_client_session(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        client_session: &mut ModelClientSession,
-        item: &ResponseItem,
-    ) -> Result<SpineToolCommit, SpineError> {
-        let Some(call_id) = tool_response_call_id(item) else {
+        }) else {
             return Ok(Self::no_spine_tool_commit());
         };
+        self.on_completed_spine_toolcall_with_client_session(
+            turn_context,
+            client_session,
+            completed,
+        )
+        .await
+    }
+
+    async fn single_completed_spine_toolcall_output<'a>(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        item: &'a ResponseItem,
+    ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
+        let Some(call_id) = tool_response_call_id(item) else {
+            return Ok(None);
+        };
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(Self::no_spine_tool_commit());
+            return Ok(None);
         };
         let mut recorded_output_inside_reduce = false;
         let mut history_before_recorded_output = None;
@@ -1091,7 +1093,7 @@ impl Session {
                 let guard = spine_slot.lock().await;
                 guard.ensure_valid()?;
                 let Some(_spine) = guard.runtime() else {
-                    return Ok(Self::no_spine_tool_commit());
+                    return Ok(None);
                 };
                 guard.raw_len()
             };
@@ -1106,7 +1108,7 @@ impl Session {
                 let guard = spine_slot.lock().await;
                 guard.ensure_valid()?;
                 let Some(spine) = guard.runtime() else {
-                    return Ok(Self::no_spine_tool_commit());
+                    return Ok(None);
                 };
                 matches!(
                     spine.pending_commit(call_id)?,
@@ -1151,7 +1153,7 @@ impl Session {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
             let Some(spine) = guard.runtime() else {
-                return Ok(Self::no_spine_tool_commit());
+                return Ok(None);
             };
             spine.pending_tool_request_anchor(call_id)?
         };
@@ -1160,19 +1162,14 @@ impl Session {
             (request_anchor.raw_ordinal, request_anchor.context_index),
             (tool_resp_raw_ordinal, tool_resp_context_index),
         )?;
-        self.on_completed_spine_toolcall_with_client_session(
-            turn_context,
-            client_session,
-            CompletedSpineToolCall {
-                call_id,
-                response_item: item,
-                evidence: completed_toolcall,
-                response_already_recorded: tool_resp_already_recorded,
-                response_recorded_inside_reduce: recorded_output_inside_reduce,
-                history_before_recorded_output,
-            },
-        )
-        .await
+        Ok(Some(CompletedSpineToolCall {
+            call_id,
+            response_item: item,
+            evidence: completed_toolcall,
+            response_already_recorded: tool_resp_already_recorded,
+            response_recorded_inside_reduce: recorded_output_inside_reduce,
+            history_before_recorded_output,
+        }))
     }
 
     #[cfg(test)]
@@ -1198,16 +1195,15 @@ impl Session {
         .await
     }
 
-    async fn commit_grouped_completed_spine_toolcall_outputs_with_client_session(
+    async fn grouped_completed_spine_toolcall_outputs<'a>(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        client_session: &mut ModelClientSession,
-        commit_call_id: &str,
+        commit_call_id: &'a str,
         tool_call_ids: &[String],
-        output_items: &[ResponseItem],
-    ) -> Result<SpineToolCommit, SpineError> {
+        output_items: &'a [ResponseItem],
+    ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(Self::no_spine_tool_commit());
+            return Ok(None);
         };
         let commit_output =
             validate_grouped_spine_toolcall_outputs(commit_call_id, tool_call_ids, output_items)?;
@@ -1215,7 +1211,7 @@ impl Session {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
             let Some(spine) = guard.runtime() else {
-                return Ok(Self::no_spine_tool_commit());
+                return Ok(None);
             };
             tool_call_ids
                 .iter()
@@ -1243,19 +1239,14 @@ impl Session {
             &output_raw_ordinals,
             output_context_start,
         )?;
-        self.on_completed_spine_toolcall_with_client_session(
-            turn_context,
-            client_session,
-            CompletedSpineToolCall {
-                call_id: commit_call_id,
-                response_item: commit_output,
-                evidence: completed_toolcall,
-                response_already_recorded: true,
-                response_recorded_inside_reduce: false,
-                history_before_recorded_output: None,
-            },
-        )
-        .await
+        Ok(Some(CompletedSpineToolCall {
+            call_id: commit_call_id,
+            response_item: commit_output,
+            evidence: completed_toolcall,
+            response_already_recorded: true,
+            response_recorded_inside_reduce: false,
+            history_before_recorded_output: None,
+        }))
     }
 
     async fn on_completed_spine_toolcall_with_client_session(
