@@ -74,7 +74,7 @@ pub(crate) enum SpineCompletedToolCallOutputs<'a> {
     },
 }
 
-pub(crate) enum SpineControlToolReceiptInput {
+pub(crate) enum SpineToolExecutionReceiptInput {
     Open { summary: String },
     Close { memory: String },
     Next { summary: String, memory: String },
@@ -808,10 +808,10 @@ impl Session {
         runtime.stage_next(call_id, summary, memory)
     }
 
-    pub(crate) async fn record_spine_control_tool_receipt(
+    pub(crate) async fn record_spine_tool_execution_receipt(
         &self,
         call_id: String,
-        receipt: SpineControlToolReceiptInput,
+        receipt: SpineToolExecutionReceiptInput,
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
@@ -822,13 +822,13 @@ impl Session {
             ));
         };
         match receipt {
-            SpineControlToolReceiptInput::Open { summary } => {
+            SpineToolExecutionReceiptInput::Open { summary } => {
                 runtime.record_open_tool_receipt(call_id, summary)
             }
-            SpineControlToolReceiptInput::Close { memory } => {
+            SpineToolExecutionReceiptInput::Close { memory } => {
                 runtime.record_close_tool_receipt(call_id, memory)
             }
-            SpineControlToolReceiptInput::Next { summary, memory } => {
+            SpineToolExecutionReceiptInput::Next { summary, memory } => {
                 runtime.record_next_tool_receipt(call_id, summary, memory)
             }
         }

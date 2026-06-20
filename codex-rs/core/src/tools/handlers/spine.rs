@@ -1,5 +1,5 @@
 use crate::function_tool::FunctionCallError;
-use crate::session::SpineControlToolReceiptInput;
+use crate::session::SpineToolExecutionReceiptInput;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_FEEDBACK;
@@ -429,9 +429,9 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
             SpineTool::Open => {
                 let args: OpenArgs = parse_arguments(&arguments)?;
                 session
-                    .record_spine_control_tool_receipt(
+                    .record_spine_tool_execution_receipt(
                         call_id,
-                        SpineControlToolReceiptInput::Open {
+                        SpineToolExecutionReceiptInput::Open {
                             summary: args.summary,
                         },
                     )
@@ -446,9 +446,9 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                 let args: CloseArgs = parse_arguments(&arguments)?;
                 let memory = normalize_memory_arg(args.memory, "spine.close")?;
                 session
-                    .record_spine_control_tool_receipt(
+                    .record_spine_tool_execution_receipt(
                         call_id,
-                        SpineControlToolReceiptInput::Close { memory },
+                        SpineToolExecutionReceiptInput::Close { memory },
                     )
                     .await
                     .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
@@ -461,9 +461,9 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                 let args: NextArgs = parse_arguments(&arguments)?;
                 let memory = normalize_memory_arg(args.memory, "spine.next")?;
                 session
-                    .record_spine_control_tool_receipt(
+                    .record_spine_tool_execution_receipt(
                         call_id,
-                        SpineControlToolReceiptInput::Next {
+                        SpineToolExecutionReceiptInput::Next {
                             summary: args.summary,
                             memory,
                         },
