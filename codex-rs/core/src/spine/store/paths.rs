@@ -1,4 +1,5 @@
 use super::SpineStore;
+use std::path::Path;
 use std::path::PathBuf;
 
 const TREE_FILE: &str = "tree.jsonl";
@@ -14,6 +15,15 @@ const CHECKPOINT_DIR: &str = "checkpoints";
 const INITIAL_CHECKPOINT_FILE: &str = "initial.json";
 
 pub(crate) const BODY_DIR: &str = "memory";
+
+pub(super) fn sidecar_store_path(store_root: &Path, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        store_root.join(path)
+    }
+}
 
 impl SpineStore {
     pub(crate) fn tree_path(&self) -> PathBuf {

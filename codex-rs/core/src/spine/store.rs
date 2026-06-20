@@ -40,6 +40,7 @@ mod trim;
 mod writer_lock;
 
 pub(crate) use paths::BODY_DIR;
+use paths::sidecar_store_path;
 
 #[derive(Clone, Debug)]
 pub struct SpineCloneBoundary {
@@ -900,15 +901,6 @@ impl SpineStore {
         commit_marker::validate_markers_for_replay(
             &self.root, &markers, events, mems, raw_live, min_seq, max_seq,
         )
-    }
-}
-
-fn sidecar_store_path(store_root: &Path, path: &str) -> PathBuf {
-    let path = Path::new(path);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        store_root.join(path)
     }
 }
 
