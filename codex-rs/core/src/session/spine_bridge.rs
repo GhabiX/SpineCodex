@@ -640,22 +640,14 @@ impl Session {
         };
         let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
         for append in appends {
-            let raw_ordinal = raw_ordinals
-                .get(append.input_index)
-                .copied()
-                .flatten()
-                .ok_or_else(|| {
-                    SpineError::InvalidEvent(
-                        "context append has no persisted raw ordinal".to_string(),
-                    )
-                })?;
-            let item = items.get(append.input_index).ok_or_else(|| {
-                SpineError::InvalidEvent("context append input index outside items".to_string())
-            })?;
-            if runtime.jit_enabled() && crate::spine::is_real_user_message(item) {
-                runtime.checkpoint_before_user_msg(&rollout_path, raw_ordinal, &raw_items)?;
-            }
-            runtime.observe_context_item(raw_ordinal, append.context_index, item)?;
+            let (raw_ordinal, item) = observe_spine_context_append(
+                runtime,
+                &rollout_path,
+                raw_ordinals,
+                items,
+                append,
+                &raw_items,
+            )?;
             if let Some(call_id) = tool_response_call_id(item) {
                 recorded_tool_outputs.push((
                     call_id.to_string(),
@@ -664,10 +656,7 @@ impl Session {
                 ));
             }
         }
-        runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
-            &recorded_tool_outputs,
-            &raw_items,
-        )?;
+        observe_recorded_spine_tool_outputs(runtime, &recorded_tool_outputs, &raw_items)?;
         Ok(())
     }
 
@@ -1748,6 +1737,42 @@ impl Session {
                 reason: err.to_string(),
             })
     }
+}
+
+fn observe_spine_context_append<'a>(
+    runtime: &mut SpineRuntime,
+    rollout_path: &Path,
+    raw_ordinals: &[Option<u64>],
+    items: &'a [ResponseItem],
+    append: &ContextAppend,
+    raw_items: &[Option<ResponseItem>],
+) -> Result<(u64, &'a ResponseItem), SpineError> {
+    let raw_ordinal = raw_ordinals
+        .get(append.input_index)
+        .copied()
+        .flatten()
+        .ok_or_else(|| {
+            SpineError::InvalidEvent("context append has no persisted raw ordinal".to_string())
+        })?;
+    let item = items.get(append.input_index).ok_or_else(|| {
+        SpineError::InvalidEvent("context append input index outside items".to_string())
+    })?;
+    if runtime.jit_enabled() && crate::spine::is_real_user_message(item) {
+        runtime.checkpoint_before_user_msg(rollout_path, raw_ordinal, raw_items)?;
+    }
+    runtime.observe_context_item(raw_ordinal, append.context_index, item)?;
+    Ok((raw_ordinal, item))
+}
+
+fn observe_recorded_spine_tool_outputs(
+    runtime: &mut SpineRuntime,
+    recorded_tool_outputs: &[(String, u64, usize)],
+    raw_items: &[Option<ResponseItem>],
+) -> Result<(), SpineError> {
+    runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+        recorded_tool_outputs,
+        raw_items,
+    )
 }
 
 fn validate_live_root_compacts_have_rollout_boundary_proofs(
