@@ -1025,30 +1025,15 @@ impl Session {
                     "failed to record grouped Spine tool outputs before commit: {err}"
                 ))
             })?;
-        let request_segments = request_anchors
-            .iter()
-            .map(|anchor| {
-                completed_toolcall_request_segment(anchor.raw_ordinal, anchor.context_index)
-            })
-            .collect::<Vec<_>>();
-        let mut response_segments = Vec::new();
-        for (index, raw_ordinal) in output_raw_ordinals.iter().enumerate() {
-            let Some(raw_ordinal) = raw_ordinal else {
-                continue;
-            };
-            response_segments.push(completed_toolcall_response_segment(
-                *raw_ordinal,
-                output_context_start + index,
-            ));
-        }
-        let completed_toolcall = completed_toolcall_evidence(CompletedToolCallEvidenceParts {
-            call_id: commit_call_id.to_string(),
-            request_call_ids: tool_call_ids.to_vec(),
-            request_segments,
-            response_segments,
-            missing_request_error: "completed grouped toolcall must contain at least one request",
-            missing_response_error: "completed grouped toolcall must contain at least one response",
-        })?;
+        let completed_toolcall = grouped_completed_toolcall_evidence(
+            commit_call_id,
+            tool_call_ids,
+            request_anchors
+                .iter()
+                .map(|anchor| (anchor.raw_ordinal, anchor.context_index)),
+            &output_raw_ordinals,
+            output_context_start,
+        )?;
         self.commit_spine_completed_toolcall_with_client_session(
             turn_context,
             client_session,
@@ -2281,6 +2266,52 @@ fn completed_toolcall_response_segment(
         raw_ordinal,
         context_index,
     }
+}
+
+fn completed_toolcall_request_segments(
+    request_anchors: impl IntoIterator<Item = (u64, usize)>,
+) -> Vec<CompletedToolCallSegment> {
+    request_anchors
+        .into_iter()
+        .map(|(raw_ordinal, context_index)| {
+            completed_toolcall_request_segment(raw_ordinal, context_index)
+        })
+        .collect()
+}
+
+fn completed_toolcall_response_segments(
+    response_raw_ordinals: &[Option<u64>],
+    context_start: usize,
+) -> Vec<CompletedToolCallSegment> {
+    response_raw_ordinals
+        .iter()
+        .enumerate()
+        .filter_map(|(index, raw_ordinal)| {
+            raw_ordinal.map(|raw_ordinal| {
+                completed_toolcall_response_segment(raw_ordinal, context_start + index)
+            })
+        })
+        .collect()
+}
+
+fn grouped_completed_toolcall_evidence(
+    commit_call_id: &str,
+    tool_call_ids: &[String],
+    request_anchors: impl IntoIterator<Item = (u64, usize)>,
+    response_raw_ordinals: &[Option<u64>],
+    response_context_start: usize,
+) -> Result<CompletedToolCall, SpineError> {
+    completed_toolcall_evidence(CompletedToolCallEvidenceParts {
+        call_id: commit_call_id.to_string(),
+        request_call_ids: tool_call_ids.to_vec(),
+        request_segments: completed_toolcall_request_segments(request_anchors),
+        response_segments: completed_toolcall_response_segments(
+            response_raw_ordinals,
+            response_context_start,
+        ),
+        missing_request_error: "completed grouped toolcall must contain at least one request",
+        missing_response_error: "completed grouped toolcall must contain at least one response",
+    })
 }
 
 fn completed_toolcall_evidence(
