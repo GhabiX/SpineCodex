@@ -1955,16 +1955,11 @@ impl SpineRuntime {
             pending_compact_parse_stack.clone(),
             prepared.root_epoch_reduction,
         )?;
-        if let Err(err) = self
-            .write_prepared_memory_body(&prepared.mem, &prepared.memory_body)
-            .and_then(|()| self.commit_prepared_memory_record(&prepared.mem, &prepared.memory_body))
-            .and_then(|()| {
-                if let Some(checkpoint) = prepared.compact_checkpoint.as_ref() {
-                    self.store.append_compact_checkpoint(checkpoint)?;
-                }
-                Ok(())
-            })
-        {
+        if let Err(err) = self.commit_root_compact_prepared_side_effects(
+            &prepared.mem,
+            &prepared.memory_body,
+            prepared.compact_checkpoint.as_ref(),
+        ) {
             self.parse_stack = pending_compact_parse_stack;
             return Err(err);
         }
@@ -1987,6 +1982,22 @@ impl SpineRuntime {
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
         self.parse_stack = prepared.final_parse_stack;
+    }
+
+    fn commit_root_compact_prepared_side_effects(
+        &mut self,
+        mem: &MemRecord,
+        memory_body: &str,
+        compact_checkpoint: Option<&crate::spine::compact_checkpoint::SpineCompactCheckpoint>,
+    ) -> Result<(), SpineError> {
+        self.write_prepared_memory_body(mem, memory_body)
+            .and_then(|()| self.commit_prepared_memory_record(mem, memory_body))
+            .and_then(|()| {
+                if let Some(checkpoint) = compact_checkpoint {
+                    self.store.append_compact_checkpoint(checkpoint)?;
+                }
+                Ok(())
+            })
     }
 
     fn write_prepared_memory_body(&self, mem: &MemRecord, body: &str) -> Result<(), SpineError> {
