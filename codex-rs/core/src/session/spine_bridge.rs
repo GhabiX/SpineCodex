@@ -1336,17 +1336,12 @@ impl Session {
         }
         if history_update.is_none() && tool_resp_already_recorded {
             let history = state.clone_history();
-            let materialized = spine.materialize_history(raw_items)?;
-            if materialized.as_slice() != history.raw_items() {
-                history_update = Some(SpineHistoryUpdate {
-                    call_id: call_id.to_string(),
-                    operation: "spine toolcall projection",
-                    suffix_start: 0,
-                    expected_history: history.raw_items().to_vec(),
-                    replacement: materialized,
-                    reference_context_item: state.reference_context_item(),
-                });
-            }
+            history_update = spine_history_update_from_materialized_projection(
+                call_id,
+                history.raw_items(),
+                spine.materialize_history(raw_items)?,
+                state.reference_context_item(),
+            );
         }
         if let Some(prepared_commit) = prepared_commit.as_ref()
             && let Err(err) = spine.persist_prepared_commit_side_effects(prepared_commit)
@@ -2328,6 +2323,25 @@ fn spine_history_update_from_publication_plan(
         suffix_start,
         expected_history: history_items.to_vec(),
         replacement,
+        reference_context_item,
+    })
+}
+
+fn spine_history_update_from_materialized_projection(
+    call_id: &str,
+    history_items: &[ResponseItem],
+    materialized: Vec<ResponseItem>,
+    reference_context_item: Option<TurnContextItem>,
+) -> Option<SpineHistoryUpdate> {
+    if materialized.as_slice() == history_items {
+        return None;
+    }
+    Some(SpineHistoryUpdate {
+        call_id: call_id.to_string(),
+        operation: "spine toolcall projection",
+        suffix_start: 0,
+        expected_history: history_items.to_vec(),
+        replacement: materialized,
         reference_context_item,
     })
 }
