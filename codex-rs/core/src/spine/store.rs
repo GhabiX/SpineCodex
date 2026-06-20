@@ -5,11 +5,8 @@ use crate::spine::compact_checkpoint::compact_checkpoint_replacement_history_has
 use crate::spine::compact_checkpoint::validate_compact_checkpoint;
 use crate::spine::io::append_json_line;
 use crate::spine::io::hash_raw_live;
-use crate::spine::io::locator_path;
 use crate::spine::io::read_json_file;
 use crate::spine::io::read_json_lines;
-use crate::spine::io::rollout_parent;
-use crate::spine::io::rollout_stem;
 use crate::spine::io::sha1_hex;
 #[cfg(test)]
 use crate::spine::io::write_json_file;
@@ -27,7 +24,6 @@ use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::TrimEvent;
 use crate::spine::model::commit_marker_structural_event_seqs;
-use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -40,14 +36,12 @@ use std::io::Seek;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 mod checkpoint_proof;
 mod clone_rewrite;
 mod commit_marker;
+mod locator;
 
-const LOCATOR_VERSION: u32 = 1;
 const TREE_FILE: &str = "tree.jsonl";
 const PRESSURE_FILE: &str = "pressure.jsonl";
 const TRIM_FILE: &str = "trim.jsonl";
@@ -87,12 +81,6 @@ fn event_seq_limit_for_clone(source: &SpineStore) -> Result<u64, SpineError> {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Locator {
-    version: u32,
-    base: String,
-}
-
 #[derive(Debug)]
 pub(crate) struct SpineStore {
     pub(super) root: PathBuf,
@@ -101,25 +89,15 @@ pub(crate) struct SpineStore {
 
 impl SpineStore {
     pub(crate) fn for_rollout(rollout_path: &Path) -> Result<Self, SpineError> {
-        let locator_path = locator_path(rollout_path)?;
-        let locator: Locator = read_json_file(&locator_path)?;
-        if locator.version != LOCATOR_VERSION {
-            return Err(SpineError::InvalidStore(format!(
-                "unsupported spine locator version {}",
-                locator.version
-            )));
-        }
-        Ok(Self::from_root(
-            rollout_parent(rollout_path)?.join(locator.base),
-        ))
+        Ok(Self::from_root(locator::root_for_rollout(rollout_path)?))
     }
 
     pub(crate) fn create_for_rollout(rollout_path: &Path) -> Result<Self, SpineError> {
-        let root = sidecar_root_for_rollout(rollout_path)?;
+        let root = locator::sidecar_root_for_rollout(rollout_path)?;
         std::fs::create_dir_all(&root)?;
         let store = Self::from_root(root);
         store.ensure_trim_ledger_exists()?;
-        write_locator_for_root(rollout_path, &store.root)?;
+        locator::write_locator_for_root(rollout_path, &store.root)?;
         Ok(store)
     }
 
@@ -204,7 +182,7 @@ impl SpineStore {
             ));
         }
         let source = Self::for_rollout(&boundary.source_rollout_path)?;
-        let staging_root = create_unpublished_clone_root(target_rollout_path)?;
+        let staging_root = locator::create_unpublished_clone_root(target_rollout_path)?;
         let target_root = staging_root.clone();
         let target = Self::from_root(staging_root.clone());
 
@@ -217,15 +195,15 @@ impl SpineStore {
             raw_live,
             raw_ordinal_limit,
         )
-        .and_then(|()| publish_unpublished_clone(target_rollout_path, &staging_root));
+        .and_then(|()| locator::publish_unpublished_clone(target_rollout_path, &staging_root));
         if result.is_err() {
-            discard_unpublished_sidecar(&staging_root);
+            locator::discard_unpublished_sidecar(&staging_root);
         }
         result
     }
 
     pub(crate) fn has_for_rollout(rollout_path: &Path) -> Result<bool, SpineError> {
-        Ok(locator_path(rollout_path)?.exists())
+        locator::has_for_rollout(rollout_path)
     }
 
     fn from_root(root: PathBuf) -> Self {
@@ -298,150 +276,6 @@ impl SpineStore {
             Err(std::fs::TryLockError::Error(err)) => Err(err.into()),
         }
     }
-}
-
-fn sidecar_root_for_rollout(rollout_path: &Path) -> Result<PathBuf, SpineError> {
-    let parent = rollout_parent(rollout_path)?;
-    let stem = rollout_stem(rollout_path)?;
-    Ok(parent.join(format!("spine-{stem}")))
-}
-
-fn write_locator_for_root(rollout_path: &Path, root: &Path) -> Result<(), SpineError> {
-    let locator = locator_for_root(rollout_path, root)?;
-    let content = serde_json::to_string_pretty(&locator)? + "\n";
-    write_locator_content_atomically(&locator_path(rollout_path)?, &content)
-}
-
-fn write_new_locator_for_root(rollout_path: &Path, root: &Path) -> Result<bool, SpineError> {
-    let locator = locator_for_root(rollout_path, root)?;
-    let content = serde_json::to_string_pretty(&locator)? + "\n";
-    let locator_path = locator_path(rollout_path)?;
-    let temp_path = write_locator_temp(&locator_path, &content)?;
-    match std::fs::hard_link(&temp_path, &locator_path) {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&temp_path);
-            Ok(true)
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-            let _ = std::fs::remove_file(&temp_path);
-            Ok(false)
-        }
-        Err(err) => {
-            let _ = std::fs::remove_file(&temp_path);
-            Err(err.into())
-        }
-    }
-}
-
-fn write_locator_content_atomically(locator_path: &Path, content: &str) -> Result<(), SpineError> {
-    let temp_path = write_locator_temp(locator_path, content)?;
-    if let Err(err) = std::fs::rename(&temp_path, locator_path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(err.into());
-    }
-    Ok(())
-}
-
-fn write_locator_temp(locator_path: &Path, content: &str) -> Result<PathBuf, SpineError> {
-    let parent = locator_path
-        .parent()
-        .ok_or_else(|| SpineError::InvalidStore("locator path has no parent".to_string()))?;
-    let file_name = locator_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| SpineError::InvalidStore("invalid locator path".to_string()))?;
-    std::fs::create_dir_all(parent)?;
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    for attempt in 0..1000u32 {
-        let temp_path = parent.join(format!(
-            ".{file_name}.tmp-{}-{nanos}-{attempt}",
-            std::process::id()
-        ));
-        let mut file = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-        {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err.into()),
-        };
-        let write_result = file
-            .write_all(content.as_bytes())
-            .and_then(|()| file.sync_all());
-        drop(file);
-        if let Err(err) = write_result {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(err.into());
-        }
-        return Ok(temp_path);
-    }
-    Err(SpineError::InvalidStore(format!(
-        "failed to allocate temp locator for {}",
-        locator_path.display()
-    )))
-}
-
-fn locator_for_root(rollout_path: &Path, root: &Path) -> Result<Locator, SpineError> {
-    let parent = rollout_parent(rollout_path)?;
-    if root.parent() != Some(parent) {
-        return Err(SpineError::InvalidStore(format!(
-            "sidecar root {} is not under rollout parent {}",
-            root.display(),
-            parent.display()
-        )));
-    }
-    Ok(Locator {
-        version: LOCATOR_VERSION,
-        base: root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| SpineError::InvalidStore("invalid sidecar path".to_string()))?
-            .to_string(),
-    })
-}
-
-fn create_unpublished_clone_root(rollout_path: &Path) -> Result<PathBuf, SpineError> {
-    let parent = rollout_parent(rollout_path)?;
-    let stem = rollout_stem(rollout_path)?;
-    std::fs::create_dir_all(parent)?;
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    for attempt in 0..1000u32 {
-        let root = parent.join(format!(
-            ".spine-{stem}.clone-{}-{nanos}-{attempt}",
-            std::process::id()
-        ));
-        match std::fs::create_dir(&root) {
-            Ok(()) => return Ok(root),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err.into()),
-        }
-    }
-    Err(SpineError::InvalidStore(format!(
-        "failed to allocate unpublished sidecar for {}",
-        rollout_path.display()
-    )))
-}
-
-fn publish_unpublished_clone(rollout_path: &Path, staging_root: &Path) -> Result<(), SpineError> {
-    if SpineStore::has_for_rollout(rollout_path)? {
-        discard_unpublished_sidecar(staging_root);
-        return Ok(());
-    }
-    if !write_new_locator_for_root(rollout_path, staging_root)? {
-        discard_unpublished_sidecar(staging_root);
-    }
-    Ok(())
-}
-
-fn discard_unpublished_sidecar(root: &Path) {
-    let _ = std::fs::remove_dir_all(root);
 }
 
 fn clone_for_rollout_into_store(
