@@ -1294,26 +1294,16 @@ impl Session {
         let publication_plan = prepared_commit
             .as_ref()
             .and_then(|prepared| prepared.publication_plan().cloned());
-        let defer_tree_update_until_raw_output = matches!(
-            commit_kind,
-            Some(SpineCommitKind::Close { .. } | SpineCommitKind::CloseThenOpen { .. })
-        );
+        let defer_tree_update_until_raw_output =
+            should_defer_tree_update_until_raw_output(commit_kind.as_ref());
         let mut snapshot = None;
         let mut history_update = None;
         if let Some(commit_kind) = commit_kind.as_ref() {
-            match commit_kind {
-                SpineCommitKind::Open { open_request_index } => {
-                    let history = state.clone_history();
-                    let history_items = history.raw_items();
-                    if *open_request_index > history_items.len() {
-                        return Err(SpineError::Invariant(format!(
-                            "spine.open request index {open_request_index} exceeds history length {} for call_id={call_id}",
-                            history_items.len()
-                        )));
-                    }
-                }
-                SpineCommitKind::Close | SpineCommitKind::CloseThenOpen { .. } => {}
-            }
+            validate_commit_kind_against_history(
+                call_id,
+                commit_kind,
+                state.clone_history().raw_items(),
+            )?;
         }
         if let Some(plan) = publication_plan.as_ref() {
             let history = state.clone_history();
@@ -2297,6 +2287,29 @@ fn grouped_completed_toolcall_evidence(
         missing_request_error: "completed grouped toolcall must contain at least one request",
         missing_response_error: "completed grouped toolcall must contain at least one response",
     })
+}
+
+fn should_defer_tree_update_until_raw_output(commit_kind: Option<&SpineCommitKind>) -> bool {
+    matches!(
+        commit_kind,
+        Some(SpineCommitKind::Close | SpineCommitKind::CloseThenOpen { .. })
+    )
+}
+
+fn validate_commit_kind_against_history(
+    call_id: &str,
+    commit_kind: &SpineCommitKind,
+    history_items: &[ResponseItem],
+) -> Result<(), SpineError> {
+    if let SpineCommitKind::Open { open_request_index } = commit_kind
+        && *open_request_index > history_items.len()
+    {
+        return Err(SpineError::Invariant(format!(
+            "spine.open request index {open_request_index} exceeds history length {} for call_id={call_id}",
+            history_items.len()
+        )));
+    }
+    Ok(())
 }
 
 fn spine_history_update_from_publication_plan(
