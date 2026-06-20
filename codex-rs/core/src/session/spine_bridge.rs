@@ -905,6 +905,7 @@ impl Session {
             return Ok(Self::no_spine_tool_commit());
         };
         let mut recorded_output_inside_reduce = false;
+        let mut history_before_recorded_output = None;
         let mut raw_len;
         let mut history_for_output_anchor;
         loop {
@@ -937,6 +938,7 @@ impl Session {
             if !is_close_like {
                 break;
             }
+            history_before_recorded_output = Some(history_for_output_anchor.clone());
             self.record_conversation_items_without_spine_observe(
                 turn_context,
                 std::slice::from_ref(item),
@@ -997,6 +999,7 @@ impl Session {
             completed_toolcall,
             tool_resp_already_recorded,
             recorded_output_inside_reduce,
+            history_before_recorded_output,
         )
         .await
     }
@@ -1054,6 +1057,7 @@ impl Session {
             completed_toolcall,
             true,
             false,
+            None,
         )
         .await
     }
@@ -1067,6 +1071,7 @@ impl Session {
         completed_toolcall: CompletedToolCall,
         tool_resp_already_recorded: bool,
         recorded_output_inside_reduce: bool,
+        history_before_recorded_output: Option<crate::context_manager::ContextManager>,
     ) -> Result<SpineToolCommit, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
@@ -1178,6 +1183,15 @@ impl Session {
             let attempt = match attempt {
                 Ok(attempt) => attempt,
                 Err(err) => {
+                    if recorded_output_inside_reduce {
+                        if let Some(history) = history_before_recorded_output.as_ref() {
+                            self.replace_history(
+                                history.raw_items().to_vec(),
+                                history.reference_context_item(),
+                            )
+                            .await;
+                        }
+                    }
                     if err.should_invalidate_runtime() {
                         self.invalidate_spine_runtime(format!(
                             "failed to commit completed Spine toolcall [{:?}] for call_id={call_id}: {err}",
