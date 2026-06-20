@@ -997,7 +997,7 @@ impl Session {
                 tool_resp_context_index,
             ),
         )?;
-        self.record_completed_spine_toolcall_with_client_session(
+        self.on_completed_spine_toolcall_with_client_session(
             turn_context,
             client_session,
             CompletedSpineToolCall {
@@ -1057,7 +1057,7 @@ impl Session {
             &output_raw_ordinals,
             output_context_start,
         )?;
-        self.record_completed_spine_toolcall_with_client_session(
+        self.on_completed_spine_toolcall_with_client_session(
             turn_context,
             client_session,
             CompletedSpineToolCall {
@@ -1072,7 +1072,7 @@ impl Session {
         .await
     }
 
-    async fn record_completed_spine_toolcall_with_client_session(
+    async fn on_completed_spine_toolcall_with_client_session(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
