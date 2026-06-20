@@ -22,7 +22,6 @@ use crate::spine::model::PressureEvent;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::model::TrimEvent;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -37,6 +36,7 @@ mod clone_rewrite;
 mod commit_marker;
 mod locator;
 mod pressure;
+mod trim;
 
 const TREE_FILE: &str = "tree.jsonl";
 const PRESSURE_FILE: &str = "pressure.jsonl";
@@ -231,14 +231,14 @@ impl SpineStore {
         raw_ordinal: u64,
     ) -> Result<Option<SpineCloneBoundary>, SpineError> {
         let trim_events = self.trim_events()?;
-        let trim_seq_watermark = trim_seq_watermark_for_raw_boundary(&trim_events, raw_ordinal);
+        let trim_seq_watermark = trim::seq_watermark_for_raw_boundary(&trim_events, raw_ordinal);
         Ok(Some(SpineCloneBoundary {
             source_rollout_path: source_rollout_path.to_path_buf(),
             raw_ordinal_limit: raw_ordinal,
             structural_seq_limit: 0,
             pressure_seq_watermark: None,
             trim_seq_watermark,
-            trim_toolcall_seq_limit: trim_toolcall_seq_limit_from_events(
+            trim_toolcall_seq_limit: trim::toolcall_seq_limit_from_events(
                 &trim_events,
                 trim_seq_watermark,
             )?,
@@ -246,7 +246,7 @@ impl SpineStore {
     }
 
     fn trim_toolcall_seq_limit(&self, trim_seq_watermark: Option<u64>) -> Result<u64, SpineError> {
-        trim_toolcall_seq_limit_from_events(&self.trim_events()?, trim_seq_watermark)
+        trim::toolcall_seq_limit_from_events(&self.trim_events()?, trim_seq_watermark)
     }
 
     pub(crate) fn ensure_writer_lock(&mut self) -> Result<(), SpineError> {
@@ -427,7 +427,7 @@ fn clone_for_rollout_into_store(
             .trim_seq_watermark
             .is_some_and(|watermark| trim.trim_seq <= watermark)
             && trim.allowed_by(mask)?
-            && trim_event_within_toolcall_boundary(&trim, boundary.trim_toolcall_seq_limit)
+            && trim::event_within_toolcall_boundary(&trim, boundary.trim_toolcall_seq_limit)
         {
             target.append_logged_trim_event(&trim)?;
         }
@@ -479,68 +479,6 @@ fn clone_for_rollout_into_store(
         target.append_commit_marker(&marker)?;
     }
     Ok(())
-}
-
-fn trim_event_within_toolcall_boundary(event: &LoggedTrimEvent, toolcall_seq_limit: u64) -> bool {
-    match &event.event {
-        TrimEvent::ToolCallBoundary { toolcall_seq, .. }
-        | TrimEvent::Candidate { toolcall_seq, .. } => *toolcall_seq < toolcall_seq_limit,
-        TrimEvent::Cleared { .. } | TrimEvent::Snipped { .. } | TrimEvent::Sliced { .. } => true,
-    }
-}
-
-fn trim_seq_watermark_for_raw_boundary(
-    events: &[LoggedTrimEvent],
-    raw_boundary: u64,
-) -> Option<u64> {
-    let mut watermark = None;
-    for event in events {
-        let within_boundary = match &event.event {
-            TrimEvent::ToolCallBoundary {
-                raw_boundary: event_boundary,
-                ..
-            }
-            | TrimEvent::Cleared {
-                raw_boundary: event_boundary,
-                ..
-            }
-            | TrimEvent::Snipped {
-                raw_boundary: event_boundary,
-                ..
-            }
-            | TrimEvent::Sliced {
-                raw_boundary: event_boundary,
-                ..
-            } => *event_boundary <= raw_boundary,
-            TrimEvent::Candidate { raw_ordinal, .. } => *raw_ordinal < raw_boundary,
-        };
-        if within_boundary {
-            watermark =
-                Some(watermark.map_or(event.trim_seq, |current: u64| current.max(event.trim_seq)));
-        }
-    }
-    watermark
-}
-
-fn trim_toolcall_seq_limit_from_events(
-    events: &[LoggedTrimEvent],
-    trim_seq_watermark: Option<u64>,
-) -> Result<u64, SpineError> {
-    Ok(events
-        .iter()
-        .filter(|event| trim_seq_watermark.is_none_or(|watermark| event.trim_seq <= watermark))
-        .filter_map(|event| match &event.event {
-            TrimEvent::ToolCallBoundary { toolcall_seq, .. } => Some(*toolcall_seq),
-            _ => None,
-        })
-        .max()
-        .map(|toolcall_seq| {
-            toolcall_seq.checked_add(1).ok_or_else(|| {
-                SpineError::InvalidEvent("spine trim toolcall seq overflow".to_string())
-            })
-        })
-        .transpose()?
-        .unwrap_or(0))
 }
 
 impl SpineStore {
