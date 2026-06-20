@@ -1255,20 +1255,12 @@ impl Session {
         let Ok(mut state) = self.state.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
         };
-        if let Some((_, expected_history)) = memory_assembly.as_ref()
-            && state.clone_history().raw_items() != expected_history.as_slice()
-        {
-            if spine.abort_pending(call_id) {
-                tracing::debug!(
-                    call_id,
-                    reason = "spine close history changed before suffix replacement",
-                    "aborted pending Spine transition"
-                );
-            }
-            return Err(SpineError::Operation(format!(
-                "spine.close history changed before suffix replacement for call_id={call_id}"
-            )));
-        }
+        validate_close_expected_history_for_commit(
+            spine,
+            call_id,
+            memory_assembly.as_ref(),
+            state.clone_history().raw_items(),
+        )?;
         let memory_assembly = memory_assembly.map(|(compact, _)| compact);
         let pending_commit = spine.pending_commit(call_id)?;
         let token_baselines = token_baselines_for_pending_commit(
@@ -2307,6 +2299,29 @@ fn validate_commit_kind_against_history(
         return Err(SpineError::Invariant(format!(
             "spine.open request index {open_request_index} exceeds history length {} for call_id={call_id}",
             history_items.len()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_close_expected_history_for_commit(
+    spine: &mut SpineRuntime,
+    call_id: &str,
+    memory_assembly: Option<&(SpineCloseMemoryAssembly, Vec<ResponseItem>)>,
+    history_items: &[ResponseItem],
+) -> Result<(), SpineError> {
+    if let Some((_, expected_history)) = memory_assembly
+        && history_items != expected_history.as_slice()
+    {
+        if spine.abort_pending(call_id) {
+            tracing::debug!(
+                call_id,
+                reason = "spine close history changed before suffix replacement",
+                "aborted pending Spine transition"
+            );
+        }
+        return Err(SpineError::Operation(format!(
+            "spine.close history changed before suffix replacement for call_id={call_id}"
         )));
     }
     Ok(())
