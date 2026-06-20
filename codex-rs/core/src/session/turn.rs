@@ -42,6 +42,7 @@ use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
+use crate::session::spine_bridge::SpineCompletedToolCallOutputs;
 use crate::session::turn_context::TurnContext;
 use crate::spine::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 use crate::spine::SPINE_NAMESPACE;
@@ -2110,10 +2111,12 @@ async fn drain_in_flight(
                     false
                 };
                 let commit = if spine_jit_enabled {
-                    sess.maybe_commit_spine_tool_output_with_client_session(
+                    sess.on_completed_spine_toolcall_outputs_with_client_session(
                         &turn_context,
                         client_session,
-                        &response_item,
+                        SpineCompletedToolCallOutputs::Single {
+                            item: &response_item,
+                        },
                     )
                     .await
                     .map_err(|err| {
@@ -2267,12 +2270,14 @@ async fn drain_deferred_spine_tool_group(
         }
     }
     let commit = sess
-        .record_spine_toolcall_group_outputs_and_commit_with_client_session(
+        .on_completed_spine_toolcall_outputs_with_client_session(
             &turn_context,
             client_session,
-            &commit_call_id,
-            &tool_call_ids,
-            &response_items,
+            SpineCompletedToolCallOutputs::Grouped {
+                commit_call_id: &commit_call_id,
+                tool_call_ids: &tool_call_ids,
+                output_items: &response_items,
+            },
         )
         .await
         .map_err(|err| {
@@ -2369,12 +2374,14 @@ async fn drain_conflicting_spine_control_tool_group(
     }
 
     let commit = sess
-        .record_spine_toolcall_group_outputs_and_commit_with_client_session(
+        .on_completed_spine_toolcall_outputs_with_client_session(
             &turn_context,
             client_session,
-            &commit_call_id,
-            &tool_call_ids,
-            &response_items,
+            SpineCompletedToolCallOutputs::Grouped {
+                commit_call_id: &commit_call_id,
+                tool_call_ids: &tool_call_ids,
+                output_items: &response_items,
+            },
         )
         .await
         .map_err(|err| {

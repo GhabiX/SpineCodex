@@ -62,6 +62,17 @@ pub(crate) struct SpineToolCommit {
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
+pub(crate) enum SpineCompletedToolCallOutputs<'a> {
+    Single {
+        item: &'a ResponseItem,
+    },
+    Grouped {
+        commit_call_id: &'a str,
+        tool_call_ids: &'a [String],
+        output_items: &'a [ResponseItem],
+    },
+}
+
 const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
 
 #[derive(Debug)]
@@ -901,7 +912,56 @@ impl Session {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn maybe_commit_spine_tool_output_with_client_session(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        client_session: &mut ModelClientSession,
+        item: &ResponseItem,
+    ) -> Result<SpineToolCommit, SpineError> {
+        // TODO(spine-hook-refactor): remove this compatibility wrapper once
+        // tests call the unified completed-toolcall hook.
+        self.on_completed_spine_toolcall_outputs_with_client_session(
+            turn_context,
+            client_session,
+            SpineCompletedToolCallOutputs::Single { item },
+        )
+        .await
+    }
+
+    pub(crate) async fn on_completed_spine_toolcall_outputs_with_client_session(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        client_session: &mut ModelClientSession,
+        outputs: SpineCompletedToolCallOutputs<'_>,
+    ) -> Result<SpineToolCommit, SpineError> {
+        match outputs {
+            SpineCompletedToolCallOutputs::Single { item } => {
+                self.commit_single_completed_spine_toolcall_output_with_client_session(
+                    turn_context,
+                    client_session,
+                    item,
+                )
+                .await
+            }
+            SpineCompletedToolCallOutputs::Grouped {
+                commit_call_id,
+                tool_call_ids,
+                output_items,
+            } => {
+                self.commit_grouped_completed_spine_toolcall_outputs_with_client_session(
+                    turn_context,
+                    client_session,
+                    commit_call_id,
+                    tool_call_ids,
+                    output_items,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn commit_single_completed_spine_toolcall_output_with_client_session(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
@@ -988,14 +1048,8 @@ impl Session {
         };
         let completed_toolcall = single_completed_toolcall_evidence(
             call_id,
-            (
-                request_anchor.raw_ordinal,
-                request_anchor.context_index,
-            ),
-            (
-                tool_resp_raw_ordinal,
-                tool_resp_context_index,
-            ),
+            (request_anchor.raw_ordinal, request_anchor.context_index),
+            (tool_resp_raw_ordinal, tool_resp_context_index),
         )?;
         self.on_completed_spine_toolcall_with_client_session(
             turn_context,
@@ -1012,7 +1066,30 @@ impl Session {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn record_spine_toolcall_group_outputs_and_commit_with_client_session(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        client_session: &mut ModelClientSession,
+        commit_call_id: &str,
+        tool_call_ids: &[String],
+        output_items: &[ResponseItem],
+    ) -> Result<SpineToolCommit, SpineError> {
+        // TODO(spine-hook-refactor): remove this compatibility wrapper once
+        // tests call the unified completed-toolcall hook.
+        self.on_completed_spine_toolcall_outputs_with_client_session(
+            turn_context,
+            client_session,
+            SpineCompletedToolCallOutputs::Grouped {
+                commit_call_id,
+                tool_call_ids,
+                output_items,
+            },
+        )
+        .await
+    }
+
+    async fn commit_grouped_completed_spine_toolcall_outputs_with_client_session(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
@@ -2325,10 +2402,7 @@ fn grouped_completed_toolcall_evidence(
         commit_call_id,
         tool_call_ids,
         completed_toolcall_request_segments(request_anchors),
-        completed_toolcall_response_segments(
-            response_raw_ordinals,
-            response_context_start,
-        ),
+        completed_toolcall_response_segments(response_raw_ordinals, response_context_start),
         "completed grouped toolcall must contain at least one request",
         "completed grouped toolcall must contain at least one response",
     )
@@ -2559,7 +2633,11 @@ mod completed_toolcall_evidence_tests {
         assert_eq!(toolcall.call_id, "call-a");
         assert_eq!(toolcall.request_call_ids, vec!["call-a".to_string()]);
         assert_eq!(
-            toolcall.segments.iter().map(segment_tuple).collect::<Vec<_>>(),
+            toolcall
+                .segments
+                .iter()
+                .map(segment_tuple)
+                .collect::<Vec<_>>(),
             vec![
                 (ToolCallSegmentKind::Request, 10, 5),
                 (ToolCallSegmentKind::Response, 11, 6),
@@ -2582,7 +2660,11 @@ mod completed_toolcall_evidence_tests {
         assert_eq!(toolcall.call_id, "call-a");
         assert_eq!(toolcall.request_call_ids, tool_call_ids);
         assert_eq!(
-            toolcall.segments.iter().map(segment_tuple).collect::<Vec<_>>(),
+            toolcall
+                .segments
+                .iter()
+                .map(segment_tuple)
+                .collect::<Vec<_>>(),
             vec![
                 (ToolCallSegmentKind::Request, 10, 3),
                 (ToolCallSegmentKind::Request, 20, 9),
