@@ -61,6 +61,67 @@ pub(crate) struct SpineToolcallCommitEvidence {
     completed_toolcall: SpineCompletedToolCallEvidence,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpineToolOutputRecording {
+    Skip,
+    Normal,
+    WithoutSpineObserve,
+    RawOnlyDurableWithoutEmission,
+}
+
+impl SpineToolOutputRecording {
+    pub(crate) fn after_successful_toolcall_commit(
+        recorded_inside_hook: bool,
+        raw_only_durable_without_emission: bool,
+    ) -> Self {
+        if recorded_inside_hook {
+            Self::Skip
+        } else if raw_only_durable_without_emission {
+            Self::RawOnlyDurableWithoutEmission
+        } else {
+            Self::WithoutSpineObserve
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SpineToolcallCommitPreparation {
+    requires_close_like_commit: bool,
+}
+
+impl SpineToolcallCommitPreparation {
+    fn new(requires_close_like_commit: bool) -> Self {
+        Self {
+            requires_close_like_commit,
+        }
+    }
+
+    pub(crate) fn pre_compact_provider_input_tokens(
+        &self,
+        current_turn_provider_input_tokens: Option<i64>,
+    ) -> Option<i64> {
+        if self.requires_close_like_commit {
+            current_turn_provider_input_tokens
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn output_recording_after_successful_commit(
+        &self,
+        tool_resp_already_recorded: bool,
+        recorded_inside_hook: bool,
+    ) -> SpineToolOutputRecording {
+        let raw_only_durable_without_emission = self.requires_close_like_commit
+            && !tool_resp_already_recorded
+            && !recorded_inside_hook;
+        SpineToolOutputRecording::after_successful_toolcall_commit(
+            recorded_inside_hook,
+            raw_only_durable_without_emission,
+        )
+    }
+}
+
 pub(crate) struct SpineToolcallCommitInput<'a> {
     pub(crate) call_id: &'a str,
     pub(crate) completed_toolcall: CompletedToolCall,
@@ -670,7 +731,7 @@ impl SpineSessionState {
         &mut self,
         call_id: &str,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<bool>, SpineError> {
+    ) -> Result<Option<SpineToolcallCommitPreparation>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
             return Ok(None);
@@ -678,6 +739,7 @@ impl SpineSessionState {
         runtime.ensure_pending_from_toolcall_request(call_id, raw_items)?;
         runtime
             .has_close_like_control_request(call_id, raw_items)
+            .map(SpineToolcallCommitPreparation::new)
             .map(Some)
     }
 

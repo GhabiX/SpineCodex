@@ -19,6 +19,7 @@ use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 use crate::spine::SpineToolcallCommitEvidence;
+use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use codex_protocol::models::ContentItem;
@@ -58,14 +59,6 @@ impl PreparedSpineReplay {
 pub(crate) struct SpineToolCommit {
     pub(crate) recording: SpineToolOutputRecording,
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SpineToolOutputRecording {
-    Skip,
-    Normal,
-    WithoutSpineObserve,
-    RawOnlyDurableWithoutEmission,
 }
 
 pub(crate) struct SpineToolCallEvidence<'a> {
@@ -109,7 +102,6 @@ const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
 
 struct SpineCommitOutput {
     post_commit_effects: SpineHostEffects,
-    spine_context_already_observed: bool,
 }
 
 struct SpinePreparedToolCallEvidence<'a> {
@@ -1120,28 +1112,22 @@ impl Session {
             return Ok(Self::no_spine_tool_commit());
         };
         let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
-        let has_pending_close_commit = {
+        let commit_preparation = {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let Some(has_pending_close_commit) =
+            let Some(commit_preparation) =
                 guard.prepare_completed_toolcall_for_commit(call_id, &raw_items)?
             else {
                 return Ok(Self::no_spine_tool_commit());
             };
-            has_pending_close_commit
+            commit_preparation
         };
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let current_turn_provider_input_tokens = current_turn_token_info
             .as_ref()
             .and_then(provider_input_context_tokens);
-        let pre_compact_provider_input_tokens = if has_pending_close_commit {
-            current_turn_provider_input_tokens
-        } else {
-            None
-        };
-        let record_raw_only_durable_without_emission = has_pending_close_commit
-            && !tool_resp_already_recorded
-            && !recorded_output_inside_reduce;
+        let pre_compact_provider_input_tokens =
+            commit_preparation.pre_compact_provider_input_tokens(current_turn_provider_input_tokens);
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
         let mut lock_retries = 0;
@@ -1212,7 +1198,6 @@ impl Session {
         };
         let SpineCommitOutput {
             post_commit_effects,
-            spine_context_already_observed,
         } = commit_output;
         let deferred_tree_update = self
             .apply_spine_post_commit_effects(turn_context, post_commit_effects)
@@ -1223,15 +1208,10 @@ impl Session {
                 "deferring Spine close-like tree update until raw output evidence is durable"
             );
         }
-        let recording = if recorded_output_inside_reduce {
-            SpineToolOutputRecording::Skip
-        } else if record_raw_only_durable_without_emission {
-            SpineToolOutputRecording::RawOnlyDurableWithoutEmission
-        } else if spine_context_already_observed {
-            SpineToolOutputRecording::WithoutSpineObserve
-        } else {
-            SpineToolOutputRecording::Normal
-        };
+        let recording = commit_preparation.output_recording_after_successful_commit(
+            tool_resp_already_recorded,
+            recorded_output_inside_reduce,
+        );
         Ok(SpineToolCommit {
             recording,
             deferred_tree_update,
@@ -1291,7 +1271,6 @@ impl Session {
         };
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
             post_commit_effects: committed.post_apply_host_effects(snapshot),
-            spine_context_already_observed: true,
         }))
     }
 
