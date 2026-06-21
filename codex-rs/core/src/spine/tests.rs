@@ -200,6 +200,8 @@ mod trim_projection;
 mod trim_projection_composition;
 #[path = "tests/trim_projection_slice.rs"]
 mod trim_projection_slice;
+#[path = "tests/trim_projection_slice_rejections.rs"]
+mod trim_projection_slice_rejections;
 #[path = "tests/trim_rollback_fork.rs"]
 mod trim_rollback_fork;
 #[path = "tests/trim_targeting.rs"]
