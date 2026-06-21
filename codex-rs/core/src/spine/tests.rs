@@ -74,6 +74,8 @@ mod close_source_plan;
 mod close_source_plan_guards;
 #[path = "tests/closed_memory_accounting.rs"]
 mod closed_memory_accounting;
+#[path = "tests/closed_memory_accounting_negative_delta.rs"]
+mod closed_memory_accounting_negative_delta;
 #[path = "tests/closed_memory_accounting_pending.rs"]
 mod closed_memory_accounting_pending;
 #[path = "tests/commit_marker_carriers.rs"]
