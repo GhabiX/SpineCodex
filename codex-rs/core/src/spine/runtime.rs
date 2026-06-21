@@ -75,8 +75,6 @@ use pending::PendingTransition;
 use pending::SpineControlToolReceipt;
 #[allow(unused_imports)]
 pub(crate) use pending::ToolRequestAnchor;
-#[allow(unused_imports)]
-pub(crate) use prepared::HistoryPublicationPlan;
 pub(crate) use prepared::SpineCommitKind;
 pub(crate) use prepared::SpinePreparedCommit;
 pub(crate) use prepared::SpinePreparedRootCompact;

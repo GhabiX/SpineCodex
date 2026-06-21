@@ -2736,112 +2736,25 @@ fn spine_host_effects_for_commit_publication(
     history_items: &[ResponseItem],
     reference_context_item: Option<TurnContextItem>,
 ) -> Result<SpineHostEffects, SpineError> {
-    let history_update = spine_history_update_for_commit_publication(
-        spine,
+    let history_update = spine.commit_publication_history_update(
         call_id,
         prepared_commit,
         tool_resp_item,
         tool_resp_already_recorded,
         raw_items,
         history_items,
-        reference_context_item,
+        |call_id, operation, suffix_start, expected_history, replacement| SpineHistoryUpdate {
+            call_id: call_id.to_string(),
+            operation,
+            suffix_start,
+            expected_history,
+            replacement,
+            reference_context_item,
+        },
     )?;
     Ok(SpineHostEffects::from_optional_history_update(
         history_update,
     ))
-}
-
-fn spine_history_update_for_commit_publication(
-    spine: &mut SpineRuntime,
-    call_id: &str,
-    prepared_commit: Option<&SpinePreparedCommit>,
-    tool_resp_item: &ResponseItem,
-    tool_resp_already_recorded: bool,
-    raw_items: &[Option<ResponseItem>],
-    history_items: &[ResponseItem],
-    reference_context_item: Option<TurnContextItem>,
-) -> Result<Option<SpineHistoryUpdate>, SpineError> {
-    if let Some(plan) = prepared_commit.and_then(|prepared| prepared.publication_plan()) {
-        return spine_history_update_from_publication_plan(
-            call_id,
-            plan.operation(),
-            plan.suffix_start(),
-            plan.replacement_prefix(),
-            plan.preserve_host_history_from(),
-            plan.append_current_tool_response_if_missing(),
-            tool_resp_item,
-            tool_resp_already_recorded,
-            history_items,
-            reference_context_item,
-        )
-        .map(Some);
-    }
-    if tool_resp_already_recorded {
-        return Ok(spine_history_update_from_materialized_projection(
-            call_id,
-            history_items,
-            spine.materialize_history(raw_items)?,
-            reference_context_item,
-        ));
-    }
-    Ok(None)
-}
-
-fn spine_history_update_from_publication_plan(
-    call_id: &str,
-    operation: &'static str,
-    suffix_start: usize,
-    replacement_prefix: &[ResponseItem],
-    preserve_host_history_from: usize,
-    append_current_tool_response_if_missing: bool,
-    tool_resp_item: &ResponseItem,
-    tool_resp_already_recorded: bool,
-    history_items: &[ResponseItem],
-    reference_context_item: Option<TurnContextItem>,
-) -> Result<SpineHistoryUpdate, SpineError> {
-    let suffix_end = history_items.len();
-    if suffix_start > suffix_end {
-        return Err(SpineError::Invariant(format!(
-            "{operation} suffix start {suffix_start} exceeds history length {suffix_end} for call_id={call_id}"
-        )));
-    }
-    if preserve_host_history_from > suffix_end {
-        return Err(SpineError::Invariant(format!(
-            "{operation} preserve-host-history index {preserve_host_history_from} exceeds history length {suffix_end} for call_id={call_id}"
-        )));
-    }
-    let mut replacement = replacement_prefix.to_vec();
-    replacement.extend_from_slice(&history_items[preserve_host_history_from..]);
-    if append_current_tool_response_if_missing && !tool_resp_already_recorded {
-        replacement.push(tool_resp_item.clone());
-    }
-    Ok(SpineHistoryUpdate {
-        call_id: call_id.to_string(),
-        operation,
-        suffix_start,
-        expected_history: history_items.to_vec(),
-        replacement,
-        reference_context_item,
-    })
-}
-
-fn spine_history_update_from_materialized_projection(
-    call_id: &str,
-    history_items: &[ResponseItem],
-    materialized: Vec<ResponseItem>,
-    reference_context_item: Option<TurnContextItem>,
-) -> Option<SpineHistoryUpdate> {
-    if materialized.as_slice() == history_items {
-        return None;
-    }
-    Some(SpineHistoryUpdate {
-        call_id: call_id.to_string(),
-        operation: "spine toolcall projection",
-        suffix_start: 0,
-        expected_history: history_items.to_vec(),
-        replacement: materialized,
-        reference_context_item,
-    })
 }
 
 fn completed_toolcall_evidence(

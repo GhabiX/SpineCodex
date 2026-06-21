@@ -612,6 +612,89 @@ impl SpineRuntime {
         }
     }
 
+    pub(crate) fn commit_publication_history_update<T>(
+        &self,
+        call_id: &str,
+        prepared_commit: Option<&SpinePreparedCommit>,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
+        history_items: &[ResponseItem],
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, SpineError> {
+        let Some((operation, suffix_start, expected_history, replacement)) = self
+            .commit_publication_history_update_parts(
+                call_id,
+                prepared_commit,
+                tool_resp_item,
+                tool_resp_already_recorded,
+                raw_items,
+                history_items,
+            )?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(build_update(
+            call_id,
+            operation,
+            suffix_start,
+            expected_history,
+            replacement,
+        )))
+    }
+
+    fn commit_publication_history_update_parts(
+        &self,
+        call_id: &str,
+        prepared_commit: Option<&SpinePreparedCommit>,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
+        history_items: &[ResponseItem],
+    ) -> Result<Option<(&'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>)>, SpineError>
+    {
+        if let Some(plan) = prepared_commit.and_then(|prepared| prepared.publication_plan.as_ref())
+        {
+            let suffix_end = history_items.len();
+            if plan.suffix_start > suffix_end {
+                return Err(SpineError::Invariant(format!(
+                    "{} suffix start {} exceeds history length {suffix_end} for call_id={call_id}",
+                    plan.operation, plan.suffix_start
+                )));
+            }
+            if plan.preserve_host_history_from > suffix_end {
+                return Err(SpineError::Invariant(format!(
+                    "{} preserve-host-history index {} exceeds history length {suffix_end} for call_id={call_id}",
+                    plan.operation, plan.preserve_host_history_from
+                )));
+            }
+            let mut replacement = plan.replacement_prefix.clone();
+            replacement.extend_from_slice(&history_items[plan.preserve_host_history_from..]);
+            if plan.append_current_tool_response_if_missing && !tool_resp_already_recorded {
+                replacement.push(tool_resp_item.clone());
+            }
+            return Ok(Some((
+                plan.operation,
+                plan.suffix_start,
+                history_items.to_vec(),
+                replacement,
+            )));
+        }
+        if !tool_resp_already_recorded {
+            return Ok(None);
+        }
+        let materialized = self.materialize_history(raw_items)?;
+        if materialized.as_slice() == history_items {
+            return Ok(None);
+        }
+        Ok(Some((
+            "spine toolcall projection",
+            0,
+            history_items.to_vec(),
+            materialized,
+        )))
+    }
+
     fn prepare_close_commit(
         &self,
         memory_assembly: Option<SpineCloseMemoryAssembly>,
