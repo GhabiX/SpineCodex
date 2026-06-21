@@ -1569,10 +1569,8 @@ impl Session {
         else {
             return Ok(SpineCommitAttempt::RuntimeMissing);
         };
-        let defer_tree_update_until_raw_output =
-            prepared_commit.defer_tree_update_until_raw_output();
-        let host_effects =
-            SpineHostEffects::from_optional_history_update(prepared_commit.take_history_update());
+        let host_effects = prepared_commit.take_pre_apply_host_effects();
+        let post_apply_effect_policy = prepared_commit.post_apply_effect_policy();
         if let Err(err) = guard.persist_toolcall_commit_side_effects(&prepared_commit) {
             guard.invalidate(format!(
                 "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
@@ -1595,16 +1593,8 @@ impl Session {
         } else {
             None
         };
-        let tree_update_delivery = if defer_tree_update_until_raw_output {
-            SpineTreeUpdateDelivery::AfterRawOutputDurable
-        } else {
-            SpineTreeUpdateDelivery::Immediate
-        };
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
-            post_commit_effects: SpineHostEffects::from_optional_tree_update(
-                snapshot,
-                tree_update_delivery,
-            ),
+            post_commit_effects: post_apply_effect_policy.host_effects(snapshot),
             spine_context_already_observed: true,
         }))
     }

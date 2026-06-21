@@ -6,10 +6,12 @@ use std::path::Path;
 use super::CompletedToolCall;
 use super::SpineError;
 use super::SpineHistoryUpdate;
+use super::SpineHostEffects;
 use super::SpinePreparedRootCompactInstall;
 #[cfg(test)]
 use super::SpineRootCompactResult;
 use super::SpineRuntime;
+use super::SpineTreeUpdateDelivery;
 use super::prepared::SpineCommitPublication;
 use super::types::SpinePreparedCloseMemory;
 
@@ -17,17 +19,32 @@ pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
 }
 
+pub(crate) struct SpinePostApplyEffectPolicy {
+    delivery: SpineTreeUpdateDelivery,
+}
+
 impl PreparedSpineToolcallCommit {
     fn new(publication: SpineCommitPublication<SpineHistoryUpdate>) -> Self {
         Self { publication }
     }
 
-    pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
-        self.publication.defer_tree_update_until_raw_output()
+    pub(crate) fn take_pre_apply_host_effects(&mut self) -> SpineHostEffects {
+        SpineHostEffects::from_optional_history_update(self.publication.take_history_update())
     }
 
-    pub(crate) fn take_history_update(&mut self) -> Option<SpineHistoryUpdate> {
-        self.publication.take_history_update()
+    pub(crate) fn post_apply_effect_policy(&self) -> SpinePostApplyEffectPolicy {
+        let delivery = if self.publication.defer_tree_update_until_raw_output() {
+            SpineTreeUpdateDelivery::AfterRawOutputDurable
+        } else {
+            SpineTreeUpdateDelivery::Immediate
+        };
+        SpinePostApplyEffectPolicy { delivery }
+    }
+}
+
+impl SpinePostApplyEffectPolicy {
+    pub(crate) fn host_effects(self, snapshot: Option<SpineTreeUpdateEvent>) -> SpineHostEffects {
+        SpineHostEffects::from_optional_tree_update(snapshot, self.delivery)
     }
 }
 
