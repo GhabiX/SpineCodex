@@ -250,6 +250,8 @@ mod tree_snapshot;
 mod tree_snapshot_closed_child;
 #[path = "tests/tree_snapshot_historical_descendants.rs"]
 mod tree_snapshot_historical_descendants;
+#[path = "tests/tree_snapshot_nested_projection.rs"]
+mod tree_snapshot_nested_projection;
 #[path = "tests/tree_snapshot_root_compact.rs"]
 mod tree_snapshot_root_compact;
 #[path = "tests/trim_candidate_rejections.rs"]
