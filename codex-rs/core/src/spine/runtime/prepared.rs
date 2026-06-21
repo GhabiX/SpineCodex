@@ -60,6 +60,11 @@ pub(crate) struct SpinePreparedCommit {
 }
 
 #[derive(Debug)]
+pub(crate) struct SpinePreparedCommitApplication {
+    prepared: SpinePreparedCommit,
+}
+
+#[derive(Debug)]
 pub(crate) struct SpinePreparedRootCompact {
     pub(super) result: SpineRootCompactResult,
     pub(super) final_parse_stack: ParseStack,
@@ -72,6 +77,10 @@ impl SpinePreparedRootCompact {
 }
 
 impl SpinePreparedCommit {
+    pub(super) fn into_application(self) -> SpinePreparedCommitApplication {
+        SpinePreparedCommitApplication { prepared: self }
+    }
+
     #[cfg(test)]
     pub(crate) fn kind(&self) -> &SpineCommitKind {
         &self.kind
@@ -103,5 +112,28 @@ impl SpinePreparedCommit {
     #[cfg(test)]
     pub(crate) fn publication_plan(&self) -> Option<&HistoryPublicationPlan> {
         self.publication_plan.as_ref()
+    }
+}
+
+impl SpinePreparedCommitApplication {
+    pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
+        self.prepared.defer_tree_update_until_raw_output()
+    }
+
+    pub(crate) fn validate_against_host_history(
+        &self,
+        call_id: &str,
+        history_items: &[ResponseItem],
+    ) -> Result<(), super::SpineError> {
+        self.prepared
+            .validate_against_host_history(call_id, history_items)
+    }
+
+    pub(crate) fn as_prepared_commit(&self) -> &SpinePreparedCommit {
+        &self.prepared
+    }
+
+    pub(super) fn into_prepared_commit(self) -> SpinePreparedCommit {
+        self.prepared
     }
 }

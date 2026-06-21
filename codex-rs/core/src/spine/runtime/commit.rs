@@ -15,6 +15,7 @@ use super::pending::PendingTransition;
 use super::prepared::HistoryPublicationPlan;
 use super::prepared::SpineCommitKind;
 use super::prepared::SpinePreparedCommit;
+use super::prepared::SpinePreparedCommitApplication;
 use super::support::close_commit_marker;
 use super::support::close_event_boundary;
 use super::support::completed_toolcall_first_segment;
@@ -179,7 +180,7 @@ impl SpineRuntime {
         current_turn_provider_input_tokens: Option<i64>,
         completed_toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<SpinePreparedCommit>, SpineError> {
+    ) -> Result<Option<SpinePreparedCommitApplication>, SpineError> {
         let pending_commit = self.pending_commit(call_id)?;
         let pre_compact_token_baselines =
             pre_compact_provider_input_tokens.map(|tokens| SpineTokenBaselines {
@@ -203,6 +204,7 @@ impl SpineRuntime {
             completed_toolcall,
             raw_items,
         )
+        .map(|prepared| prepared.map(SpinePreparedCommit::into_application))
     }
 
     pub(crate) fn validate_close_expected_history_for_commit(
@@ -627,6 +629,13 @@ impl SpineRuntime {
         Ok(())
     }
 
+    pub(crate) fn persist_prepared_commit_application_side_effects(
+        &mut self,
+        application: &SpinePreparedCommitApplication,
+    ) -> Result<(), SpineError> {
+        self.persist_prepared_commit_side_effects(application.as_prepared_commit())
+    }
+
     pub(crate) fn install_prepared_commit(&mut self, prepared: SpinePreparedCommit) {
         if let Some(final_parse_stack) = prepared.final_parse_stack {
             self.parse_stack = final_parse_stack;
@@ -634,6 +643,13 @@ impl SpineRuntime {
         if let Some(completed_toolcall) = prepared.completed_toolcall.as_ref() {
             self.clear_completed_toolcall_anchors(completed_toolcall);
         }
+    }
+
+    pub(crate) fn install_prepared_commit_application(
+        &mut self,
+        application: SpinePreparedCommitApplication,
+    ) {
+        self.install_prepared_commit(application.into_prepared_commit());
     }
 
     pub(crate) fn commit_publication_history_update<T>(
@@ -665,6 +681,27 @@ impl SpineRuntime {
             expected_history,
             replacement,
         )))
+    }
+
+    pub(crate) fn commit_application_publication_history_update<T>(
+        &self,
+        call_id: &str,
+        application: Option<&SpinePreparedCommitApplication>,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
+        history_items: &[ResponseItem],
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, SpineError> {
+        self.commit_publication_history_update(
+            call_id,
+            application.map(SpinePreparedCommitApplication::as_prepared_commit),
+            tool_resp_item,
+            tool_resp_already_recorded,
+            raw_items,
+            history_items,
+            build_update,
+        )
     }
 
     fn commit_publication_history_update_parts(

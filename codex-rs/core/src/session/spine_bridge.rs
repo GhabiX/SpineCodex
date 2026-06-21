@@ -1607,25 +1607,26 @@ impl Session {
             state.clone_history().raw_items(),
         )?;
         let memory_assembly = memory_assembly.map(SpinePreparedCloseMemory::into_assembly);
-        let prepared_commit = spine.prepare_or_observe_completed_toolcall_with_pending_baselines(
-            call_id,
-            memory_assembly,
-            pre_compact_provider_input_tokens,
-            current_turn_token_info.and_then(provider_input_context_tokens),
-            completed_toolcall,
-            raw_items,
-        )?;
-        let defer_tree_update_until_raw_output = prepared_commit
+        let commit_application = spine
+            .prepare_or_observe_completed_toolcall_with_pending_baselines(
+                call_id,
+                memory_assembly,
+                pre_compact_provider_input_tokens,
+                current_turn_token_info.and_then(provider_input_context_tokens),
+                completed_toolcall,
+                raw_items,
+            )?;
+        let defer_tree_update_until_raw_output = commit_application
             .as_ref()
-            .is_some_and(|prepared| prepared.defer_tree_update_until_raw_output());
-        if let Some(prepared_commit) = prepared_commit.as_ref() {
-            prepared_commit
+            .is_some_and(|application| application.defer_tree_update_until_raw_output());
+        if let Some(commit_application) = commit_application.as_ref() {
+            commit_application
                 .validate_against_host_history(call_id, state.clone_history().raw_items())?;
         }
         let reference_context_item = state.reference_context_item();
-        let history_update = spine.commit_publication_history_update(
+        let history_update = spine.commit_application_publication_history_update(
             call_id,
-            prepared_commit.as_ref(),
+            commit_application.as_ref(),
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
@@ -1640,8 +1641,9 @@ impl Session {
             },
         )?;
         let host_effects = SpineHostEffects::from_optional_history_update(history_update);
-        if let Some(prepared_commit) = prepared_commit.as_ref()
-            && let Err(err) = spine.persist_prepared_commit_side_effects(prepared_commit)
+        if let Some(commit_application) = commit_application.as_ref()
+            && let Err(err) =
+                spine.persist_prepared_commit_application_side_effects(commit_application)
         {
             guard.invalidate(format!(
                 "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
@@ -1654,8 +1656,8 @@ impl Session {
             ));
             return Err(SpineError::Invariant(err));
         }
-        let snapshot = if let Some(prepared_commit) = prepared_commit {
-            spine.install_prepared_commit(prepared_commit);
+        let snapshot = if let Some(commit_application) = commit_application {
+            spine.install_prepared_commit_application(commit_application);
             let token_info = state.token_info();
             Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?)
         } else {
