@@ -72,6 +72,8 @@ mod close_retry_prepared_memory;
 mod close_source_plan;
 #[path = "tests/close_source_plan_guards.rs"]
 mod close_source_plan_guards;
+#[path = "tests/close_source_plan_stale_indices.rs"]
+mod close_source_plan_stale_indices;
 #[path = "tests/closed_memory_accounting.rs"]
 mod closed_memory_accounting;
 #[path = "tests/closed_memory_accounting_negative_delta.rs"]
