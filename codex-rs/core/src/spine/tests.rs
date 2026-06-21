@@ -218,6 +218,8 @@ mod tree_accounting;
 mod tree_snapshot;
 #[path = "tests/tree_snapshot_historical_descendants.rs"]
 mod tree_snapshot_historical_descendants;
+#[path = "tests/tree_snapshot_root_compact.rs"]
+mod tree_snapshot_root_compact;
 #[path = "tests/trim_candidate_rejections.rs"]
 mod trim_candidate_rejections;
 #[path = "tests/trim_candidates.rs"]
