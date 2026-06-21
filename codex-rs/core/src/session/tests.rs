@@ -3594,7 +3594,7 @@ async fn clone_spine_sidecar_for_fork_replays_interrupted_child_suffix() {
     )
     .await;
     source_session
-        .initialize_spine_for_new_session()
+        .on_init()
         .await
         .expect("initialize source spine");
     let source_item = user_message("source-visible");
@@ -15619,10 +15619,7 @@ async fn init_new_session_creates_root_and_1_1() {
         attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
             .await;
 
-    session
-        .initialize_spine_for_new_session()
-        .await
-        .expect("initialize spine");
+    session.on_init().await.expect("initialize spine");
     let tree_before = {
         session
             .spine
@@ -15671,10 +15668,7 @@ async fn spine_tree_plan_overlay_is_model_visible_and_non_durable() {
         attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
             .await;
 
-    session
-        .initialize_spine_for_new_session()
-        .await
-        .expect("initialize spine");
+    session.on_init().await.expect("initialize spine");
     let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
     let events_before = store.event_count_for_test().expect("events before");
 
@@ -16264,7 +16258,7 @@ async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree()
     )
     .await;
     source_session
-        .initialize_spine_for_new_session()
+        .on_init()
         .await
         .expect("initialize trim-only spine");
     let source_store = SpineStore::for_rollout(&source_rollout_path).expect("source store");
@@ -16366,7 +16360,7 @@ async fn spine_trim_only_head_fork_installs_runtime_without_jit_tree() {
     )
     .await;
     source_session
-        .initialize_spine_for_new_session()
+        .on_init()
         .await
         .expect("initialize source trim-only spine");
     let source_output =
@@ -17131,10 +17125,7 @@ async fn spine_tree_tool_appends_context_pressure_from_last_usage() {
     )
     .await;
     attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
-    session
-        .initialize_spine_for_new_session()
-        .await
-        .expect("initialize spine");
+    session.on_init().await.expect("initialize spine");
     {
         let mut state = session.state.lock().await;
         state.set_token_info(Some(TokenUsageInfo {
@@ -17174,10 +17165,7 @@ async fn spine_tree_tool_omits_context_pressure_when_window_unknown() {
     )
     .await;
     attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
-    session
-        .initialize_spine_for_new_session()
-        .await
-        .expect("initialize spine");
+    session.on_init().await.expect("initialize spine");
     {
         let mut state = session.state.lock().await;
         state.set_token_info(Some(TokenUsageInfo {
@@ -18105,10 +18093,7 @@ async fn resume_rejects_committed_raw_without_sidecar_token() {
     let rollout_path =
         attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
             .await;
-    session
-        .initialize_spine_for_new_session()
-        .await
-        .expect("initialize spine");
+    session.on_init().await.expect("initialize spine");
 
     let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
     let broken_tree_path = store.tree_path_for_test();
@@ -18528,10 +18513,7 @@ async fn failed_spine_replay_does_not_mutate_live_session_history() {
     let live_rollout_path =
         attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
             .await;
-    session
-        .initialize_spine_for_new_session()
-        .await
-        .expect("initialize spine");
+    session.on_init().await.expect("initialize spine");
     let live_message = user_message("live history must survive failed replay");
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&live_message))
@@ -19182,10 +19164,7 @@ async fn turn_abort_clears_stale_spine_pending_transition() {
     let _rollout_path =
         attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
             .await;
-    session
-        .initialize_spine_for_new_session()
-        .await
-        .expect("initialize spine");
+    session.on_init().await.expect("initialize spine");
     let work = user_message("work before interrupted close");
     session
         .record_conversation_items(&tc, std::slice::from_ref(&work))
@@ -19433,10 +19412,7 @@ async fn task_finish_pending_input_append_failure_does_not_emit_turn_complete() 
     let rollout_path =
         attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
             .await;
-    session
-        .initialize_spine_for_new_session()
-        .await
-        .expect("initialize spine");
+    session.on_init().await.expect("initialize spine");
     let sess = session;
     sess.spawn_task(
         Arc::clone(&tc),
