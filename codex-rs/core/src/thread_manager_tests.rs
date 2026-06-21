@@ -104,7 +104,7 @@ async fn inject_response_items_rejects_pending_spine_control_output_when_spine_j
         .await
         .expect("record spine open request");
     session
-        .stage_spine_open(
+        .test_seed_spine_open_control_request(
             "injected-spine-output".to_string(),
             "injected output guard".to_string(),
         )

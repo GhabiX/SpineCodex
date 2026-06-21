@@ -212,14 +212,22 @@ pub(crate) struct PreparedSpineRootCompactInstall {
 }
 
 struct PreparedSpineRootCompact {
-    result: crate::spine::SpineRootCompactResult,
+    materialized: Vec<ResponseItem>,
     install: crate::spine::SpinePreparedRootCompactInstall,
 }
 
 impl PreparedSpineRootCompact {
     fn from_install(install: crate::spine::SpinePreparedRootCompactInstall) -> Self {
-        let result = install.result().clone();
-        Self { result, install }
+        let materialized = install.result().materialized.clone();
+        Self {
+            materialized,
+            install,
+        }
+    }
+
+    #[cfg(test)]
+    fn result(&self) -> crate::spine::SpineRootCompactResult {
+        self.install.result().clone()
     }
 
     fn into_install(self) -> crate::spine::SpinePreparedRootCompactInstall {
@@ -1760,7 +1768,7 @@ impl Session {
         let Some(prepared) = self.prepare_spine_root_compact_impl(body).await? else {
             return Ok(None);
         };
-        let result = prepared.result.clone();
+        let result = prepared.result();
         let install = prepared.into_install();
         let mut guard = spine_slot.lock().await;
         guard.ensure_valid()?;
@@ -1905,7 +1913,7 @@ impl Session {
         else {
             return Ok(None);
         };
-        *items = root_compact.result.materialized.clone();
+        *items = root_compact.materialized.clone();
         compacted_item.replacement_history = Some(items.clone());
         Ok(Some(PreparedSpineRootCompactInstall {
             install: root_compact.into_install(),
