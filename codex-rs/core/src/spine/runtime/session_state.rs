@@ -23,6 +23,11 @@ pub(crate) struct SpinePostApplyEffectPolicy {
     delivery: SpineTreeUpdateDelivery,
 }
 
+pub(crate) struct CommittedSpineToolcall {
+    installed_commit: bool,
+    post_apply_effect_policy: SpinePostApplyEffectPolicy,
+}
+
 impl PreparedSpineToolcallCommit {
     fn new(publication: SpineCommitPublication<SpineHistoryUpdate>) -> Self {
         Self { publication }
@@ -45,6 +50,19 @@ impl PreparedSpineToolcallCommit {
 impl SpinePostApplyEffectPolicy {
     pub(crate) fn host_effects(self, snapshot: Option<SpineTreeUpdateEvent>) -> SpineHostEffects {
         SpineHostEffects::from_optional_tree_update(snapshot, self.delivery)
+    }
+}
+
+impl CommittedSpineToolcall {
+    pub(crate) fn installed_commit(&self) -> bool {
+        self.installed_commit
+    }
+
+    pub(crate) fn post_apply_host_effects(
+        self,
+        snapshot: Option<SpineTreeUpdateEvent>,
+    ) -> SpineHostEffects {
+        self.post_apply_effect_policy.host_effects(snapshot)
     }
 }
 
@@ -304,7 +322,7 @@ impl SpineSessionState {
             .map(Some)
     }
 
-    pub(crate) fn persist_toolcall_commit_side_effects(
+    fn persist_toolcall_commit_side_effects(
         &mut self,
         prepared: &PreparedSpineToolcallCommit,
     ) -> Result<(), SpineError> {
@@ -317,7 +335,7 @@ impl SpineSessionState {
         runtime.persist_commit_publication_side_effects(&prepared.publication)
     }
 
-    pub(crate) fn apply_toolcall_commit(
+    fn apply_toolcall_commit(
         &mut self,
         prepared: PreparedSpineToolcallCommit,
     ) -> Result<bool, SpineError> {
@@ -328,5 +346,32 @@ impl SpineSessionState {
             ));
         };
         Ok(runtime.install_commit_publication(prepared.publication))
+    }
+
+    pub(crate) fn commit_prepared_toolcall_with_host_effects(
+        &mut self,
+        call_id: &str,
+        mut prepared: PreparedSpineToolcallCommit,
+        apply_host_effects: impl FnOnce(SpineHostEffects) -> Result<(), String>,
+    ) -> Result<CommittedSpineToolcall, SpineError> {
+        let host_effects = prepared.take_pre_apply_host_effects();
+        let post_apply_effect_policy = prepared.post_apply_effect_policy();
+        if let Err(err) = self.persist_toolcall_commit_side_effects(&prepared) {
+            self.invalidate(format!(
+                "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
+            ));
+            return Err(err);
+        }
+        if let Err(err) = apply_host_effects(host_effects) {
+            self.invalidate(format!(
+                "failed to publish Spine h(PS) before installing reduced parse stack for call_id={call_id}: {err}"
+            ));
+            return Err(SpineError::Invariant(err));
+        }
+        let installed_commit = self.apply_toolcall_commit(prepared)?;
+        Ok(CommittedSpineToolcall {
+            installed_commit,
+            post_apply_effect_policy,
+        })
     }
 }

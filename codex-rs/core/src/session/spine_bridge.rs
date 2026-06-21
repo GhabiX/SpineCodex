@@ -1554,7 +1554,7 @@ impl Session {
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
-        let Some(mut prepared_commit) = guard.prepare_completed_toolcall_commit(
+        let Some(prepared_commit) = guard.prepare_completed_toolcall_commit(
             call_id,
             memory_assembly,
             pre_compact_provider_input_tokens,
@@ -1569,22 +1569,12 @@ impl Session {
         else {
             return Ok(SpineCommitAttempt::RuntimeMissing);
         };
-        let host_effects = prepared_commit.take_pre_apply_host_effects();
-        let post_apply_effect_policy = prepared_commit.post_apply_effect_policy();
-        if let Err(err) = guard.persist_toolcall_commit_side_effects(&prepared_commit) {
-            guard.invalidate(format!(
-                "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
-            ));
-            return Err(err);
-        }
-        if let Err(err) = Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects) {
-            guard.invalidate(format!(
-                "failed to publish Spine h(PS) before installing reduced parse stack for call_id={call_id}: {err}"
-            ));
-            return Err(SpineError::Invariant(err));
-        }
-        let installed_commit = guard.apply_toolcall_commit(prepared_commit)?;
-        let snapshot = if installed_commit {
+        let committed = guard.commit_prepared_toolcall_with_host_effects(
+            call_id,
+            prepared_commit,
+            |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
+        )?;
+        let snapshot = if committed.installed_commit() {
             let Some(spine) = guard.runtime() else {
                 return Ok(SpineCommitAttempt::RuntimeMissing);
             };
@@ -1594,7 +1584,7 @@ impl Session {
             None
         };
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
-            post_commit_effects: post_apply_effect_policy.host_effects(snapshot),
+            post_commit_effects: committed.post_apply_host_effects(snapshot),
             spine_context_already_observed: true,
         }))
     }
