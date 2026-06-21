@@ -34,6 +34,8 @@ use std::time::Instant;
 
 #[path = "tests/checkpoint_failures.rs"]
 mod checkpoint_failures;
+#[path = "tests/clone_boundary_pressure.rs"]
+mod clone_boundary_pressure;
 #[path = "tests/clone_missing_memory.rs"]
 mod clone_missing_memory;
 #[path = "tests/clone_structural_pressure.rs"]
