@@ -40,6 +40,8 @@ mod clone_boundary_pressure;
 mod clone_missing_memory;
 #[path = "tests/clone_structural_pressure.rs"]
 mod clone_structural_pressure;
+#[path = "tests/close_commit_artifact_failures.rs"]
+mod close_commit_artifact_failures;
 #[path = "tests/close_commit_durable_failures.rs"]
 mod close_commit_durable_failures;
 #[path = "tests/close_commit_failures.rs"]
