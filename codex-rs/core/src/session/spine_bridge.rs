@@ -211,6 +211,22 @@ pub(crate) struct PreparedSpineRootCompactInstall {
     install: crate::spine::SpinePreparedRootCompactInstall,
 }
 
+struct PreparedSpineRootCompact {
+    result: crate::spine::SpineRootCompactResult,
+    install: crate::spine::SpinePreparedRootCompactInstall,
+}
+
+impl PreparedSpineRootCompact {
+    fn from_install(install: crate::spine::SpinePreparedRootCompactInstall) -> Self {
+        let result = install.result().clone();
+        Self { result, install }
+    }
+
+    fn into_install(self) -> crate::spine::SpinePreparedRootCompactInstall {
+        self.install
+    }
+}
+
 enum SpineCommitAttempt {
     Done(SpineCommitOutput),
     Retry,
@@ -1744,7 +1760,7 @@ impl Session {
         let Some(prepared) = self.prepare_spine_root_compact_impl(body).await? else {
             return Ok(None);
         };
-        let result = prepared.result().clone();
+        let result = prepared.result.clone();
         let install = prepared.into_install();
         let mut guard = spine_slot.lock().await;
         guard.ensure_valid()?;
@@ -1759,7 +1775,7 @@ impl Session {
     async fn prepare_spine_root_compact_impl(
         &self,
         body: String,
-    ) -> Result<Option<crate::spine::SpinePreparedRootCompact>, SpineError> {
+    ) -> Result<Option<PreparedSpineRootCompact>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -1805,7 +1821,7 @@ impl Session {
                         "spine runtime missing after initialization".to_string(),
                     )
                 })?
-                .prepare_root_compact_with_checkpoint(
+                .prepare_root_compact_install_with_checkpoint(
                     &rollout_path,
                     body,
                     &raw_items,
@@ -1826,7 +1842,7 @@ impl Session {
                     return Err(err);
                 }
             };
-            Ok(Some(prepared))
+            Ok(Some(PreparedSpineRootCompact::from_install(prepared)))
         }
     }
 
@@ -1889,7 +1905,7 @@ impl Session {
         else {
             return Ok(None);
         };
-        *items = root_compact.result().materialized.clone();
+        *items = root_compact.result.materialized.clone();
         compacted_item.replacement_history = Some(items.clone());
         Ok(Some(PreparedSpineRootCompactInstall {
             install: root_compact.into_install(),

@@ -77,6 +77,17 @@ impl SpineRuntime {
         self.root_compact_impl(body, raw_items, token_metadata, Some(rollout_path))
     }
 
+    pub(crate) fn prepare_root_compact_install_with_checkpoint(
+        &mut self,
+        rollout_path: &Path,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        token_metadata: SpineRootCompactTokenMetadata,
+    ) -> Result<SpinePreparedRootCompactInstall, SpineError> {
+        self.prepare_root_compact_with_checkpoint(rollout_path, body, raw_items, token_metadata)
+            .map(SpinePreparedRootCompact::into_install)
+    }
+
     fn root_compact_impl(
         &mut self,
         body: String,
