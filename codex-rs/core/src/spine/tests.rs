@@ -46,6 +46,8 @@ mod close_source_plan;
 mod closed_memory_accounting;
 #[path = "tests/commit_marker_carriers.rs"]
 mod commit_marker_carriers;
+#[path = "tests/commit_marker_prepare_failures.rs"]
+mod commit_marker_prepare_failures;
 #[path = "tests/commit_markers.rs"]
 mod commit_markers;
 #[path = "tests/compact_checkpoint_proofs.rs"]
