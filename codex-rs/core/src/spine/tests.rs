@@ -98,6 +98,8 @@ mod tree_snapshot;
 mod trim;
 #[path = "tests/trim_candidates.rs"]
 mod trim_candidates;
+#[path = "tests/trim_projection.rs"]
+mod trim_projection;
 
 // Shared raw/context fixtures.
 
