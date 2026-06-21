@@ -60,6 +60,8 @@ mod close_retry;
 mod close_retry_prepared_memory;
 #[path = "tests/close_source_plan.rs"]
 mod close_source_plan;
+#[path = "tests/close_source_plan_guards.rs"]
+mod close_source_plan_guards;
 #[path = "tests/closed_memory_accounting.rs"]
 mod closed_memory_accounting;
 #[path = "tests/closed_memory_accounting_pending.rs"]
