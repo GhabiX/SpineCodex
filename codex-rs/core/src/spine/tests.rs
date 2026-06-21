@@ -92,6 +92,8 @@ mod commit_marker_clone_carrier;
 mod commit_marker_next_carriers;
 #[path = "tests/commit_marker_prepare_failures.rs"]
 mod commit_marker_prepare_failures;
+#[path = "tests/commit_marker_prepare_failures_next.rs"]
+mod commit_marker_prepare_failures_next;
 #[path = "tests/commit_marker_replay.rs"]
 mod commit_marker_replay;
 #[path = "tests/commit_marker_replay_classification.rs"]
