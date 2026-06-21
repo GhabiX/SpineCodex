@@ -1771,7 +1771,19 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn on_spine_compact_after_native_compact(
+        &self,
+        items: &mut Vec<ResponseItem>,
+        compacted_item: &mut CompactedItem,
+    ) -> CodexResult<Option<PreparedSpineRootCompactInstall>> {
+        // TODO(spine-hook-refactor): remove this compatibility wrapper once
+        // tests and callers use the semantic `on_compact` hook name.
+        self.on_compact_after_native_compact(items, compacted_item)
+            .await
+    }
+
+    pub(crate) async fn on_compact_after_native_compact(
         &self,
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
