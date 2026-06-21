@@ -10,7 +10,6 @@ use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCloseMemoryAssembly;
-use crate::spine::SpinePreparedCommit;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
@@ -1640,16 +1639,24 @@ impl Session {
             prepared_commit
                 .validate_against_host_history(call_id, state.clone_history().raw_items())?;
         }
-        let host_effects = spine_host_effects_for_commit_publication(
-            spine,
+        let reference_context_item = state.reference_context_item();
+        let history_update = spine.commit_publication_history_update(
             call_id,
             prepared_commit.as_ref(),
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
             state.clone_history().raw_items(),
-            state.reference_context_item(),
+            |call_id, operation, suffix_start, expected_history, replacement| SpineHistoryUpdate {
+                call_id: call_id.to_string(),
+                operation,
+                suffix_start,
+                expected_history,
+                replacement,
+                reference_context_item,
+            },
         )?;
+        let host_effects = SpineHostEffects::from_optional_history_update(history_update);
         if let Some(prepared_commit) = prepared_commit.as_ref()
             && let Err(err) = spine.persist_prepared_commit_side_effects(prepared_commit)
         {
@@ -2723,37 +2730,6 @@ fn completed_toolcall_evidence_from_segments(
         missing_request_error,
         missing_response_error,
     })
-}
-
-fn spine_host_effects_for_commit_publication(
-    spine: &mut SpineRuntime,
-    call_id: &str,
-    prepared_commit: Option<&SpinePreparedCommit>,
-    tool_resp_item: &ResponseItem,
-    tool_resp_already_recorded: bool,
-    raw_items: &[Option<ResponseItem>],
-    history_items: &[ResponseItem],
-    reference_context_item: Option<TurnContextItem>,
-) -> Result<SpineHostEffects, SpineError> {
-    let history_update = spine.commit_publication_history_update(
-        call_id,
-        prepared_commit,
-        tool_resp_item,
-        tool_resp_already_recorded,
-        raw_items,
-        history_items,
-        |call_id, operation, suffix_start, expected_history, replacement| SpineHistoryUpdate {
-            call_id: call_id.to_string(),
-            operation,
-            suffix_start,
-            expected_history,
-            replacement,
-            reference_context_item,
-        },
-    )?;
-    Ok(SpineHostEffects::from_optional_history_update(
-        history_update,
-    ))
 }
 
 fn completed_toolcall_evidence(
