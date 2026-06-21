@@ -1,10 +1,12 @@
 use codex_protocol::models::ResponseItem;
 
+use super::SpineCloseMemoryAssembly;
 use super::SpineCompactSourceEntryKind;
 use super::SpineCompactSourcePlan;
 use super::SpineError;
 use super::SpineRuntime;
 use super::support::collect_source_plan_entries_from_visible_refs;
+use super::support::is_real_user_message;
 use super::support::validate_source_plan_context_index;
 use crate::spine::io::hash_response_items;
 use crate::spine::model::ControlSymbol;
@@ -12,8 +14,38 @@ use crate::spine::model::NodeId;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::render::project_spine_tree_nodes_visible_items;
+use crate::spine::user_message_projection::user_message_memory_body;
 
 impl SpineRuntime {
+    pub(crate) fn prepare_close_memory_assembly_for_completed_toolcall(
+        &self,
+        raw_context_items: &[ResponseItem],
+        toolcall_start: usize,
+        call_id: &str,
+    ) -> Result<Option<SpineCloseMemoryAssembly>, SpineError> {
+        let Some(pending_commit) = self.pending_commit(call_id)? else {
+            return Ok(None);
+        };
+        let super::SpinePendingCommit::Close {
+            node,
+            suffix_start,
+            memory,
+            action: _,
+            next_summary: _,
+        } = pending_commit
+        else {
+            return Ok(None);
+        };
+        let source_plan = self.build_close_source_plan(
+            raw_context_items,
+            &node,
+            suffix_start,
+            toolcall_start,
+            call_id,
+        )?;
+        close_memory_assembly_from_source_plan(&node.to_string(), &source_plan, &memory).map(Some)
+    }
+
     pub(crate) fn build_close_source_plan(
         &self,
         raw_context_items: &[ResponseItem],
@@ -162,4 +194,86 @@ impl SpineRuntime {
             ))),
         }
     }
+}
+
+fn close_memory_assembly_from_source_plan(
+    node_id: &str,
+    source_plan: &SpineCompactSourcePlan,
+    node_memory: &str,
+) -> Result<SpineCloseMemoryAssembly, SpineError> {
+    if source_plan.node_id.to_string() != node_id {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan node {} does not match close node {node_id}",
+            source_plan.node_id
+        )));
+    }
+    if source_plan.entries.is_empty() {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close memory source plan is empty for node {node_id}"
+        )));
+    }
+    let body = assemble_close_memory_body(node_id, source_plan, node_memory)?;
+    Ok(SpineCloseMemoryAssembly {
+        body,
+        source_context_range: source_plan.source_context_range.clone(),
+        source_raw_range: source_plan.source_raw_range.clone(),
+        memory_output_tokens: None,
+    })
+}
+
+fn assemble_close_memory_body(
+    node_id: &str,
+    source_plan: &SpineCompactSourcePlan,
+    node_memory: &str,
+) -> Result<String, SpineError> {
+    let mut body = format!("# Spine Memory {node_id}\n");
+    for entry in &source_plan.entries {
+        match &entry.kind {
+            SpineCompactSourceEntryKind::RawResponseItem {
+                item,
+                from_user: true,
+                user_anchor,
+                ..
+            } => {
+                if is_real_user_message(item)
+                    && let Some(text) = user_message_memory_body(item)
+                {
+                    let heading = user_anchor
+                        .map(|anchor| format!("## User Message [U{anchor}]"))
+                        .unwrap_or_else(|| "## User Message".to_string());
+                    push_memory_block(&mut body, &heading, &text);
+                }
+            }
+            SpineCompactSourceEntryKind::RawResponseItem {
+                from_user: false, ..
+            } => {}
+            SpineCompactSourceEntryKind::ChildMemory { body: child, .. } => {
+                push_memory_block(&mut body, "## Child Memory", child);
+            }
+        }
+    }
+    validate_generated_node_memory_body(node_memory)?;
+    push_memory_block(&mut body, "## Node Memory", node_memory);
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    Ok(body)
+}
+
+fn push_memory_block(body: &mut String, heading: &str, block_body: &str) {
+    body.push('\n');
+    body.push_str(heading);
+    body.push('\n');
+    body.push_str(block_body.trim_matches('\n'));
+    body.push('\n');
+}
+
+fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Err(SpineError::CompactFailure(
+            "spine.close memory argument produced empty node memory".to_string(),
+        ));
+    }
+    Ok(())
 }

@@ -2,7 +2,6 @@ use super::*;
 use crate::client::ModelClientSession;
 use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
-use crate::session::spine_memory_assembly::spine_close_memory_assembly_from_tool_arg;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
 use crate::spine::CompletedToolCall;
 use crate::spine::CompletedToolCallSegment;
@@ -12,7 +11,6 @@ use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCloseMemoryAssembly;
 use crate::spine::SpineCommitKind;
-use crate::spine::SpinePendingCommit;
 use crate::spine::SpinePreparedCommit;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
@@ -1444,80 +1442,56 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
         };
-        let pending_commit = {
+        let has_pending_close_commit = {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
             let Some(spine) = guard.runtime() else {
                 return Ok(Self::no_spine_tool_commit());
             };
-            spine.pending_commit(call_id)?
+            spine.has_close_like_pending_commit(call_id)?
         };
-        let has_pending_close_commit = matches!(
-            pending_commit.as_ref(),
-            Some(SpinePendingCommit::Close { .. })
-        );
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let pre_compact_token_baselines = if has_pending_close_commit {
             Some(token_baselines_from_info(current_turn_token_info.as_ref()))
         } else {
             None
         };
-        let memory_assembly = match pending_commit {
-            Some(SpinePendingCommit::Close {
-                node,
-                suffix_start,
-                memory,
-                action: _,
-                next_summary: _,
-            }) => {
-                let history = self.clone_history().await;
-                let expected_history = history.raw_items().to_vec();
-                let toolcall_start = completed_toolcall
-                    .segments
-                    .first()
-                    .map(|segment| segment.context_index)
-                    .ok_or_else(|| {
-                        SpineError::InvalidEvent(
-                            "completed toolcall missing first segment".to_string(),
-                        )
-                    })?;
-                let source_plan = {
-                    let guard = spine_slot.lock().await;
-                    guard.ensure_valid()?;
-                    let Some(spine) = guard.runtime() else {
-                        return Err(SpineError::Invariant(format!(
-                            "spine runtime missing while building close memory source plan for call_id={call_id}"
-                        )));
-                    };
-                    spine.build_close_source_plan(
-                        history.raw_items(),
-                        &node,
-                        suffix_start,
-                        toolcall_start,
-                        call_id,
-                    )
-                };
-                let source_plan = match source_plan {
-                    Ok(source_plan) => source_plan,
-                    Err(err) => {
-                        let reason = "spine close memory source plan failed before commit";
-                        if tool_resp_already_recorded {
-                            self.fail_closed_spine_toolcall_commit(call_id, reason)
-                                .await;
-                        } else {
-                            self.abort_spine_pending_tool(call_id, reason).await;
-                        }
-                        return Err(err);
-                    }
-                };
-                let compact = spine_close_memory_assembly_from_tool_arg(
-                    &node.to_string(),
-                    &source_plan,
-                    &memory,
-                )?;
-                Some((compact, expected_history))
+        let history = self.clone_history().await;
+        let expected_history = history.raw_items().to_vec();
+        let toolcall_start = completed_toolcall
+            .segments
+            .first()
+            .map(|segment| segment.context_index)
+            .ok_or_else(|| {
+                SpineError::InvalidEvent("completed toolcall missing first segment".to_string())
+            })?;
+        let memory_assembly = {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(spine) = guard.runtime() else {
+                return Err(SpineError::Invariant(format!(
+                    "spine runtime missing while building close memory assembly for call_id={call_id}"
+                )));
+            };
+            spine.prepare_close_memory_assembly_for_completed_toolcall(
+                history.raw_items(),
+                toolcall_start,
+                call_id,
+            )
+        };
+        let memory_assembly = match memory_assembly {
+            Ok(Some(compact)) => Some((compact, expected_history)),
+            Ok(None) => None,
+            Err(err) => {
+                let reason = "spine close memory assembly failed before commit";
+                if tool_resp_already_recorded {
+                    self.fail_closed_spine_toolcall_commit(call_id, reason)
+                        .await;
+                } else {
+                    self.abort_spine_pending_tool(call_id, reason).await;
+                }
+                return Err(err);
             }
-            Some(SpinePendingCommit::Open) | None => None,
         };
         if let Some((_, expected_history)) = memory_assembly.as_ref() {
             let history = self.clone_history().await;

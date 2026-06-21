@@ -1,15 +1,22 @@
+#[cfg(test)]
 use crate::spine::SpineCloseMemoryAssembly;
+#[cfg(test)]
 use crate::spine::SpineCompactSourceEntryKind;
+#[cfg(test)]
 use crate::spine::SpineCompactSourcePlan;
+#[cfg(test)]
 use crate::spine::SpineError;
+#[cfg(test)]
 use crate::spine::is_real_user_message;
+#[cfg(test)]
 use crate::spine::user_message_memory_body;
 #[cfg(test)]
 use codex_protocol::models::ContentItem;
 #[cfg(test)]
 use codex_protocol::models::ResponseItem;
 
-pub(crate) fn spine_close_memory_assembly_from_tool_arg(
+#[cfg(test)]
+fn spine_close_memory_assembly_from_tool_arg(
     node_id: &str,
     source_plan: &SpineCompactSourcePlan,
     node_memory: &str,
@@ -94,12 +101,14 @@ fn validate_source_plan_against_history(
     Ok(())
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SpineMemoryAssemblySkeleton {
     node_id: String,
     blocks: Vec<SpineMemoryAssemblyBlock>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SpineMemoryAssemblyBlock {
     UserMessage {
@@ -111,6 +120,7 @@ enum SpineMemoryAssemblyBlock {
     },
 }
 
+#[cfg(test)]
 impl SpineMemoryAssemblySkeleton {
     fn from_source_plan(
         node_id: &str,
@@ -175,6 +185,7 @@ impl SpineMemoryAssemblySkeleton {
     }
 }
 
+#[cfg(test)]
 fn push_memory_block(body: &mut String, heading: &str, block_body: &str) {
     body.push('\n');
     body.push_str(heading);
@@ -183,6 +194,7 @@ fn push_memory_block(body: &mut String, heading: &str, block_body: &str) {
     body.push('\n');
 }
 
+#[cfg(test)]
 fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
     let trimmed = body.trim();
     if trimmed.is_empty() {
