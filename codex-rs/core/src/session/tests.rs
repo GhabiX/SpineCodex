@@ -1,3 +1,5 @@
+use super::spine_bridge::SpineToolCallEvidence;
+use super::spine_bridge::SpineToolCommit;
 use super::turn_context::TurnEnvironment;
 use super::*;
 use crate::config::ConfigBuilder;
@@ -490,13 +492,17 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
             )
             .await?;
     }
-    let commit = session
-        .test_on_toolcall_single_with_client_session(turn_context, client_session, &response_item)
-        .await
-        .map_err(|err| CodexErr::SpineTerminalFailure {
-            operation: "commit Spine tool output".to_string(),
-            reason: err.to_string(),
-        })?;
+    let commit = test_on_toolcall_single_with_client_session(
+        session,
+        turn_context,
+        client_session,
+        &response_item,
+    )
+    .await
+    .map_err(|err| CodexErr::SpineTerminalFailure {
+        operation: "commit Spine tool output".to_string(),
+        reason: err.to_string(),
+    })?;
     if !commit.record_output && !output_recorded_before_spine_commit {
         return Ok(response_item);
     }
@@ -534,6 +540,31 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
             .await?;
     }
     Ok(response_item)
+}
+
+async fn test_on_toolcall_single(
+    session: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    item: &ResponseItem,
+) -> Result<SpineToolCommit, SpineError> {
+    let mut client_session = session.services.model_client.new_session();
+    test_on_toolcall_single_with_client_session(session, turn_context, &mut client_session, item)
+        .await
+}
+
+async fn test_on_toolcall_single_with_client_session(
+    session: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    client_session: &mut crate::client::ModelClientSession,
+    item: &ResponseItem,
+) -> Result<SpineToolCommit, SpineError> {
+    session
+        .on_toolcall(
+            turn_context,
+            client_session,
+            SpineToolCallEvidence::single(item),
+        )
+        .await
 }
 
 async fn assert_no_pending_spine_commit(session: &Session, call_id: &str) {
@@ -1050,8 +1081,7 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record post-next open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit post-next open");
 
@@ -1209,8 +1239,7 @@ async fn make_spine_close_window_missing_output_carrier(
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record close-window open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit close-window open");
 
@@ -1229,8 +1258,7 @@ async fn make_spine_close_window_missing_output_carrier(
         .await
         .expect("stage close-window");
 
-    let commit = session
-        .test_on_toolcall_single(&turn_context, &function_output("close-window"))
+    let commit = test_on_toolcall_single(&session, &turn_context, &function_output("close-window"))
         .await
         .expect("commit close-window sidecar only");
     assert!(
@@ -1316,8 +1344,7 @@ async fn make_spine_next_window_missing_output_carrier(
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record next-window open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit next-window open");
 
@@ -1340,8 +1367,7 @@ async fn make_spine_next_window_missing_output_carrier(
         .await
         .expect("stage next-window");
 
-    let commit = session
-        .test_on_toolcall_single(&turn_context, &function_output("next-window"))
+    let commit = test_on_toolcall_single(&session, &turn_context, &function_output("next-window"))
         .await
         .expect("commit next-window sidecar only");
     assert!(
@@ -1437,8 +1463,7 @@ async fn make_spine_session_with_closed_child(
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -1461,8 +1486,7 @@ async fn make_spine_session_with_closed_child(
         .await
         .expect("stage close");
     let close_output = function_output("resume-close");
-    session
-        .test_on_toolcall_single(&turn_context, &close_output)
+    test_on_toolcall_single(&session, &turn_context, &close_output)
         .await
         .expect("commit close");
     session
@@ -9439,8 +9463,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open output");
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
@@ -9629,8 +9652,7 @@ async fn spine_close_direct_memory_keeps_prefix_image_provenance() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open output");
 
@@ -9769,8 +9791,7 @@ async fn spine_close_direct_memory_keeps_suffix_image_raw_provenance() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open output");
 
@@ -10617,8 +10638,7 @@ async fn close_commit_is_atomic_across_sidecar_and_history() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -10751,8 +10771,7 @@ async fn close_sidecar_commit_marker_failure_invalidates_runtime() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -10780,10 +10799,13 @@ async fn close_sidecar_commit_marker_failure_invalidates_runtime() {
     std::fs::create_dir_all(store.commit_path_for_test())
         .expect("block close commit marker append");
 
-    let err = session
-        .test_on_toolcall_single(&turn_context, &function_output("close-sidecar-fail"))
-        .await
-        .expect_err("close sidecar marker append failure should fail");
+    let err = test_on_toolcall_single(
+        &session,
+        &turn_context,
+        &function_output("close-sidecar-fail"),
+    )
+    .await
+    .expect_err("close sidecar marker append failure should fail");
     assert!(
         err.should_invalidate_runtime(),
         "sidecar marker failure should be invalidating: {err}"
@@ -10863,8 +10885,7 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -10888,8 +10909,7 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
     while rx.try_recv().is_ok() {}
 
     let close_output = function_output("close-history-fail");
-    let commit = session
-        .test_on_toolcall_single(&turn_context, &close_output)
+    let commit = test_on_toolcall_single(&session, &turn_context, &close_output)
         .await
         .expect("commit close output");
     assert!(
@@ -10987,8 +11007,7 @@ async fn spine_close_host_publish_failure_does_not_install_live_parse_stack() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -11020,8 +11039,7 @@ async fn spine_close_host_publish_failure_does_not_install_live_parse_stack() {
     session
         .fail_next_history_suffix_replace_for_test("forced host publish failure")
         .await;
-    let err = session
-        .test_on_toolcall_single(&turn_context, &close_output)
+    let err = test_on_toolcall_single(&session, &turn_context, &close_output)
         .await
         .expect_err("host publish failure should fail close reduce");
     assert!(
@@ -11103,8 +11121,7 @@ async fn spine_next_host_publish_failure_does_not_install_live_parse_stack() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -11137,8 +11154,7 @@ async fn spine_next_host_publish_failure_does_not_install_live_parse_stack() {
     session
         .fail_next_history_suffix_replace_for_test("forced next host publish failure")
         .await;
-    let err = session
-        .test_on_toolcall_single(&turn_context, &next_output)
+    let err = test_on_toolcall_single(&session, &turn_context, &next_output)
         .await
         .expect_err("host publish failure should fail next reduce");
     assert!(
@@ -11219,8 +11235,7 @@ async fn spine_next_raw_output_append_failure_does_not_replace_host_history() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -11349,8 +11364,7 @@ async fn next_sidecar_commit_marker_failure_invalidates_runtime() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -11378,10 +11392,13 @@ async fn next_sidecar_commit_marker_failure_invalidates_runtime() {
     let store = SpineStore::for_rollout(&rollout_path).expect("spine store");
     std::fs::create_dir_all(store.commit_path_for_test()).expect("block next commit marker append");
 
-    let err = session
-        .test_on_toolcall_single(&turn_context, &function_output("next-sidecar-fail"))
-        .await
-        .expect_err("next sidecar marker append failure should fail");
+    let err = test_on_toolcall_single(
+        &session,
+        &turn_context,
+        &function_output("next-sidecar-fail"),
+    )
+    .await
+    .expect_err("next sidecar marker append failure should fail");
     assert!(
         err.should_invalidate_runtime(),
         "sidecar marker failure should be invalidating: {err}"
@@ -11467,8 +11484,7 @@ async fn spine_next_direct_memory_ignores_mock_compact_response_and_opens_siblin
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -11499,8 +11515,7 @@ async fn spine_next_direct_memory_ignores_mock_compact_response_and_opens_siblin
         .await
         .expect("record next output before Spine commit");
 
-    session
-        .test_on_toolcall_single(&turn_context, &next_output)
+    test_on_toolcall_single(&session, &turn_context, &next_output)
         .await
         .expect("direct memory next should not request or parse compact response");
     assert_eq!(compact_mock.requests().len(), 0);
@@ -11585,8 +11600,7 @@ async fn spine_next_direct_memory_commit_does_not_wait_for_compact_request() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -11692,8 +11706,7 @@ async fn spine_next_direct_memory_commit_does_not_run_overflow_compact() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -12359,8 +12372,7 @@ async fn spine_close_direct_memory_commit_publishes_host_history_before_return()
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open output");
     let inner = assistant_message("inside");
@@ -12385,8 +12397,7 @@ async fn spine_close_direct_memory_commit_publishes_host_history_before_return()
         )
         .await
         .expect("record close output before Spine commit");
-    session
-        .test_on_toolcall_single(&turn_context, &close_output)
+    test_on_toolcall_single(&session, &turn_context, &close_output)
         .await
         .expect("direct close commit should publish staged history replacement");
     assert_eq!(
@@ -12499,8 +12510,7 @@ async fn spine_close_reduce_records_raw_output_and_publishes_host_history_before
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open output");
 
@@ -12524,8 +12534,7 @@ async fn spine_close_reduce_records_raw_output_and_publishes_host_history_before
     while rx.try_recv().is_ok() {}
 
     let close_output = function_output("raw-internal-close");
-    let commit = session
-        .test_on_toolcall_single(&turn_context, &close_output)
+    let commit = test_on_toolcall_single(&session, &turn_context, &close_output)
         .await
         .expect("close reduce should record raw output and publish host history");
     assert!(
@@ -12641,8 +12650,7 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -12781,8 +12789,7 @@ async fn spine_close_accepts_marker_like_memory_as_opaque_text_without_mutating_
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
     let child_body = assistant_message("child body before encrypted only close");
@@ -12885,8 +12892,7 @@ async fn spine_close_direct_memory_commit_does_not_wait_for_compact_request() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
     let child_body = assistant_message("partial child work");
@@ -12987,8 +12993,7 @@ async fn spine_close_direct_memory_commit_does_not_run_overflow_compact() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -13079,8 +13084,7 @@ async fn spine_parent_memory_assemblys_child_memory_not_child_raw_trajs() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&outer_open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &outer_open_output)
+    test_on_toolcall_single(&session, &turn_context, &outer_open_output)
         .await
         .expect("commit outer open");
 
@@ -13104,8 +13108,7 @@ async fn spine_parent_memory_assemblys_child_memory_not_child_raw_trajs() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner_open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &inner_open_output)
+    test_on_toolcall_single(&session, &turn_context, &inner_open_output)
         .await
         .expect("commit inner open");
 
@@ -13235,8 +13238,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -13259,8 +13261,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
         .await
         .expect("stage close");
     let close_output = function_output("native-compact-close");
-    session
-        .test_on_toolcall_single(&turn_context, &close_output)
+    test_on_toolcall_single(&session, &turn_context, &close_output)
         .await
         .expect("commit close");
     session
@@ -14352,8 +14353,7 @@ async fn replacement_history_validates_at_compact_boundary() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
@@ -14579,8 +14579,7 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("open after native compact should use corrected root open index");
 
@@ -17243,8 +17242,7 @@ async fn assert_spine_tree_tool_node_context_uses_provider_context_delta() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
     while rx.try_recv().is_ok() {}
@@ -17419,8 +17417,7 @@ async fn spine_next_sibling_tree_defers_provider_open_baseline_until_post_replac
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -17455,8 +17452,7 @@ async fn spine_next_sibling_tree_defers_provider_open_baseline_until_post_replac
         }));
     }
     let next_output = function_output("next-baseline");
-    session
-        .test_on_toolcall_single(&turn_context, &next_output)
+    test_on_toolcall_single(&session, &turn_context, &next_output)
         .await
         .expect("commit next");
     assert_eq!(
@@ -17566,8 +17562,7 @@ async fn spine_tree_tool_appends_inclusive_context_for_open_ancestors() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&outer_output))
         .await
         .expect("record outer open output");
-    session
-        .test_on_toolcall_single(&turn_context, &outer_output)
+    test_on_toolcall_single(&session, &turn_context, &outer_output)
         .await
         .expect("commit outer open");
 
@@ -17597,8 +17592,7 @@ async fn spine_tree_tool_appends_inclusive_context_for_open_ancestors() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&inner_output))
         .await
         .expect("record inner open output");
-    session
-        .test_on_toolcall_single(&turn_context, &inner_output)
+    test_on_toolcall_single(&session, &turn_context, &inner_output)
         .await
         .expect("commit inner open");
     while rx.try_recv().is_ok() {}
@@ -17705,8 +17699,7 @@ async fn record_token_usage_refreshes_spine_tree_cache_only_snapshot() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
     while rx.try_recv().is_ok() {}
@@ -17772,8 +17765,7 @@ async fn spine_tree_tool_hides_context_problem_but_snapshot_keeps_it() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record conversation items");
-    let commit = session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    let commit = test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open should defer missing token usage");
     assert!(commit.spine_context_already_observed);
@@ -17862,8 +17854,7 @@ async fn spine_pressure_prompt_overlay_is_temporarily_disabled() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -17962,8 +17953,7 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open");
 
@@ -18048,8 +18038,7 @@ async fn spine_pressure_prompt_context_warning_is_temporarily_disabled() {
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
         .await
         .expect("record open output");
-    session
-        .test_on_toolcall_single(&turn_context, &open_output)
+    test_on_toolcall_single(&session, &turn_context, &open_output)
         .await
         .expect("commit open without token baseline");
 

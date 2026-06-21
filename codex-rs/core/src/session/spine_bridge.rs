@@ -928,34 +928,6 @@ impl Session {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) async fn test_on_toolcall_single(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        item: &ResponseItem,
-    ) -> Result<SpineToolCommit, SpineError> {
-        let mut client_session = self.services.model_client.new_session();
-        self.test_on_toolcall_single_with_client_session(turn_context, &mut client_session, item)
-            .await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn test_on_toolcall_single_with_client_session(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        client_session: &mut ModelClientSession,
-        item: &ResponseItem,
-    ) -> Result<SpineToolCommit, SpineError> {
-        // TODO(spine-hook-refactor): remove this compatibility wrapper once
-        // tests call the unified completed-toolcall hook.
-        self.on_toolcall(
-            turn_context,
-            client_session,
-            SpineToolCallEvidence::single(item),
-        )
-        .await
-    }
-
     pub(crate) async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
