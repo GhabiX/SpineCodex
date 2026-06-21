@@ -78,6 +78,8 @@ mod closed_memory_accounting;
 mod closed_memory_accounting_negative_delta;
 #[path = "tests/closed_memory_accounting_pending.rs"]
 mod closed_memory_accounting_pending;
+#[path = "tests/closed_memory_accounting_reload.rs"]
+mod closed_memory_accounting_reload;
 #[path = "tests/commit_marker_carriers.rs"]
 mod commit_marker_carriers;
 #[path = "tests/commit_marker_next_carriers.rs"]
