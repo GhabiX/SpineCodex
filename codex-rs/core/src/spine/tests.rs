@@ -98,6 +98,8 @@ mod message_anchors;
 mod next_failure;
 #[path = "tests/next_lifecycle.rs"]
 mod next_lifecycle;
+#[path = "tests/next_provider_baseline.rs"]
+mod next_provider_baseline;
 #[path = "tests/next_transactions.rs"]
 mod next_transactions;
 #[path = "tests/open_lifecycle.rs"]
