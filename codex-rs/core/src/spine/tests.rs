@@ -204,6 +204,8 @@ mod root_compact_replay_rollback;
 mod root_compact_staging_failures;
 #[path = "tests/root_compact_token_baseline.rs"]
 mod root_compact_token_baseline;
+#[path = "tests/root_compact_token_baseline_handoff.rs"]
+mod root_compact_token_baseline_handoff;
 #[path = "tests/runtime_lifecycle.rs"]
 mod runtime_lifecycle;
 #[path = "tests/runtime_lifecycle_trim_ledger.rs"]
