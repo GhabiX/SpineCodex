@@ -9,6 +9,7 @@ use super::LiveRootCompact;
 use super::SpineError;
 use super::SpineHistoryUpdate;
 use super::SpineHostEffects;
+use super::SpineOpenNodeContextProjection;
 use super::SpinePreparedRootCompactInstall;
 #[cfg(test)]
 use super::SpineRootCompactResult;
@@ -547,6 +548,20 @@ impl SpineSessionState {
         let snapshot = runtime.build_tree_snapshot()?;
         self.initial_tree_snapshot_emitted = true;
         Ok(Some(snapshot))
+    }
+
+    pub(crate) fn tree_snapshot_projection(
+        &self,
+    ) -> Result<Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>, SpineError>
+    {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        Ok(Some((
+            runtime.build_tree_snapshot()?,
+            runtime.open_node_context_projections(),
+        )))
     }
 
     pub(crate) fn apply_root_compact_after_history_publish(

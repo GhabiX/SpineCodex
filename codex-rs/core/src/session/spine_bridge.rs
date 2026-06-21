@@ -2,6 +2,7 @@ use super::*;
 use crate::client::ModelClientSession;
 use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
+use crate::session::spine_tree_inside::annotate_spine_tree_snapshot;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
 #[cfg(test)]
 use crate::spine::IntoSpineNodeMemory;
@@ -289,11 +290,10 @@ impl Session {
         // ContextManager, ParseStack, or sidecar state.
         let snapshot = {
             let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(runtime) = guard.runtime() else {
+            let Some(projection) = guard.tree_snapshot_projection()? else {
                 return Ok(());
             };
-            build_annotated_tree_snapshot(runtime, token_info.as_ref())?
+            build_annotated_tree_snapshot(projection, token_info.as_ref())?
         };
         self.send_event_raw(Event {
             id: INITIAL_SUBMIT_ID.to_string(),
@@ -546,11 +546,16 @@ impl Session {
                 tracing::debug!("skipping Spine tree cache refresh: {err}");
                 return;
             }
-            let Some(runtime) = guard.runtime() else {
-                return;
-            };
-            match build_annotated_tree_snapshot(runtime, token_info.as_ref()) {
-                Ok(snapshot) => snapshot,
+            match guard
+                .tree_snapshot_projection()
+                .and_then(|projection| match projection {
+                    Some(projection) => {
+                        build_annotated_tree_snapshot(projection, token_info.as_ref()).map(Some)
+                    }
+                    None => Ok(None),
+                }) {
+                Ok(Some(snapshot)) => snapshot,
+                Ok(None) => return,
                 Err(err) => {
                     tracing::debug!("failed to build Spine tree cache refresh snapshot: {err}");
                     return;
@@ -763,13 +768,12 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let mut snapshot = {
             let guard = spine.lock().await;
-            guard.ensure_valid()?;
-            let Some(runtime) = guard.runtime() else {
+            let Some(projection) = guard.tree_snapshot_projection()? else {
                 return Err(SpineError::InvalidStore(
                     "spine runtime missing after initialization".to_string(),
                 ));
             };
-            build_annotated_tree_snapshot(runtime, token_info.as_ref())?
+            build_annotated_tree_snapshot(projection, token_info.as_ref())?
         };
         self.prune_spine_planned_nodes(&snapshot).await;
         snapshot.planned_nodes = self.spine_planned_nodes.lock().await.clone();
@@ -1359,11 +1363,14 @@ impl Session {
             |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
         )?;
         let snapshot = if committed.installed_commit() {
-            let Some(spine) = guard.runtime() else {
+            let Some(projection) = guard.tree_snapshot_projection()? else {
                 return Ok(SpineCommitAttempt::RuntimeMissing);
             };
             let token_info = state.token_info();
-            Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?)
+            Some(build_annotated_tree_snapshot(
+                projection,
+                token_info.as_ref(),
+            )?)
         } else {
             None
         };
@@ -1897,10 +1904,18 @@ fn non_empty_text(text: &str) -> Option<&str> {
 }
 
 fn build_annotated_tree_snapshot(
-    runtime: &SpineRuntime,
+    projection: (
+        SpineTreeUpdateEvent,
+        Vec<crate::spine::SpineOpenNodeContextProjection>,
+    ),
     token_info: Option<&TokenUsageInfo>,
 ) -> Result<SpineTreeUpdateEvent, SpineError> {
-    Ok(build_spine_tree_inside_view(runtime, token_info)?.snapshot)
+    let (snapshot, open_node_projections) = projection;
+    Ok(annotate_spine_tree_snapshot(
+        snapshot,
+        token_info,
+        &open_node_projections,
+    ))
 }
 
 fn render_spine_tree_for_model_with_plan(

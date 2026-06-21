@@ -69,6 +69,15 @@ pub(crate) fn build_spine_tree_inside_view(
     })
 }
 
+pub(crate) fn annotate_spine_tree_snapshot(
+    mut snapshot: SpineTreeUpdateEvent,
+    token_info: Option<&TokenUsageInfo>,
+    open_node_projections: &[SpineOpenNodeContextProjection],
+) -> SpineTreeUpdateEvent {
+    annotate_open_node_contexts(&mut snapshot, token_info, open_node_projections);
+    snapshot
+}
+
 pub(crate) fn node_context_tokens(
     current: Option<&TokenUsageInfo>,
     open_context_tokens: Option<i64>,
