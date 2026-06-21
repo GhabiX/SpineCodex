@@ -86,6 +86,8 @@ mod materialize_history;
 mod materialize_projection_guards;
 #[path = "tests/message_anchors.rs"]
 mod message_anchors;
+#[path = "tests/next_failure.rs"]
+mod next_failure;
 #[path = "tests/next_lifecycle.rs"]
 mod next_lifecycle;
 #[path = "tests/next_transactions.rs"]
