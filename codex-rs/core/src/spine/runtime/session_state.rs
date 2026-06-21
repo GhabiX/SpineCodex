@@ -276,7 +276,7 @@ impl SpineSessionState {
             .map(Some)
     }
 
-    pub(crate) fn persist_prepared_toolcall_commit_side_effects<T>(
+    pub(crate) fn persist_toolcall_commit_side_effects<T>(
         &mut self,
         prepared: &PreparedSpineToolcallCommit<T>,
     ) -> Result<(), SpineError> {
@@ -289,7 +289,7 @@ impl SpineSessionState {
         runtime.persist_commit_publication_side_effects(&prepared.publication)
     }
 
-    pub(crate) fn install_prepared_toolcall_commit<T>(
+    pub(crate) fn apply_toolcall_commit<T>(
         &mut self,
         prepared: PreparedSpineToolcallCommit<T>,
     ) -> Result<bool, SpineError> {

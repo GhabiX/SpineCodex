@@ -1647,7 +1647,7 @@ impl Session {
             prepared_commit.defer_tree_update_until_raw_output();
         let host_effects =
             SpineHostEffects::from_optional_history_update(prepared_commit.take_history_update());
-        if let Err(err) = guard.persist_prepared_toolcall_commit_side_effects(&prepared_commit) {
+        if let Err(err) = guard.persist_toolcall_commit_side_effects(&prepared_commit) {
             guard.invalidate(format!(
                 "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
             ));
@@ -1659,7 +1659,7 @@ impl Session {
             ));
             return Err(SpineError::Invariant(err));
         }
-        let installed_commit = guard.install_prepared_toolcall_commit(prepared_commit)?;
+        let installed_commit = guard.apply_toolcall_commit(prepared_commit)?;
         let snapshot = if installed_commit {
             let Some(spine) = guard.runtime() else {
                 return Ok(SpineCommitAttempt::RuntimeMissing);
