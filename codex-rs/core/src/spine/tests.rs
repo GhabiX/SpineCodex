@@ -48,6 +48,8 @@ mod close_commit_durable_failures;
 mod close_commit_failures;
 #[path = "tests/close_lifecycle.rs"]
 mod close_lifecycle;
+#[path = "tests/close_memory_assembly.rs"]
+mod close_memory_assembly;
 #[path = "tests/close_output_projection.rs"]
 mod close_output_projection;
 #[path = "tests/close_reduce_edges.rs"]
