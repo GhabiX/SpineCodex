@@ -10,7 +10,6 @@ use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCloseMemoryAssembly;
-use crate::spine::SpineCommitKind;
 use crate::spine::SpinePreparedCommit;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
@@ -1632,17 +1631,12 @@ impl Session {
             completed_toolcall,
             raw_items,
         )?;
-        let commit_kind = prepared_commit
+        let defer_tree_update_until_raw_output = prepared_commit
             .as_ref()
-            .map(|prepared| prepared.kind().clone());
-        let defer_tree_update_until_raw_output =
-            should_defer_tree_update_until_raw_output(commit_kind.as_ref());
-        if let Some(commit_kind) = commit_kind.as_ref() {
-            validate_commit_kind_against_history(
-                call_id,
-                commit_kind,
-                state.clone_history().raw_items(),
-            )?;
+            .is_some_and(|prepared| prepared.defer_tree_update_until_raw_output());
+        if let Some(prepared_commit) = prepared_commit.as_ref() {
+            prepared_commit
+                .validate_against_host_history(call_id, state.clone_history().raw_items())?;
         }
         let host_effects = spine_host_effects_for_commit_publication(
             spine,
@@ -2719,29 +2713,6 @@ fn completed_toolcall_evidence_from_segments(
         missing_request_error,
         missing_response_error,
     })
-}
-
-fn should_defer_tree_update_until_raw_output(commit_kind: Option<&SpineCommitKind>) -> bool {
-    matches!(
-        commit_kind,
-        Some(SpineCommitKind::Close | SpineCommitKind::CloseThenOpen { .. })
-    )
-}
-
-fn validate_commit_kind_against_history(
-    call_id: &str,
-    commit_kind: &SpineCommitKind,
-    history_items: &[ResponseItem],
-) -> Result<(), SpineError> {
-    if let SpineCommitKind::Open { open_request_index } = commit_kind
-        && *open_request_index > history_items.len()
-    {
-        return Err(SpineError::Invariant(format!(
-            "spine.open request index {open_request_index} exceeds history length {} for call_id={call_id}",
-            history_items.len()
-        )));
-    }
-    Ok(())
 }
 
 fn validate_close_expected_history_for_commit(

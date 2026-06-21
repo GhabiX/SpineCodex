@@ -71,6 +71,29 @@ impl SpinePreparedCommit {
         &self.kind
     }
 
+    pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
+        matches!(
+            self.kind,
+            SpineCommitKind::Close | SpineCommitKind::CloseThenOpen { .. }
+        )
+    }
+
+    pub(crate) fn validate_against_host_history(
+        &self,
+        call_id: &str,
+        history_items: &[ResponseItem],
+    ) -> Result<(), super::SpineError> {
+        if let SpineCommitKind::Open { open_request_index } = self.kind
+            && open_request_index > history_items.len()
+        {
+            return Err(super::SpineError::Invariant(format!(
+                "spine.open request index {open_request_index} exceeds history length {} for call_id={call_id}",
+                history_items.len()
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) fn publication_plan(&self) -> Option<&HistoryPublicationPlan> {
         self.publication_plan.as_ref()
     }
