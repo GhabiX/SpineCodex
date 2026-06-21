@@ -96,6 +96,8 @@ mod materialize_history;
 mod materialize_projection;
 #[path = "tests/materialize_projection_guards.rs"]
 mod materialize_projection_guards;
+#[path = "tests/message_anchor_multimodal.rs"]
+mod message_anchor_multimodal;
 #[path = "tests/message_anchors.rs"]
 mod message_anchors;
 #[path = "tests/next_failure.rs"]
