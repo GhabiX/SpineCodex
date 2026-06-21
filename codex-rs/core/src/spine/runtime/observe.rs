@@ -47,25 +47,8 @@ impl SpineRuntime {
         if !self.jit_enabled {
             return Ok(());
         }
-        let context_index = u64::try_from(context_index)
+        let context_index_u64 = u64::try_from(context_index)
             .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
-        let from_user = is_real_user_message(item);
-        let user_anchor = if from_user {
-            let user_anchor = self.next_user_anchor;
-            self.next_user_anchor = self
-                .next_user_anchor
-                .checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent("user anchor overflow".to_string()))?;
-            Some(user_anchor)
-        } else {
-            None
-        };
-        let msg = PendingMsg {
-            raw_ordinal,
-            context_index,
-            from_user,
-            user_anchor,
-        };
         if let ResponseItem::FunctionCall {
             call_id,
             name,
@@ -89,16 +72,16 @@ impl SpineRuntime {
             self.ordinary_tool_requests.insert(
                 call_id.clone(),
                 PendingToolRequest {
-                    raw_ordinal: msg.raw_ordinal,
-                    context_index: msg.context_index,
+                    raw_ordinal,
+                    context_index: context_index_u64,
                 },
             );
             if name == SPINE_TOOL_OPEN {
                 self.open_requests.insert(
                     call_id.clone(),
                     OpenRequestAnchor {
-                        raw_ordinal: msg.raw_ordinal,
-                        context_index: msg.context_index,
+                        raw_ordinal,
+                        context_index: context_index_u64,
                     },
                 );
             }
@@ -122,8 +105,8 @@ impl SpineRuntime {
             self.ordinary_tool_requests.insert(
                 call_id.clone(),
                 PendingToolRequest {
-                    raw_ordinal: msg.raw_ordinal,
-                    context_index: msg.context_index,
+                    raw_ordinal,
+                    context_index: context_index_u64,
                 },
             );
             return Ok(());
@@ -137,8 +120,8 @@ impl SpineRuntime {
             self.ordinary_tool_requests.insert(
                 call_id.to_string(),
                 PendingToolRequest {
-                    raw_ordinal: msg.raw_ordinal,
-                    context_index: msg.context_index,
+                    raw_ordinal,
+                    context_index: context_index_u64,
                 },
             );
             return Ok(());
@@ -149,8 +132,8 @@ impl SpineRuntime {
                 .entry(call_id.to_string())
                 .or_default()
                 .push(PendingToolResponse {
-                    raw_ordinal: msg.raw_ordinal,
-                    context_index: msg.context_index,
+                    raw_ordinal,
+                    context_index: context_index_u64,
                 });
             if self.control_call_ids.contains(call_id)
                 || self.tree_call_ids.remove(call_id)
@@ -170,7 +153,49 @@ impl SpineRuntime {
         ) {
             return Ok(());
         }
-        self.append_and_shift_msg(&msg)
+        self.on_non_toolcall_msg(raw_ordinal, context_index, item)
+    }
+
+    pub(crate) fn on_non_toolcall_msg(
+        &mut self,
+        raw_ordinal: u64,
+        context_index: usize,
+        item: &ResponseItem,
+    ) -> Result<(), SpineError> {
+        if !self.jit_enabled {
+            return Ok(());
+        }
+        if tool_request_call_id(item).is_some()
+            || tool_response_call_id(item).is_some()
+            || matches!(
+                item,
+                ResponseItem::ToolSearchOutput { call_id: None, .. }
+                    | ResponseItem::ToolSearchCall { call_id: None, .. }
+            )
+        {
+            return Err(SpineError::InvalidEvent(
+                "on_non_toolcall_msg received toolcall item".to_string(),
+            ));
+        }
+        let context_index = u64::try_from(context_index)
+            .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
+        let from_user = is_real_user_message(item);
+        let user_anchor = if from_user {
+            let user_anchor = self.next_user_anchor;
+            self.next_user_anchor = self
+                .next_user_anchor
+                .checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("user anchor overflow".to_string()))?;
+            Some(user_anchor)
+        } else {
+            None
+        };
+        self.append_and_shift_msg(&PendingMsg {
+            raw_ordinal,
+            context_index,
+            from_user,
+            user_anchor,
+        })
     }
 
     pub(crate) fn observe_completed_toolcall(
