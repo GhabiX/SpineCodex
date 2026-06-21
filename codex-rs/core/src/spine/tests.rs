@@ -110,6 +110,8 @@ mod compact_checkpoint_ambiguity;
 mod compact_checkpoint_ambiguity_proofs;
 #[path = "tests/compact_checkpoint_clone.rs"]
 mod compact_checkpoint_clone;
+#[path = "tests/compact_checkpoint_clone_boundary.rs"]
+mod compact_checkpoint_clone_boundary;
 #[path = "tests/compact_checkpoint_proofs.rs"]
 mod compact_checkpoint_proofs;
 #[path = "tests/compact_checkpoint_validation.rs"]
