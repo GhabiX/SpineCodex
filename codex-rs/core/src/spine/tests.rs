@@ -104,6 +104,8 @@ mod pending_control_receipts;
 mod prepared_commit;
 #[path = "tests/provider_baseline.rs"]
 mod provider_baseline;
+#[path = "tests/provider_legacy_pressure.rs"]
+mod provider_legacy_pressure;
 #[path = "tests/raw_coverage.rs"]
 mod raw_coverage;
 #[path = "tests/rollback_checkpoint_continuation.rs"]
