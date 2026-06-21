@@ -14,6 +14,7 @@ use super::SpineRootCompactResult;
 use super::SpineRuntime;
 use super::SpineTreeUpdateDelivery;
 use super::prepared::SpineCommitPublication;
+use super::support::is_real_user_message;
 use super::types::SpinePreparedCloseMemory;
 use crate::spine::model::ToolCallSegmentKind;
 
@@ -376,6 +377,21 @@ impl SpineSessionState {
         Ok(())
     }
 
+    pub(crate) fn checkpoint_initial_if_jit(
+        &self,
+        rollout_path: &Path,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(());
+        };
+        if runtime.jit_enabled() {
+            runtime.checkpoint_initial(rollout_path, raw_items)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn take_initial_tree_snapshot(
         &mut self,
     ) -> Result<Option<SpineTreeUpdateEvent>, SpineError> {
@@ -490,6 +506,24 @@ impl SpineSessionState {
             recorded_tool_outputs,
             raw_items,
         )
+    }
+
+    pub(crate) fn observe_non_toolcall_msg(
+        &mut self,
+        rollout_path: &Path,
+        raw_ordinal: u64,
+        context_index: usize,
+        item: &ResponseItem,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Ok(());
+        };
+        if runtime.jit_enabled() && is_real_user_message(item) {
+            runtime.checkpoint_before_user_msg(rollout_path, raw_ordinal, raw_items)?;
+        }
+        runtime.on_non_toolcall_msg(raw_ordinal, context_index, item)
     }
 
     pub(crate) fn single_completed_toolcall_evidence(

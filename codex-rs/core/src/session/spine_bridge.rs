@@ -323,11 +323,7 @@ impl Session {
         };
         let mut guard = spine_slot.lock().await;
         guard.ensure_runtime(&rollout_path)?;
-        if let Some(runtime) = guard.runtime() {
-            if runtime.jit_enabled() {
-                runtime.checkpoint_initial(&rollout_path, &[])?;
-            }
-        }
+        guard.checkpoint_initial_if_jit(&rollout_path, &[])?;
         Ok(())
     }
 
@@ -764,14 +760,7 @@ impl Session {
                 SpineError::InvalidStore("spine_jit checkpoint requires rollout path".to_string())
             })?;
         let mut guard = spine_slot.lock().await;
-        guard.ensure_valid()?;
-        let Some(runtime) = guard.runtime_mut() else {
-            return Ok(());
-        };
-        if runtime.jit_enabled() && crate::spine::is_real_user_message(item) {
-            runtime.checkpoint_before_user_msg(&rollout_path, raw_ordinal, raw_items)?;
-        }
-        runtime.on_non_toolcall_msg(raw_ordinal, context_index, item)
+        guard.observe_non_toolcall_msg(&rollout_path, raw_ordinal, context_index, item, raw_items)
     }
 
     async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineSessionState>, SpineError> {
