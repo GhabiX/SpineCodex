@@ -43,6 +43,7 @@ use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::spine_bridge::SpineToolCallEvidence;
+use crate::session::spine_bridge::SpineToolOutputRecording;
 use crate::session::turn_context::TurnContext;
 use crate::spine::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 use crate::spine::SPINE_NAMESPACE;
@@ -2117,7 +2118,9 @@ async fn drain_in_flight(
                 } else {
                     Session::no_spine_tool_commit()
                 };
-                if !commit.record_output && !output_recorded_before_spine_commit {
+                if commit.recording == SpineToolOutputRecording::Skip
+                    && !output_recorded_before_spine_commit
+                {
                     continue;
                 }
                 let deferred_tree_update = commit.deferred_tree_update;
@@ -2129,7 +2132,9 @@ async fn drain_in_flight(
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
-                } else if commit.record_raw_only_durable_without_emission {
+                } else if commit.recording
+                    == SpineToolOutputRecording::RawOnlyDurableWithoutEmission
+                {
                     sess.record_conversation_items_raw_only_durable_without_emission(
                         &turn_context,
                         std::slice::from_ref(&response_item),
@@ -2148,7 +2153,7 @@ async fn drain_in_flight(
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
-                } else if commit.spine_context_already_observed {
+                } else if commit.recording == SpineToolOutputRecording::WithoutSpineObserve {
                     sess.record_conversation_items_without_spine_observe(
                         &turn_context,
                         std::slice::from_ref(&response_item),

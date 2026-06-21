@@ -56,10 +56,16 @@ impl PreparedSpineReplay {
 
 #[derive(Debug)]
 pub(crate) struct SpineToolCommit {
-    pub(crate) record_output: bool,
-    pub(crate) record_raw_only_durable_without_emission: bool,
-    pub(crate) spine_context_already_observed: bool,
+    pub(crate) recording: SpineToolOutputRecording,
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpineToolOutputRecording {
+    Skip,
+    Normal,
+    WithoutSpineObserve,
+    RawOnlyDurableWithoutEmission,
 }
 
 pub(crate) struct SpineToolCallEvidence<'a> {
@@ -147,9 +153,7 @@ enum SpineTrimRequest {
 impl Session {
     pub(crate) fn no_spine_tool_commit() -> SpineToolCommit {
         SpineToolCommit {
-            record_output: true,
-            record_raw_only_durable_without_emission: false,
-            spine_context_already_observed: false,
+            recording: SpineToolOutputRecording::Normal,
             deferred_tree_update: None,
         }
     }
@@ -1219,10 +1223,17 @@ impl Session {
                 "deferring Spine close-like tree update until raw output evidence is durable"
             );
         }
+        let recording = if recorded_output_inside_reduce {
+            SpineToolOutputRecording::Skip
+        } else if record_raw_only_durable_without_emission {
+            SpineToolOutputRecording::RawOnlyDurableWithoutEmission
+        } else if spine_context_already_observed {
+            SpineToolOutputRecording::WithoutSpineObserve
+        } else {
+            SpineToolOutputRecording::Normal
+        };
         Ok(SpineToolCommit {
-            record_output: !recorded_output_inside_reduce,
-            record_raw_only_durable_without_emission,
-            spine_context_already_observed,
+            recording,
             deferred_tree_update,
         })
     }
