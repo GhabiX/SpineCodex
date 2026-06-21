@@ -62,6 +62,8 @@ mod close_reduce_edges;
 mod close_reduce_failures;
 #[path = "tests/close_retry.rs"]
 mod close_retry;
+#[path = "tests/close_retry_pending_token.rs"]
+mod close_retry_pending_token;
 #[path = "tests/close_retry_prepared_memory.rs"]
 mod close_retry_prepared_memory;
 #[path = "tests/close_source_plan.rs"]
