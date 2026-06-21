@@ -205,6 +205,29 @@ impl SpineRuntime {
         )
     }
 
+    pub(crate) fn validate_close_expected_history_for_commit(
+        &mut self,
+        call_id: &str,
+        expected_history: Option<&[ResponseItem]>,
+        history_items: &[ResponseItem],
+    ) -> Result<(), SpineError> {
+        if let Some(expected_history) = expected_history
+            && history_items != expected_history
+        {
+            if self.abort_pending(call_id) {
+                tracing::debug!(
+                    call_id,
+                    reason = "spine close history changed before suffix replacement",
+                    "aborted pending Spine transition"
+                );
+            }
+            return Err(SpineError::Operation(format!(
+                "spine.close history changed before suffix replacement for call_id={call_id}"
+            )));
+        }
+        Ok(())
+    }
+
     fn maybe_commit_output_impl(
         &mut self,
         call_id: &str,

@@ -1618,10 +1618,11 @@ impl Session {
         let Ok(mut state) = self.state.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
         };
-        validate_close_expected_history_for_commit(
-            spine,
+        spine.validate_close_expected_history_for_commit(
             call_id,
-            memory_assembly.as_ref(),
+            memory_assembly
+                .as_ref()
+                .map(|(_, expected_history)| expected_history.as_slice()),
             state.clone_history().raw_items(),
         )?;
         let memory_assembly = memory_assembly.map(|(compact, _)| compact);
@@ -2701,29 +2702,6 @@ fn completed_toolcall_evidence_from_segments(
         missing_request_error,
         missing_response_error,
     })
-}
-
-fn validate_close_expected_history_for_commit(
-    spine: &mut SpineRuntime,
-    call_id: &str,
-    memory_assembly: Option<&(SpineCloseMemoryAssembly, Vec<ResponseItem>)>,
-    history_items: &[ResponseItem],
-) -> Result<(), SpineError> {
-    if let Some((_, expected_history)) = memory_assembly
-        && history_items != expected_history.as_slice()
-    {
-        if spine.abort_pending(call_id) {
-            tracing::debug!(
-                call_id,
-                reason = "spine close history changed before suffix replacement",
-                "aborted pending Spine transition"
-            );
-        }
-        return Err(SpineError::Operation(format!(
-            "spine.close history changed before suffix replacement for call_id={call_id}"
-        )));
-    }
-    Ok(())
 }
 
 fn spine_host_effects_for_commit_publication(
