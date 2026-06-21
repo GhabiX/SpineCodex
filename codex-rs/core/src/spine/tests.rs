@@ -194,6 +194,8 @@ mod root_compact_failures;
 mod root_compact_lifecycle;
 #[path = "tests/root_compact_prepared.rs"]
 mod root_compact_prepared;
+#[path = "tests/root_compact_prepared_install.rs"]
+mod root_compact_prepared_install;
 #[path = "tests/root_compact_replay.rs"]
 mod root_compact_replay;
 #[path = "tests/root_compact_replay_rollback.rs"]
