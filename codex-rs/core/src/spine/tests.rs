@@ -52,6 +52,8 @@ mod commit_marker_prepare_failures;
 mod commit_marker_replay;
 #[path = "tests/commit_marker_required.rs"]
 mod commit_marker_required;
+#[path = "tests/commit_marker_resume_failures.rs"]
+mod commit_marker_resume_failures;
 #[path = "tests/commit_marker_root_compact.rs"]
 mod commit_marker_root_compact;
 #[path = "tests/commit_markers.rs"]
