@@ -1635,7 +1635,6 @@ impl Session {
         )?;
         let defer_tree_update_until_raw_output =
             commit_publication.defer_tree_update_until_raw_output();
-        let has_commit_application = commit_publication.has_application();
         let host_effects = SpineHostEffects::from_optional_history_update(
             commit_publication.take_history_update(),
         );
@@ -1651,8 +1650,7 @@ impl Session {
             ));
             return Err(SpineError::Invariant(err));
         }
-        let snapshot = if has_commit_application {
-            spine.install_commit_publication(commit_publication);
+        let snapshot = if spine.install_commit_publication(commit_publication) {
             let token_info = state.token_info();
             Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?)
         } else {

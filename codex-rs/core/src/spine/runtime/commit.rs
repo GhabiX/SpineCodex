@@ -663,9 +663,15 @@ impl SpineRuntime {
         self.install_prepared_commit(application.into_prepared_commit());
     }
 
-    pub(crate) fn install_commit_publication<T>(&mut self, publication: SpineCommitPublication<T>) {
+    pub(crate) fn install_commit_publication<T>(
+        &mut self,
+        publication: SpineCommitPublication<T>,
+    ) -> bool {
         if let Some(application) = publication.into_application() {
             self.install_prepared_commit_application(application);
+            true
+        } else {
+            false
         }
     }
 

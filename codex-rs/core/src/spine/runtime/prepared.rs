@@ -164,10 +164,6 @@ impl<T> SpineCommitPublication<T> {
         self.defer_tree_update_until_raw_output
     }
 
-    pub(crate) fn has_application(&self) -> bool {
-        self.application.is_some()
-    }
-
     pub(crate) fn take_history_update(&mut self) -> Option<T> {
         self.history_update.take()
     }
