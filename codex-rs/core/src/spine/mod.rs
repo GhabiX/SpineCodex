@@ -32,7 +32,6 @@ pub(crate) use runtime::SpineCompactSourceEntryKind;
 pub(crate) use runtime::SpineCompactSourcePlan;
 #[cfg(test)]
 pub(crate) use runtime::SpineCompactSourcePlanEntry;
-pub(crate) use runtime::SpineCompletedToolCallEvidence;
 pub(crate) use runtime::SpineError;
 pub(crate) use runtime::SpineHostEffect;
 pub(crate) use runtime::SpineHostEffects;
@@ -47,6 +46,7 @@ pub(crate) use runtime::SpineRootCompactTokenMetadata;
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::SpineTokenBaselines;
+pub(crate) use runtime::SpineToolcallCommitEvidence;
 pub(crate) use runtime::SpineToolcallCommitInput;
 pub(crate) use runtime::SpineTreeUpdateDelivery;
 pub(crate) use runtime::SpineTrimOutcome;

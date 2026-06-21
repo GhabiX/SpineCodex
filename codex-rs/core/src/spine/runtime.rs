@@ -94,9 +94,9 @@ use replay::next_pressure_seq_from;
 use replay::next_trim_seq_from;
 pub(crate) use replay::trim_projection_from_events_for_checkpoint;
 pub(crate) use session_state::PreparedSpineRootCompactApply;
-pub(crate) use session_state::SpineCompletedToolCallEvidence;
 pub(crate) use session_state::SpineObservedContextItem;
 pub(crate) use session_state::SpineSessionState;
+pub(crate) use session_state::SpineToolcallCommitEvidence;
 pub(crate) use session_state::SpineToolcallCommitInput;
 pub(crate) use support::is_real_user_message;
 #[cfg(test)]

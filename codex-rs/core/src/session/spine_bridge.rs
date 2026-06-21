@@ -9,7 +9,6 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineCompletedToolCallEvidence;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
 use crate::spine::SpineObservedContextItem;
@@ -18,6 +17,7 @@ use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
+use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use codex_protocol::models::ContentItem;
@@ -107,7 +107,7 @@ struct SpineCommitOutput {
 struct SpinePreparedToolCallEvidence<'a> {
     call_id: &'a str,
     response_item: &'a ResponseItem,
-    completed_toolcall: SpineCompletedToolCallEvidence,
+    toolcall_evidence: SpineToolcallCommitEvidence,
 }
 
 struct SpineToolCallHostRecording {
@@ -1029,23 +1029,23 @@ impl Session {
         } else {
             (raw_len, history_items_for_output_anchor.len())
         };
-        let completed_toolcall = {
+        let toolcall_evidence = {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let Some(completed_toolcall) = guard.single_completed_toolcall_evidence(
+            let Some(toolcall_evidence) = guard.single_completed_toolcall_evidence(
                 call_id,
                 (tool_resp_raw_ordinal, tool_resp_context_index),
             )?
             else {
                 return Ok(None);
             };
-            completed_toolcall
+            toolcall_evidence
         };
         Ok(Some(CompletedSpineToolCall {
             evidence: SpinePreparedToolCallEvidence {
                 call_id,
                 response_item: item,
-                completed_toolcall,
+                toolcall_evidence,
             },
             host_recording: SpineToolCallHostRecording {
                 response_already_recorded: tool_resp_already_recorded,
@@ -1079,10 +1079,10 @@ impl Session {
                     "failed to record grouped Spine tool outputs before commit: {err}"
                 ))
             })?;
-        let completed_toolcall = {
+        let toolcall_evidence = {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let Some(completed_toolcall) = guard.grouped_completed_toolcall_evidence(
+            let Some(toolcall_evidence) = guard.grouped_completed_toolcall_evidence(
                 commit_call_id,
                 tool_call_ids,
                 &output_raw_ordinals,
@@ -1091,13 +1091,13 @@ impl Session {
             else {
                 return Ok(None);
             };
-            completed_toolcall
+            toolcall_evidence
         };
         Ok(Some(CompletedSpineToolCall {
             evidence: SpinePreparedToolCallEvidence {
                 call_id: commit_call_id,
                 response_item: commit_output,
-                completed_toolcall,
+                toolcall_evidence,
             },
             host_recording: SpineToolCallHostRecording {
                 response_already_recorded: true,
@@ -1118,7 +1118,7 @@ impl Session {
             client_session,
             toolcall.evidence.call_id,
             toolcall.evidence.response_item,
-            toolcall.evidence.completed_toolcall,
+            toolcall.evidence.toolcall_evidence,
             toolcall.host_recording.response_already_recorded,
             toolcall.host_recording.response_recorded_inside_reduce,
             toolcall.host_recording.history_before_recorded_output,
@@ -1132,7 +1132,7 @@ impl Session {
         _client_session: &mut ModelClientSession,
         call_id: &str,
         item: &ResponseItem,
-        completed_toolcall: SpineCompletedToolCallEvidence,
+        toolcall_evidence: SpineToolcallCommitEvidence,
         tool_resp_already_recorded: bool,
         recorded_output_inside_reduce: bool,
         history_before_recorded_output: Option<crate::context_manager::ContextManager>,
@@ -1171,7 +1171,7 @@ impl Session {
                 expected_history.clone(),
                 pre_compact_provider_input_tokens,
                 current_turn_token_info.as_ref(),
-                completed_toolcall.clone(),
+                toolcall_evidence.clone(),
                 tool_resp_already_recorded,
                 &raw_items,
             );
@@ -1256,7 +1256,7 @@ impl Session {
         expected_history: Vec<ResponseItem>,
         pre_compact_provider_input_tokens: Option<i64>,
         current_turn_token_info: Option<&TokenUsageInfo>,
-        completed_toolcall: SpineCompletedToolCallEvidence,
+        toolcall_evidence: SpineToolcallCommitEvidence,
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitAttempt, SpineError> {
@@ -1269,8 +1269,7 @@ impl Session {
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
         let Some(prepared_commit) = guard.prepare_completed_toolcall_commit(
-            call_id,
-            completed_toolcall,
+            toolcall_evidence,
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
