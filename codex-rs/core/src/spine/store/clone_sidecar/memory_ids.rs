@@ -1,7 +1,10 @@
 use crate::spine::SpineError;
+use crate::spine::checkpoint::SpineCheckpoint;
+use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
+use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
 use std::collections::BTreeSet;
 
@@ -54,4 +57,27 @@ pub(in crate::spine::store::clone_sidecar) fn required_memory_ids_for_cloned_eve
         }
     }
     Ok(ids)
+}
+
+pub(in crate::spine::store::clone_sidecar) fn add_required_memory_refs(
+    ids: &mut BTreeSet<String>,
+    compact_checkpoints: &[SpineCompactCheckpoint],
+    checkpoints: &[SpineCheckpoint],
+    commit_markers: &[SpineCommitMarker],
+) {
+    for checkpoint in compact_checkpoints {
+        for memory in &checkpoint.memory_refs {
+            ids.insert(memory.compact_id.clone());
+        }
+    }
+    for checkpoint in checkpoints {
+        for memory in &checkpoint.memory_refs {
+            ids.insert(memory.compact_id.clone());
+        }
+    }
+    for marker in commit_markers {
+        for memory in &marker.memory_refs {
+            ids.insert(memory.compact_id.clone());
+        }
+    }
 }

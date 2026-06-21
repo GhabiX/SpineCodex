@@ -137,21 +137,12 @@ fn clone_for_rollout_into_store(
     }
     let mut required_memory_ids =
         memory_ids::required_memory_ids_for_cloned_events(&cloned_events, &source_mems, mask)?;
-    for checkpoint in &cloned_compact_checkpoints {
-        for memory in &checkpoint.memory_refs {
-            required_memory_ids.insert(memory.compact_id.clone());
-        }
-    }
-    for checkpoint in &cloned_checkpoints {
-        for memory in &checkpoint.memory_refs {
-            required_memory_ids.insert(memory.compact_id.clone());
-        }
-    }
-    for marker in &cloned_commit_markers {
-        for memory in &marker.memory_refs {
-            required_memory_ids.insert(memory.compact_id.clone());
-        }
-    }
+    memory_ids::add_required_memory_refs(
+        &mut required_memory_ids,
+        &cloned_compact_checkpoints,
+        &cloned_checkpoints,
+        &cloned_commit_markers,
+    );
     side_ledgers::copy_pressure_and_trim(
         source,
         target,
