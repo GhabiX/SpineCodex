@@ -158,6 +158,8 @@ mod provider_baseline_capture;
 mod provider_baseline_capture_replay;
 #[path = "tests/provider_legacy_pressure.rs"]
 mod provider_legacy_pressure;
+#[path = "tests/provider_legacy_pressure_corrupt.rs"]
+mod provider_legacy_pressure_corrupt;
 #[path = "tests/raw_coverage.rs"]
 mod raw_coverage;
 #[path = "tests/rollback_checkpoint_continuation.rs"]
