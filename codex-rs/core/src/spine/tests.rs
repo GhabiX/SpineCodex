@@ -198,6 +198,8 @@ mod trim_projection_slice;
 mod trim_rollback_fork;
 #[path = "tests/trim_targeting.rs"]
 mod trim_targeting;
+#[path = "tests/trim_targeting_ledger.rs"]
+mod trim_targeting_ledger;
 
 // Shared raw/context fixtures.
 
