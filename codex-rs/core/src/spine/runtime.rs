@@ -101,6 +101,7 @@ pub(crate) use types::SpineCompactSourcePlanEntry;
 pub(crate) use types::SpineOpenNodeContextProjection;
 pub(crate) use types::SpinePendingCloseAction;
 pub(crate) use types::SpinePendingCommit;
+pub(crate) use types::SpinePreparedCloseMemory;
 pub(crate) use types::SpineRootCompactResult;
 pub(crate) use types::SpineRootCompactTokenMetadata;
 pub(crate) use types::SpineTokenBaselines;

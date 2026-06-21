@@ -9,7 +9,7 @@ use crate::spine::CompletedToolCallSegment;
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineCloseMemoryAssembly;
+use crate::spine::SpinePreparedCloseMemory;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
@@ -1463,7 +1463,7 @@ impl Session {
             )
         };
         let memory_assembly = match memory_assembly {
-            Ok(Some(compact)) => Some((compact, expected_history)),
+            Ok(Some(compact)) => Some(SpinePreparedCloseMemory::new(compact, expected_history)),
             Ok(None) => None,
             Err(err) => {
                 let reason = "spine close memory assembly failed before commit";
@@ -1476,9 +1476,9 @@ impl Session {
                 return Err(err);
             }
         };
-        if let Some((_, expected_history)) = memory_assembly.as_ref() {
+        if let Some(prepared_memory) = memory_assembly.as_ref() {
             let history = self.clone_history().await;
-            if history.raw_items() != expected_history.as_slice() {
+            if history.raw_items() != prepared_memory.expected_history() {
                 let reason = "spine close history changed before commit";
                 if tool_resp_already_recorded {
                     self.fail_closed_spine_toolcall_commit(call_id, reason)
@@ -1582,7 +1582,7 @@ impl Session {
         spine_slot: &Mutex<SpineSessionState>,
         call_id: &str,
         tool_resp_item: &ResponseItem,
-        memory_assembly: Option<(SpineCloseMemoryAssembly, Vec<ResponseItem>)>,
+        memory_assembly: Option<SpinePreparedCloseMemory>,
         pre_compact_provider_input_tokens: Option<i64>,
         current_turn_token_info: Option<&TokenUsageInfo>,
         completed_toolcall: CompletedToolCall,
@@ -1603,10 +1603,10 @@ impl Session {
             call_id,
             memory_assembly
                 .as_ref()
-                .map(|(_, expected_history)| expected_history.as_slice()),
+                .map(SpinePreparedCloseMemory::expected_history),
             state.clone_history().raw_items(),
         )?;
-        let memory_assembly = memory_assembly.map(|(compact, _)| compact);
+        let memory_assembly = memory_assembly.map(SpinePreparedCloseMemory::into_assembly);
         let prepared_commit = spine.prepare_or_observe_completed_toolcall_with_pending_baselines(
             call_id,
             memory_assembly,

@@ -34,6 +34,7 @@ pub(crate) use runtime::SpineCompactSourcePlanEntry;
 pub(crate) use runtime::SpineError;
 pub(crate) use runtime::SpineOpenNodeContextProjection;
 pub(crate) use runtime::SpinePendingCommit;
+pub(crate) use runtime::SpinePreparedCloseMemory;
 pub(crate) use runtime::SpinePreparedCommit;
 pub(crate) use runtime::SpinePreparedRootCompact;
 #[cfg(test)]

@@ -30,6 +30,32 @@ pub(crate) struct SpineCloseMemoryAssembly {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpinePreparedCloseMemory {
+    assembly: SpineCloseMemoryAssembly,
+    expected_history: Vec<ResponseItem>,
+}
+
+impl SpinePreparedCloseMemory {
+    pub(crate) fn new(
+        assembly: SpineCloseMemoryAssembly,
+        expected_history: Vec<ResponseItem>,
+    ) -> Self {
+        Self {
+            assembly,
+            expected_history,
+        }
+    }
+
+    pub(crate) fn expected_history(&self) -> &[ResponseItem] {
+        &self.expected_history
+    }
+
+    pub(crate) fn into_assembly(self) -> SpineCloseMemoryAssembly {
+        self.assembly
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpineCompactSourcePlan {
     pub(crate) node_id: NodeId,
     pub(crate) source_context_range: Range<usize>,
