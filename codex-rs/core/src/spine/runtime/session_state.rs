@@ -9,6 +9,24 @@ use super::SpineRuntime;
 use super::prepared::SpineCommitPublication;
 use super::types::SpinePreparedCloseMemory;
 
+pub(crate) struct PreparedSpineToolcallCommit<T> {
+    publication: SpineCommitPublication<T>,
+}
+
+impl<T> PreparedSpineToolcallCommit<T> {
+    fn new(publication: SpineCommitPublication<T>) -> Self {
+        Self { publication }
+    }
+
+    pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
+        self.publication.defer_tree_update_until_raw_output()
+    }
+
+    pub(crate) fn take_history_update(&mut self) -> Option<T> {
+        self.publication.take_history_update()
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct SpineSessionState {
     raw_len: u64,
@@ -189,7 +207,7 @@ impl SpineSessionState {
         runtime.build_tree_snapshot()
     }
 
-    pub(crate) fn prepare_completed_toolcall_commit_publication<T>(
+    pub(crate) fn prepare_completed_toolcall_commit<T>(
         &mut self,
         call_id: &str,
         memory: Option<SpinePreparedCloseMemory>,
@@ -201,7 +219,7 @@ impl SpineSessionState {
         raw_items: &[Option<ResponseItem>],
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
-    ) -> Result<Option<SpineCommitPublication<T>>, SpineError> {
+    ) -> Result<Option<PreparedSpineToolcallCommit<T>>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
             return Ok(None);
@@ -233,12 +251,13 @@ impl SpineSessionState {
                 history_items,
                 build_update,
             )
+            .map(PreparedSpineToolcallCommit::new)
             .map(Some)
     }
 
-    pub(crate) fn persist_commit_publication_side_effects<T>(
+    pub(crate) fn persist_prepared_toolcall_commit_side_effects<T>(
         &mut self,
-        publication: &SpineCommitPublication<T>,
+        prepared: &PreparedSpineToolcallCommit<T>,
     ) -> Result<(), SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
@@ -246,12 +265,12 @@ impl SpineSessionState {
                 "spine runtime missing before commit publication side effects".to_string(),
             ));
         };
-        runtime.persist_commit_publication_side_effects(publication)
+        runtime.persist_commit_publication_side_effects(&prepared.publication)
     }
 
-    pub(crate) fn install_commit_publication<T>(
+    pub(crate) fn install_prepared_toolcall_commit<T>(
         &mut self,
-        publication: SpineCommitPublication<T>,
+        prepared: PreparedSpineToolcallCommit<T>,
     ) -> Result<bool, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
@@ -259,6 +278,6 @@ impl SpineSessionState {
                 "spine runtime missing before commit publication install".to_string(),
             ));
         };
-        Ok(runtime.install_commit_publication(publication))
+        Ok(runtime.install_commit_publication(prepared.publication))
     }
 }
