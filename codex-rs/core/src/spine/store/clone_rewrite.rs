@@ -1,5 +1,4 @@
 use crate::spine::SpineError;
-use crate::spine::checkpoint::CheckpointMemoryRef;
 use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
 use crate::spine::model::ControlSymbol;
@@ -7,7 +6,6 @@ use crate::spine::model::MemoryRef;
 use crate::spine::model::RootEpoch;
 use crate::spine::model::SegRef;
 use crate::spine::model::SpineCommitMarker;
-use crate::spine::model::SpineCommitMemoryRef;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
@@ -15,27 +13,17 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+mod memory_refs;
+
 pub(super) fn clone_compact_checkpoint_for_target(
     checkpoint: SpineCompactCheckpoint,
     target_rollout_path: &Path,
     cloned_memory_paths: &BTreeMap<String, String>,
 ) -> Result<SpineCompactCheckpoint, SpineError> {
-    let mut memory_refs = Vec::with_capacity(checkpoint.memory_refs.len());
-    for memory in checkpoint.memory_refs {
-        let body_path = cloned_memory_paths
-            .get(&memory.compact_id)
-            .ok_or_else(|| {
-                SpineError::InvalidStore(format!(
-                    "compact checkpoint references uncloned memory {}",
-                    memory.compact_id
-                ))
-            })?
-            .clone();
-        memory_refs.push(CheckpointMemoryRef {
-            body_path,
-            ..memory
-        });
-    }
+    let memory_refs = memory_refs::clone_compact_checkpoint_memory_refs(
+        checkpoint.memory_refs,
+        cloned_memory_paths,
+    )?;
     Ok(SpineCompactCheckpoint {
         rollout_path: target_rollout_path.display().to_string(),
         memory_refs,
@@ -228,22 +216,8 @@ pub(super) fn clone_commit_marker_for_target(
     marker: SpineCommitMarker,
     cloned_memory_paths: &BTreeMap<String, String>,
 ) -> Result<SpineCommitMarker, SpineError> {
-    let mut memory_refs = Vec::with_capacity(marker.memory_refs.len());
-    for memory in marker.memory_refs {
-        let body_path = cloned_memory_paths
-            .get(&memory.compact_id)
-            .ok_or_else(|| {
-                SpineError::InvalidStore(format!(
-                    "Spine commit marker references uncloned memory {}",
-                    memory.compact_id
-                ))
-            })?
-            .clone();
-        memory_refs.push(SpineCommitMemoryRef {
-            body_path,
-            ..memory
-        });
-    }
+    let memory_refs =
+        memory_refs::clone_commit_marker_memory_refs(marker.memory_refs, cloned_memory_paths)?;
     Ok(SpineCommitMarker {
         memory_refs,
         ..marker
