@@ -1201,10 +1201,7 @@ impl Session {
             let is_close_like = {
                 let guard = spine_slot.lock().await;
                 guard.ensure_valid()?;
-                let Some(spine) = guard.runtime() else {
-                    return Ok(None);
-                };
-                spine.has_close_like_control_request(call_id, &raw_items)?
+                guard.completed_toolcall_requires_durable_output(call_id, &raw_items)?
             };
             if !is_close_like {
                 break;
@@ -1381,11 +1378,12 @@ impl Session {
         let has_pending_close_commit = {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let Some(spine) = guard.runtime_mut() else {
+            let Some(has_pending_close_commit) =
+                guard.prepare_completed_toolcall_for_commit(call_id, &raw_items)?
+            else {
                 return Ok(Self::no_spine_tool_commit());
             };
-            spine.ensure_pending_from_toolcall_request(call_id, &raw_items)?;
-            spine.has_close_like_control_request(call_id, &raw_items)?
+            has_pending_close_commit
         };
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let current_turn_provider_input_tokens = current_turn_token_info
@@ -1589,10 +1587,7 @@ impl Session {
         let raw_items = self.spine_raw_items_from_rollout().await?;
         let guard = spine_slot.lock().await;
         guard.ensure_valid()?;
-        let Some(spine) = guard.runtime() else {
-            return Ok(false);
-        };
-        spine.has_close_like_control_request(call_id, &raw_items)
+        guard.completed_toolcall_requires_durable_output(call_id, &raw_items)
     }
 
     pub(crate) async fn is_spine_control_output_response_item(

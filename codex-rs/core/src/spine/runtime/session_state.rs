@@ -279,6 +279,33 @@ impl SpineSessionState {
         runtime.build_tree_snapshot()
     }
 
+    pub(crate) fn completed_toolcall_requires_durable_output(
+        &self,
+        call_id: &str,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<bool, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(false);
+        };
+        runtime.has_close_like_control_request(call_id, raw_items)
+    }
+
+    pub(crate) fn prepare_completed_toolcall_for_commit(
+        &mut self,
+        call_id: &str,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<bool>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Ok(None);
+        };
+        runtime.ensure_pending_from_toolcall_request(call_id, raw_items)?;
+        runtime
+            .has_close_like_control_request(call_id, raw_items)
+            .map(Some)
+    }
+
     pub(crate) fn prepare_completed_toolcall_commit(
         &mut self,
         input: SpineToolcallCommitInput<'_>,
