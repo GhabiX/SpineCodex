@@ -1,11 +1,11 @@
 use super::*;
 
 #[test]
-fn trim_repeated_slice_applies_to_current_visible_projection() {
+fn trim_snip_after_slice_clears_visible_body() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "long-tool");
-    let long_text = format!("{}abcdef{}", "prefix ".repeat(60), " suffix".repeat(60));
+    let long_text = "important raw output ".repeat(40);
     let output = function_output_text("long-tool", &long_text);
     let raw = vec![Some(request.clone()), Some(output.clone())];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
@@ -25,19 +25,17 @@ fn trim_repeated_slice_applies_to_current_visible_projection() {
         .expect("observe completed toolcall");
 
     runtime
-        .slice_tool_response_anchor("trim_0", "abcdef", 0, 0, &raw)
-        .expect("first slice succeeds");
-    runtime
-        .slice_tool_response_head("trim_0", 3, &raw)
-        .expect("second slice succeeds");
+        .slice_tool_response_head("trim_0", 9, &raw)
+        .expect("slice succeeds");
+    assert_eq!(
+        runtime.trim_tool_response("trim_0").expect("snip succeeds"),
+        SpineTrimOutcome::Cleared {
+            trim_id: "trim_0".to_string()
+        }
+    );
     let rendered = runtime.materialize_history(&raw).expect("materialize");
-    assert_eq!(function_output_text_content(&rendered[1]), "abc");
-
-    let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
-        .expect("load replayed runtime")
-        .expect("runtime exists");
-    let replayed_rendered = replayed
-        .materialize_history(&raw)
-        .expect("materialize replay");
-    assert_eq!(function_output_text_content(&replayed_rendered[1]), "abc");
+    assert_eq!(
+        function_output_text_content(&rendered[1]),
+        crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE
+    );
 }
