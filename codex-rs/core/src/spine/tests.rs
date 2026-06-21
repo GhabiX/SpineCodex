@@ -142,6 +142,8 @@ mod store_basics;
 mod toolcall_grouping;
 #[path = "tests/toolcall_lexer.rs"]
 mod toolcall_lexer;
+#[path = "tests/toolcall_spine_tree.rs"]
+mod toolcall_spine_tree;
 #[path = "tests/tree_accounting.rs"]
 mod tree_accounting;
 #[path = "tests/tree_snapshot.rs"]
