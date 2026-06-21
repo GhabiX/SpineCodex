@@ -102,6 +102,8 @@ mod compact_checkpoint_proofs;
 mod compact_checkpoint_validation;
 #[path = "tests/error_classification.rs"]
 mod error_classification;
+#[path = "tests/error_classification_runtime.rs"]
+mod error_classification_runtime;
 #[path = "tests/fork_isolation.rs"]
 mod fork_isolation;
 #[path = "tests/m0_trace.rs"]
