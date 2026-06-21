@@ -677,7 +677,7 @@ impl Session {
         Ok(Some(runtime))
     }
 
-    pub(super) async fn install_prepared_spine_replay(
+    pub(super) async fn apply_spine_replay(
         &self,
         replay: PreparedSpineReplay,
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {

@@ -1384,7 +1384,7 @@ impl Session {
             None
         };
         let spine_history = if let Some(spine_replay) = spine_replay {
-            self.install_prepared_spine_replay(spine_replay)
+            self.apply_spine_replay(spine_replay)
                 .await
                 .map_err(|err| {
                     CodexErr::Fatal(format!(
