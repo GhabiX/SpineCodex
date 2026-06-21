@@ -64,6 +64,8 @@ mod commit_marker_required;
 mod commit_marker_resume_failures;
 #[path = "tests/commit_marker_root_compact.rs"]
 mod commit_marker_root_compact;
+#[path = "tests/compact_checkpoint_clone.rs"]
+mod compact_checkpoint_clone;
 #[path = "tests/compact_checkpoint_proofs.rs"]
 mod compact_checkpoint_proofs;
 #[path = "tests/compact_checkpoint_validation.rs"]
