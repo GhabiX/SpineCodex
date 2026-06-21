@@ -56,8 +56,6 @@ mod commit_marker_required;
 mod commit_marker_resume_failures;
 #[path = "tests/commit_marker_root_compact.rs"]
 mod commit_marker_root_compact;
-#[path = "tests/commit_markers.rs"]
-mod commit_markers;
 #[path = "tests/compact_checkpoint_proofs.rs"]
 mod compact_checkpoint_proofs;
 #[path = "tests/compact_checkpoint_validation.rs"]
@@ -82,6 +80,8 @@ mod pending_control;
 mod prepared_commit;
 #[path = "tests/provider_baseline.rs"]
 mod provider_baseline;
+#[path = "tests/raw_coverage.rs"]
+mod raw_coverage;
 #[path = "tests/rollback_checkpoint_continuation.rs"]
 mod rollback_checkpoint_continuation;
 #[path = "tests/rollback_checkpoint_restore.rs"]
