@@ -1,9 +1,13 @@
+use codex_protocol::models::ResponseItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::path::Path;
 
+use super::CompletedToolCall;
 use super::SpineError;
 use super::SpinePreparedRootCompactInstall;
 use super::SpineRuntime;
+use super::prepared::SpineCommitPublication;
+use super::types::SpinePreparedCloseMemory;
 
 #[derive(Debug)]
 pub(crate) struct SpineSessionState {
@@ -183,5 +187,52 @@ impl SpineSessionState {
             )));
         }
         runtime.build_tree_snapshot()
+    }
+
+    pub(crate) fn prepare_completed_toolcall_commit_publication<T>(
+        &mut self,
+        call_id: &str,
+        memory: Option<SpinePreparedCloseMemory>,
+        pre_compact_provider_input_tokens: Option<i64>,
+        current_turn_provider_input_tokens: Option<i64>,
+        completed_toolcall: CompletedToolCall,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
+        history_items: &[ResponseItem],
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<SpineCommitPublication<T>>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Ok(None);
+        };
+        runtime.validate_close_expected_history_for_commit(
+            call_id,
+            memory
+                .as_ref()
+                .map(SpinePreparedCloseMemory::expected_history),
+            history_items,
+        )?;
+        let memory_assembly = memory.map(SpinePreparedCloseMemory::into_assembly);
+        let commit_application = runtime
+            .prepare_or_observe_completed_toolcall_with_pending_baselines(
+                call_id,
+                memory_assembly,
+                pre_compact_provider_input_tokens,
+                current_turn_provider_input_tokens,
+                completed_toolcall,
+                raw_items,
+            )?;
+        runtime
+            .prepare_commit_publication(
+                call_id,
+                commit_application,
+                tool_resp_item,
+                tool_resp_already_recorded,
+                raw_items,
+                history_items,
+                build_update,
+            )
+            .map(Some)
     }
 }

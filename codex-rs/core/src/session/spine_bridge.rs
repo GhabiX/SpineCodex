@@ -1616,38 +1616,21 @@ impl Session {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
         };
-        guard.ensure_valid()?;
-        let Some(spine) = guard.runtime_mut() else {
-            return Ok(SpineCommitAttempt::RuntimeMissing);
-        };
         let Ok(mut state) = self.state.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
         };
-        spine.validate_close_expected_history_for_commit(
-            call_id,
-            memory_assembly
-                .as_ref()
-                .map(SpinePreparedCloseMemory::expected_history),
-            state.clone_history().raw_items(),
-        )?;
-        let memory_assembly = memory_assembly.map(SpinePreparedCloseMemory::into_assembly);
-        let commit_application = spine
-            .prepare_or_observe_completed_toolcall_with_pending_baselines(
-                call_id,
-                memory_assembly,
-                pre_compact_provider_input_tokens,
-                current_turn_token_info.and_then(provider_input_context_tokens),
-                completed_toolcall,
-                raw_items,
-            )?;
         let reference_context_item = state.reference_context_item();
-        let mut commit_publication = spine.prepare_commit_publication(
+        let history = state.clone_history();
+        let Some(mut commit_publication) = guard.prepare_completed_toolcall_commit_publication(
             call_id,
-            commit_application,
+            memory_assembly,
+            pre_compact_provider_input_tokens,
+            current_turn_token_info.and_then(provider_input_context_tokens),
+            completed_toolcall,
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
-            state.clone_history().raw_items(),
+            history.raw_items(),
             |call_id, operation, suffix_start, expected_history, replacement| SpineHistoryUpdate {
                 call_id: call_id.to_string(),
                 operation,
@@ -1656,12 +1639,18 @@ impl Session {
                 replacement,
                 reference_context_item,
             },
-        )?;
+        )?
+        else {
+            return Ok(SpineCommitAttempt::RuntimeMissing);
+        };
         let defer_tree_update_until_raw_output =
             commit_publication.defer_tree_update_until_raw_output();
         let host_effects = SpineHostEffects::from_optional_history_update(
             commit_publication.take_history_update(),
         );
+        let Some(spine) = guard.runtime_mut() else {
+            return Ok(SpineCommitAttempt::RuntimeMissing);
+        };
         if let Err(err) = spine.persist_commit_publication_side_effects(&commit_publication) {
             guard.invalidate(format!(
                 "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
