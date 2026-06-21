@@ -12837,6 +12837,27 @@
       ],
       "type": "string"
     },
+    "SpinePlannedNode": {
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "nodeId",
+        "summary"
+      ],
+      "type": "object"
+    },
     "SpineTreeNode": {
       "properties": {
         "accounting": {
@@ -12876,34 +12897,7 @@
     },
     "SpineTreeNodeAccounting": {
       "properties": {
-        "currentNodeContextBaselineSource": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SpineNodeContextBaselineSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "currentNodeContextTokens": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "currentNodeContextProblem": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SpineNodeContextProblem"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "memoryOutputTokens": {
+        "closedMemoryContextTokens": {
           "format": "int64",
           "type": [
             "integer",
@@ -12917,7 +12911,34 @@
             "null"
           ]
         },
-        "closedMemoryContextTokens": {
+        "currentNodeContextBaselineSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineNodeContextBaselineSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currentNodeContextProblem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineNodeContextProblem"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currentNodeContextTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memoryOutputTokens": {
           "format": "int64",
           "type": [
             "integer",
@@ -12945,6 +12966,13 @@
         "nodes": {
           "items": {
             "$ref": "#/definitions/SpineTreeNode"
+          },
+          "type": "array"
+        },
+        "plannedNodes": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SpinePlannedNode"
           },
           "type": "array"
         },

@@ -1,5 +1,6 @@
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use codex_app_server_protocol::SpinePlannedNode;
 use codex_app_server_protocol::SpineTreeNode;
 use codex_app_server_protocol::SpineTreeNodeAccounting;
 use codex_app_server_protocol::SpineTreeNodeStatus;
@@ -2106,7 +2107,11 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
                 }),
             },
         ],
-        planned_nodes: Vec::new(),
+        planned_nodes: vec![SpinePlannedNode {
+            node_id: "2.2".to_string(),
+            parent_id: Some("2".to_string()),
+            summary: "plan schema bridge".to_string(),
+        }],
     });
 
     chat.dispatch_command(SlashCommand::DebugSpine);
@@ -2133,6 +2138,10 @@ async fn slash_debugspine_renders_cached_snapshot_with_accounting() {
     );
     assert!(
         rendered.contains("~182K inclusive context"),
+        "got {rendered}"
+    );
+    assert!(
+        rendered.contains("2.2 plan schema bridge planned"),
         "got {rendered}"
     );
 }

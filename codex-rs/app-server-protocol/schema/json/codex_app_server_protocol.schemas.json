@@ -15013,6 +15013,27 @@
         ],
         "type": "string"
       },
+      "SpinePlannedNode": {
+        "properties": {
+          "nodeId": {
+            "type": "string"
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "summary"
+        ],
+        "type": "object"
+      },
       "SpineTreeNode": {
         "properties": {
           "accounting": {
@@ -15052,34 +15073,7 @@
       },
       "SpineTreeNodeAccounting": {
         "properties": {
-          "currentNodeContextBaselineSource": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/SpineNodeContextBaselineSource"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "currentNodeContextTokens": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "currentNodeContextProblem": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/SpineNodeContextProblem"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "memoryOutputTokens": {
+          "closedMemoryContextTokens": {
             "format": "int64",
             "type": [
               "integer",
@@ -15093,7 +15087,34 @@
               "null"
             ]
           },
-          "closedMemoryContextTokens": {
+          "currentNodeContextBaselineSource": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpineNodeContextBaselineSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currentNodeContextProblem": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpineNodeContextProblem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currentNodeContextTokens": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memoryOutputTokens": {
             "format": "int64",
             "type": [
               "integer",
@@ -15121,6 +15142,13 @@
           "nodes": {
             "items": {
               "$ref": "#/definitions/v2/SpineTreeNode"
+            },
+            "type": "array"
+          },
+          "plannedNodes": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/v2/SpinePlannedNode"
             },
             "type": "array"
           },
