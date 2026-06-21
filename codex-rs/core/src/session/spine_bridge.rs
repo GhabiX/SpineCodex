@@ -208,7 +208,7 @@ struct CompletedSpineToolCall<'a> {
 }
 
 pub(crate) struct PreparedSpineRootCompactInstall {
-    prepared: crate::spine::SpinePreparedRootCompact,
+    install: crate::spine::SpinePreparedRootCompactInstall,
 }
 
 enum SpineCommitAttempt {
@@ -1745,12 +1745,13 @@ impl Session {
             return Ok(None);
         };
         let result = prepared.result().clone();
+        let install = prepared.into_install();
         let mut guard = spine_slot.lock().await;
         guard.ensure_valid()?;
         let Some(spine) = guard.runtime_mut() else {
             return Ok(None);
         };
-        spine.install_prepared_root_compact(prepared);
+        spine.install_prepared_root_compact_install(install);
         let snapshot = spine.build_tree_snapshot()?;
         Ok(Some((result, snapshot)))
     }
@@ -1891,7 +1892,7 @@ impl Session {
         *items = root_compact.result().materialized.clone();
         compacted_item.replacement_history = Some(items.clone());
         Ok(Some(PreparedSpineRootCompactInstall {
-            prepared: root_compact,
+            install: root_compact.into_install(),
         }))
     }
 
@@ -1919,7 +1920,7 @@ impl Session {
                 operation: "install Spine root compact".to_string(),
                 reason: "spine runtime missing before root compact PS install".to_string(),
             })?;
-        spine.install_prepared_root_compact(prepared.prepared);
+        spine.install_prepared_root_compact_install(prepared.install);
         let current_open_index =
             spine
                 .current_open_index()

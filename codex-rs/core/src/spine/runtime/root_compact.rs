@@ -3,6 +3,7 @@ use std::path::Path;
 
 use super::SpineError;
 use super::SpinePreparedRootCompact;
+use super::SpinePreparedRootCompactInstall;
 use super::SpineRootCompactResult;
 use super::SpineRootCompactTokenMetadata;
 use super::SpineRuntime;
@@ -134,6 +135,13 @@ impl SpineRuntime {
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
         self.parse_stack = prepared.final_parse_stack;
+    }
+
+    pub(crate) fn install_prepared_root_compact_install(
+        &mut self,
+        install: SpinePreparedRootCompactInstall,
+    ) {
+        self.install_prepared_root_compact(install.into_prepared());
     }
 
     fn commit_root_compact_prepared_side_effects(

@@ -79,6 +79,7 @@ pub(crate) use pending::ToolRequestAnchor;
 pub(crate) use prepared::SpineCommitKind;
 pub(crate) use prepared::SpinePreparedCommit;
 pub(crate) use prepared::SpinePreparedRootCompact;
+pub(crate) use prepared::SpinePreparedRootCompactInstall;
 #[cfg(test)]
 use replay::ReplayCommitClassification;
 #[cfg(test)]
