@@ -96,6 +96,8 @@ mod tree_accounting;
 mod tree_snapshot;
 #[path = "tests/trim.rs"]
 mod trim;
+#[path = "tests/trim_candidates.rs"]
+mod trim_candidates;
 
 // Shared raw/context fixtures.
 
