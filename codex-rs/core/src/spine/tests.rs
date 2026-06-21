@@ -224,6 +224,8 @@ mod tree_snapshot_historical_descendants;
 mod tree_snapshot_root_compact;
 #[path = "tests/trim_candidate_rejections.rs"]
 mod trim_candidate_rejections;
+#[path = "tests/trim_candidate_rejections_short.rs"]
+mod trim_candidate_rejections_short;
 #[path = "tests/trim_candidates.rs"]
 mod trim_candidates;
 #[path = "tests/trim_only.rs"]
