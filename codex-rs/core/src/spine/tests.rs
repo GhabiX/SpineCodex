@@ -288,6 +288,8 @@ mod trim_projection_composition_snip;
 mod trim_projection_slice;
 #[path = "tests/trim_projection_slice_rejections.rs"]
 mod trim_projection_slice_rejections;
+#[path = "tests/trim_projection_slice_tail.rs"]
+mod trim_projection_slice_tail;
 #[path = "tests/trim_rollback_fork.rs"]
 mod trim_rollback_fork;
 #[path = "tests/trim_rollback_fork_clone.rs"]
