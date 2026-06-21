@@ -100,6 +100,8 @@ mod provider_baseline;
 mod raw_coverage;
 #[path = "tests/rollback_checkpoint_continuation.rs"]
 mod rollback_checkpoint_continuation;
+#[path = "tests/rollback_checkpoint_fail_closed.rs"]
+mod rollback_checkpoint_fail_closed;
 #[path = "tests/rollback_checkpoint_restore.rs"]
 mod rollback_checkpoint_restore;
 #[path = "tests/rollback_sparse.rs"]
