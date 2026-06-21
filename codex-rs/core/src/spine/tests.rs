@@ -128,6 +128,8 @@ mod rollback_checkpoint_fail_closed;
 mod rollback_checkpoint_live_append;
 #[path = "tests/rollback_checkpoint_provider_baseline.rs"]
 mod rollback_checkpoint_provider_baseline;
+#[path = "tests/rollback_checkpoint_records.rs"]
+mod rollback_checkpoint_records;
 #[path = "tests/rollback_checkpoint_restore.rs"]
 mod rollback_checkpoint_restore;
 #[path = "tests/rollback_sparse.rs"]
