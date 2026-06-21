@@ -409,8 +409,26 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        let history = self.clone_history().await;
-        let projected = {
+        let jit_enabled = {
+            let guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(runtime) = guard.runtime() else {
+                return Ok(());
+            };
+            runtime.jit_enabled()
+        };
+        let projected = if jit_enabled {
+            let raw_items = self.spine_raw_items_from_rollout().await?;
+            {
+                let guard = spine_slot.lock().await;
+                guard.ensure_valid()?;
+                let Some(runtime) = guard.runtime() else {
+                    return Ok(());
+                };
+                runtime.materialize_history(&raw_items)?
+            }
+        } else {
+            let history = self.clone_history().await;
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
             let Some(runtime) = guard.runtime() else {
@@ -418,8 +436,10 @@ impl Session {
             };
             runtime.project_raw_history_with_trim(history.raw_items())?
         };
-        self.replace_history(projected, self.reference_context_item().await)
-            .await;
+        if projected.as_slice() != self.clone_history().await.raw_items() {
+            self.replace_history(projected, self.reference_context_item().await)
+                .await;
+        }
         Ok(())
     }
 
@@ -1052,36 +1072,59 @@ impl Session {
         trim_id: String,
         request: SpineTrimRequest,
     ) -> Result<SpineTrimOutcome, SpineError> {
-        let raw_items = self
-            .clone_history()
-            .await
-            .raw_items()
-            .iter()
-            .cloned()
-            .map(Some)
-            .collect::<Vec<_>>();
-        let spine = self.ensure_spine_runtime().await?;
-        let mut guard = spine.lock().await;
-        guard.ensure_valid()?;
-        let Some(runtime) = guard.runtime_mut() else {
-            return Err(SpineError::InvalidStore(
-                "spine runtime missing after initialization".to_string(),
-            ));
-        };
         match request {
-            SpineTrimRequest::Snip => runtime.trim_tool_response(&trim_id),
+            SpineTrimRequest::Snip => {
+                let spine = self.ensure_spine_runtime().await?;
+                let mut guard = spine.lock().await;
+                guard.ensure_valid()?;
+                let Some(runtime) = guard.runtime_mut() else {
+                    return Err(SpineError::InvalidStore(
+                        "spine runtime missing after initialization".to_string(),
+                    ));
+                };
+                runtime.trim_tool_response(&trim_id)
+            }
             SpineTrimRequest::SliceHead { head } => {
+                let raw_items = self.spine_raw_items_from_rollout().await?;
+                let spine = self.ensure_spine_runtime().await?;
+                let mut guard = spine.lock().await;
+                guard.ensure_valid()?;
+                let Some(runtime) = guard.runtime_mut() else {
+                    return Err(SpineError::InvalidStore(
+                        "spine runtime missing after initialization".to_string(),
+                    ));
+                };
                 runtime.slice_tool_response_head(&trim_id, head, &raw_items)
             }
             SpineTrimRequest::SliceTail { tail } => {
+                let raw_items = self.spine_raw_items_from_rollout().await?;
+                let spine = self.ensure_spine_runtime().await?;
+                let mut guard = spine.lock().await;
+                guard.ensure_valid()?;
+                let Some(runtime) = guard.runtime_mut() else {
+                    return Err(SpineError::InvalidStore(
+                        "spine runtime missing after initialization".to_string(),
+                    ));
+                };
                 runtime.slice_tool_response_tail(&trim_id, tail, &raw_items)
             }
             SpineTrimRequest::SliceAnchor {
                 anchor,
                 preceding,
                 following,
-            } => runtime
-                .slice_tool_response_anchor(&trim_id, &anchor, preceding, following, &raw_items),
+            } => {
+                let raw_items = self.spine_raw_items_from_rollout().await?;
+                let spine = self.ensure_spine_runtime().await?;
+                let mut guard = spine.lock().await;
+                guard.ensure_valid()?;
+                let Some(runtime) = guard.runtime_mut() else {
+                    return Err(SpineError::InvalidStore(
+                        "spine runtime missing after initialization".to_string(),
+                    ));
+                };
+                runtime
+                    .slice_tool_response_anchor(&trim_id, &anchor, preceding, following, &raw_items)
+            }
         }
     }
 
@@ -1689,6 +1732,10 @@ impl Session {
     async fn spine_raw_items_from_rollout_for_commit(
         &self,
     ) -> Result<Vec<Option<ResponseItem>>, SpineError> {
+        self.spine_raw_items_from_rollout().await
+    }
+
+    async fn spine_raw_items_from_rollout(&self) -> Result<Vec<Option<ResponseItem>>, SpineError> {
         self.ensure_rollout_materialized().await;
         self.flush_rollout()
             .await
@@ -1698,7 +1745,7 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?
             .ok_or_else(|| {
-                SpineError::InvalidStore("spine_jit commit requires rollout path".to_string())
+                SpineError::InvalidStore("spine raw trace lookup requires rollout path".to_string())
             })?;
         let rollout_history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
             .await

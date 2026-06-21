@@ -16010,6 +16010,198 @@ async fn spine_trim_slice_rewrites_visible_history_and_preserves_raw_tool_output
 }
 
 #[tokio::test]
+async fn spine_trim_slice_after_prior_close_uses_rollout_raw_trace() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config
+                .features
+                .enable(Feature::SpineTrim)
+                .expect("enable spine trim");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "trim-close-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .stage_spine_open(
+            "trim-close-open".to_string(),
+            "trim close child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("trim-close-open"),
+    )
+    .await
+    .expect("commit open output");
+
+    let folded_inner = assistant_message("inner raw body folded by close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&folded_inner))
+        .await
+        .expect("record inner item");
+
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "trim-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .stage_spine_close("trim-close".to_string(), "trim close memory".to_string())
+        .await
+        .expect("stage close");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("trim-close"),
+    )
+    .await
+    .expect("commit close output");
+
+    let after_close_history = session.clone_history().await.raw_items().to_vec();
+    assert!(
+        after_close_history.len() < 6,
+        "close should compact visible history: {after_close_history:#?}"
+    );
+    assert!(
+        !after_close_history.contains(&folded_inner),
+        "inner raw item should be folded into memory"
+    );
+
+    let request = function_call("shell_command", "post-close-long-tool");
+    let long_text = format!(
+        "{}abc<needle>xyz{}",
+        "left ".repeat(60),
+        " right".repeat(60)
+    );
+    let output = function_output_with_text("post-close-long-tool", &long_text);
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&request))
+        .await
+        .expect("record post-close request");
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, output.clone())
+        .await
+        .expect("commit post-close output");
+
+    let tagged_history = session.clone_history().await.raw_items().to_vec();
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(tagged_resumed) =
+        RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .expect("read tagged rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let tagged_raw_items = spine_raw_items_after_rollback(&tagged_resumed.history);
+    assert!(
+        tagged_raw_items.len() > tagged_history.len(),
+        "prior close should make raw trace longer than visible history: raw={} visible={}",
+        tagged_raw_items.len(),
+        tagged_history.len()
+    );
+    let tagged_body = function_output_text_by_call_id(&tagged_history, "post-close-long-tool");
+    let trim_id = tagged_body
+        .strip_prefix("[TRIM_ID: ")
+        .and_then(|rest| rest.split_once("]\n"))
+        .map(|(trim_id, _)| trim_id.to_string())
+        .unwrap_or_else(|| panic!("missing trim tag in post-close output: {tagged_body:?}"));
+    assert!(
+        tagged_body.contains(&long_text),
+        "tagging must keep the original output visible until trim"
+    );
+
+    let trim_request = ResponseItem::FunctionCall {
+        id: None,
+        name: SPINE_TOOL_TRIM.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: json!({
+            "TRIM_ID": trim_id,
+            "op": "slice",
+            "anchor": "<needle>",
+            "preceding": 3,
+            "following": 3
+        })
+        .to_string(),
+        call_id: "slice-post-close-long".to_string(),
+    };
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&trim_request))
+        .await
+        .expect("record trim request");
+    let outcome = session
+        .slice_spine_tool_response_anchor(trim_id.clone(), "<needle>".to_string(), 3, 3)
+        .await
+        .expect("slice post-close tool response");
+    assert_eq!(
+        outcome,
+        crate::spine::SpineTrimOutcome::Sliced {
+            trim_id: trim_id.clone()
+        }
+    );
+    let trim_output = function_output_with_text(
+        "slice-post-close-long",
+        &format!("Sliced tool response {trim_id}."),
+    );
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        trim_output.clone(),
+    )
+    .await
+    .expect("commit trim output");
+
+    let visible_history = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(
+        function_output_text_by_call_id(&visible_history, "post-close-long-tool"),
+        "abc<needle>xyz"
+    );
+    assert!(
+        !function_output_text_by_call_id(&visible_history, "post-close-long-tool")
+            .contains("[TRIM_ID:")
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load replayed runtime")
+        .expect("spine sidecar exists");
+    let replayed_visible = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize replayed trim projection");
+    assert_eq!(replayed_visible, visible_history);
+    assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
+}
+
+#[tokio::test]
 async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree() {
     let (mut source_session, source_context, _source_rx) =
         make_session_and_context_with_auth_and_config_and_rx(
