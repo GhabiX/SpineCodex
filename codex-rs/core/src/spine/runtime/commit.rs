@@ -11,8 +11,6 @@ use super::close_family::PreparedCloseCommit;
 use super::pending::CompletedToolCall;
 #[cfg(test)]
 use super::pending::CompletedToolCallSegment;
-#[cfg(test)]
-use super::pending::PendingToolResponse;
 use super::pending::PendingTransition;
 use super::prepared::HistoryPublicationPlan;
 use super::prepared::SpineCommitKind;
@@ -171,6 +169,33 @@ impl SpineRuntime {
             self.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
             Ok(None)
         }
+    }
+
+    pub(crate) fn prepare_or_observe_completed_toolcall_with_pending_baselines(
+        &mut self,
+        call_id: &str,
+        pending_commit: Option<&SpinePendingCommit>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
+        pre_compact_token_baselines: Option<SpineTokenBaselines>,
+        current_turn_token_baselines: SpineTokenBaselines,
+        completed_toolcall: CompletedToolCall,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<SpinePreparedCommit>, SpineError> {
+        let token_baselines = match pending_commit {
+            Some(SpinePendingCommit::Close { .. }) => {
+                pre_compact_token_baselines.unwrap_or(current_turn_token_baselines)
+            }
+            Some(SpinePendingCommit::Open) => current_turn_token_baselines,
+            None => SpineTokenBaselines::default(),
+        };
+        self.prepare_or_observe_completed_toolcall_for_commit(
+            call_id,
+            pending_commit,
+            memory_assembly,
+            token_baselines,
+            completed_toolcall,
+            raw_items,
+        )
     }
 
     fn maybe_commit_output_impl(

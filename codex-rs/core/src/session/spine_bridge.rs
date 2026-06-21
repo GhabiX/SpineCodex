@@ -1651,16 +1651,12 @@ impl Session {
         )?;
         let memory_assembly = memory_assembly.map(|(compact, _)| compact);
         let pending_commit = spine.pending_commit(call_id)?;
-        let token_baselines = token_baselines_for_pending_commit(
-            pending_commit.as_ref(),
-            pre_compact_token_baselines,
-            current_turn_token_info,
-        );
-        let prepared_commit = spine.prepare_or_observe_completed_toolcall_for_commit(
+        let prepared_commit = spine.prepare_or_observe_completed_toolcall_with_pending_baselines(
             call_id,
             pending_commit.as_ref(),
             memory_assembly,
-            token_baselines,
+            pre_compact_token_baselines,
+            token_baselines_from_info(current_turn_token_info),
             completed_toolcall,
             raw_items,
         )?;
@@ -2581,19 +2577,6 @@ fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBase
             provider_input_tokens: provider_input_context_tokens(current),
         })
         .unwrap_or_default()
-}
-
-fn token_baselines_for_pending_commit(
-    pending_commit: Option<&SpinePendingCommit>,
-    pre_compact_token_baselines: Option<SpineTokenBaselines>,
-    current_turn_token_info: Option<&TokenUsageInfo>,
-) -> SpineTokenBaselines {
-    match pending_commit {
-        Some(SpinePendingCommit::Close { .. }) => pre_compact_token_baselines
-            .unwrap_or_else(|| token_baselines_from_info(current_turn_token_info)),
-        Some(SpinePendingCommit::Open) => token_baselines_from_info(current_turn_token_info),
-        None => SpineTokenBaselines::default(),
-    }
 }
 
 fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
