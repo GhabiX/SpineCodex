@@ -11,10 +11,14 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineTreeInsideView {
-    pub(crate) active_node_id: String,
-    pub(crate) active_node_summary: Option<String>,
     pub(crate) rendered_tree: String,
     pub(crate) snapshot: SpineTreeUpdateEvent,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SpineTreePressureView {
+    pub(crate) active_node_id: String,
+    pub(crate) active_node_summary: Option<String>,
     pub(crate) open_nodes: Vec<SpineOpenNodeInside>,
     pub(crate) context_window: Option<SpineContextWindowInside>,
 }
@@ -43,13 +47,6 @@ pub(crate) fn build_spine_tree_inside_view(
     let mut snapshot = runtime.build_tree_snapshot()?;
     annotate_open_node_contexts(&mut snapshot, token_info, &open_node_projections);
 
-    let active_node_id = snapshot.active_node_id.clone();
-    let active_node_summary = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == snapshot.active_node_id)
-        .and_then(|node| node.summary.clone());
-
     let open_nodes = build_open_nodes_inside(&snapshot, token_info, &open_node_projections);
     let annotations = format_open_node_context_annotations(&open_nodes);
     let mut rendered_tree = runtime.render_tree_with_context_annotations(&annotations)?;
@@ -60,13 +57,29 @@ pub(crate) fn build_spine_tree_inside_view(
     }
 
     Ok(SpineTreeInsideView {
-        active_node_id,
-        active_node_summary,
         rendered_tree,
         snapshot,
-        open_nodes,
-        context_window,
     })
+}
+
+pub(crate) fn build_spine_tree_pressure_view_from_projection(
+    projection: (SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>),
+    token_info: Option<&TokenUsageInfo>,
+) -> SpineTreePressureView {
+    let (snapshot, open_node_projections) = projection;
+    let active_node_id = snapshot.active_node_id.clone();
+    let active_node_summary = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == snapshot.active_node_id)
+        .and_then(|node| node.summary.clone());
+    let open_nodes = build_open_nodes_inside(&snapshot, token_info, &open_node_projections);
+    SpineTreePressureView {
+        active_node_id,
+        active_node_summary,
+        open_nodes,
+        context_window: context_window_inside(token_info),
+    }
 }
 
 pub(crate) fn annotate_spine_tree_snapshot(

@@ -1,6 +1,6 @@
 use super::session::Session;
-use super::spine_tree_inside::SpineTreeInsideView;
-use super::spine_tree_inside::build_spine_tree_inside_view;
+use super::spine_tree_inside::SpineTreePressureView;
+use super::spine_tree_inside::build_spine_tree_pressure_view_from_projection;
 use super::spine_tree_inside::node_context_tokens;
 use super::turn_context::TurnContext;
 use codex_features::Feature;
@@ -9,6 +9,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 
 const SPINE_BOUNDARY_HINT_FIRST_TOKENS: i64 = 50_000;
 const SPINE_BOUNDARY_HINT_STEP_TOKENS: i64 = 25_000;
@@ -82,8 +83,8 @@ impl Session {
                 tracing::debug!("skipping Spine status prompt signal: {err}");
                 return None;
             }
-            let runtime = guard.runtime()?;
-            match status_prompt_signal(runtime, token_info.as_ref(), context_left_tokens) {
+            let projection = guard.tree_snapshot_projection().ok().flatten()?;
+            match status_prompt_signal(projection, token_info.as_ref(), context_left_tokens) {
                 Ok(signal) => signal,
                 Err(err) => {
                     tracing::debug!("failed to build Spine status prompt signal: {err}");
@@ -117,14 +118,8 @@ impl Session {
                 tracing::debug!("skipping Spine pressure prompt signal: {err}");
                 return None;
             }
-            let runtime = guard.runtime()?;
-            match build_spine_tree_inside_view(runtime, Some(&token_info)) {
-                Ok(view) => view,
-                Err(err) => {
-                    tracing::debug!("failed to build Spine pressure prompt signal: {err}");
-                    return None;
-                }
-            }
+            let projection = guard.tree_snapshot_projection().ok().flatten()?;
+            build_spine_tree_pressure_view_from_projection(projection, Some(&token_info))
         };
 
         let mode_allows_spine_close = mode != ModeKind::Plan;
@@ -151,12 +146,14 @@ impl Session {
 }
 
 fn status_prompt_signal(
-    runtime: &crate::spine::SpineRuntime,
+    projection: (
+        SpineTreeUpdateEvent,
+        Vec<crate::spine::SpineOpenNodeContextProjection>,
+    ),
     token_info: Option<&TokenUsageInfo>,
     context_left_tokens: Option<i64>,
 ) -> Result<SpineStatusPromptSignal, crate::spine::SpineError> {
-    let snapshot = runtime.build_tree_snapshot()?;
-    let open_nodes = runtime.open_node_context_projections();
+    let (snapshot, open_nodes) = projection;
     let active_node = snapshot
         .nodes
         .iter()
@@ -213,7 +210,7 @@ fn format_context_left_status(context_left_tokens: Option<i64>) -> Option<String
 }
 
 fn pressure_prompt_signal(
-    inside_view: &SpineTreeInsideView,
+    inside_view: &SpineTreePressureView,
     token_info: &TokenUsageInfo,
     mode_allows_spine_close: bool,
 ) -> SpinePressurePromptSignal {
