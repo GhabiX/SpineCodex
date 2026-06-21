@@ -8,6 +8,7 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 #[cfg(test)]
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
+use crate::spine::PreparedSpineRootCompactApply;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
@@ -119,34 +120,6 @@ struct SpineToolCallHostRecording {
 struct CompletedSpineToolCall<'a> {
     evidence: SpinePreparedToolCallEvidence<'a>,
     host_recording: SpineToolCallHostRecording,
-}
-
-pub(crate) struct PreparedSpineRootCompactApply {
-    prepared: crate::spine::PreparedSpineRootCompactApply,
-}
-
-struct PreparedSpineRootCompact {
-    materialized: Vec<ResponseItem>,
-    prepared: crate::spine::PreparedSpineRootCompactApply,
-}
-
-impl PreparedSpineRootCompact {
-    fn from_prepared(prepared: crate::spine::PreparedSpineRootCompactApply) -> Self {
-        let materialized = prepared.materialized().to_vec();
-        Self {
-            materialized,
-            prepared,
-        }
-    }
-
-    #[cfg(test)]
-    fn result(&self) -> crate::spine::SpineRootCompactResult {
-        self.prepared.result()
-    }
-
-    fn into_apply(self) -> crate::spine::PreparedSpineRootCompactApply {
-        self.prepared
-    }
 }
 
 enum SpineCommitAttempt {
@@ -1374,7 +1347,6 @@ impl Session {
             return Ok(None);
         };
         let result = prepared.result();
-        let prepared = prepared.into_apply();
         let mut guard = spine_slot.lock().await;
         guard.ensure_valid()?;
         let snapshot =
@@ -1385,7 +1357,7 @@ impl Session {
     async fn prepare_spine_root_compact_impl(
         &self,
         body: String,
-    ) -> Result<Option<PreparedSpineRootCompact>, SpineError> {
+    ) -> Result<Option<PreparedSpineRootCompactApply>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -1429,7 +1401,7 @@ impl Session {
                 &raw_items,
                 token_metadata,
             )?;
-            Ok(Some(PreparedSpineRootCompact::from_prepared(prepared)))
+            Ok(Some(prepared))
         }
     }
 
@@ -1470,11 +1442,9 @@ impl Session {
         else {
             return Ok(None);
         };
-        *items = root_compact.materialized.clone();
+        *items = root_compact.materialized().to_vec();
         compacted_item.replacement_history = Some(items.clone());
-        Ok(Some(PreparedSpineRootCompactApply {
-            prepared: root_compact.into_apply(),
-        }))
+        Ok(Some(root_compact))
     }
 
     pub(crate) async fn finalize_spine_root_compact_after_history_publish(
@@ -1490,7 +1460,7 @@ impl Session {
         };
         let mut guard = spine_slot.lock().await;
         guard
-            .apply_root_compact_after_history_publish(prepared.prepared, published_history_len)
+            .apply_root_compact_after_history_publish(prepared, published_history_len)
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),
