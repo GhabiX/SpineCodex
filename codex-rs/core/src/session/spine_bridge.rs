@@ -1925,35 +1925,10 @@ impl Session {
         };
         let mut guard = spine_slot.lock().await;
         guard
-            .ensure_valid()
-            .map_err(|err| CodexErr::SpineTerminalFailure {
-                operation: "install Spine root compact".to_string(),
-                reason: err.to_string(),
-            })?;
-        let spine = guard
-            .runtime_mut()
-            .ok_or_else(|| CodexErr::SpineTerminalFailure {
-                operation: "install Spine root compact".to_string(),
-                reason: "spine runtime missing before root compact PS install".to_string(),
-            })?;
-        spine.install_prepared_root_compact_install(prepared.install);
-        let current_open_index =
-            spine
-                .current_open_index()
-                .map_err(|err| CodexErr::SpineTerminalFailure {
-                    operation: "install Spine root compact".to_string(),
-                    reason: err.to_string(),
-                })?;
-        if current_open_index != published_history_len {
-            return Err(CodexErr::SpineTerminalFailure {
-                operation: "install Spine root compact".to_string(),
-                reason: format!(
-                    "spine root compact open index {current_open_index} does not match materialized history length {published_history_len}"
-                ),
-            });
-        }
-        spine
-            .build_tree_snapshot()
+            .install_prepared_root_compact_after_history_publish(
+                prepared.install,
+                published_history_len,
+            )
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),

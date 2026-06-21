@@ -2,6 +2,7 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::path::Path;
 
 use super::SpineError;
+use super::SpinePreparedRootCompactInstall;
 use super::SpineRuntime;
 
 #[derive(Debug)]
@@ -161,5 +162,26 @@ impl SpineSessionState {
         let snapshot = runtime.build_tree_snapshot()?;
         self.initial_tree_snapshot_emitted = true;
         Ok(Some(snapshot))
+    }
+
+    pub(crate) fn install_prepared_root_compact_after_history_publish(
+        &mut self,
+        install: SpinePreparedRootCompactInstall,
+        published_history_len: usize,
+    ) -> Result<SpineTreeUpdateEvent, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing before root compact PS install".to_string(),
+            ));
+        };
+        runtime.install_prepared_root_compact_install(install);
+        let current_open_index = runtime.current_open_index()?;
+        if current_open_index != published_history_len {
+            return Err(SpineError::InvalidStore(format!(
+                "spine root compact open index {current_open_index} does not match materialized history length {published_history_len}"
+            )));
+        }
+        runtime.build_tree_snapshot()
     }
 }
