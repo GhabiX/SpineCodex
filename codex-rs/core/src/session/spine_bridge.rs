@@ -956,32 +956,6 @@ impl Session {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn on_spine_toolcall_with_client_session(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        client_session: &mut ModelClientSession,
-        evidence: SpineToolCallEvidence<'_>,
-    ) -> Result<SpineToolCommit, SpineError> {
-        // TODO(spine-hook-refactor): remove this compatibility wrapper once
-        // tests and callers use the semantic `on_toolcall` hook name.
-        self.on_toolcall(turn_context, client_session, evidence)
-            .await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn on_toolcall_with_client_session(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        client_session: &mut ModelClientSession,
-        evidence: SpineToolCallEvidence<'_>,
-    ) -> Result<SpineToolCommit, SpineError> {
-        // TODO(spine-hook-refactor): remove this compatibility wrapper once
-        // tests call the semantic `on_toolcall` hook name.
-        self.on_toolcall(turn_context, client_session, evidence)
-            .await
-    }
-
     pub(crate) async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
@@ -1505,28 +1479,6 @@ impl Session {
             )?;
             Ok(Some(PreparedSpineRootCompact::from_commit(prepared)))
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn on_spine_compact_after_native_compact(
-        &self,
-        items: &mut Vec<ResponseItem>,
-        compacted_item: &mut CompactedItem,
-    ) -> CodexResult<Option<PreparedSpineRootCompactApply>> {
-        // TODO(spine-hook-refactor): remove this compatibility wrapper once
-        // tests and callers use the semantic `on_compact` hook name.
-        self.on_compact(items, compacted_item).await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn on_compact_after_native_compact(
-        &self,
-        items: &mut Vec<ResponseItem>,
-        compacted_item: &mut CompactedItem,
-    ) -> CodexResult<Option<PreparedSpineRootCompactApply>> {
-        // TODO(spine-hook-refactor): remove this compatibility wrapper once
-        // tests call the semantic `on_compact` hook name.
-        self.on_compact(items, compacted_item).await
     }
 
     pub(crate) async fn on_compact(
