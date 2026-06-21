@@ -49,6 +49,7 @@ mod close_family;
 mod commit;
 mod coverage;
 mod load;
+mod memory_artifact;
 mod observe;
 mod pending;
 mod prepared;
