@@ -202,6 +202,8 @@ mod toolcall_grouping;
 mod toolcall_grouping_validation;
 #[path = "tests/toolcall_lexer.rs"]
 mod toolcall_lexer;
+#[path = "tests/toolcall_lexer_replay.rs"]
+mod toolcall_lexer_replay;
 #[path = "tests/toolcall_spine_tree.rs"]
 mod toolcall_spine_tree;
 #[path = "tests/tree_accounting.rs"]
