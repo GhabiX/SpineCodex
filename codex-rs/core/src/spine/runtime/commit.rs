@@ -175,12 +175,19 @@ impl SpineRuntime {
         &mut self,
         call_id: &str,
         memory_assembly: Option<SpineCloseMemoryAssembly>,
-        pre_compact_token_baselines: Option<SpineTokenBaselines>,
-        current_turn_token_baselines: SpineTokenBaselines,
+        pre_compact_provider_input_tokens: Option<i64>,
+        current_turn_provider_input_tokens: Option<i64>,
         completed_toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpinePreparedCommit>, SpineError> {
         let pending_commit = self.pending_commit(call_id)?;
+        let pre_compact_token_baselines =
+            pre_compact_provider_input_tokens.map(|tokens| SpineTokenBaselines {
+                provider_input_tokens: Some(tokens),
+            });
+        let current_turn_token_baselines = SpineTokenBaselines {
+            provider_input_tokens: current_turn_provider_input_tokens,
+        };
         let token_baselines = match pending_commit {
             Some(SpinePendingCommit::Close { .. }) => {
                 pre_compact_token_baselines.unwrap_or(current_turn_token_baselines)

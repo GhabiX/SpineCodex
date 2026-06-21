@@ -16,7 +16,6 @@ use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
-use crate::spine::SpineTokenBaselines;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::ToolCallSegmentKind;
 use codex_protocol::models::ContentItem;
@@ -1450,8 +1449,11 @@ impl Session {
             spine.has_close_like_pending_commit(call_id)?
         };
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
-        let pre_compact_token_baselines = if has_pending_close_commit {
-            Some(token_baselines_from_info(current_turn_token_info.as_ref()))
+        let current_turn_provider_input_tokens = current_turn_token_info
+            .as_ref()
+            .and_then(provider_input_context_tokens);
+        let pre_compact_provider_input_tokens = if has_pending_close_commit {
+            current_turn_provider_input_tokens
         } else {
             None
         };
@@ -1515,7 +1517,7 @@ impl Session {
                 call_id,
                 item,
                 memory_assembly.clone(),
-                pre_compact_token_baselines,
+                pre_compact_provider_input_tokens,
                 current_turn_token_info.as_ref(),
                 completed_toolcall.clone(),
                 tool_resp_already_recorded,
@@ -1600,7 +1602,7 @@ impl Session {
         call_id: &str,
         tool_resp_item: &ResponseItem,
         memory_assembly: Option<(SpineCloseMemoryAssembly, Vec<ResponseItem>)>,
-        pre_compact_token_baselines: Option<SpineTokenBaselines>,
+        pre_compact_provider_input_tokens: Option<i64>,
         current_turn_token_info: Option<&TokenUsageInfo>,
         completed_toolcall: CompletedToolCall,
         tool_resp_already_recorded: bool,
@@ -1626,8 +1628,8 @@ impl Session {
         let prepared_commit = spine.prepare_or_observe_completed_toolcall_with_pending_baselines(
             call_id,
             memory_assembly,
-            pre_compact_token_baselines,
-            token_baselines_from_info(current_turn_token_info),
+            pre_compact_provider_input_tokens,
+            current_turn_token_info.and_then(provider_input_context_tokens),
             completed_toolcall,
             raw_items,
         )?;
@@ -1796,19 +1798,13 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&history.get_rollout_items());
-        let close_baselines = self
+        let close_provider_input_tokens = self
             .token_usage_info()
             .await
-            .map(|info| SpineTokenBaselines {
-                provider_input_tokens: provider_input_context_tokens(&info),
-            });
+            .and_then(|info| provider_input_context_tokens(&info));
         let token_metadata = SpineRootCompactTokenMetadata {
-            close_input_tokens: close_baselines
-                .as_ref()
-                .and_then(|baselines| baselines.provider_input_tokens),
-            close_context_tokens: close_baselines
-                .as_ref()
-                .and_then(|baselines| baselines.provider_input_tokens),
+            close_input_tokens: close_provider_input_tokens,
+            close_context_tokens: close_provider_input_tokens,
             next_open_input_tokens: None,
             next_open_context_tokens: None,
         };
@@ -2535,14 +2531,6 @@ fn path_to_string(path: &[u32]) -> String {
         .map(|part| part.to_string())
         .collect::<Vec<_>>()
         .join(".")
-}
-
-fn token_baselines_from_info(current: Option<&TokenUsageInfo>) -> SpineTokenBaselines {
-    current
-        .map(|current| SpineTokenBaselines {
-            provider_input_tokens: provider_input_context_tokens(current),
-        })
-        .unwrap_or_default()
 }
 
 fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
