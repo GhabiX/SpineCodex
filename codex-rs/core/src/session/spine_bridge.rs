@@ -9,12 +9,15 @@ use crate::spine::CompletedToolCallSegment;
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
+use crate::spine::SpineHostEffect;
+use crate::spine::SpineHostEffects;
 use crate::spine::SpinePreparedCloseMemory;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
+use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::ToolCallSegmentKind;
 use codex_protocol::models::ContentItem;
@@ -23,7 +26,6 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpinePlannedNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
@@ -97,20 +99,6 @@ impl<'a> SpineCompletedToolCallOutputs<'a> {
 
 const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
 
-#[derive(Debug)]
-struct SpineHistoryUpdate {
-    call_id: String,
-    operation: &'static str,
-    suffix_start: usize,
-    expected_history: Vec<ResponseItem>,
-    replacement: Vec<ResponseItem>,
-    reference_context_item: Option<TurnContextItem>,
-}
-
-struct SpineHostEffects {
-    effects: Vec<SpineHostEffect>,
-}
-
 enum SpineToolCallAppendEvidence<'a> {
     Request {
         raw_ordinal: u64,
@@ -126,54 +114,6 @@ enum SpineToolCallAppendEvidence<'a> {
         outputs: &'a [(String, u64, usize)],
         raw_items: &'a [Option<ResponseItem>],
     },
-}
-
-impl SpineHostEffects {
-    fn none() -> Self {
-        Self {
-            effects: Vec::new(),
-        }
-    }
-
-    fn replace_history(update: SpineHistoryUpdate) -> Self {
-        Self {
-            effects: vec![SpineHostEffect::ReplaceHistory(update)],
-        }
-    }
-
-    fn tree_update(snapshot: SpineTreeUpdateEvent, delivery: SpineTreeUpdateDelivery) -> Self {
-        Self {
-            effects: vec![SpineHostEffect::TreeUpdate { snapshot, delivery }],
-        }
-    }
-
-    fn from_optional_history_update(update: Option<SpineHistoryUpdate>) -> Self {
-        update.map_or_else(Self::none, Self::replace_history)
-    }
-
-    fn from_optional_tree_update(
-        snapshot: Option<SpineTreeUpdateEvent>,
-        delivery: SpineTreeUpdateDelivery,
-    ) -> Self {
-        snapshot.map_or_else(Self::none, |snapshot| Self::tree_update(snapshot, delivery))
-    }
-
-    fn into_effects(self) -> Vec<SpineHostEffect> {
-        self.effects
-    }
-}
-
-enum SpineHostEffect {
-    ReplaceHistory(SpineHistoryUpdate),
-    TreeUpdate {
-        snapshot: SpineTreeUpdateEvent,
-        delivery: SpineTreeUpdateDelivery,
-    },
-}
-
-enum SpineTreeUpdateDelivery {
-    Immediate,
-    AfterRawOutputDurable,
 }
 
 struct SpineCommitOutput {
@@ -274,48 +214,41 @@ impl Session {
             .await;
     }
 
-    fn apply_spine_history_replacement_to_locked_state(
-        state: &mut crate::state::SessionState,
-        update: SpineHistoryUpdate,
-    ) -> Result<(), String> {
-        let history = state.clone_history();
-        let current_history = history.raw_items();
-        if current_history != update.expected_history.as_slice() {
-            Err(format!(
-                "{} history changed before suffix replacement for call_id={}",
-                update.operation, update.call_id
-            ))
-        } else if update.suffix_start > current_history.len() {
-            Err(format!(
-                "{} suffix start {} exceeds history length {} for call_id={}",
-                update.operation,
-                update.suffix_start,
-                current_history.len(),
-                update.call_id
-            ))
-        } else {
-            state
-                .replace_history_suffix(
-                    update.suffix_start..current_history.len(),
-                    update.replacement,
-                    update.reference_context_item,
-                )
-                .map_err(|err| {
-                    format!(
-                        "{} suffix replacement failed for call_id={}: {err}",
-                        update.operation, update.call_id
-                    )
-                })
-        }
-    }
-
     fn apply_spine_host_effect_to_locked_state(
         state: &mut crate::state::SessionState,
         effect: SpineHostEffect,
     ) -> Result<(), String> {
         match effect {
             SpineHostEffect::ReplaceHistory(update) => {
-                Self::apply_spine_history_replacement_to_locked_state(state, update)
+                let history = state.clone_history();
+                let current_history = history.raw_items();
+                if current_history != update.expected_history.as_slice() {
+                    Err(format!(
+                        "{} history changed before suffix replacement for call_id={}",
+                        update.operation, update.call_id
+                    ))
+                } else if update.suffix_start > current_history.len() {
+                    Err(format!(
+                        "{} suffix start {} exceeds history length {} for call_id={}",
+                        update.operation,
+                        update.suffix_start,
+                        current_history.len(),
+                        update.call_id
+                    ))
+                } else {
+                    state
+                        .replace_history_suffix(
+                            update.suffix_start..current_history.len(),
+                            update.replacement,
+                            update.reference_context_item,
+                        )
+                        .map_err(|err| {
+                            format!(
+                                "{} suffix replacement failed for call_id={}: {err}",
+                                update.operation, update.call_id
+                            )
+                        })
+                }
             }
             SpineHostEffect::TreeUpdate { .. } => Ok(()),
         }
@@ -1631,14 +1564,7 @@ impl Session {
             tool_resp_already_recorded,
             raw_items,
             history.raw_items(),
-            |call_id, operation, suffix_start, expected_history, replacement| SpineHistoryUpdate {
-                call_id: call_id.to_string(),
-                operation,
-                suffix_start,
-                expected_history,
-                replacement,
-                reference_context_item,
-            },
+            reference_context_item,
         )?
         else {
             return Ok(SpineCommitAttempt::RuntimeMissing);

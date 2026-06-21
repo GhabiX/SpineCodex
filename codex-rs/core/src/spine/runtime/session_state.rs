@@ -1,9 +1,11 @@
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::path::Path;
 
 use super::CompletedToolCall;
 use super::SpineError;
+use super::SpineHistoryUpdate;
 use super::SpinePreparedRootCompactInstall;
 #[cfg(test)]
 use super::SpineRootCompactResult;
@@ -11,12 +13,12 @@ use super::SpineRuntime;
 use super::prepared::SpineCommitPublication;
 use super::types::SpinePreparedCloseMemory;
 
-pub(crate) struct PreparedSpineToolcallCommit<T> {
-    publication: SpineCommitPublication<T>,
+pub(crate) struct PreparedSpineToolcallCommit {
+    publication: SpineCommitPublication<SpineHistoryUpdate>,
 }
 
-impl<T> PreparedSpineToolcallCommit<T> {
-    fn new(publication: SpineCommitPublication<T>) -> Self {
+impl PreparedSpineToolcallCommit {
+    fn new(publication: SpineCommitPublication<SpineHistoryUpdate>) -> Self {
         Self { publication }
     }
 
@@ -24,7 +26,7 @@ impl<T> PreparedSpineToolcallCommit<T> {
         self.publication.defer_tree_update_until_raw_output()
     }
 
-    pub(crate) fn take_history_update(&mut self) -> Option<T> {
+    pub(crate) fn take_history_update(&mut self) -> Option<SpineHistoryUpdate> {
         self.publication.take_history_update()
     }
 }
@@ -228,7 +230,7 @@ impl SpineSessionState {
         runtime.build_tree_snapshot()
     }
 
-    pub(crate) fn prepare_completed_toolcall_commit<T>(
+    pub(crate) fn prepare_completed_toolcall_commit(
         &mut self,
         call_id: &str,
         memory: Option<SpinePreparedCloseMemory>,
@@ -239,8 +241,8 @@ impl SpineSessionState {
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
         history_items: &[ResponseItem],
-        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
-    ) -> Result<Option<PreparedSpineToolcallCommit<T>>, SpineError> {
+        reference_context_item: Option<TurnContextItem>,
+    ) -> Result<Option<PreparedSpineToolcallCommit>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
             return Ok(None);
@@ -270,15 +272,24 @@ impl SpineSessionState {
                 tool_resp_already_recorded,
                 raw_items,
                 history_items,
-                build_update,
+                |call_id, operation, suffix_start, expected_history, replacement| {
+                    SpineHistoryUpdate {
+                        call_id: call_id.to_string(),
+                        operation,
+                        suffix_start,
+                        expected_history,
+                        replacement,
+                        reference_context_item,
+                    }
+                },
             )
             .map(PreparedSpineToolcallCommit::new)
             .map(Some)
     }
 
-    pub(crate) fn persist_toolcall_commit_side_effects<T>(
+    pub(crate) fn persist_toolcall_commit_side_effects(
         &mut self,
-        prepared: &PreparedSpineToolcallCommit<T>,
+        prepared: &PreparedSpineToolcallCommit,
     ) -> Result<(), SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
@@ -289,9 +300,9 @@ impl SpineSessionState {
         runtime.persist_commit_publication_side_effects(&prepared.publication)
     }
 
-    pub(crate) fn apply_toolcall_commit<T>(
+    pub(crate) fn apply_toolcall_commit(
         &mut self,
-        prepared: PreparedSpineToolcallCommit<T>,
+        prepared: PreparedSpineToolcallCommit,
     ) -> Result<bool, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {

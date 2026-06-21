@@ -33,6 +33,8 @@ pub(crate) use runtime::SpineCompactSourcePlan;
 #[cfg(test)]
 pub(crate) use runtime::SpineCompactSourcePlanEntry;
 pub(crate) use runtime::SpineError;
+pub(crate) use runtime::SpineHostEffect;
+pub(crate) use runtime::SpineHostEffects;
 pub(crate) use runtime::SpineOpenNodeContextProjection;
 pub(crate) use runtime::SpinePendingCommit;
 pub(crate) use runtime::SpinePreparedCloseMemory;
@@ -44,6 +46,7 @@ pub(crate) use runtime::SpineRootCompactTokenMetadata;
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::SpineTokenBaselines;
+pub(crate) use runtime::SpineTreeUpdateDelivery;
 pub(crate) use runtime::SpineTrimOutcome;
 pub(crate) use runtime::is_real_user_message;
 #[cfg(test)]

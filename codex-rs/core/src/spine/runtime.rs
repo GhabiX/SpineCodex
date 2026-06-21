@@ -48,6 +48,7 @@ mod checkpoint;
 mod close_family;
 mod commit;
 mod coverage;
+mod host_effect;
 mod load;
 mod memory_artifact;
 mod observe;
@@ -63,6 +64,10 @@ mod types;
 
 #[cfg(test)]
 use crate::spine::model::commit_marker_structural_event_seqs;
+use host_effect::SpineHistoryUpdate;
+pub(crate) use host_effect::SpineHostEffect;
+pub(crate) use host_effect::SpineHostEffects;
+pub(crate) use host_effect::SpineTreeUpdateDelivery;
 pub(crate) use pending::CompletedToolCall;
 pub(crate) use pending::CompletedToolCallSegment;
 use pending::OpenRequestAnchor;
