@@ -1,18 +1,16 @@
 use super::SpineCloneBoundary;
 use super::SpineStore;
 use super::clone_rewrite;
-use super::commit_marker;
 use super::locator;
 use super::trim;
 use crate::spine::SpineError;
 use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
-use crate::spine::model::commit_marker_structural_event_seqs;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::path::Path;
 
 mod checkpoints;
+mod events;
 mod memory_ids;
 
 impl SpineStore {
@@ -187,60 +185,22 @@ fn clone_for_rollout_into_store(
         boundary,
         source_raw_live,
     )?;
-    let mut all_marker_structural_event_seqs = BTreeSet::new();
-    let mut cloned_commit_markers = Vec::new();
-    for marker in source_commit_markers {
-        commit_marker::validate_commit_marker_record(&marker)?;
-        commit_marker::validate_commit_marker_events(&marker, &source_events_by_seq)?;
-        let structural_event_seqs = commit_marker_structural_event_seqs(&marker)?;
-        all_marker_structural_event_seqs.extend(structural_event_seqs.iter().copied());
-        let marker_in_clone_boundary = marker.token_seq_end <= boundary.structural_seq_limit
-            && marker.raw_boundary <= boundary.raw_ordinal_limit;
-        if !marker_in_clone_boundary {
-            continue;
-        }
-        if !commit_marker::commit_marker_allowed_by_source_live(&marker, source_raw_live)? {
-            return Err(SpineError::InvalidStore(format!(
-                "Spine commit marker {} is not proved by clone raw live state",
-                marker.op_id
-            )));
-        }
-        for seq in (marker.token_seq_start..marker.token_seq_end)
-            .filter(|seq| !structural_event_seqs.contains(seq))
-        {
-            let Some(event) = source_events_by_seq.get(&seq) else {
-                return Err(SpineError::InvalidStore(format!(
-                    "Spine commit marker {} references missing raw-backed event at token_seq {}",
-                    marker.op_id, seq
-                )));
-            };
-            if !event.allowed_by(mask)? {
-                return Err(SpineError::InvalidStore(format!(
-                    "Spine commit marker {} raw-backed event at token_seq {} is not proved by clone raw live state",
-                    marker.op_id, seq
-                )));
-            }
-        }
-        cloned_commit_markers.push(marker);
-    }
+    let (cloned_commit_markers, all_marker_structural_event_seqs) =
+        events::select_cloned_commit_markers(
+            source_commit_markers,
+            &source_events_by_seq,
+            boundary,
+            source_raw_live,
+            mask,
+        )?;
     drop(source_events_by_seq);
-    let mut marker_proved_event_seqs = BTreeSet::new();
-    for marker in &cloned_commit_markers {
-        marker_proved_event_seqs.extend(commit_marker_structural_event_seqs(marker)?);
-    }
-    let mut cloned_events = Vec::new();
-    for event in source_events {
-        if event.seq >= boundary.structural_seq_limit {
-            continue;
-        }
-        if marker_proved_event_seqs.contains(&event.seq) {
-            cloned_events.push(event);
-        } else if !all_marker_structural_event_seqs.contains(&event.seq)
-            && event.allowed_by(mask)?
-        {
-            cloned_events.push(event);
-        }
-    }
+    let cloned_events = events::select_cloned_events(
+        source_events,
+        &cloned_commit_markers,
+        &all_marker_structural_event_seqs,
+        boundary,
+        mask,
+    )?;
     for event in &cloned_events {
         target.append_logged_event(event)?;
     }
