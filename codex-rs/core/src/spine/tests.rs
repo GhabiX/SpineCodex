@@ -122,6 +122,8 @@ mod message_anchors;
 mod next_failure;
 #[path = "tests/next_lifecycle.rs"]
 mod next_lifecycle;
+#[path = "tests/next_lifecycle_checkpoint.rs"]
+mod next_lifecycle_checkpoint;
 #[path = "tests/next_provider_baseline.rs"]
 mod next_provider_baseline;
 #[path = "tests/next_root_cursor_failures.rs"]
