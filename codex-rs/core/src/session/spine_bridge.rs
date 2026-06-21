@@ -1064,7 +1064,7 @@ impl Session {
     ) -> Result<SpineToolCommit, SpineError> {
         // TODO(spine-hook-refactor): remove this compatibility wrapper once
         // tests call the unified completed-toolcall hook.
-        self.on_toolcall_with_client_session(
+        self.on_toolcall(
             turn_context,
             client_session,
             SpineCompletedToolCallOutputs::single(item),
@@ -1081,11 +1081,22 @@ impl Session {
     ) -> Result<SpineToolCommit, SpineError> {
         // TODO(spine-hook-refactor): remove this compatibility wrapper once
         // tests and callers use the semantic `on_toolcall` hook name.
-        self.on_toolcall_with_client_session(turn_context, client_session, outputs)
-            .await
+        self.on_toolcall(turn_context, client_session, outputs).await
     }
 
+    #[cfg(test)]
     pub(crate) async fn on_toolcall_with_client_session(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        client_session: &mut ModelClientSession,
+        outputs: SpineCompletedToolCallOutputs<'_>,
+    ) -> Result<SpineToolCommit, SpineError> {
+        // TODO(spine-hook-refactor): remove this compatibility wrapper once
+        // tests call the semantic `on_toolcall` hook name.
+        self.on_toolcall(turn_context, client_session, outputs).await
+    }
+
+    pub(crate) async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
@@ -1234,7 +1245,7 @@ impl Session {
     ) -> Result<SpineToolCommit, SpineError> {
         // TODO(spine-hook-refactor): remove this compatibility wrapper once
         // tests call the unified completed-toolcall hook.
-        self.on_toolcall_with_client_session(
+        self.on_toolcall(
             turn_context,
             client_session,
             SpineCompletedToolCallOutputs::grouped(commit_call_id, tool_call_ids, output_items),
