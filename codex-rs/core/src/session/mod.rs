@@ -42,7 +42,6 @@ use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineError;
 use crate::spine::SpineSessionState;
-use crate::spine::is_user_message;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -2751,16 +2750,22 @@ impl Session {
         self.ensure_rollout_materialized_for_spine_append().await?;
         self.observe_spine_raw_items_for_append(persisted_raw_count)
             .await?;
-        if !raw_ordinals.is_empty()
-            && let Err(err) = self
+        let observed_spine_user_message = if !raw_ordinals.is_empty() {
+            match self
                 .observe_spine_context_items(&raw_ordinals, items, &appends)
                 .await
-        {
-            return Err(self
-                .spine_append_fatal("observe Spine context items", err)
-                .await);
-        }
-        if items.iter().any(is_user_message)
+            {
+                Ok(observed_user_message) => observed_user_message,
+                Err(err) => {
+                    return Err(self
+                        .spine_append_fatal("observe Spine context items", err)
+                        .await);
+                }
+            }
+        } else {
+            false
+        };
+        if observed_spine_user_message
             && let Err(err) = self.publish_spine_materialized_history_if_available().await
         {
             return Err(self

@@ -19,6 +19,7 @@ use super::SpineTreeUpdateDelivery;
 use super::SpineTrimOutcome;
 use super::prepared::SpineCommitPublication;
 use super::support::is_real_user_message;
+use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
 use super::types::SpinePreparedCloseMemory;
 use crate::spine::model::ToolCallSegmentKind;
@@ -33,6 +34,18 @@ pub(crate) struct PreparedSpineReplayRuntime {
     pub(crate) runtime: Option<SpineRuntime>,
     pub(crate) materialized: Option<Vec<ResponseItem>>,
     pub(crate) live_root_compacts: Vec<LiveRootCompact>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SpineObservedContextItem<'a> {
+    pub(crate) raw_ordinal: u64,
+    pub(crate) context_index: usize,
+    pub(crate) item: &'a ResponseItem,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SpineContextObserveOutcome {
+    pub(crate) observed_user_message: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -619,45 +632,53 @@ impl SpineSessionState {
             .map(Some)
     }
 
-    pub(crate) fn observe_toolcall_request_anchor(
+    pub(crate) fn observe_toolcall_context_items(
         &mut self,
-        raw_ordinal: u64,
-        context_index: usize,
-        item: &ResponseItem,
-    ) -> Result<(), SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime_mut() else {
-            return Ok(());
-        };
-        runtime.observe_toolcall_request_anchor(raw_ordinal, context_index, item)
-    }
-
-    pub(crate) fn observe_toolcall_response_anchor(
-        &mut self,
-        raw_ordinal: u64,
-        context_index: usize,
-        item: &ResponseItem,
-    ) -> Result<(), SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime_mut() else {
-            return Ok(());
-        };
-        runtime.observe_toolcall_response_anchor(raw_ordinal, context_index, item)
-    }
-
-    pub(crate) fn observe_recorded_tool_outputs(
-        &mut self,
-        recorded_tool_outputs: &[(String, u64, usize)],
+        items: &[SpineObservedContextItem<'_>],
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
+    ) -> Result<SpineContextObserveOutcome, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
-            return Ok(());
+            return Ok(SpineContextObserveOutcome::default());
         };
-        runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
-            recorded_tool_outputs,
-            raw_items,
-        )
+        let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
+        for item in items {
+            if tool_request_call_id(item.item).is_some() {
+                runtime.observe_toolcall_request_anchor(
+                    item.raw_ordinal,
+                    item.context_index,
+                    item.item,
+                )?;
+            } else if let Some(call_id) = tool_response_call_id(item.item) {
+                recorded_tool_outputs.push((
+                    call_id.to_string(),
+                    item.raw_ordinal,
+                    item.context_index,
+                ));
+                runtime.observe_toolcall_response_anchor(
+                    item.raw_ordinal,
+                    item.context_index,
+                    item.item,
+                )?;
+            } else if matches!(
+                item.item,
+                ResponseItem::ToolSearchOutput { call_id: None, .. }
+                    | ResponseItem::ToolSearchCall { call_id: None, .. }
+            ) {
+                continue;
+            } else {
+                return Err(SpineError::InvalidEvent(
+                    "toolcall context observer received non-toolcall item".to_string(),
+                ));
+            }
+        }
+        if !recorded_tool_outputs.is_empty() {
+            runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+                &recorded_tool_outputs,
+                raw_items,
+            )?;
+        }
+        Ok(SpineContextObserveOutcome::default())
     }
 
     pub(crate) fn observe_non_toolcall_msg(
@@ -667,15 +688,16 @@ impl SpineSessionState {
         context_index: usize,
         item: &ResponseItem,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
+    ) -> Result<bool, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
-            return Ok(());
+            return Ok(false);
         };
         if runtime.jit_enabled() && is_real_user_message(item) {
             runtime.checkpoint_before_user_msg(rollout_path, raw_ordinal, raw_items)?;
         }
-        runtime.on_non_toolcall_msg(raw_ordinal, context_index, item)
+        runtime.on_non_toolcall_msg(raw_ordinal, context_index, item)?;
+        Ok(is_real_user_message(item))
     }
 
     pub(crate) fn trim_tool_response(

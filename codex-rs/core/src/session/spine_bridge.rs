@@ -11,6 +11,7 @@ use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCompletedToolCallEvidence;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
+use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
@@ -631,9 +632,9 @@ impl Session {
         raw_ordinals: &[Option<u64>],
         items: &[ResponseItem],
         appends: &[ContextAppend],
-    ) -> Result<(), SpineError> {
+    ) -> Result<bool, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(());
+            return Ok(false);
         };
         spine_slot.lock().await.ensure_valid()?;
         let rollout_path = self
@@ -647,33 +648,28 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
-        let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
+        let mut observed_user_message = false;
+        let mut tool_items = Vec::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
             if is_non_toolcall_msg(item) {
-                self.on_non_toolcall_msg(raw_ordinal, append.context_index, item, &raw_items)
+                observed_user_message |= self
+                    .on_non_toolcall_msg(raw_ordinal, append.context_index, item, &raw_items)
                     .await?;
-            } else if let Some(call_id) = tool_response_call_id(item) {
-                recorded_tool_outputs.push((
-                    call_id.to_string(),
+            } else {
+                tool_items.push(SpineObservedContextItem {
                     raw_ordinal,
-                    append.context_index,
-                ));
-                let mut guard = spine_slot.lock().await;
-                guard.ensure_valid()?;
-                guard.observe_toolcall_response_anchor(raw_ordinal, append.context_index, item)?;
-            } else if tool_request_call_id(item).is_some() {
-                let mut guard = spine_slot.lock().await;
-                guard.ensure_valid()?;
-                guard.observe_toolcall_request_anchor(raw_ordinal, append.context_index, item)?;
+                    context_index: append.context_index,
+                    item,
+                });
             }
         }
-        if !recorded_tool_outputs.is_empty() {
+        if !tool_items.is_empty() {
             let mut guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            guard.observe_recorded_tool_outputs(&recorded_tool_outputs, &raw_items)?;
+            let outcome = guard.observe_toolcall_context_items(&tool_items, &raw_items)?;
+            observed_user_message |= outcome.observed_user_message;
         }
-        Ok(())
+        Ok(observed_user_message)
     }
 
     pub(crate) async fn on_non_toolcall_msg(
@@ -682,9 +678,9 @@ impl Session {
         context_index: usize,
         item: &ResponseItem,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
+    ) -> Result<bool, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(());
+            return Ok(false);
         };
         if !is_non_toolcall_msg(item) {
             return Err(SpineError::InvalidEvent(
