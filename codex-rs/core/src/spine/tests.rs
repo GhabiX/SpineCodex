@@ -56,6 +56,8 @@ mod close_memory_assembly;
 mod close_output_projection;
 #[path = "tests/close_reduce_edges.rs"]
 mod close_reduce_edges;
+#[path = "tests/close_reduce_failures.rs"]
+mod close_reduce_failures;
 #[path = "tests/close_retry.rs"]
 mod close_retry;
 #[path = "tests/close_retry_prepared_memory.rs"]
