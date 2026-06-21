@@ -100,6 +100,8 @@ mod commit_marker_required;
 mod commit_marker_required_next;
 #[path = "tests/commit_marker_resume_failures.rs"]
 mod commit_marker_resume_failures;
+#[path = "tests/commit_marker_resume_failures_memory.rs"]
+mod commit_marker_resume_failures_memory;
 #[path = "tests/commit_marker_root_compact.rs"]
 mod commit_marker_root_compact;
 #[path = "tests/compact_checkpoint_ambiguity.rs"]
