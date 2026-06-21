@@ -46,10 +46,10 @@ use crate::session::spine_bridge::SpineToolCallEvidence;
 use crate::session::turn_context::TurnContext;
 use crate::spine::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 use crate::spine::SPINE_NAMESPACE;
-use crate::spine::SpineToolOutputRecording;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
+use crate::spine::SpineToolOutputRecording;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -2082,7 +2082,6 @@ async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
     spine_control_overlay: &mut SpineControlOverlay,
 ) -> Result<(), SamplingRequestError> {
     while let Some(res) = in_flight.next().await {
@@ -2103,18 +2102,16 @@ async fn drain_in_flight(
                     false
                 };
                 let commit = if spine_jit_enabled {
-                    sess.on_toolcall(
-                        &turn_context,
-                        client_session,
-                        SpineToolCallEvidence::single(&response_item),
-                    )
-                    .await
-                    .map_err(|err| {
-                        SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
-                            operation: "commit Spine tool output".to_string(),
-                            reason: err.to_string(),
-                        })
-                    })?
+                    sess.on_toolcall(&turn_context, SpineToolCallEvidence::single(&response_item))
+                        .await
+                        .map_err(|err| {
+                            SamplingRequestError::FailedNoTurnComplete(
+                                CodexErr::SpineTerminalFailure {
+                                    operation: "commit Spine tool output".to_string(),
+                                    reason: err.to_string(),
+                                },
+                            )
+                        })?
                 } else {
                     Session::no_spine_tool_commit()
                 };
@@ -2222,7 +2219,6 @@ async fn drain_deferred_spine_tool_group(
     group: Vec<DeferredToolCall>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
     spine_control_overlay: &mut SpineControlOverlay,
     tool_runtime: &ToolCallRuntime,
     cancellation_token: &CancellationToken,
@@ -2266,7 +2262,6 @@ async fn drain_deferred_spine_tool_group(
     let commit = sess
         .on_toolcall(
             &turn_context,
-            client_session,
             SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
         )
         .await
@@ -2297,7 +2292,6 @@ async fn drain_conflicting_spine_control_tool_group(
     message: &str,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
     spine_control_overlay: &mut SpineControlOverlay,
     tool_runtime: &ToolCallRuntime,
     cancellation_token: &CancellationToken,
@@ -2366,7 +2360,6 @@ async fn drain_conflicting_spine_control_tool_group(
     let commit = sess
         .on_toolcall(
             &turn_context,
-            client_session,
             SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
         )
         .await
@@ -2936,7 +2929,6 @@ async fn try_run_sampling_request(
                     group,
                     sess.clone(),
                     turn_context.clone(),
-                    client_session,
                     &mut spine_control_overlay,
                     &tool_runtime,
                     &cancellation_token,
@@ -2949,7 +2941,6 @@ async fn try_run_sampling_request(
                     &message,
                     sess.clone(),
                     turn_context.clone(),
-                    client_session,
                     &mut spine_control_overlay,
                     &tool_runtime,
                     &cancellation_token,
@@ -2963,7 +2954,6 @@ async fn try_run_sampling_request(
         &mut in_flight,
         sess.clone(),
         turn_context.clone(),
-        client_session,
         &mut spine_control_overlay,
     )
     .await?;

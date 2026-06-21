@@ -461,20 +461,13 @@ async fn commit_spine_output_and_record_raw_durable_for_test(
     turn_context: &Arc<TurnContext>,
     response_item: ResponseItem,
 ) -> CodexResult<ResponseItem> {
-    let mut client_session = session.services.model_client.new_session();
-    commit_spine_output_and_record_raw_durable_with_client_session_for_test(
-        session,
-        turn_context,
-        &mut client_session,
-        response_item,
-    )
-    .await
+    commit_spine_output_and_record_raw_durable_for_test_inner(session, turn_context, response_item)
+        .await
 }
 
-async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test(
+async fn commit_spine_output_and_record_raw_durable_for_test_inner(
     session: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    client_session: &mut crate::client::ModelClientSession,
     response_item: ResponseItem,
 ) -> CodexResult<ResponseItem> {
     let output_recorded_before_spine_commit = session.enabled(Feature::SpineJit);
@@ -486,17 +479,12 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
             )
             .await?;
     }
-    let commit = test_on_toolcall_single_with_client_session(
-        session,
-        turn_context,
-        client_session,
-        &response_item,
-    )
-    .await
-    .map_err(|err| CodexErr::SpineTerminalFailure {
-        operation: "commit Spine tool output".to_string(),
-        reason: err.to_string(),
-    })?;
+    let commit = test_on_toolcall_single(session, turn_context, &response_item)
+        .await
+        .map_err(|err| CodexErr::SpineTerminalFailure {
+            operation: "commit Spine tool output".to_string(),
+            reason: err.to_string(),
+        })?;
     if commit.recording == SpineToolOutputRecording::Skip && !output_recorded_before_spine_commit {
         return Ok(response_item);
     }
@@ -541,23 +529,8 @@ async fn test_on_toolcall_single(
     turn_context: &Arc<TurnContext>,
     item: &ResponseItem,
 ) -> Result<SpineToolCommit, SpineError> {
-    let mut client_session = session.services.model_client.new_session();
-    test_on_toolcall_single_with_client_session(session, turn_context, &mut client_session, item)
-        .await
-}
-
-async fn test_on_toolcall_single_with_client_session(
-    session: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    client_session: &mut crate::client::ModelClientSession,
-    item: &ResponseItem,
-) -> Result<SpineToolCommit, SpineError> {
     session
-        .on_toolcall(
-            turn_context,
-            client_session,
-            SpineToolCallEvidence::single(item),
-        )
+        .on_toolcall(turn_context, SpineToolCallEvidence::single(item))
         .await
 }
 
@@ -9485,10 +9458,9 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
         .await
         .expect("stage close");
     let close_output = function_output("close");
-    commit_spine_output_and_record_raw_durable_with_client_session_for_test(
+    commit_spine_output_and_record_raw_durable_for_test_inner(
         &session,
         &turn_context,
-        &mut client_session,
         close_output,
     )
     .await
@@ -11937,11 +11909,9 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
         .expect("stage next");
     let ordinary_output = function_output("grouped-durable-ordinary");
     let next_output = function_output("grouped-durable-overflow-next");
-    let mut client_session = session.services.model_client.new_session();
     let commit = session
         .on_toolcall(
             &turn_context,
-            &mut client_session,
             SpineToolCallEvidence::grouped(
                 "grouped-durable-overflow-next",
                 &[
@@ -16599,11 +16569,9 @@ async fn grouped_toolcall_prevalidates_request_anchors_before_recording_outputs(
         .await
         .expect("record anchored request");
     let before_history = session.clone_history().await.raw_items().to_vec();
-    let mut client_session = session.services.model_client.new_session();
     let err = session
         .on_toolcall(
             &turn_context,
-            &mut client_session,
             SpineToolCallEvidence::grouped(
                 "anchored-call",
                 &["anchored-call".to_string(), "missing-request".to_string()],
@@ -16648,11 +16616,9 @@ async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
         .await
         .expect("record anchored request");
     let before_history = session.clone_history().await.raw_items().to_vec();
-    let mut client_session = session.services.model_client.new_session();
     let err = session
         .on_toolcall(
             &turn_context,
-            &mut client_session,
             SpineToolCallEvidence::grouped(
                 "anchored-call",
                 &["anchored-call".to_string()],
@@ -16759,11 +16725,9 @@ async fn grouped_spine_open_after_close_uses_rollout_raw_evidence_for_projection
         .await
         .expect("stage sibling open");
 
-    let mut client_session = session.services.model_client.new_session();
     session
         .on_toolcall(
             &turn_context,
-            &mut client_session,
             SpineToolCallEvidence::grouped(
                 "open-sibling",
                 &["open-sibling".to_string()],

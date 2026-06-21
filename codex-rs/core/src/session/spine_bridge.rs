@@ -1,5 +1,4 @@
 use super::*;
-use crate::client::ModelClientSession;
 use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::annotate_spine_tree_snapshot;
@@ -18,8 +17,8 @@ use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
-use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineToolOutputRecording;
+use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use codex_protocol::models::ContentItem;
@@ -902,7 +901,6 @@ impl Session {
     pub(crate) async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        client_session: &mut ModelClientSession,
         evidence: SpineToolCallEvidence<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
         let Some(completed) = (match evidence.kind {
@@ -926,7 +924,7 @@ impl Session {
         }) else {
             return Ok(Self::no_spine_tool_commit());
         };
-        self.commit_completed_spine_toolcall(turn_context, client_session, completed)
+        self.commit_completed_spine_toolcall(turn_context, completed)
             .await
     }
 
@@ -1081,12 +1079,10 @@ impl Session {
     async fn commit_completed_spine_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        client_session: &mut ModelClientSession,
         toolcall: CompletedSpineToolCall<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
-        self.commit_spine_completed_toolcall_with_client_session(
+        self.commit_spine_completed_toolcall(
             turn_context,
-            client_session,
             toolcall.evidence.call_id,
             toolcall.evidence.response_item,
             toolcall.evidence.toolcall_evidence,
@@ -1097,10 +1093,9 @@ impl Session {
         .await
     }
 
-    async fn commit_spine_completed_toolcall_with_client_session(
+    async fn commit_spine_completed_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        _client_session: &mut ModelClientSession,
         call_id: &str,
         item: &ResponseItem,
         toolcall_evidence: SpineToolcallCommitEvidence,
@@ -1126,8 +1121,8 @@ impl Session {
         let current_turn_provider_input_tokens = current_turn_token_info
             .as_ref()
             .and_then(provider_input_context_tokens);
-        let pre_compact_provider_input_tokens =
-            commit_preparation.pre_compact_provider_input_tokens(current_turn_provider_input_tokens);
+        let pre_compact_provider_input_tokens = commit_preparation
+            .pre_compact_provider_input_tokens(current_turn_provider_input_tokens);
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
         let mut lock_retries = 0;
