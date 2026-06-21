@@ -959,11 +959,13 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn stage_spine_open(
+    pub(crate) async fn test_seed_spine_open_control_request(
         &self,
         call_id: String,
         summary: String,
     ) -> Result<(), SpineError> {
+        // TODO(spine-hook-refactor): replace direct runtime seeding with
+        // test evidence passed through the unified on_toolcall hook.
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
         guard.ensure_valid()?;
@@ -976,11 +978,13 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn stage_spine_close<M: IntoSpineNodeMemory>(
+    pub(crate) async fn test_seed_spine_close_control_request<M: IntoSpineNodeMemory>(
         &self,
         call_id: String,
         memory: M,
     ) -> Result<(), SpineError> {
+        // TODO(spine-hook-refactor): replace direct runtime seeding with
+        // test evidence passed through the unified on_toolcall hook.
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
         guard.ensure_valid()?;
@@ -993,12 +997,14 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn stage_spine_next<M: IntoSpineNodeMemory>(
+    pub(crate) async fn test_seed_spine_next_control_request<M: IntoSpineNodeMemory>(
         &self,
         call_id: String,
         summary: String,
         memory: M,
     ) -> Result<(), SpineError> {
+        // TODO(spine-hook-refactor): replace direct runtime seeding with
+        // test evidence passed through the unified on_toolcall hook.
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
         guard.ensure_valid()?;
