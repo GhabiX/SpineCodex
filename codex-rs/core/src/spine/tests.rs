@@ -48,6 +48,8 @@ mod close_commit_artifact_failures;
 mod close_commit_durable_failures;
 #[path = "tests/close_commit_failures.rs"]
 mod close_commit_failures;
+#[path = "tests/close_commit_internal_failures.rs"]
+mod close_commit_internal_failures;
 #[path = "tests/close_lifecycle.rs"]
 mod close_lifecycle;
 #[path = "tests/close_memory_assembly.rs"]
