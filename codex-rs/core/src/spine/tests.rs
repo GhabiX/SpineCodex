@@ -164,6 +164,8 @@ mod rollback_sparse;
 mod rollback_sparse_materialization;
 #[path = "tests/root_compact_boundary.rs"]
 mod root_compact_boundary;
+#[path = "tests/root_compact_boundary_checkpoint.rs"]
+mod root_compact_boundary_checkpoint;
 #[path = "tests/root_compact_checkpoint_retry.rs"]
 mod root_compact_checkpoint_retry;
 #[path = "tests/root_compact_example_trace.rs"]
