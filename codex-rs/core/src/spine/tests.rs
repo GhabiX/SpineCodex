@@ -106,6 +106,8 @@ mod next_failure;
 mod next_lifecycle;
 #[path = "tests/next_provider_baseline.rs"]
 mod next_provider_baseline;
+#[path = "tests/next_root_cursor_failures.rs"]
+mod next_root_cursor_failures;
 #[path = "tests/next_transactions.rs"]
 mod next_transactions;
 #[path = "tests/open_lifecycle.rs"]
