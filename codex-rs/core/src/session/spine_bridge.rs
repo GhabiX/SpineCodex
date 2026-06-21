@@ -11,12 +11,12 @@ use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
-use crate::spine::SpinePreparedCloseMemory;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
+use crate::spine::SpineToolcallCommitInput;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::ToolCallSegmentKind;
@@ -1405,56 +1405,14 @@ impl Session {
             .ok_or_else(|| {
                 SpineError::InvalidEvent("completed toolcall missing first segment".to_string())
             })?;
-        let memory_assembly = {
-            let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(spine) = guard.runtime() else {
-                return Err(SpineError::Invariant(format!(
-                    "spine runtime missing while building close memory assembly for call_id={call_id}"
-                )));
-            };
-            spine.prepare_close_memory_assembly_for_completed_toolcall(
-                history.raw_items(),
-                toolcall_start,
-                call_id,
-            )
-        };
-        let memory_assembly = match memory_assembly {
-            Ok(Some(compact)) => Some(SpinePreparedCloseMemory::new(compact, expected_history)),
-            Ok(None) => None,
-            Err(err) => {
-                let reason = "spine close memory assembly failed before commit";
-                if tool_resp_already_recorded {
-                    self.fail_closed_spine_toolcall_commit(call_id, reason)
-                        .await;
-                } else {
-                    self.abort_spine_pending_tool(call_id, reason).await;
-                }
-                return Err(err);
-            }
-        };
-        if let Some(prepared_memory) = memory_assembly.as_ref() {
-            let history = self.clone_history().await;
-            if history.raw_items() != prepared_memory.expected_history() {
-                let reason = "spine close history changed before commit";
-                if tool_resp_already_recorded {
-                    self.fail_closed_spine_toolcall_commit(call_id, reason)
-                        .await;
-                } else {
-                    self.abort_spine_pending_tool(call_id, reason).await;
-                }
-                return Err(SpineError::Operation(format!(
-                    "spine.close history changed while compacting suffix for call_id={call_id}"
-                )));
-            }
-        }
         let mut lock_retries = 0;
         let commit_output = loop {
             let attempt = self.try_commit_spine_tool_output_once(
                 spine_slot,
                 call_id,
                 item,
-                memory_assembly.clone(),
+                expected_history.clone(),
+                toolcall_start,
                 pre_compact_provider_input_tokens,
                 current_turn_token_info.as_ref(),
                 completed_toolcall.clone(),
@@ -1539,7 +1497,8 @@ impl Session {
         spine_slot: &Mutex<SpineSessionState>,
         call_id: &str,
         tool_resp_item: &ResponseItem,
-        memory_assembly: Option<SpinePreparedCloseMemory>,
+        expected_history: Vec<ResponseItem>,
+        toolcall_start: usize,
         pre_compact_provider_input_tokens: Option<i64>,
         current_turn_token_info: Option<&TokenUsageInfo>,
         completed_toolcall: CompletedToolCall,
@@ -1554,19 +1513,21 @@ impl Session {
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
-        let Some(prepared_commit) = guard.prepare_completed_toolcall_commit(
+        let input = SpineToolcallCommitInput {
             call_id,
-            memory_assembly,
-            pre_compact_provider_input_tokens,
-            current_turn_token_info.and_then(provider_input_context_tokens),
             completed_toolcall,
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
-            history.raw_items(),
+            history_items: history.raw_items(),
+            expected_history,
+            toolcall_start,
             reference_context_item,
-        )?
-        else {
+            pre_compact_provider_input_tokens,
+            current_turn_provider_input_tokens: current_turn_token_info
+                .and_then(provider_input_context_tokens),
+        };
+        let Some(prepared_commit) = guard.prepare_completed_toolcall_commit(input)? else {
             return Ok(SpineCommitAttempt::RuntimeMissing);
         };
         let committed = guard.commit_prepared_toolcall_with_host_effects(

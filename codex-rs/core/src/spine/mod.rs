@@ -46,6 +46,7 @@ pub(crate) use runtime::SpineRootCompactTokenMetadata;
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::SpineTokenBaselines;
+pub(crate) use runtime::SpineToolcallCommitInput;
 pub(crate) use runtime::SpineTreeUpdateDelivery;
 pub(crate) use runtime::SpineTrimOutcome;
 pub(crate) use runtime::is_real_user_message;

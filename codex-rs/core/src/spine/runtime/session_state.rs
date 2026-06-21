@@ -19,6 +19,20 @@ pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
 }
 
+pub(crate) struct SpineToolcallCommitInput<'a> {
+    pub(crate) call_id: &'a str,
+    pub(crate) completed_toolcall: CompletedToolCall,
+    pub(crate) tool_resp_item: &'a ResponseItem,
+    pub(crate) tool_resp_already_recorded: bool,
+    pub(crate) raw_items: &'a [Option<ResponseItem>],
+    pub(crate) history_items: &'a [ResponseItem],
+    pub(crate) expected_history: Vec<ResponseItem>,
+    pub(crate) toolcall_start: usize,
+    pub(crate) reference_context_item: Option<TurnContextItem>,
+    pub(crate) pre_compact_provider_input_tokens: Option<i64>,
+    pub(crate) current_turn_provider_input_tokens: Option<i64>,
+}
+
 pub(crate) struct SpinePostApplyEffectPolicy {
     delivery: SpineTreeUpdateDelivery,
 }
@@ -267,46 +281,84 @@ impl SpineSessionState {
 
     pub(crate) fn prepare_completed_toolcall_commit(
         &mut self,
-        call_id: &str,
-        memory: Option<SpinePreparedCloseMemory>,
-        pre_compact_provider_input_tokens: Option<i64>,
-        current_turn_provider_input_tokens: Option<i64>,
-        completed_toolcall: CompletedToolCall,
-        tool_resp_item: &ResponseItem,
-        tool_resp_already_recorded: bool,
-        raw_items: &[Option<ResponseItem>],
-        history_items: &[ResponseItem],
-        reference_context_item: Option<TurnContextItem>,
+        input: SpineToolcallCommitInput<'_>,
     ) -> Result<Option<PreparedSpineToolcallCommit>, SpineError> {
         self.ensure_valid()?;
+        if self.runtime().is_none() {
+            return Ok(None);
+        }
+        let memory = {
+            let assembly = self
+                .runtime_mut()
+                .ok_or_else(|| {
+                    SpineError::InvalidStore(
+                        "spine runtime missing before completed toolcall commit".to_string(),
+                    )
+                })?
+                .prepare_close_memory_assembly_for_completed_toolcall(
+                    input.history_items,
+                    input.toolcall_start,
+                    input.call_id,
+                );
+            match assembly {
+                Ok(Some(assembly)) => Some(SpinePreparedCloseMemory::new(
+                    assembly,
+                    input.expected_history,
+                )),
+                Ok(None) => None,
+                Err(err) => {
+                    let reason = "spine close memory assembly failed before commit";
+                    if input.tool_resp_already_recorded {
+                        self.invalidate(format!("{reason} for call_id={}", input.call_id));
+                    } else if let Some(runtime) = self.runtime_mut() {
+                        runtime.abort_pending(input.call_id);
+                    }
+                    return Err(err);
+                }
+            }
+        };
+        if let Some(prepared_memory) = memory.as_ref()
+            && input.history_items != prepared_memory.expected_history()
+        {
+            let reason = "spine close history changed before commit";
+            if input.tool_resp_already_recorded {
+                self.invalidate(format!("{reason} for call_id={}", input.call_id));
+            } else if let Some(runtime) = self.runtime_mut() {
+                runtime.abort_pending(input.call_id);
+            }
+            return Err(SpineError::Operation(format!(
+                "spine.close history changed while compacting suffix for call_id={}",
+                input.call_id
+            )));
+        }
         let Some(runtime) = self.runtime_mut() else {
             return Ok(None);
         };
         runtime.validate_close_expected_history_for_commit(
-            call_id,
+            input.call_id,
             memory
                 .as_ref()
                 .map(SpinePreparedCloseMemory::expected_history),
-            history_items,
+            input.history_items,
         )?;
         let memory_assembly = memory.map(SpinePreparedCloseMemory::into_assembly);
         let commit_application = runtime
             .prepare_or_observe_completed_toolcall_with_pending_baselines(
-                call_id,
+                input.call_id,
                 memory_assembly,
-                pre_compact_provider_input_tokens,
-                current_turn_provider_input_tokens,
-                completed_toolcall,
-                raw_items,
+                input.pre_compact_provider_input_tokens,
+                input.current_turn_provider_input_tokens,
+                input.completed_toolcall,
+                input.raw_items,
             )?;
         runtime
             .prepare_commit_publication(
-                call_id,
+                input.call_id,
                 commit_application,
-                tool_resp_item,
-                tool_resp_already_recorded,
-                raw_items,
-                history_items,
+                input.tool_resp_item,
+                input.tool_resp_already_recorded,
+                input.raw_items,
+                input.history_items,
                 |call_id, operation, suffix_start, expected_history, replacement| {
                     SpineHistoryUpdate {
                         call_id: call_id.to_string(),
@@ -314,7 +366,7 @@ impl SpineSessionState {
                         suffix_start,
                         expected_history,
                         replacement,
-                        reference_context_item,
+                        reference_context_item: input.reference_context_item,
                     }
                 },
             )
