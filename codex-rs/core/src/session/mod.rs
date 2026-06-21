@@ -1352,33 +1352,16 @@ impl Session {
                 ))
             })?
         } else if self.features.enabled(Feature::SpineTrim) {
-            let runtime = self
-                .prepare_spine_trim_replay_from_rollout_items(
-                    replay_raw_len,
-                    &reconstructed_rollout.history,
-                )
-                .await
-                .map_err(|err| {
-                    CodexErr::Fatal(format!(
-                        "failed to rebuild Spine trim runtime from rollout: {err}"
-                    ))
-                })?;
-            let materialized = runtime
-                .as_ref()
-                .map(|runtime| {
-                    runtime.project_raw_history_with_trim(&reconstructed_rollout.history)
-                })
-                .transpose()
-                .map_err(|err| {
-                    CodexErr::Fatal(format!(
-                        "failed to apply Spine trim projection from rollout: {err}"
-                    ))
-                })?;
-            Some(spine_bridge::PreparedSpineReplay::new(
+            self.prepare_spine_trim_replay_from_rollout_items(
                 replay_raw_len,
-                runtime,
-                materialized,
-            ))
+                &reconstructed_rollout.history,
+            )
+            .await
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to rebuild Spine trim runtime from rollout: {err}"
+                ))
+            })?
         } else {
             None
         };

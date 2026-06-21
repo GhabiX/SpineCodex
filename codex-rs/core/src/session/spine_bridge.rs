@@ -490,7 +490,7 @@ impl Session {
         &self,
         raw_len: u64,
         history: &[ResponseItem],
-    ) -> Result<Option<SpineRuntime>, SpineError> {
+    ) -> Result<Option<PreparedSpineReplay>, SpineError> {
         let Some(_spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -504,13 +504,16 @@ impl Session {
         else {
             return Ok(None);
         };
-        if !SpineStore::has_for_rollout(&rollout_path)? {
+        let Some((runtime, materialized)) =
+            SpineSessionState::prepare_trim_replay_from_history(&rollout_path, raw_len, history)?
+        else {
             return Ok(None);
-        }
-        let mut runtime = SpineRuntime::load_or_create_with_jit(&rollout_path, raw_len, false)?;
-        runtime.set_trim_enabled(true);
-        runtime.project_raw_history_with_trim(history)?;
-        Ok(Some(runtime))
+        };
+        Ok(Some(PreparedSpineReplay::new(
+            raw_len,
+            Some(runtime),
+            Some(materialized),
+        )))
     }
 
     pub(super) async fn apply_spine_replay(

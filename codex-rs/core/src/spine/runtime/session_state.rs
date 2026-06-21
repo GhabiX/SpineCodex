@@ -684,6 +684,20 @@ impl SpineSessionState {
         Ok(Some(runtime.project_raw_history_with_trim(history_items)?))
     }
 
+    pub(crate) fn prepare_trim_replay_from_history(
+        rollout_path: &Path,
+        raw_len: u64,
+        history_items: &[ResponseItem],
+    ) -> Result<Option<(SpineRuntime, Vec<ResponseItem>)>, SpineError> {
+        if !SpineStore::has_for_rollout(rollout_path)? {
+            return Ok(None);
+        }
+        let mut runtime = SpineRuntime::load_or_create_with_jit(rollout_path, raw_len, false)?;
+        runtime.set_trim_enabled(true);
+        let materialized = runtime.project_raw_history_with_trim(history_items)?;
+        Ok(Some((runtime, materialized)))
+    }
+
     pub(crate) fn prepare_root_compact_commit_with_checkpoint(
         &mut self,
         rollout_path: &Path,
