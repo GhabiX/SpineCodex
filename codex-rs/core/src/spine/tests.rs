@@ -126,6 +126,8 @@ mod root_compact_lifecycle;
 mod root_compact_prepared;
 #[path = "tests/root_compact_replay.rs"]
 mod root_compact_replay;
+#[path = "tests/root_compact_token_baseline.rs"]
+mod root_compact_token_baseline;
 #[path = "tests/runtime_lifecycle.rs"]
 mod runtime_lifecycle;
 #[path = "tests/store_basics.rs"]
