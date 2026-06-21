@@ -48,6 +48,8 @@ mod closed_memory_accounting;
 mod commit_marker_carriers;
 #[path = "tests/commit_marker_prepare_failures.rs"]
 mod commit_marker_prepare_failures;
+#[path = "tests/commit_marker_replay.rs"]
+mod commit_marker_replay;
 #[path = "tests/commit_marker_required.rs"]
 mod commit_marker_required;
 #[path = "tests/commit_markers.rs"]
