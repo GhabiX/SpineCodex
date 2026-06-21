@@ -302,6 +302,8 @@ mod trim_projection_composition;
 mod trim_projection_composition_snip;
 #[path = "tests/trim_projection_slice.rs"]
 mod trim_projection_slice;
+#[path = "tests/trim_projection_slice_anchor.rs"]
+mod trim_projection_slice_anchor;
 #[path = "tests/trim_projection_slice_rejections.rs"]
 mod trim_projection_slice_rejections;
 #[path = "tests/trim_projection_slice_tail.rs"]
