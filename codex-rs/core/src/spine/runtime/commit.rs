@@ -21,6 +21,7 @@ use super::support::close_commit_marker;
 use super::support::close_event_boundary;
 use super::support::completed_toolcall_first_segment;
 use super::types::SpineCloseMemoryAssembly;
+use super::types::SpinePendingCommit;
 use super::types::SpineTokenBaselines;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::flush_archive_writes;
@@ -147,6 +148,29 @@ impl SpineRuntime {
             Some(completed_toolcall),
             raw_items,
         )
+    }
+
+    pub(crate) fn prepare_or_observe_completed_toolcall_for_commit(
+        &mut self,
+        call_id: &str,
+        pending_commit: Option<&SpinePendingCommit>,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
+        token_baselines: SpineTokenBaselines,
+        completed_toolcall: CompletedToolCall,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<SpinePreparedCommit>, SpineError> {
+        if pending_commit.is_some() {
+            self.prepare_commit_output_with_toolcall_and_raw_items(
+                call_id,
+                memory_assembly,
+                token_baselines,
+                completed_toolcall,
+                raw_items,
+            )
+        } else {
+            self.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
+            Ok(None)
+        }
     }
 
     fn maybe_commit_output_impl(

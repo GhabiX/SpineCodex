@@ -1656,8 +1656,7 @@ impl Session {
             pre_compact_token_baselines,
             current_turn_token_info,
         );
-        let prepared_commit = prepare_or_observe_completed_toolcall_for_commit(
-            spine,
+        let prepared_commit = spine.prepare_or_observe_completed_toolcall_for_commit(
             call_id,
             pending_commit.as_ref(),
             memory_assembly,
@@ -2811,29 +2810,6 @@ fn validate_close_expected_history_for_commit(
         )));
     }
     Ok(())
-}
-
-fn prepare_or_observe_completed_toolcall_for_commit(
-    spine: &mut SpineRuntime,
-    call_id: &str,
-    pending_commit: Option<&SpinePendingCommit>,
-    memory_assembly: Option<SpineCloseMemoryAssembly>,
-    token_baselines: SpineTokenBaselines,
-    completed_toolcall: CompletedToolCall,
-    raw_items: &[Option<ResponseItem>],
-) -> Result<Option<SpinePreparedCommit>, SpineError> {
-    if pending_commit.is_some() {
-        spine.prepare_commit_output_with_toolcall_and_raw_items(
-            call_id,
-            memory_assembly,
-            token_baselines,
-            completed_toolcall,
-            raw_items,
-        )
-    } else {
-        spine.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
-        Ok(None)
-    }
 }
 
 fn spine_host_effects_for_commit_publication(
