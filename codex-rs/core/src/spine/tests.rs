@@ -266,6 +266,8 @@ mod trim_candidates;
 mod trim_candidates_custom;
 #[path = "tests/trim_only.rs"]
 mod trim_only;
+#[path = "tests/trim_only_fork_clone.rs"]
+mod trim_only_fork_clone;
 #[path = "tests/trim_projection.rs"]
 mod trim_projection;
 #[path = "tests/trim_projection_composition.rs"]
