@@ -436,6 +436,47 @@ impl SpineSessionState {
             .map(Some)
     }
 
+    pub(crate) fn observe_toolcall_request_anchor(
+        &mut self,
+        raw_ordinal: u64,
+        context_index: usize,
+        item: &ResponseItem,
+    ) -> Result<(), SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Ok(());
+        };
+        runtime.observe_toolcall_request_anchor(raw_ordinal, context_index, item)
+    }
+
+    pub(crate) fn observe_toolcall_response_anchor(
+        &mut self,
+        raw_ordinal: u64,
+        context_index: usize,
+        item: &ResponseItem,
+    ) -> Result<(), SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Ok(());
+        };
+        runtime.observe_toolcall_response_anchor(raw_ordinal, context_index, item)
+    }
+
+    pub(crate) fn observe_recorded_tool_outputs(
+        &mut self,
+        recorded_tool_outputs: &[(String, u64, usize)],
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Ok(());
+        };
+        runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+            recorded_tool_outputs,
+            raw_items,
+        )
+    }
+
     pub(crate) fn single_completed_toolcall_evidence(
         &self,
         call_id: &str,
