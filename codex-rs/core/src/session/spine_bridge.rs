@@ -1557,35 +1557,12 @@ impl Session {
         };
         {
             let mut guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let prepared = match guard
-                .runtime_mut()
-                .ok_or_else(|| {
-                    SpineError::InvalidStore(
-                        "spine runtime missing after initialization".to_string(),
-                    )
-                })?
-                .prepare_root_compact_commit_with_checkpoint(
-                    &rollout_path,
-                    body,
-                    &raw_items,
-                    token_metadata,
-                ) {
-                Ok(prepared) => prepared,
-                Err(err) => {
-                    if !err.should_invalidate_runtime() {
-                        tracing::debug!(
-                            error_class = ?err.class(),
-                            "invalidating Spine runtime after root compact failure to preserve existing fail-closed behavior"
-                        );
-                    }
-                    guard.invalidate(format!(
-                        "failed to install Spine root compact [{:?}]: {err}",
-                        err.class()
-                    ));
-                    return Err(err);
-                }
-            };
+            let prepared = guard.prepare_root_compact_commit_with_checkpoint(
+                &rollout_path,
+                body,
+                &raw_items,
+                token_metadata,
+            )?;
             Ok(Some(PreparedSpineRootCompact::from_commit(prepared)))
         }
     }

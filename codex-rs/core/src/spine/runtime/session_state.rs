@@ -11,6 +11,7 @@ use super::SpineHostEffects;
 use super::SpinePreparedRootCompactInstall;
 #[cfg(test)]
 use super::SpineRootCompactResult;
+use super::SpineRootCompactTokenMetadata;
 use super::SpineRuntime;
 use super::SpineTreeUpdateDelivery;
 use super::SpineTrimOutcome;
@@ -571,6 +572,40 @@ impl SpineSessionState {
     ) -> Result<SpineTrimOutcome, SpineError> {
         self.runtime_mut_after_init()?
             .slice_tool_response_anchor(trim_id, anchor, preceding, following, raw_items)
+    }
+
+    pub(crate) fn prepare_root_compact_commit_with_checkpoint(
+        &mut self,
+        rollout_path: &Path,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        token_metadata: SpineRootCompactTokenMetadata,
+    ) -> Result<PreparedSpineRootCompactCommit, SpineError> {
+        let prepared = {
+            let runtime = self.runtime_mut_after_init()?;
+            runtime.prepare_root_compact_commit_with_checkpoint(
+                rollout_path,
+                body,
+                raw_items,
+                token_metadata,
+            )
+        };
+        match prepared {
+            Ok(prepared) => Ok(prepared),
+            Err(err) => {
+                if !err.should_invalidate_runtime() {
+                    tracing::debug!(
+                        error_class = ?err.class(),
+                        "invalidating Spine runtime after root compact failure to preserve existing fail-closed behavior"
+                    );
+                }
+                self.invalidate(format!(
+                    "failed to install Spine root compact [{:?}]: {err}",
+                    err.class()
+                ));
+                Err(err)
+            }
+        }
     }
 
     pub(crate) fn single_completed_toolcall_evidence(
