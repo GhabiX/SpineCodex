@@ -421,6 +421,13 @@ impl SpineSessionState {
         runtime.has_close_like_control_request(call_id, raw_items)
     }
 
+    pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
+        let Some(runtime) = self.runtime() else {
+            return false;
+        };
+        runtime.is_control_output_call_id(call_id)
+    }
+
     pub(crate) fn prepare_completed_toolcall_for_commit(
         &mut self,
         call_id: &str,

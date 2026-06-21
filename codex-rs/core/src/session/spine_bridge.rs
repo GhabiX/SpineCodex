@@ -1529,10 +1529,7 @@ impl Session {
         };
         let guard = spine_slot.lock().await;
         guard.ensure_valid()?;
-        let Some(spine) = guard.runtime() else {
-            return Ok(false);
-        };
-        Ok(spine.is_control_output_call_id(call_id))
+        Ok(guard.is_control_output_call_id(call_id))
     }
 
     #[cfg(test)]
