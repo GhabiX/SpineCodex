@@ -8,7 +8,6 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::spine::archive::SpineArchive;
-use crate::spine::archive::StagedArchiveWrite;
 use crate::spine::archive::flush_archive_writes;
 use crate::spine::archive::memory_ref;
 use crate::spine::archive::tree_meta_with_token_baselines;
@@ -58,6 +57,7 @@ use crate::spine::store::BODY_DIR;
 use crate::spine::store::SpineStore;
 
 mod accounting;
+mod close_family;
 mod coverage;
 mod load;
 mod observe;
@@ -71,6 +71,12 @@ mod types;
 
 #[cfg(test)]
 use crate::spine::model::commit_marker_structural_event_seqs;
+use close_family::CloseFamilyAfterClose;
+use close_family::CloseFamilyOpenPlan;
+use close_family::CloseFamilyPlan;
+use close_family::CloseFamilyTransaction;
+use close_family::CloseFamilyTransactionError;
+use close_family::PreparedCloseCommit;
 pub(crate) use pending::CompletedToolCall;
 pub(crate) use pending::CompletedToolCallSegment;
 use pending::OpenRequestAnchor;
@@ -190,17 +196,6 @@ impl SpineLedgerCache {
     }
 }
 
-struct PreparedCloseCommit {
-    suffix_start: usize,
-    replacement: Vec<ResponseItem>,
-    mem: MemRecord,
-    memory_body: String,
-    archive_writes: Vec<StagedArchiveWrite>,
-    close_event: SpineLedgerEvent,
-    memory: crate::spine::model::MemoryRef,
-    task_tree_reduction: PreparedTaskTreeReduction,
-}
-
 struct PreparedRootCompactCommit {
     result: SpineRootCompactResult,
     mem: MemRecord,
@@ -216,44 +211,6 @@ struct PreparedRootCompactCommit {
 struct OpenContextBaseline {
     provider_input_tokens: i64,
     source: ContextBaselineSource,
-}
-
-enum CloseFamilyAfterClose {
-    None,
-    Open { summary: String },
-}
-
-struct CloseFamilyOpenPlan {
-    child: NodeId,
-    open_index_u64: u64,
-    summary: String,
-    event: SpineLedgerEvent,
-}
-
-struct CloseFamilyPlan {
-    operation: &'static str,
-    missing_toolcall_error: &'static str,
-    event_count_underflow_error: &'static str,
-    toolcall_seq_overflow_error: &'static str,
-    marker_kind: SpineCommitKindMarker,
-    kind: SpineCommitKind,
-    toolcall_context_index: Option<usize>,
-    open: Option<CloseFamilyOpenPlan>,
-}
-
-struct CloseFamilyTransaction<'a> {
-    mem: &'a MemRecord,
-    memory_body: &'a str,
-    archive_writes: &'a [StagedArchiveWrite],
-    events: Vec<SpineLedgerEvent>,
-    marker_kind: SpineCommitKindMarker,
-    close_event: &'a SpineLedgerEvent,
-    event_count: u64,
-}
-
-enum CloseFamilyTransactionError {
-    PreparedSideEffect(SpineError),
-    CommitProof(SpineError),
 }
 
 pub(crate) trait IntoSpineNodeMemory {
