@@ -240,6 +240,8 @@ mod runtime_lifecycle_writer_ownership;
 mod store_basics;
 #[path = "tests/toolcall_grouping.rs"]
 mod toolcall_grouping;
+#[path = "tests/toolcall_grouping_multi_request.rs"]
+mod toolcall_grouping_multi_request;
 #[path = "tests/toolcall_grouping_validation.rs"]
 mod toolcall_grouping_validation;
 #[path = "tests/toolcall_lexer.rs"]
