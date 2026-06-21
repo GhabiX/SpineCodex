@@ -122,30 +122,30 @@ struct CompletedSpineToolCall<'a> {
 }
 
 pub(crate) struct PreparedSpineRootCompactApply {
-    commit: crate::spine::PreparedSpineRootCompactCommit,
+    prepared: crate::spine::PreparedSpineRootCompactApply,
 }
 
 struct PreparedSpineRootCompact {
     materialized: Vec<ResponseItem>,
-    commit: crate::spine::PreparedSpineRootCompactCommit,
+    prepared: crate::spine::PreparedSpineRootCompactApply,
 }
 
 impl PreparedSpineRootCompact {
-    fn from_commit(commit: crate::spine::PreparedSpineRootCompactCommit) -> Self {
-        let materialized = commit.materialized().to_vec();
+    fn from_prepared(prepared: crate::spine::PreparedSpineRootCompactApply) -> Self {
+        let materialized = prepared.materialized().to_vec();
         Self {
             materialized,
-            commit,
+            prepared,
         }
     }
 
     #[cfg(test)]
     fn result(&self) -> crate::spine::SpineRootCompactResult {
-        self.commit.result()
+        self.prepared.result()
     }
 
-    fn into_commit(self) -> crate::spine::PreparedSpineRootCompactCommit {
-        self.commit
+    fn into_apply(self) -> crate::spine::PreparedSpineRootCompactApply {
+        self.prepared
     }
 }
 
@@ -1375,11 +1375,11 @@ impl Session {
             return Ok(None);
         };
         let result = prepared.result();
-        let commit = prepared.into_commit();
+        let prepared = prepared.into_apply();
         let mut guard = spine_slot.lock().await;
         guard.ensure_valid()?;
         let snapshot =
-            guard.apply_root_compact_after_history_publish(commit, result.materialized.len())?;
+            guard.apply_root_compact_after_history_publish(prepared, result.materialized.len())?;
         Ok(Some((result, snapshot)))
     }
 
@@ -1424,13 +1424,13 @@ impl Session {
         };
         {
             let mut guard = spine_slot.lock().await;
-            let prepared = guard.prepare_root_compact_commit_with_checkpoint(
+            let prepared = guard.prepare_root_compact_apply_with_checkpoint(
                 &rollout_path,
                 body,
                 &raw_items,
                 token_metadata,
             )?;
-            Ok(Some(PreparedSpineRootCompact::from_commit(prepared)))
+            Ok(Some(PreparedSpineRootCompact::from_prepared(prepared)))
         }
     }
 
@@ -1474,7 +1474,7 @@ impl Session {
         *items = root_compact.materialized.clone();
         compacted_item.replacement_history = Some(items.clone());
         Ok(Some(PreparedSpineRootCompactApply {
-            commit: root_compact.into_commit(),
+            prepared: root_compact.into_apply(),
         }))
     }
 
@@ -1491,7 +1491,7 @@ impl Session {
         };
         let mut guard = spine_slot.lock().await;
         guard
-            .apply_root_compact_after_history_publish(prepared.commit, published_history_len)
+            .apply_root_compact_after_history_publish(prepared.prepared, published_history_len)
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),

@@ -1,13 +1,13 @@
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
 
-use super::PreparedSpineRootCompactCommit;
 use super::SpineError;
 use super::SpinePreparedRootCompact;
 use super::SpinePreparedRootCompactInstall;
 use super::SpineRootCompactResult;
 use super::SpineRootCompactTokenMetadata;
 use super::SpineRuntime;
+use super::session_state::PreparedSpineRootCompactCommit;
 use crate::spine::archive::memory_ref;
 use crate::spine::compact_checkpoint::build_compact_checkpoint;
 use crate::spine::io::hash_raw_live;

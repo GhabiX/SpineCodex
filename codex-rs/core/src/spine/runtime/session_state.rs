@@ -162,6 +162,10 @@ pub(crate) struct PreparedSpineRootCompactCommit {
     install: SpinePreparedRootCompactInstall,
 }
 
+pub(crate) struct PreparedSpineRootCompactApply {
+    commit: PreparedSpineRootCompactCommit,
+}
+
 impl PreparedSpineRootCompactCommit {
     pub(crate) fn from_install(install: SpinePreparedRootCompactInstall) -> Self {
         Self { install }
@@ -174,6 +178,21 @@ impl PreparedSpineRootCompactCommit {
     #[cfg(test)]
     pub(crate) fn result(&self) -> SpineRootCompactResult {
         self.install.result().clone()
+    }
+}
+
+impl PreparedSpineRootCompactApply {
+    fn new(commit: PreparedSpineRootCompactCommit) -> Self {
+        Self { commit }
+    }
+
+    pub(crate) fn materialized(&self) -> &[ResponseItem] {
+        self.commit.materialized()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn result(&self) -> SpineRootCompactResult {
+        self.commit.result()
     }
 }
 
@@ -594,7 +613,7 @@ impl SpineSessionState {
 
     pub(crate) fn apply_root_compact_after_history_publish(
         &mut self,
-        commit: PreparedSpineRootCompactCommit,
+        prepared: PreparedSpineRootCompactApply,
         published_history_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         self.ensure_valid()?;
@@ -603,7 +622,7 @@ impl SpineSessionState {
                 "spine runtime missing before root compact PS install".to_string(),
             ));
         };
-        runtime.install_prepared_root_compact_install(commit.install);
+        runtime.install_prepared_root_compact_install(prepared.commit.install);
         let current_open_index = runtime.current_open_index()?;
         if current_open_index != published_history_len {
             return Err(SpineError::InvalidStore(format!(
@@ -846,6 +865,22 @@ impl SpineSessionState {
                 Err(err)
             }
         }
+    }
+
+    pub(crate) fn prepare_root_compact_apply_with_checkpoint(
+        &mut self,
+        rollout_path: &Path,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        token_metadata: SpineRootCompactTokenMetadata,
+    ) -> Result<PreparedSpineRootCompactApply, SpineError> {
+        self.prepare_root_compact_commit_with_checkpoint(
+            rollout_path,
+            body,
+            raw_items,
+            token_metadata,
+        )
+        .map(PreparedSpineRootCompactApply::new)
     }
 
     pub(crate) fn single_completed_toolcall_evidence(
