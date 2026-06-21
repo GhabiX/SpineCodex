@@ -1378,13 +1378,6 @@ impl Session {
         };
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
-        let toolcall_start = completed_toolcall
-            .segments
-            .first()
-            .map(|segment| segment.context_index)
-            .ok_or_else(|| {
-                SpineError::InvalidEvent("completed toolcall missing first segment".to_string())
-            })?;
         let mut lock_retries = 0;
         let commit_output = loop {
             let attempt = self.try_commit_spine_tool_output_once(
@@ -1392,7 +1385,6 @@ impl Session {
                 call_id,
                 item,
                 expected_history.clone(),
-                toolcall_start,
                 pre_compact_provider_input_tokens,
                 current_turn_token_info.as_ref(),
                 completed_toolcall.clone(),
@@ -1478,7 +1470,6 @@ impl Session {
         call_id: &str,
         tool_resp_item: &ResponseItem,
         expected_history: Vec<ResponseItem>,
-        toolcall_start: usize,
         pre_compact_provider_input_tokens: Option<i64>,
         current_turn_token_info: Option<&TokenUsageInfo>,
         completed_toolcall: CompletedToolCall,
@@ -1501,7 +1492,6 @@ impl Session {
             raw_items,
             history_items: history.raw_items(),
             expected_history,
-            toolcall_start,
             reference_context_item,
             pre_compact_provider_input_tokens,
             current_turn_provider_input_tokens: current_turn_token_info

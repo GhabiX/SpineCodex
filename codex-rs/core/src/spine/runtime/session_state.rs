@@ -29,7 +29,6 @@ pub(crate) struct SpineToolcallCommitInput<'a> {
     pub(crate) raw_items: &'a [Option<ResponseItem>],
     pub(crate) history_items: &'a [ResponseItem],
     pub(crate) expected_history: Vec<ResponseItem>,
-    pub(crate) toolcall_start: usize,
     pub(crate) reference_context_item: Option<TurnContextItem>,
     pub(crate) pre_compact_provider_input_tokens: Option<i64>,
     pub(crate) current_turn_provider_input_tokens: Option<i64>,
@@ -477,6 +476,14 @@ impl SpineSessionState {
         if self.runtime().is_none() {
             return Ok(None);
         }
+        let toolcall_start = input
+            .completed_toolcall
+            .segments
+            .first()
+            .map(|segment| segment.context_index)
+            .ok_or_else(|| {
+                SpineError::InvalidEvent("completed toolcall missing first segment".to_string())
+            })?;
         let memory = {
             let assembly = self
                 .runtime_mut()
@@ -487,7 +494,7 @@ impl SpineSessionState {
                 })?
                 .prepare_close_memory_assembly_for_completed_toolcall(
                     input.history_items,
-                    input.toolcall_start,
+                    toolcall_start,
                     input.call_id,
                 );
             match assembly {
