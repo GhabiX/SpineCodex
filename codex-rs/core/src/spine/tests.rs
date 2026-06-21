@@ -232,6 +232,8 @@ mod trim_candidate_rejections;
 mod trim_candidate_rejections_short;
 #[path = "tests/trim_candidates.rs"]
 mod trim_candidates;
+#[path = "tests/trim_candidates_custom.rs"]
+mod trim_candidates_custom;
 #[path = "tests/trim_only.rs"]
 mod trim_only;
 #[path = "tests/trim_projection.rs"]
