@@ -276,6 +276,8 @@ mod trim_rollback_fork_clone;
 mod trim_targeting;
 #[path = "tests/trim_targeting_ledger.rs"]
 mod trim_targeting_ledger;
+#[path = "tests/trim_targeting_no_retry.rs"]
+mod trim_targeting_no_retry;
 
 // Shared raw/context fixtures.
 
