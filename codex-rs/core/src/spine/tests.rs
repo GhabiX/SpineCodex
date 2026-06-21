@@ -118,6 +118,8 @@ mod next_root_cursor_failures;
 mod next_transactions;
 #[path = "tests/open_lifecycle.rs"]
 mod open_lifecycle;
+#[path = "tests/open_lifecycle_failures.rs"]
+mod open_lifecycle_failures;
 #[path = "tests/pending_control.rs"]
 mod pending_control;
 #[path = "tests/pending_control_raw_requests.rs"]
