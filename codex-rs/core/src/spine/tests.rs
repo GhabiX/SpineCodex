@@ -84,6 +84,8 @@ mod fork_isolation;
 mod m0_trace;
 #[path = "tests/materialize_history.rs"]
 mod materialize_history;
+#[path = "tests/materialize_projection.rs"]
+mod materialize_projection;
 #[path = "tests/materialize_projection_guards.rs"]
 mod materialize_projection_guards;
 #[path = "tests/message_anchors.rs"]
