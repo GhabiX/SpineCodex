@@ -144,6 +144,8 @@ mod open_lifecycle_duplicates;
 mod open_lifecycle_failures;
 #[path = "tests/pending_control.rs"]
 mod pending_control;
+#[path = "tests/pending_control_abort_stale.rs"]
+mod pending_control_abort_stale;
 #[path = "tests/pending_control_raw_requests.rs"]
 mod pending_control_raw_requests;
 #[path = "tests/pending_control_receipt_abort.rs"]
