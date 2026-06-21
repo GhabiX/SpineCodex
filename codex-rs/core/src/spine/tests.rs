@@ -202,6 +202,8 @@ mod rollback_checkpoint_records;
 mod rollback_checkpoint_restore;
 #[path = "tests/rollback_sparse.rs"]
 mod rollback_sparse;
+#[path = "tests/rollback_sparse_hole.rs"]
+mod rollback_sparse_hole;
 #[path = "tests/rollback_sparse_materialization.rs"]
 mod rollback_sparse_materialization;
 #[path = "tests/root_compact_boundary.rs"]
