@@ -369,7 +369,14 @@ impl Session {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) async fn initialize_spine_for_new_session(&self) -> Result<(), SpineError> {
+        // TODO(spine-hook-refactor): remove this compatibility wrapper once
+        // tests call the semantic `on_init` hook name.
+        self.on_init().await
+    }
+
+    pub(super) async fn on_init(&self) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };

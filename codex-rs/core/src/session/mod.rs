@@ -1244,7 +1244,7 @@ impl Session {
                 // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(/*previous_turn_settings*/ None)
                     .await;
-                self.initialize_spine_for_new_session()
+                self.on_init()
                     .await
                     .map_err(|err| {
                         CodexErr::Fatal(format!("failed to initialize Spine runtime: {err}"))
