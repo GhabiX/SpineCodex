@@ -216,6 +216,8 @@ mod toolcall_spine_tree;
 mod tree_accounting;
 #[path = "tests/tree_snapshot.rs"]
 mod tree_snapshot;
+#[path = "tests/tree_snapshot_closed_child.rs"]
+mod tree_snapshot_closed_child;
 #[path = "tests/tree_snapshot_historical_descendants.rs"]
 mod tree_snapshot_historical_descendants;
 #[path = "tests/tree_snapshot_root_compact.rs"]
