@@ -793,26 +793,22 @@ impl Session {
                 let mut guard = spine_slot.lock().await;
                 guard.ensure_valid()?;
                 if let Some(runtime) = guard.runtime_mut() {
-                    observe_spine_context_append(
+                    observe_spine_toolcall_response_anchor(
                         runtime,
-                        &rollout_path,
-                        raw_ordinals,
-                        items,
-                        append,
-                        &raw_items,
+                        raw_ordinal,
+                        append.context_index,
+                        item,
                     )?;
                 }
-            } else {
+            } else if tool_request_call_id(item).is_some() {
                 let mut guard = spine_slot.lock().await;
                 guard.ensure_valid()?;
                 if let Some(runtime) = guard.runtime_mut() {
-                    observe_spine_context_append(
+                    observe_spine_toolcall_request_anchor(
                         runtime,
-                        &rollout_path,
-                        raw_ordinals,
-                        items,
-                        append,
-                        &raw_items,
+                        raw_ordinal,
+                        append.context_index,
+                        item,
                     )?;
                 }
             }
@@ -2008,20 +2004,22 @@ impl Session {
     }
 }
 
-fn observe_spine_context_append<'a>(
+fn observe_spine_toolcall_request_anchor(
     runtime: &mut SpineRuntime,
-    rollout_path: &Path,
-    raw_ordinals: &[Option<u64>],
-    items: &'a [ResponseItem],
-    append: &ContextAppend,
-    raw_items: &[Option<ResponseItem>],
-) -> Result<(u64, &'a ResponseItem), SpineError> {
-    let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
-    if runtime.jit_enabled() && crate::spine::is_real_user_message(item) {
-        runtime.checkpoint_before_user_msg(rollout_path, raw_ordinal, raw_items)?;
-    }
-    runtime.observe_context_item(raw_ordinal, append.context_index, item)?;
-    Ok((raw_ordinal, item))
+    raw_ordinal: u64,
+    context_index: usize,
+    item: &ResponseItem,
+) -> Result<(), SpineError> {
+    runtime.observe_toolcall_request_anchor(raw_ordinal, context_index, item)
+}
+
+fn observe_spine_toolcall_response_anchor(
+    runtime: &mut SpineRuntime,
+    raw_ordinal: u64,
+    context_index: usize,
+    item: &ResponseItem,
+) -> Result<(), SpineError> {
+    runtime.observe_toolcall_response_anchor(raw_ordinal, context_index, item)
 }
 
 fn context_append_raw_item<'a>(
