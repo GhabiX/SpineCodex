@@ -400,73 +400,11 @@ impl Session {
         else {
             return Ok(());
         };
-        let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
-        SpineStore::clone_for_rollout_with_raw_live(boundary, &target_rollout_path, &raw_live)?;
-        let raw_ordinal_limit = usize::try_from(boundary.raw_ordinal_limit()).map_err(|_| {
-            SpineError::InvalidEvent("clone raw ordinal boundary overflow".to_string())
-        })?;
-        if raw_ordinal_limit > raw_items.len() {
-            return Err(SpineError::InvalidEvent(
-                "clone raw ordinal boundary exceeds fork raw length".to_string(),
-            ));
-        }
-        if raw_ordinal_limit == raw_items.len() {
-            let runtime = SpineRuntime::load_for_rollout_items_for_writer_with_jit(
-                &target_rollout_path,
-                raw_items,
-                &[],
-                self.features.enabled(Feature::SpineJit),
-            )?;
-            spine_slot.lock().await.set_replayed(
-                u64::try_from(raw_items.len())
-                    .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
-                runtime,
-            )?;
-            return Ok(());
-        }
-        let prefix_runtime = SpineRuntime::load_for_rollout_items_for_writer_with_jit(
+        spine_slot.lock().await.install_cloned_sidecar_for_fork(
+            boundary,
             &target_rollout_path,
-            &raw_items[..raw_ordinal_limit],
-            &[],
-            self.features.enabled(Feature::SpineJit),
-        )?;
-        let mut runtime = prefix_runtime.ok_or_else(|| {
-            SpineError::InvalidStore("cloned Spine sidecar is missing after fork clone".to_string())
-        })?;
-        runtime.set_jit_enabled(self.features.enabled(Feature::SpineJit));
-        runtime.set_trim_enabled(self.features.enabled(Feature::SpineTrim));
-        let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
-        for (raw_ordinal, item) in raw_items.iter().enumerate().skip(raw_ordinal_limit) {
-            runtime.observe_raw_items(1)?;
-            let Some(item) = item.as_ref() else {
-                continue;
-            };
-            let context_index = if runtime.jit_enabled() {
-                runtime.materialize_history(raw_items)?.len()
-            } else {
-                raw_items
-                    .iter()
-                    .take(raw_ordinal)
-                    .filter(|item| item.is_some())
-                    .count()
-            };
-            let raw_ordinal = u64::try_from(raw_ordinal)
-                .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-            runtime.observe_context_item(raw_ordinal, context_index, item)?;
-            if let Some(call_id) = tool_response_call_id(item) {
-                recorded_tool_outputs.push((call_id.to_string(), raw_ordinal, context_index));
-            }
-        }
-        runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
-            &recorded_tool_outputs,
             raw_items,
-        )?;
-        spine_slot.lock().await.set_replayed(
-            u64::try_from(raw_items.len())
-                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
-            Some(runtime),
-        )?;
-        Ok(())
+        )
     }
 
     pub(super) async fn prepare_spine_replay_from_rollout_items(

@@ -17,8 +17,11 @@ use super::SpineTreeUpdateDelivery;
 use super::SpineTrimOutcome;
 use super::prepared::SpineCommitPublication;
 use super::support::is_real_user_message;
+use super::support::tool_response_call_id;
 use super::types::SpinePreparedCloseMemory;
 use crate::spine::model::ToolCallSegmentKind;
+use crate::spine::store::SpineCloneBoundary;
+use crate::spine::store::SpineStore;
 
 pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
@@ -317,6 +320,81 @@ impl SpineSessionState {
     pub(crate) fn release_runtime_for_replay(&mut self) {
         self.runtime = None;
         self.initial_tree_snapshot_emitted = false;
+    }
+
+    pub(crate) fn install_cloned_sidecar_for_fork(
+        &mut self,
+        boundary: &SpineCloneBoundary,
+        target_rollout_path: &Path,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
+        SpineStore::clone_for_rollout_with_raw_live(boundary, target_rollout_path, &raw_live)?;
+        let raw_ordinal_limit = usize::try_from(boundary.raw_ordinal_limit()).map_err(|_| {
+            SpineError::InvalidEvent("clone raw ordinal boundary overflow".to_string())
+        })?;
+        if raw_ordinal_limit > raw_items.len() {
+            return Err(SpineError::InvalidEvent(
+                "clone raw ordinal boundary exceeds fork raw length".to_string(),
+            ));
+        }
+        if raw_ordinal_limit == raw_items.len() {
+            let runtime = SpineRuntime::load_for_rollout_items_for_writer_with_jit(
+                target_rollout_path,
+                raw_items,
+                &[],
+                self.jit_enabled,
+            )?;
+            return self.set_replayed(
+                u64::try_from(raw_items.len())
+                    .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
+                runtime,
+            );
+        }
+
+        let prefix_runtime = SpineRuntime::load_for_rollout_items_for_writer_with_jit(
+            target_rollout_path,
+            &raw_items[..raw_ordinal_limit],
+            &[],
+            self.jit_enabled,
+        )?;
+        let mut runtime = prefix_runtime.ok_or_else(|| {
+            SpineError::InvalidStore("cloned Spine sidecar is missing after fork clone".to_string())
+        })?;
+        runtime.set_jit_enabled(self.jit_enabled);
+        runtime.set_trim_enabled(self.trim_enabled);
+
+        let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
+        for (raw_ordinal, item) in raw_items.iter().enumerate().skip(raw_ordinal_limit) {
+            runtime.observe_raw_items(1)?;
+            let Some(item) = item.as_ref() else {
+                continue;
+            };
+            let context_index = if runtime.jit_enabled() {
+                runtime.materialize_history(raw_items)?.len()
+            } else {
+                raw_items
+                    .iter()
+                    .take(raw_ordinal)
+                    .filter(|item| item.is_some())
+                    .count()
+            };
+            let raw_ordinal = u64::try_from(raw_ordinal)
+                .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+            runtime.observe_context_item(raw_ordinal, context_index, item)?;
+            if let Some(call_id) = tool_response_call_id(item) {
+                recorded_tool_outputs.push((call_id.to_string(), raw_ordinal, context_index));
+            }
+        }
+        runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+            &recorded_tool_outputs,
+            raw_items,
+        )?;
+        self.set_replayed(
+            u64::try_from(raw_items.len())
+                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
+            Some(runtime),
+        )
     }
 
     pub(crate) fn abort_pending_tool(&mut self, call_id: &str) -> bool {
