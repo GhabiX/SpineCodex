@@ -1129,11 +1129,10 @@ impl Session {
         loop {
             raw_len = {
                 let guard = spine_slot.lock().await;
-                guard.ensure_valid()?;
-                let Some(_spine) = guard.runtime() else {
+                let Some(raw_len) = guard.ready_raw_len()? else {
                     return Ok(None);
                 };
-                guard.raw_len()
+                raw_len
             };
             history_for_output_anchor = self.clone_history().await;
             let history_items_for_output_anchor = history_for_output_anchor.raw_items();
@@ -1562,7 +1561,7 @@ impl Session {
         {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            if guard.runtime().is_none() {
+            if !guard.is_ready() {
                 return Ok(None);
             }
         }
@@ -1664,7 +1663,7 @@ impl Session {
                     operation: "install Spine root compact".to_string(),
                     reason: err.to_string(),
                 })?;
-            if guard.runtime().is_none() {
+            if !guard.is_ready() {
                 return Ok(None);
             }
         }

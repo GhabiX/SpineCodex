@@ -277,6 +277,14 @@ impl SpineSessionState {
         self.raw_len
     }
 
+    pub(crate) fn ready_raw_len(&self) -> Result<Option<u64>, SpineError> {
+        self.ensure_valid()?;
+        if self.runtime().is_none() {
+            return Ok(None);
+        }
+        Ok(Some(self.raw_len))
+    }
+
     pub(crate) fn set_replayed(
         &mut self,
         raw_len: u64,
