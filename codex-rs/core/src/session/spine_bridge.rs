@@ -184,13 +184,21 @@ struct CompletedToolCallEvidenceParts {
     missing_response_error: &'static str,
 }
 
-struct CompletedSpineToolCall<'a> {
+struct SpineToolCallEvidence<'a> {
     call_id: &'a str,
     response_item: &'a ResponseItem,
-    evidence: CompletedToolCall,
+    completed_toolcall: CompletedToolCall,
+}
+
+struct SpineToolCallHostRecording {
     response_already_recorded: bool,
     response_recorded_inside_reduce: bool,
     history_before_recorded_output: Option<crate::context_manager::ContextManager>,
+}
+
+struct CompletedSpineToolCall<'a> {
+    evidence: SpineToolCallEvidence<'a>,
+    host_recording: SpineToolCallHostRecording,
 }
 
 pub(crate) struct PreparedSpineRootCompactInstall {
@@ -1189,12 +1197,16 @@ impl Session {
             (tool_resp_raw_ordinal, tool_resp_context_index),
         )?;
         Ok(Some(CompletedSpineToolCall {
-            call_id,
-            response_item: item,
-            evidence: completed_toolcall,
-            response_already_recorded: tool_resp_already_recorded,
-            response_recorded_inside_reduce: recorded_output_inside_reduce,
-            history_before_recorded_output,
+            evidence: SpineToolCallEvidence {
+                call_id,
+                response_item: item,
+                completed_toolcall,
+            },
+            host_recording: SpineToolCallHostRecording {
+                response_already_recorded: tool_resp_already_recorded,
+                response_recorded_inside_reduce: recorded_output_inside_reduce,
+                history_before_recorded_output,
+            },
         }))
     }
 
@@ -1262,12 +1274,16 @@ impl Session {
             output_context_start,
         )?;
         Ok(Some(CompletedSpineToolCall {
-            call_id: commit_call_id,
-            response_item: commit_output,
-            evidence: completed_toolcall,
-            response_already_recorded: true,
-            response_recorded_inside_reduce: false,
-            history_before_recorded_output: None,
+            evidence: SpineToolCallEvidence {
+                call_id: commit_call_id,
+                response_item: commit_output,
+                completed_toolcall,
+            },
+            host_recording: SpineToolCallHostRecording {
+                response_already_recorded: true,
+                response_recorded_inside_reduce: false,
+                history_before_recorded_output: None,
+            },
         }))
     }
 
@@ -1280,12 +1296,12 @@ impl Session {
         self.commit_spine_completed_toolcall_with_client_session(
             turn_context,
             client_session,
-            toolcall.call_id,
-            toolcall.response_item,
-            toolcall.evidence,
-            toolcall.response_already_recorded,
-            toolcall.response_recorded_inside_reduce,
-            toolcall.history_before_recorded_output,
+            toolcall.evidence.call_id,
+            toolcall.evidence.response_item,
+            toolcall.evidence.completed_toolcall,
+            toolcall.host_recording.response_already_recorded,
+            toolcall.host_recording.response_recorded_inside_reduce,
+            toolcall.host_recording.history_before_recorded_output,
         )
         .await
     }
