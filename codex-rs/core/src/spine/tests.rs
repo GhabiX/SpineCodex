@@ -118,6 +118,8 @@ mod next_transactions;
 mod open_lifecycle;
 #[path = "tests/pending_control.rs"]
 mod pending_control;
+#[path = "tests/pending_control_raw_requests.rs"]
+mod pending_control_raw_requests;
 #[path = "tests/pending_control_receipts.rs"]
 mod pending_control_receipts;
 #[path = "tests/prepared_commit.rs"]
