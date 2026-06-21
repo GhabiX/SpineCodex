@@ -120,6 +120,8 @@ mod pending_control;
 mod pending_control_receipts;
 #[path = "tests/prepared_commit.rs"]
 mod prepared_commit;
+#[path = "tests/prepared_commit_side_effect_failures.rs"]
+mod prepared_commit_side_effect_failures;
 #[path = "tests/provider_baseline.rs"]
 mod provider_baseline;
 #[path = "tests/provider_legacy_pressure.rs"]
