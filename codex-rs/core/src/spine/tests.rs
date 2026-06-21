@@ -52,6 +52,8 @@ mod close_output_projection;
 mod close_reduce_edges;
 #[path = "tests/close_retry.rs"]
 mod close_retry;
+#[path = "tests/close_retry_prepared_memory.rs"]
+mod close_retry_prepared_memory;
 #[path = "tests/close_source_plan.rs"]
 mod close_source_plan;
 #[path = "tests/closed_memory_accounting.rs"]
