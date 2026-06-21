@@ -124,6 +124,8 @@ mod raw_coverage;
 mod rollback_checkpoint_continuation;
 #[path = "tests/rollback_checkpoint_fail_closed.rs"]
 mod rollback_checkpoint_fail_closed;
+#[path = "tests/rollback_checkpoint_live_append.rs"]
+mod rollback_checkpoint_live_append;
 #[path = "tests/rollback_checkpoint_provider_baseline.rs"]
 mod rollback_checkpoint_provider_baseline;
 #[path = "tests/rollback_checkpoint_restore.rs"]
