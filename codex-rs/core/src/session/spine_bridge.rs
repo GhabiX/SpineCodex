@@ -431,27 +431,20 @@ impl Session {
         let raw_len = u64::try_from(raw_items.len())
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
         self.release_spine_runtime_for_replay().await;
-        let mut runtime =
-            SpineRuntime::load_for_rollout_items(&rollout_path, raw_items, rollback_cuts)?;
-        if let Some(runtime) = runtime.as_mut() {
-            runtime.set_jit_enabled(self.features.enabled(Feature::SpineJit));
-            runtime.set_trim_enabled(self.features.enabled(Feature::SpineTrim));
-        }
-        if runtime.is_none() && (used_replacement_history || raw_items.iter().any(Option::is_some))
+        let spine_slot = self.spine.as_ref().ok_or_else(|| {
+            SpineError::InvalidStore("spine_jit replay requires Spine session state".to_string())
+        })?;
+        let prepared_runtime = {
+            let guard = spine_slot.lock().await;
+            guard.prepare_jit_replay_from_rollout_items(&rollout_path, raw_items, rollback_cuts)?
+        };
+        if prepared_runtime.runtime.is_none()
+            && (used_replacement_history || raw_items.iter().any(Option::is_some))
         {
             return Err(SpineError::InvalidStore(
                 "spine_jit resume requires Spine sidecar".to_string(),
             ));
         }
-        let materialized = runtime
-            .as_ref()
-            .map(|runtime| runtime.materialize_history(raw_items))
-            .transpose()?;
-        let live_root_compacts = runtime
-            .as_ref()
-            .map(|runtime| runtime.live_root_compacts())
-            .transpose()?
-            .unwrap_or_default();
         if used_replacement_history {
             let store = SpineStore::for_rollout(&rollout_path)?;
             let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
@@ -469,7 +462,7 @@ impl Session {
                 &base_boundary.replacement_history,
             )?;
             validate_live_root_compacts_have_rollout_boundary_proofs(
-                &live_root_compacts,
+                &prepared_runtime.live_root_compacts,
                 replacement_history_boundaries,
                 &store,
                 &rollout_path,
@@ -477,12 +470,14 @@ impl Session {
                 raw_items,
             )?;
         } else {
-            validate_no_live_root_compacts_without_rollout_boundaries(&live_root_compacts)?;
+            validate_no_live_root_compacts_without_rollout_boundaries(
+                &prepared_runtime.live_root_compacts,
+            )?;
         }
         Ok(Some(PreparedSpineReplay {
             raw_len,
-            runtime,
-            materialized,
+            runtime: prepared_runtime.runtime,
+            materialized: prepared_runtime.materialized,
         }))
     }
 

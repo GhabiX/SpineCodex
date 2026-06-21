@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::CompletedToolCall;
 use super::CompletedToolCallSegment;
+use super::LiveRootCompact;
 use super::SpineError;
 use super::SpineHistoryUpdate;
 use super::SpineHostEffects;
@@ -25,6 +26,12 @@ use crate::spine::store::SpineStore;
 
 pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
+}
+
+pub(crate) struct PreparedSpineReplayRuntime {
+    pub(crate) runtime: Option<SpineRuntime>,
+    pub(crate) materialized: Option<Vec<ResponseItem>>,
+    pub(crate) live_root_compacts: Vec<LiveRootCompact>,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +106,20 @@ impl PreparedSpineToolcallCommit {
             SpineTreeUpdateDelivery::Immediate
         };
         SpinePostApplyEffectPolicy { delivery }
+    }
+}
+
+impl PreparedSpineReplayRuntime {
+    fn new(
+        runtime: Option<SpineRuntime>,
+        materialized: Option<Vec<ResponseItem>>,
+        live_root_compacts: Vec<LiveRootCompact>,
+    ) -> Self {
+        Self {
+            runtime,
+            materialized,
+            live_root_compacts,
+        }
     }
 }
 
@@ -320,6 +341,35 @@ impl SpineSessionState {
     pub(crate) fn release_runtime_for_replay(&mut self) {
         self.runtime = None;
         self.initial_tree_snapshot_emitted = false;
+    }
+
+    pub(crate) fn prepare_jit_replay_from_rollout_items(
+        &self,
+        rollout_path: &Path,
+        raw_items: &[Option<ResponseItem>],
+        rollback_cuts: &[usize],
+    ) -> Result<PreparedSpineReplayRuntime, SpineError> {
+        self.ensure_valid()?;
+        let mut runtime =
+            SpineRuntime::load_for_rollout_items(rollout_path, raw_items, rollback_cuts)?;
+        if let Some(runtime) = runtime.as_mut() {
+            runtime.set_jit_enabled(self.jit_enabled);
+            runtime.set_trim_enabled(self.trim_enabled);
+        }
+        let materialized = runtime
+            .as_ref()
+            .map(|runtime| runtime.materialize_history(raw_items))
+            .transpose()?;
+        let live_root_compacts = runtime
+            .as_ref()
+            .map(|runtime| runtime.live_root_compacts())
+            .transpose()?
+            .unwrap_or_default();
+        Ok(PreparedSpineReplayRuntime::new(
+            runtime,
+            materialized,
+            live_root_compacts,
+        ))
     }
 
     pub(crate) fn install_cloned_sidecar_for_fork(
