@@ -84,6 +84,8 @@ mod closed_memory_accounting_pending;
 mod closed_memory_accounting_reload;
 #[path = "tests/commit_marker_carriers.rs"]
 mod commit_marker_carriers;
+#[path = "tests/commit_marker_clone_carrier.rs"]
+mod commit_marker_clone_carrier;
 #[path = "tests/commit_marker_next_carriers.rs"]
 mod commit_marker_next_carriers;
 #[path = "tests/commit_marker_prepare_failures.rs"]
