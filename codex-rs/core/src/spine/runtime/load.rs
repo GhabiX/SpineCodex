@@ -72,6 +72,7 @@ impl SpineRuntime {
             #[cfg(test)]
             pending_tool_responses: BTreeMap::new(),
             pending: None,
+            #[cfg(test)]
             control_receipts: BTreeMap::new(),
             pending_memory_context_accounting: None,
             next_user_anchor,
@@ -330,6 +331,7 @@ impl SpineRuntime {
             #[cfg(test)]
             pending_tool_responses: BTreeMap::new(),
             pending: None,
+            #[cfg(test)]
             control_receipts: BTreeMap::new(),
             pending_memory_context_accounting,
             next_user_anchor,
@@ -428,6 +430,7 @@ impl SpineRuntime {
             #[cfg(test)]
             pending_tool_responses: BTreeMap::new(),
             pending: None,
+            #[cfg(test)]
             control_receipts: BTreeMap::new(),
             pending_memory_context_accounting,
             next_user_anchor,

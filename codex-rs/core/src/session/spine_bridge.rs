@@ -96,12 +96,6 @@ impl<'a> SpineCompletedToolCallOutputs<'a> {
     }
 }
 
-pub(crate) enum SpineToolExecutionReceiptInput {
-    Open { summary: String },
-    Close { memory: String },
-    Next { summary: String, memory: String },
-}
-
 const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
 
 #[derive(Debug)]
@@ -989,32 +983,6 @@ impl Session {
         runtime.stage_next(call_id, summary, memory)
     }
 
-    pub(crate) async fn record_spine_tool_execution_receipt(
-        &self,
-        call_id: String,
-        receipt: SpineToolExecutionReceiptInput,
-    ) -> Result<(), SpineError> {
-        let spine = self.ensure_spine_runtime().await?;
-        let mut guard = spine.lock().await;
-        guard.ensure_valid()?;
-        let Some(runtime) = guard.runtime_mut() else {
-            return Err(SpineError::InvalidStore(
-                "spine runtime missing after initialization".to_string(),
-            ));
-        };
-        match receipt {
-            SpineToolExecutionReceiptInput::Open { summary } => {
-                runtime.record_open_tool_receipt(call_id, summary)
-            }
-            SpineToolExecutionReceiptInput::Close { memory } => {
-                runtime.record_close_tool_receipt(call_id, memory)
-            }
-            SpineToolExecutionReceiptInput::Next { summary, memory } => {
-                runtime.record_next_tool_receipt(call_id, summary, memory)
-            }
-        }
-    }
-
     pub(crate) async fn trim_spine_tool_response(
         &self,
         trim_id: String,
@@ -1261,13 +1229,14 @@ impl Session {
             if tool_resp_already_recorded || recorded_output_inside_reduce {
                 break;
             }
+            let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
             let is_close_like = {
                 let guard = spine_slot.lock().await;
                 guard.ensure_valid()?;
                 let Some(spine) = guard.runtime() else {
                     return Ok(None);
                 };
-                spine.has_close_like_pending_commit(call_id)?
+                spine.has_close_like_control_request(call_id, &raw_items)?
             };
             if !is_close_like {
                 break;
@@ -1440,13 +1409,15 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
         };
+        let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
         let has_pending_close_commit = {
-            let guard = spine_slot.lock().await;
+            let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let Some(spine) = guard.runtime() else {
+            let Some(spine) = guard.runtime_mut() else {
                 return Ok(Self::no_spine_tool_commit());
             };
-            spine.has_close_like_pending_commit(call_id)?
+            spine.ensure_pending_from_toolcall_request(call_id, &raw_items)?;
+            spine.has_close_like_control_request(call_id, &raw_items)?
         };
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let current_turn_provider_input_tokens = current_turn_token_info
@@ -1509,7 +1480,6 @@ impl Session {
                 )));
             }
         }
-        let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
         let mut lock_retries = 0;
         let commit_output = loop {
             let attempt = self.try_commit_spine_tool_output_once(
@@ -1722,12 +1692,13 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(false);
         };
+        let raw_items = self.spine_raw_items_from_rollout().await?;
         let guard = spine_slot.lock().await;
         guard.ensure_valid()?;
         let Some(spine) = guard.runtime() else {
             return Ok(false);
         };
-        Ok(spine.has_close_like_control_receipt(call_id))
+        spine.has_close_like_control_request(call_id, &raw_items)
     }
 
     pub(crate) async fn is_spine_control_output_response_item(

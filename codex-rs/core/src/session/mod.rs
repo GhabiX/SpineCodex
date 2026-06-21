@@ -223,7 +223,6 @@ use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
-pub(crate) use self::spine_bridge::SpineToolExecutionReceiptInput;
 use self::spine_bridge::assign_spine_raw_ordinals;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;

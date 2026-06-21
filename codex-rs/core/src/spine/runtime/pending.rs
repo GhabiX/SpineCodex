@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+#[cfg(test)]
 use std::collections::btree_map::Entry;
 
 use super::IntoSpineNodeMemory;
@@ -6,11 +7,15 @@ use super::SpineError;
 use super::SpinePendingCloseAction;
 use super::SpinePendingCommit;
 use super::SpineRuntime;
+use super::support::is_spine_parser_control_tool_name;
 use super::support::user_anchor_refs_in_memory;
+#[cfg(test)]
 use super::support::validate_model_node_memory;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::ToolCallSegmentKind;
+use codex_protocol::models::ResponseItem;
+use serde::Deserialize;
 
 #[derive(Clone, Debug)]
 pub(super) struct OpenRequestAnchor {
@@ -60,6 +65,7 @@ impl PendingTransition {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(super) enum SpineControlToolReceipt {
     Open { summary: String },
@@ -67,10 +73,30 @@ pub(super) enum SpineControlToolReceipt {
     Next { summary: String, memory: String },
 }
 
+#[cfg(test)]
 impl SpineControlToolReceipt {
     pub(super) fn is_close_like(&self) -> bool {
         matches!(self, Self::Close { .. } | Self::Next { .. })
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenToolArgs {
+    summary: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CloseToolArgs {
+    memory: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NextToolArgs {
+    summary: String,
+    memory: String,
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +135,7 @@ pub(crate) struct CompletedToolCallSegment {
 }
 
 impl SpineRuntime {
+    #[cfg(test)]
     pub(super) fn validate_control_tool_receipt_pending_view(
         &self,
         receipt: &SpineControlToolReceipt,
@@ -248,6 +275,7 @@ impl SpineRuntime {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn record_open_tool_receipt(
         &mut self,
         call_id: String,
@@ -256,6 +284,7 @@ impl SpineRuntime {
         self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Open { summary })
     }
 
+    #[cfg(test)]
     pub(crate) fn record_close_tool_receipt(
         &mut self,
         call_id: String,
@@ -264,6 +293,7 @@ impl SpineRuntime {
         self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Close { memory })
     }
 
+    #[cfg(test)]
     pub(crate) fn record_next_tool_receipt(
         &mut self,
         call_id: String,
@@ -273,6 +303,7 @@ impl SpineRuntime {
         self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Next { summary, memory })
     }
 
+    #[cfg(test)]
     fn record_control_tool_receipt(
         &mut self,
         call_id: String,
@@ -297,6 +328,7 @@ impl SpineRuntime {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn ensure_pending_from_receipt(&mut self, call_id: &str) -> Result<(), SpineError> {
         if self
             .pending
@@ -323,6 +355,134 @@ impl SpineRuntime {
         Ok(())
     }
 
+    pub(crate) fn ensure_pending_from_toolcall_request(
+        &mut self,
+        call_id: &str,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.call_id() == call_id)
+        {
+            return Ok(());
+        }
+        if !self.control_call_ids.contains(call_id) {
+            return Ok(());
+        }
+        let request = self
+            .ordinary_tool_requests
+            .get(call_id)
+            .ok_or_else(|| {
+                SpineError::Operation(format!(
+                    "missing Spine control request anchor for call_id={call_id}"
+                ))
+            })?
+            .clone();
+        let raw_index = usize::try_from(request.raw_ordinal).map_err(|_| {
+            SpineError::InvalidEvent("Spine control request raw ordinal overflow".to_string())
+        })?;
+        let item = raw_items
+            .get(raw_index)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| {
+                SpineError::InvalidEvent(format!(
+                    "missing Spine control request raw item for call_id={call_id}"
+                ))
+            })?;
+        let ResponseItem::FunctionCall {
+            call_id: request_call_id,
+            name,
+            namespace: Some(namespace),
+            arguments,
+            ..
+        } = item
+        else {
+            return Err(SpineError::InvalidEvent(format!(
+                "Spine control request raw item for call_id={call_id} is not a function call"
+            )));
+        };
+        if request_call_id != call_id {
+            return Err(SpineError::InvalidEvent(format!(
+                "Spine control request raw item call_id={request_call_id} does not match completed call_id={call_id}"
+            )));
+        }
+        if namespace != super::SPINE_NAMESPACE || !is_spine_parser_control_tool_name(name) {
+            return Err(SpineError::InvalidEvent(format!(
+                "raw item for call_id={call_id} is not a Spine parser control request"
+            )));
+        }
+        match name.as_str() {
+            super::SPINE_TOOL_OPEN => {
+                let args: OpenToolArgs = serde_json::from_str(arguments).map_err(|err| {
+                    SpineError::ToolUse(format!("failed to parse spine.open arguments: {err}"))
+                })?;
+                self.stage_open(call_id.to_string(), args.summary)
+            }
+            super::SPINE_TOOL_CLOSE => {
+                let args: CloseToolArgs = serde_json::from_str(arguments).map_err(|err| {
+                    SpineError::ToolUse(format!("failed to parse spine.close arguments: {err}"))
+                })?;
+                self.stage_close(call_id.to_string(), args.memory.trim().to_string())
+            }
+            super::SPINE_TOOL_NEXT => {
+                let args: NextToolArgs = serde_json::from_str(arguments).map_err(|err| {
+                    SpineError::ToolUse(format!("failed to parse spine.next arguments: {err}"))
+                })?;
+                self.stage_next(
+                    call_id.to_string(),
+                    args.summary,
+                    args.memory.trim().to_string(),
+                )
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn has_close_like_control_request(
+        &self,
+        call_id: &str,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<bool, SpineError> {
+        if self.pending.as_ref().is_some_and(|pending| {
+            pending.call_id() == call_id
+                && matches!(
+                    pending,
+                    PendingTransition::Close { .. } | PendingTransition::NextSugar { .. }
+                )
+        }) {
+            return Ok(true);
+        }
+        #[cfg(test)]
+        if self
+            .control_receipts
+            .get(call_id)
+            .is_some_and(SpineControlToolReceipt::is_close_like)
+        {
+            return Ok(true);
+        }
+        if !self.control_call_ids.contains(call_id) {
+            return Ok(false);
+        }
+        let Some(request) = self.ordinary_tool_requests.get(call_id) else {
+            return Ok(false);
+        };
+        let raw_index = usize::try_from(request.raw_ordinal).map_err(|_| {
+            SpineError::InvalidEvent("Spine control request raw ordinal overflow".to_string())
+        })?;
+        Ok(matches!(
+            raw_items.get(raw_index).and_then(Option::as_ref),
+            Some(ResponseItem::FunctionCall {
+                call_id: request_call_id,
+                name,
+                namespace: Some(namespace),
+                ..
+            }) if request_call_id == call_id
+                && namespace == super::SPINE_NAMESPACE
+                && matches!(name.as_str(), super::SPINE_TOOL_CLOSE | super::SPINE_TOOL_NEXT)
+        ))
+    }
+
     fn ensure_no_pending_transition(&self) -> Result<(), SpineError> {
         if self.pending.is_some() {
             let pending_call_id = self
@@ -338,7 +498,10 @@ impl SpineRuntime {
     }
 
     pub(crate) fn abort_pending(&mut self, call_id: &str) -> bool {
+        #[cfg(test)]
         let removed_receipt = self.control_receipts.remove(call_id).is_some();
+        #[cfg(not(test))]
+        let removed_receipt = false;
         if self
             .pending
             .as_ref()
@@ -363,6 +526,7 @@ impl SpineRuntime {
         let pending = self.pending.take()?;
         let call_id = pending.call_id().to_string();
         self.control_call_ids.remove(&call_id);
+        #[cfg(test)]
         self.control_receipts.remove(&call_id);
         Some(call_id)
     }
@@ -400,38 +564,43 @@ impl SpineRuntime {
                 }
             }));
         }
-        Ok(self
-            .control_receipts
-            .get(call_id)
-            .map(|receipt| {
-                self.validate_control_tool_receipt_pending_view(receipt)?;
-                match receipt {
-                    SpineControlToolReceipt::Open { .. } => {
-                        Ok::<SpinePendingCommit, SpineError>(SpinePendingCommit::Open)
+        #[cfg(test)]
+        {
+            return Ok(self
+                .control_receipts
+                .get(call_id)
+                .map(|receipt| {
+                    self.validate_control_tool_receipt_pending_view(receipt)?;
+                    match receipt {
+                        SpineControlToolReceipt::Open { .. } => {
+                            Ok::<SpinePendingCommit, SpineError>(SpinePendingCommit::Open)
+                        }
+                        SpineControlToolReceipt::Close { memory } => {
+                            let open_meta = self.current_close_open_meta()?;
+                            Ok(SpinePendingCommit::Close {
+                                action: SpinePendingCloseAction::Close,
+                                node: open_meta.id.clone(),
+                                suffix_start: open_meta.index,
+                                memory: memory.clone(),
+                                next_summary: None,
+                            })
+                        }
+                        SpineControlToolReceipt::Next { summary, memory } => {
+                            let open_meta = self.current_close_open_meta()?;
+                            Ok(SpinePendingCommit::Close {
+                                action: SpinePendingCloseAction::Next,
+                                node: open_meta.id.clone(),
+                                suffix_start: open_meta.index,
+                                memory: memory.clone(),
+                                next_summary: Some(summary.clone()),
+                            })
+                        }
                     }
-                    SpineControlToolReceipt::Close { memory } => {
-                        let open_meta = self.current_close_open_meta()?;
-                        Ok(SpinePendingCommit::Close {
-                            action: SpinePendingCloseAction::Close,
-                            node: open_meta.id.clone(),
-                            suffix_start: open_meta.index,
-                            memory: memory.clone(),
-                            next_summary: None,
-                        })
-                    }
-                    SpineControlToolReceipt::Next { summary, memory } => {
-                        let open_meta = self.current_close_open_meta()?;
-                        Ok(SpinePendingCommit::Close {
-                            action: SpinePendingCloseAction::Next,
-                            node: open_meta.id.clone(),
-                            suffix_start: open_meta.index,
-                            memory: memory.clone(),
-                            next_summary: Some(summary.clone()),
-                        })
-                    }
-                }
-            })
-            .transpose()?)
+                })
+                .transpose()?);
+        }
+        #[cfg(not(test))]
+        Ok(None)
     }
 
     pub(crate) fn has_close_like_pending_commit(&self, call_id: &str) -> Result<bool, SpineError> {
@@ -441,6 +610,7 @@ impl SpineRuntime {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn has_close_like_control_receipt(&self, call_id: &str) -> bool {
         self.control_receipts
             .get(call_id)

@@ -1,5 +1,4 @@
 use crate::function_tool::FunctionCallError;
-use crate::session::SpineToolExecutionReceiptInput;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_FEEDBACK;
@@ -319,7 +318,7 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
         let ToolInvocation {
             session,
             turn,
-            call_id,
+            call_id: _,
             payload,
             source,
             ..
@@ -427,16 +426,7 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                 )))
             }
             SpineTool::Open => {
-                let args: OpenArgs = parse_arguments(&arguments)?;
-                session
-                    .record_spine_tool_execution_receipt(
-                        call_id,
-                        SpineToolExecutionReceiptInput::Open {
-                            summary: args.summary,
-                        },
-                    )
-                    .await
-                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                let OpenArgs { summary: _summary } = parse_arguments(&arguments)?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
                     "Spine open accepted.".to_string(),
                     Some(true),
@@ -444,32 +434,18 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
             }
             SpineTool::Close => {
                 let args: CloseArgs = parse_arguments(&arguments)?;
-                let memory = normalize_memory_arg(args.memory, "spine.close")?;
-                session
-                    .record_spine_tool_execution_receipt(
-                        call_id,
-                        SpineToolExecutionReceiptInput::Close { memory },
-                    )
-                    .await
-                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                let _memory = normalize_memory_arg(args.memory, "spine.close")?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
                     "Spine close accepted.".to_string(),
                     Some(true),
                 )))
             }
             SpineTool::Next => {
-                let args: NextArgs = parse_arguments(&arguments)?;
-                let memory = normalize_memory_arg(args.memory, "spine.next")?;
-                session
-                    .record_spine_tool_execution_receipt(
-                        call_id,
-                        SpineToolExecutionReceiptInput::Next {
-                            summary: args.summary,
-                            memory,
-                        },
-                    )
-                    .await
-                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                let NextArgs {
+                    summary: _summary,
+                    memory,
+                } = parse_arguments(&arguments)?;
+                let _memory = normalize_memory_arg(memory, "spine.next")?;
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
                     "Spine next accepted.".to_string(),
                     Some(true),

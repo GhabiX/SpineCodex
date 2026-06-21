@@ -72,6 +72,7 @@ use pending::PendingToolRequest;
 #[cfg(test)]
 use pending::PendingToolResponse;
 use pending::PendingTransition;
+#[cfg(test)]
 use pending::SpineControlToolReceipt;
 #[allow(unused_imports)]
 pub(crate) use pending::ToolRequestAnchor;
@@ -134,6 +135,7 @@ pub(crate) struct SpineRuntime {
     #[cfg(test)]
     pending_tool_responses: BTreeMap<String, Vec<PendingToolResponse>>,
     pending: Option<PendingTransition>,
+    #[cfg(test)]
     control_receipts: BTreeMap<String, SpineControlToolReceipt>,
     pending_memory_context_accounting: Option<PendingMemoryContextAccounting>,
     next_user_anchor: u64,
