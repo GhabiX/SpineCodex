@@ -1271,10 +1271,7 @@ impl Session {
                 let Some(spine) = guard.runtime() else {
                     return Ok(None);
                 };
-                matches!(
-                    spine.pending_commit(call_id)?,
-                    Some(SpinePendingCommit::Close { .. })
-                )
+                spine.has_close_like_pending_commit(call_id)?
             };
             if !is_close_like {
                 break;

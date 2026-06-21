@@ -434,6 +434,13 @@ impl SpineRuntime {
             .transpose()?)
     }
 
+    pub(crate) fn has_close_like_pending_commit(&self, call_id: &str) -> Result<bool, SpineError> {
+        Ok(matches!(
+            self.pending_commit(call_id)?,
+            Some(SpinePendingCommit::Close { .. })
+        ))
+    }
+
     pub(crate) fn has_close_like_control_receipt(&self, call_id: &str) -> bool {
         self.control_receipts
             .get(call_id)
