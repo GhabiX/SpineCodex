@@ -13,26 +13,7 @@ fn clone_for_rollout_rewrites_compact_checkpoint_memory_refs() {
     let body_path = source
         .write_memory_body("root-1-1", body)
         .expect("write source body");
-    let mem = MemRecord {
-        compact_id: "root-1-1".to_string(),
-        kind: MemKind::RootEpoch,
-        node: NodeId::root_epoch(1),
-        raw_start: 0,
-        raw_end: 0,
-        context_start: 0,
-        context_end: 1,
-        raw_live_hash: Some(hash_raw_live(&[])),
-        open_input_tokens: None,
-        close_input_tokens: None,
-        open_context_tokens: None,
-        close_context_tokens: None,
-        closed_source_suffix_tokens: None,
-        closed_memory_context_tokens: None,
-        open_context_source: None,
-        memory_output_tokens: None,
-        body_path: body_path.clone(),
-        body_hash: sha1_hex(body.as_bytes()),
-    };
+    let mem = root_epoch_mem_record("root-1-1", body, body_path.clone());
     source.append_mem(&mem).expect("append mem");
     source
         .append_event(&SpineLedgerEvent::RootCompact {
@@ -92,26 +73,7 @@ fn compact_checkpoint_without_root_compact_marker_fails_validation() {
     let body_path = store
         .write_memory_body("root-1-0", body)
         .expect("write body");
-    let mem = MemRecord {
-        compact_id: "root-1-0".to_string(),
-        kind: MemKind::RootEpoch,
-        node: NodeId::root_epoch(1),
-        raw_start: 0,
-        raw_end: 0,
-        context_start: 0,
-        context_end: 1,
-        raw_live_hash: Some(hash_raw_live(&[])),
-        open_input_tokens: None,
-        close_input_tokens: None,
-        open_context_tokens: None,
-        close_context_tokens: None,
-        closed_source_suffix_tokens: None,
-        closed_memory_context_tokens: None,
-        open_context_source: None,
-        memory_output_tokens: None,
-        body_path: body_path.clone(),
-        body_hash: sha1_hex(body.as_bytes()),
-    };
+    let mem = root_epoch_mem_record("root-1-0", body, body_path.clone());
     store.append_mem(&mem).expect("append mem");
     store
         .append_compact_checkpoint(&root_compact_checkpoint_for_memory(
@@ -146,26 +108,7 @@ fn compact_checkpoint_with_mismatched_root_memory_ref_fails_validation() {
     let body_path = store
         .write_memory_body("root-1-0", body)
         .expect("write body");
-    let mem = MemRecord {
-        compact_id: "root-1-0".to_string(),
-        kind: MemKind::RootEpoch,
-        node: NodeId::root_epoch(1),
-        raw_start: 0,
-        raw_end: 0,
-        context_start: 0,
-        context_end: 1,
-        raw_live_hash: Some(hash_raw_live(&[])),
-        open_input_tokens: None,
-        close_input_tokens: None,
-        open_context_tokens: None,
-        close_context_tokens: None,
-        closed_source_suffix_tokens: None,
-        closed_memory_context_tokens: None,
-        open_context_source: None,
-        memory_output_tokens: None,
-        body_path: body_path.clone(),
-        body_hash: sha1_hex(body.as_bytes()),
-    };
+    let mem = root_epoch_mem_record("root-1-0", body, body_path.clone());
     store.append_mem(&mem).expect("append mem");
     store
         .append_event(&SpineLedgerEvent::RootCompact {
@@ -198,4 +141,27 @@ fn compact_checkpoint_with_mismatched_root_memory_ref_fails_validation() {
             .contains("does not match committed memory record"),
         "unexpected checkpoint validation error: {err}"
     );
+}
+
+fn root_epoch_mem_record(compact_id: &str, body: &str, body_path: String) -> MemRecord {
+    MemRecord {
+        compact_id: compact_id.to_string(),
+        kind: MemKind::RootEpoch,
+        node: NodeId::root_epoch(1),
+        raw_start: 0,
+        raw_end: 0,
+        context_start: 0,
+        context_end: 1,
+        raw_live_hash: Some(hash_raw_live(&[])),
+        open_input_tokens: None,
+        close_input_tokens: None,
+        open_context_tokens: None,
+        close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
+        open_context_source: None,
+        memory_output_tokens: None,
+        body_path,
+        body_hash: sha1_hex(body.as_bytes()),
+    }
 }
