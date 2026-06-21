@@ -148,6 +148,8 @@ mod runtime_lifecycle;
 mod store_basics;
 #[path = "tests/toolcall_grouping.rs"]
 mod toolcall_grouping;
+#[path = "tests/toolcall_grouping_validation.rs"]
+mod toolcall_grouping_validation;
 #[path = "tests/toolcall_lexer.rs"]
 mod toolcall_lexer;
 #[path = "tests/toolcall_spine_tree.rs"]
