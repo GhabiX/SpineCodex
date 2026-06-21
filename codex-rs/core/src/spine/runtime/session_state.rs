@@ -574,6 +574,38 @@ impl SpineSessionState {
             .slice_tool_response_anchor(trim_id, anchor, preceding, following, raw_items)
     }
 
+    pub(crate) fn trim_projection_needs_rollout_raw_items(
+        &self,
+    ) -> Result<Option<bool>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        Ok(Some(runtime.jit_enabled()))
+    }
+
+    pub(crate) fn materialize_trim_projection_from_raw_items(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        Ok(Some(runtime.materialize_history(raw_items)?))
+    }
+
+    pub(crate) fn project_trim_projection_from_history(
+        &self,
+        history_items: &[ResponseItem],
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        Ok(Some(runtime.project_raw_history_with_trim(history_items)?))
+    }
+
     pub(crate) fn prepare_root_compact_commit_with_checkpoint(
         &mut self,
         rollout_path: &Path,

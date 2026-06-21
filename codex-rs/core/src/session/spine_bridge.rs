@@ -339,32 +339,30 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        let jit_enabled = {
+        let Some(needs_rollout_raw_items) = ({
             let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(runtime) = guard.runtime() else {
+            guard.trim_projection_needs_rollout_raw_items()?
+        }) else {
+            return Ok(());
+        };
+        let projected = if needs_rollout_raw_items {
+            let raw_items = self.spine_raw_items_from_rollout().await?;
+            let Some(projected) = ({
+                let guard = spine_slot.lock().await;
+                guard.materialize_trim_projection_from_raw_items(&raw_items)?
+            }) else {
                 return Ok(());
             };
-            runtime.jit_enabled()
-        };
-        let projected = if jit_enabled {
-            let raw_items = self.spine_raw_items_from_rollout().await?;
-            {
-                let guard = spine_slot.lock().await;
-                guard.ensure_valid()?;
-                let Some(runtime) = guard.runtime() else {
-                    return Ok(());
-                };
-                runtime.materialize_history(&raw_items)?
-            }
+            projected
         } else {
             let history = self.clone_history().await;
             let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(runtime) = guard.runtime() else {
+            let Some(projected) =
+                guard.project_trim_projection_from_history(history.raw_items())?
+            else {
                 return Ok(());
             };
-            runtime.project_raw_history_with_trim(history.raw_items())?
+            projected
         };
         if projected.as_slice() != self.clone_history().await.raw_items() {
             self.replace_history(projected, self.reference_context_item().await)
