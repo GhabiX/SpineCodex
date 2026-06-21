@@ -1,7 +1,5 @@
 use crate::spine::NodeId;
-use crate::spine::SpineError;
 use crate::spine::SpineOpenNodeContextProjection;
-use crate::spine::SpineRuntime;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineNodeContextProblem;
@@ -39,27 +37,33 @@ pub(crate) struct SpineContextWindowInside {
     remaining_percent: Option<i64>,
 }
 
-pub(crate) fn build_spine_tree_inside_view(
-    runtime: &SpineRuntime,
+pub(crate) fn build_spine_tree_inside_view_from_projection(
+    projection: (SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>),
+    mut rendered_tree: String,
     token_info: Option<&TokenUsageInfo>,
-) -> Result<SpineTreeInsideView, SpineError> {
-    let open_node_projections = runtime.open_node_context_projections();
-    let mut snapshot = runtime.build_tree_snapshot()?;
+) -> SpineTreeInsideView {
+    let (mut snapshot, open_node_projections) = projection;
     annotate_open_node_contexts(&mut snapshot, token_info, &open_node_projections);
 
-    let open_nodes = build_open_nodes_inside(&snapshot, token_info, &open_node_projections);
-    let annotations = format_open_node_context_annotations(&open_nodes);
-    let mut rendered_tree = runtime.render_tree_with_context_annotations(&annotations)?;
     let context_window = context_window_inside(token_info);
     if let Some(line) = format_context_window_pressure(context_window.as_ref()) {
         rendered_tree.push_str("\n\n");
         rendered_tree.push_str(&line);
     }
 
-    Ok(SpineTreeInsideView {
+    SpineTreeInsideView {
         rendered_tree,
         snapshot,
-    })
+    }
+}
+
+pub(crate) fn build_spine_tree_context_annotations(
+    projection: &(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>),
+    token_info: Option<&TokenUsageInfo>,
+) -> BTreeMap<NodeId, String> {
+    let (snapshot, open_node_projections) = projection;
+    let open_nodes = build_open_nodes_inside(snapshot, token_info, open_node_projections);
+    format_open_node_context_annotations(&open_nodes)
 }
 
 pub(crate) fn build_spine_tree_pressure_view_from_projection(

@@ -1,6 +1,7 @@
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::CompletedToolCall;
@@ -22,6 +23,7 @@ use super::support::is_real_user_message;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
 use super::types::SpinePreparedCloseMemory;
+use crate::spine::model::NodeId;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::store::SpineCloneBoundary;
 use crate::spine::store::SpineStore;
@@ -575,6 +577,19 @@ impl SpineSessionState {
             runtime.build_tree_snapshot()?,
             runtime.open_node_context_projections(),
         )))
+    }
+
+    pub(crate) fn render_tree_with_context_annotations(
+        &self,
+        annotations: &BTreeMap<NodeId, String>,
+    ) -> Result<Option<String>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        runtime
+            .render_tree_with_context_annotations(annotations)
+            .map(Some)
     }
 
     pub(crate) fn apply_root_compact_after_history_publish(

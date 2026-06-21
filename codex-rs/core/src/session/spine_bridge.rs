@@ -3,7 +3,8 @@ use crate::client::ModelClientSession;
 use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::annotate_spine_tree_snapshot;
-use crate::session::spine_tree_inside::build_spine_tree_inside_view;
+use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
+use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
 #[cfg(test)]
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
@@ -731,15 +732,28 @@ impl Session {
     ) -> Result<String, SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let token_info = self.token_usage_info().await;
-        let guard = spine.lock().await;
-        guard.ensure_valid()?;
-        let Some(runtime) = guard.runtime() else {
-            return Err(SpineError::InvalidStore(
-                "spine runtime missing after initialization".to_string(),
-            ));
+        let view = {
+            let guard = spine.lock().await;
+            let Some(projection) = guard.tree_snapshot_projection()? else {
+                return Err(SpineError::InvalidStore(
+                    "spine runtime missing after initialization".to_string(),
+                ));
+            };
+            let annotations =
+                build_spine_tree_context_annotations(&projection, token_info.as_ref());
+            let rendered_tree = guard
+                .render_tree_with_context_annotations(&annotations)?
+                .ok_or_else(|| {
+                    SpineError::InvalidStore(
+                        "spine runtime missing after initialization".to_string(),
+                    )
+                })?;
+            build_spine_tree_inside_view_from_projection(
+                projection,
+                rendered_tree,
+                token_info.as_ref(),
+            )
         };
-        let view = build_spine_tree_inside_view(runtime, token_info.as_ref())?;
-        drop(guard);
 
         if let Some(planned_nodes) = planned_nodes {
             let planned_nodes = validate_planned_nodes(&view.snapshot, planned_nodes)?;
