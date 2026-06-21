@@ -63,7 +63,11 @@ pub(crate) struct SpineToolCommit {
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
-pub(crate) enum SpineCompletedToolCallOutputs<'a> {
+pub(crate) struct SpineCompletedToolCallOutputs<'a> {
+    kind: SpineCompletedToolCallOutputsKind<'a>,
+}
+
+enum SpineCompletedToolCallOutputsKind<'a> {
     Single {
         item: &'a ResponseItem,
     },
@@ -76,7 +80,9 @@ pub(crate) enum SpineCompletedToolCallOutputs<'a> {
 
 impl<'a> SpineCompletedToolCallOutputs<'a> {
     pub(crate) fn single(item: &'a ResponseItem) -> Self {
-        Self::Single { item }
+        Self {
+            kind: SpineCompletedToolCallOutputsKind::Single { item },
+        }
     }
 
     pub(crate) fn grouped(
@@ -84,10 +90,12 @@ impl<'a> SpineCompletedToolCallOutputs<'a> {
         tool_call_ids: &'a [String],
         output_items: &'a [ResponseItem],
     ) -> Self {
-        Self::Grouped {
-            commit_call_id,
-            tool_call_ids,
-            output_items,
+        Self {
+            kind: SpineCompletedToolCallOutputsKind::Grouped {
+                commit_call_id,
+                tool_call_ids,
+                output_items,
+            },
         }
     }
 }
@@ -1062,12 +1070,12 @@ impl Session {
         client_session: &mut ModelClientSession,
         outputs: SpineCompletedToolCallOutputs<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
-        let Some(completed) = (match outputs {
-            SpineCompletedToolCallOutputs::Single { item } => {
+        let Some(completed) = (match outputs.kind {
+            SpineCompletedToolCallOutputsKind::Single { item } => {
                 self.single_completed_spine_toolcall_output(turn_context, item)
                     .await?
             }
-            SpineCompletedToolCallOutputs::Grouped {
+            SpineCompletedToolCallOutputsKind::Grouped {
                 commit_call_id,
                 tool_call_ids,
                 output_items,
