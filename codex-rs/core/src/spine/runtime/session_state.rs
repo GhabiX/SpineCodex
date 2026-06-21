@@ -21,6 +21,11 @@ pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SpineCompletedToolCallEvidence {
+    completed_toolcall: CompletedToolCall,
+}
+
 pub(crate) struct SpineToolcallCommitInput<'a> {
     pub(crate) call_id: &'a str,
     pub(crate) completed_toolcall: CompletedToolCall,
@@ -50,6 +55,26 @@ pub(crate) struct SpinePostApplyEffectPolicy {
 pub(crate) struct CommittedSpineToolcall {
     installed_commit: bool,
     post_apply_effect_policy: SpinePostApplyEffectPolicy,
+}
+
+impl SpineCompletedToolCallEvidence {
+    fn new(completed_toolcall: CompletedToolCall) -> Self {
+        Self { completed_toolcall }
+    }
+
+    fn first_segment_context_index(&self) -> Result<usize, SpineError> {
+        self.completed_toolcall
+            .segments
+            .first()
+            .map(|segment| segment.context_index)
+            .ok_or_else(|| {
+                SpineError::InvalidEvent("completed toolcall missing first segment".to_string())
+            })
+    }
+
+    fn into_completed_toolcall(self) -> CompletedToolCall {
+        self.completed_toolcall
+    }
 }
 
 impl PreparedSpineToolcallCommit {
@@ -164,7 +189,7 @@ fn completed_toolcall_evidence_from_segments(
     response_segments: Vec<CompletedToolCallSegment>,
     missing_request_error: &'static str,
     missing_response_error: &'static str,
-) -> Result<CompletedToolCall, SpineError> {
+) -> Result<SpineCompletedToolCallEvidence, SpineError> {
     completed_toolcall_evidence(CompletedToolCallEvidenceParts {
         call_id: call_id.to_string(),
         request_call_ids: request_call_ids.to_vec(),
@@ -177,7 +202,7 @@ fn completed_toolcall_evidence_from_segments(
 
 fn completed_toolcall_evidence(
     parts: CompletedToolCallEvidenceParts,
-) -> Result<CompletedToolCall, SpineError> {
+) -> Result<SpineCompletedToolCallEvidence, SpineError> {
     let CompletedToolCallEvidenceParts {
         call_id,
         request_call_ids,
@@ -197,11 +222,11 @@ fn completed_toolcall_evidence(
     let mut segments = Vec::with_capacity(request_segments.len() + response_segments.len());
     segments.extend(request_segments);
     segments.extend(response_segments);
-    Ok(CompletedToolCall {
+    Ok(SpineCompletedToolCallEvidence::new(CompletedToolCall {
         call_id,
         request_call_ids,
         segments,
-    })
+    }))
 }
 
 #[derive(Debug)]
@@ -415,7 +440,7 @@ impl SpineSessionState {
         &self,
         call_id: &str,
         response_anchor: (u64, usize),
-    ) -> Result<Option<CompletedToolCall>, SpineError> {
+    ) -> Result<Option<SpineCompletedToolCallEvidence>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime() else {
             return Ok(None);
@@ -444,7 +469,7 @@ impl SpineSessionState {
         tool_call_ids: &[String],
         response_raw_ordinals: &[Option<u64>],
         response_context_start: usize,
-    ) -> Result<Option<CompletedToolCall>, SpineError> {
+    ) -> Result<Option<SpineCompletedToolCallEvidence>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime() else {
             return Ok(None);
@@ -471,7 +496,7 @@ impl SpineSessionState {
     pub(crate) fn prepare_completed_toolcall_commit(
         &mut self,
         call_id: &str,
-        completed_toolcall: CompletedToolCall,
+        completed_toolcall: SpineCompletedToolCallEvidence,
         tool_resp_item: &ResponseItem,
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
@@ -481,9 +506,10 @@ impl SpineSessionState {
         pre_compact_provider_input_tokens: Option<i64>,
         current_turn_provider_input_tokens: Option<i64>,
     ) -> Result<Option<PreparedSpineToolcallCommit>, SpineError> {
+        let toolcall_start = completed_toolcall.first_segment_context_index()?;
         let input = SpineToolcallCommitInput {
             call_id,
-            completed_toolcall,
+            completed_toolcall: completed_toolcall.into_completed_toolcall(),
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
@@ -497,14 +523,6 @@ impl SpineSessionState {
         if self.runtime().is_none() {
             return Ok(None);
         }
-        let toolcall_start = input
-            .completed_toolcall
-            .segments
-            .first()
-            .map(|segment| segment.context_index)
-            .ok_or_else(|| {
-                SpineError::InvalidEvent("completed toolcall missing first segment".to_string())
-            })?;
         let memory = {
             let assembly = self
                 .runtime_mut()

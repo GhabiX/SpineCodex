@@ -3,11 +3,11 @@ use crate::client::ModelClientSession;
 use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view;
-use crate::spine::CompletedToolCall;
 #[cfg(test)]
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
+use crate::spine::SpineCompletedToolCallEvidence;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
 #[cfg(test)]
@@ -121,7 +121,7 @@ struct SpineCommitOutput {
 struct SpineToolCallEvidence<'a> {
     call_id: &'a str,
     response_item: &'a ResponseItem,
-    completed_toolcall: CompletedToolCall,
+    completed_toolcall: SpineCompletedToolCallEvidence,
 }
 
 struct SpineToolCallHostRecording {
@@ -1347,7 +1347,7 @@ impl Session {
         _client_session: &mut ModelClientSession,
         call_id: &str,
         item: &ResponseItem,
-        completed_toolcall: CompletedToolCall,
+        completed_toolcall: SpineCompletedToolCallEvidence,
         tool_resp_already_recorded: bool,
         recorded_output_inside_reduce: bool,
         history_before_recorded_output: Option<crate::context_manager::ContextManager>,
@@ -1471,7 +1471,7 @@ impl Session {
         expected_history: Vec<ResponseItem>,
         pre_compact_provider_input_tokens: Option<i64>,
         current_turn_token_info: Option<&TokenUsageInfo>,
-        completed_toolcall: CompletedToolCall,
+        completed_toolcall: SpineCompletedToolCallEvidence,
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCommitAttempt, SpineError> {
