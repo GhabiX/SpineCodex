@@ -13,6 +13,7 @@ use super::SpinePreparedRootCompactInstall;
 use super::SpineRootCompactResult;
 use super::SpineRuntime;
 use super::SpineTreeUpdateDelivery;
+use super::SpineTrimOutcome;
 use super::prepared::SpineCommitPublication;
 use super::support::is_real_user_message;
 use super::types::SpinePreparedCloseMemory;
@@ -329,6 +330,13 @@ impl SpineSessionState {
         runtime.abort_any_pending()
     }
 
+    fn runtime_mut_after_init(&mut self) -> Result<&mut SpineRuntime, SpineError> {
+        self.ensure_valid()?;
+        self.runtime_mut().ok_or_else(|| {
+            SpineError::InvalidStore("spine runtime missing after initialization".to_string())
+        })
+    }
+
     fn invalid_error(&self) -> Option<SpineError> {
         self.invalid
             .as_ref()
@@ -524,6 +532,45 @@ impl SpineSessionState {
             runtime.checkpoint_before_user_msg(rollout_path, raw_ordinal, raw_items)?;
         }
         runtime.on_non_toolcall_msg(raw_ordinal, context_index, item)
+    }
+
+    pub(crate) fn trim_tool_response(
+        &mut self,
+        trim_id: &str,
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.runtime_mut_after_init()?.trim_tool_response(trim_id)
+    }
+
+    pub(crate) fn slice_tool_response_head(
+        &mut self,
+        trim_id: &str,
+        head: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.runtime_mut_after_init()?
+            .slice_tool_response_head(trim_id, head, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_tail(
+        &mut self,
+        trim_id: &str,
+        tail: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.runtime_mut_after_init()?
+            .slice_tool_response_tail(trim_id, tail, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_anchor(
+        &mut self,
+        trim_id: &str,
+        anchor: &str,
+        preceding: usize,
+        following: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimOutcome, SpineError> {
+        self.runtime_mut_after_init()?
+            .slice_tool_response_anchor(trim_id, anchor, preceding, following, raw_items)
     }
 
     pub(crate) fn single_completed_toolcall_evidence(

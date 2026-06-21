@@ -959,37 +959,19 @@ impl Session {
             SpineTrimRequest::Snip => {
                 let spine = self.ensure_spine_runtime().await?;
                 let mut guard = spine.lock().await;
-                guard.ensure_valid()?;
-                let Some(runtime) = guard.runtime_mut() else {
-                    return Err(SpineError::InvalidStore(
-                        "spine runtime missing after initialization".to_string(),
-                    ));
-                };
-                runtime.trim_tool_response(&trim_id)
+                guard.trim_tool_response(&trim_id)
             }
             SpineTrimRequest::SliceHead { head } => {
                 let raw_items = self.spine_raw_items_from_rollout().await?;
                 let spine = self.ensure_spine_runtime().await?;
                 let mut guard = spine.lock().await;
-                guard.ensure_valid()?;
-                let Some(runtime) = guard.runtime_mut() else {
-                    return Err(SpineError::InvalidStore(
-                        "spine runtime missing after initialization".to_string(),
-                    ));
-                };
-                runtime.slice_tool_response_head(&trim_id, head, &raw_items)
+                guard.slice_tool_response_head(&trim_id, head, &raw_items)
             }
             SpineTrimRequest::SliceTail { tail } => {
                 let raw_items = self.spine_raw_items_from_rollout().await?;
                 let spine = self.ensure_spine_runtime().await?;
                 let mut guard = spine.lock().await;
-                guard.ensure_valid()?;
-                let Some(runtime) = guard.runtime_mut() else {
-                    return Err(SpineError::InvalidStore(
-                        "spine runtime missing after initialization".to_string(),
-                    ));
-                };
-                runtime.slice_tool_response_tail(&trim_id, tail, &raw_items)
+                guard.slice_tool_response_tail(&trim_id, tail, &raw_items)
             }
             SpineTrimRequest::SliceAnchor {
                 anchor,
@@ -999,13 +981,7 @@ impl Session {
                 let raw_items = self.spine_raw_items_from_rollout().await?;
                 let spine = self.ensure_spine_runtime().await?;
                 let mut guard = spine.lock().await;
-                guard.ensure_valid()?;
-                let Some(runtime) = guard.runtime_mut() else {
-                    return Err(SpineError::InvalidStore(
-                        "spine runtime missing after initialization".to_string(),
-                    ));
-                };
-                runtime
+                guard
                     .slice_tool_response_anchor(&trim_id, &anchor, preceding, following, &raw_items)
             }
         }
