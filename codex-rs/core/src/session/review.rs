@@ -58,7 +58,6 @@ pub(super) async fn spawn_review_thread(
     .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
     .with_multi_agent_v2_non_code_mode_only(config.multi_agent_v2.non_code_mode_only)
     .with_goal_tools_allowed(goal_tools_supported)
-    .with_spine_feedback_tool_visible(config.dev_debug_prompt_overrides)
     .with_max_concurrent_threads_per_session(config.agent_max_threads)
     .with_wait_agent_min_timeout_ms(
         review_features
@@ -204,7 +203,5 @@ pub(crate) fn apply_review_spine_tool_visibility(
 ) -> ToolsConfig {
     tools_config.spine_jit_tools_visible = tools_config.spine_jit && spine_jit_tools_visible;
     tools_config.spine_trim_tools_visible = tools_config.spine_trim && spine_trim_tools_visible;
-    tools_config.spine_feedback_tool_visible =
-        tools_config.spine_feedback_tool_visible && tools_config.spine_jit_tools_visible;
     tools_config
 }

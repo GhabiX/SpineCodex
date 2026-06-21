@@ -10,7 +10,6 @@ const MEM_ACCOUNTING_FILE: &str = "mem_accounting.jsonl";
 const MEM_ACCOUNTING_WITNESS_FILE: &str = "mem_accounting_witness.jsonl";
 const COMMIT_FILE: &str = "commits.jsonl";
 const COMPACT_CHECKPOINT_FILE: &str = "compact_checkpoints.jsonl";
-const FEEDBACK_FILE: &str = "spine_feedback.md";
 const CHECKPOINT_DIR: &str = "checkpoints";
 const INITIAL_CHECKPOINT_FILE: &str = "initial.json";
 
@@ -72,15 +71,6 @@ impl SpineStore {
     #[cfg(test)]
     pub(crate) fn trim_path_for_test(&self) -> PathBuf {
         self.trim_path()
-    }
-
-    pub(crate) fn feedback_path(&self) -> PathBuf {
-        self.root.join(FEEDBACK_FILE)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn feedback_path_for_test(&self) -> PathBuf {
-        self.feedback_path()
     }
 
     pub(super) fn compact_checkpoint_path(&self) -> PathBuf {

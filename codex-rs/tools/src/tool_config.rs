@@ -112,7 +112,6 @@ pub struct ToolsConfig {
     pub spine_trim: bool,
     pub spine_jit_tools_visible: bool,
     pub spine_trim_tools_visible: bool,
-    pub spine_feedback_tool_visible: bool,
     pub tool_suggest: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
@@ -258,7 +257,6 @@ impl ToolsConfig {
             spine_trim: include_spine_trim,
             spine_jit_tools_visible: include_spine_jit,
             spine_trim_tools_visible: include_spine_trim,
-            spine_feedback_tool_visible: false,
             tool_suggest: include_tool_suggest,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
@@ -296,7 +294,6 @@ impl ToolsConfig {
             self.spine_trim = false;
             self.spine_jit_tools_visible = false;
             self.spine_trim_tools_visible = false;
-            self.spine_feedback_tool_visible = false;
         }
         self
     }
@@ -304,13 +301,6 @@ impl ToolsConfig {
     pub fn with_spine_tools_visible(mut self, visible: bool) -> Self {
         self.spine_jit_tools_visible = self.spine_jit && visible;
         self.spine_trim_tools_visible = self.spine_trim && visible;
-        self.spine_feedback_tool_visible =
-            self.spine_feedback_tool_visible && self.spine_jit_tools_visible;
-        self
-    }
-
-    pub fn with_spine_feedback_tool_visible(mut self, visible: bool) -> Self {
-        self.spine_feedback_tool_visible = self.spine_jit_tools_visible && visible;
         self
     }
 

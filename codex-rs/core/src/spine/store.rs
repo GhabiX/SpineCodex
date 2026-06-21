@@ -11,7 +11,6 @@ mod clone_rewrite;
 mod clone_sidecar;
 mod commit_marker;
 mod compact_validation;
-mod feedback;
 mod ledger;
 mod locator;
 mod memory_body;
@@ -100,10 +99,6 @@ impl SpineStore {
 }
 
 impl SpineStore {
-    pub(crate) fn append_feedback_markdown(&self, entry: &str) -> Result<(), SpineError> {
-        feedback::append_markdown_entry(&self.feedback_path(), entry)
-    }
-
     pub(super) fn write_memory_body(
         &self,
         compact_id: &str,

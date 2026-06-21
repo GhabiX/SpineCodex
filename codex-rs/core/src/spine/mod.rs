@@ -21,7 +21,6 @@ pub(crate) use runtime::LiveRootCompact;
 pub(crate) use runtime::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 pub(crate) use runtime::SPINE_NAMESPACE;
 pub(crate) use runtime::SPINE_TOOL_CLOSE;
-pub(crate) use runtime::SPINE_TOOL_FEEDBACK;
 pub(crate) use runtime::SPINE_TOOL_NEXT;
 pub(crate) use runtime::SPINE_TOOL_OPEN;
 pub(crate) use runtime::SPINE_TOOL_TREE;

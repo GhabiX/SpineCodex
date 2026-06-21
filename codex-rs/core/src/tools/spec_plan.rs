@@ -399,15 +399,11 @@ fn collect_tool_executors(
     }
 
     executors.push(Arc::new(PlanHandler));
-    if config.spine_jit_tools_visible
-        || config.spine_trim_tools_visible
-        || config.spine_feedback_tool_visible
-    {
+    if config.spine_jit_tools_visible || config.spine_trim_tools_visible {
         executors.extend(
             SpineHandler::all(
                 config.spine_jit_tools_visible,
                 config.spine_trim_tools_visible,
-                config.spine_feedback_tool_visible,
             )
             .into_iter()
             .map(|handler| Arc::new(handler) as Arc<dyn CoreToolRuntime>),

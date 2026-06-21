@@ -112,7 +112,6 @@ pub(crate) const SPINE_TOOL_OPEN: &str = "open";
 pub(crate) const SPINE_TOOL_CLOSE: &str = "close";
 pub(crate) const SPINE_TOOL_NEXT: &str = "next";
 pub(crate) const SPINE_TOOL_TRIM: &str = "trim";
-pub(crate) const SPINE_TOOL_FEEDBACK: &str = "feedback";
 pub(crate) const SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX: &str =
     "Spine control tools are mutually exclusive within one response;";
 
@@ -194,10 +193,6 @@ impl IntoSpineNodeMemory for String {
 }
 
 impl SpineRuntime {
-    pub(crate) fn append_feedback_markdown(&self, entry: &str) -> Result<(), SpineError> {
-        self.store.append_feedback_markdown(entry)
-    }
-
     pub(crate) fn current_open_index(&self) -> Result<usize, SpineError> {
         self.ensure_jit_enabled("Spine current open index")?;
         Ok(self.parse_stack.current_open_meta()?.index)

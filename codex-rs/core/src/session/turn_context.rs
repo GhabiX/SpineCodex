@@ -225,7 +225,6 @@ impl TurnContext {
         .with_spine_tools_visible(
             self.tools_config.spine_jit_tools_visible || self.tools_config.spine_trim_tools_visible,
         )
-        .with_spine_feedback_tool_visible(config.dev_debug_prompt_overrides)
         .with_max_concurrent_threads_per_session(
             config
                 .features
@@ -546,7 +545,6 @@ impl Session {
         .with_multi_agent_v2_non_code_mode_only(per_turn_config.multi_agent_v2.non_code_mode_only)
         .with_goal_tools_allowed(goal_tools_supported)
         .with_spine_tools_visible(false)
-        .with_spine_feedback_tool_visible(per_turn_config.dev_debug_prompt_overrides)
         .with_max_concurrent_threads_per_session(
             per_turn_config
                 .features
@@ -826,8 +824,7 @@ impl Session {
         turn_context.tools_config = turn_context
             .tools_config
             .clone()
-            .with_spine_tools_visible(spine_tools_visible)
-            .with_spine_feedback_tool_visible(turn_context.config.dev_debug_prompt_overrides);
+            .with_spine_tools_visible(spine_tools_visible);
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {

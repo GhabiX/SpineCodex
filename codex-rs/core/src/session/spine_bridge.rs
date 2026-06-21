@@ -1120,23 +1120,6 @@ impl Session {
         }
     }
 
-    pub(crate) async fn append_spine_feedback(&self, content: String) -> Result<(), SpineError> {
-        let spine = self.ensure_spine_runtime().await?;
-        let guard = spine.lock().await;
-        guard.ensure_valid()?;
-        let Some(runtime) = guard.runtime() else {
-            return Err(SpineError::InvalidStore(
-                "spine runtime missing after initialization".to_string(),
-            ));
-        };
-        let entry = format!(
-            "## {}\n\n{}",
-            chrono::Utc::now().to_rfc3339(),
-            content.trim()
-        );
-        runtime.append_feedback_markdown(&entry)
-    }
-
     #[cfg(test)]
     pub(crate) async fn test_on_toolcall_single(
         self: &Arc<Self>,

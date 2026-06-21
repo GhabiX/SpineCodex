@@ -1,28 +1,6 @@
 use super::*;
 
 #[test]
-fn feedback_markdown_append_creates_file_and_preserves_existing_entries() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let rollout = rollout_path(&dir);
-    let runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine runtime");
-    let store = &runtime.store;
-
-    store
-        .append_feedback_markdown("## first\n\nInitial feedback")
-        .expect("append first feedback");
-    store
-        .append_feedback_markdown("## second\n\nFollow-up feedback")
-        .expect("append second feedback");
-
-    let body =
-        std::fs::read_to_string(store.feedback_path_for_test()).expect("read feedback markdown");
-    assert_eq!(
-        body,
-        "## first\n\nInitial feedback\n\n## second\n\nFollow-up feedback\n"
-    );
-}
-
-#[test]
 fn ledger_cache_uses_sparse_max_seq_on_load_and_append() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);

@@ -1,6 +1,5 @@
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
-use crate::spine::SPINE_TOOL_FEEDBACK;
 use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
@@ -16,7 +15,6 @@ use std::collections::BTreeMap;
 pub(crate) fn create_spine_namespace_tool(
     include_jit_tools: bool,
     include_trim_tool: bool,
-    include_feedback_tool: bool,
 ) -> ToolSpec {
     let mut tools = Vec::new();
     if include_jit_tools {
@@ -47,10 +45,6 @@ pub(crate) fn create_spine_namespace_tool(
             ResponsesApiNamespaceTool::Function(spine_next_tool()),
         ]);
     }
-    if include_feedback_tool {
-        tools.push(ResponsesApiNamespaceTool::Function(spine_feedback_tool()));
-    }
-
     ToolSpec::Namespace(ResponsesApiNamespace {
         name: SPINE_NAMESPACE.to_string(),
         description: "Inspect and move the Spine task tree.".to_string(),
@@ -105,23 +99,6 @@ fn spine_tree_tool() -> ResponsesApiTool {
             Some(Vec::new()),
             Some(false.into()),
         ),
-        output_schema: None,
-    }
-}
-
-fn spine_feedback_tool() -> ResponsesApiTool {
-    let properties = BTreeMap::from([(
-        "content".to_string(),
-        JsonSchema::string(Some(
-            "Concise feedback for Spine developers about a problem, rough edge, confusing behavior, missing capability, or concrete improvement idea noticed during real work.".to_string(),
-        )),
-    )]);
-    ResponsesApiTool {
-        name: SPINE_TOOL_FEEDBACK.to_string(),
-        description: "Record debug-only feedback for Spine developers when real work reveals a Spine problem, rough edge, confusing behavior, missing capability, or concrete improvement idea. When the feedback is relevant to the ongoing collaboration, also mention the same issue or improvement idea in your ordinary assistant reply; do not rely on the tool call or tool response as the user-visible communication. Do not use this for normal task notes, user-facing summaries, or project implementation logs.".to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(vec!["content".to_string()]), Some(false.into())),
         output_schema: None,
     }
 }

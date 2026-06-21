@@ -1548,41 +1548,6 @@ fn spine_namespace_tools_follow_jit_and_trim_visibility_independently() {
     assert_eq!(open_required, Some(&vec!["summary".to_string()]));
     assert!(open_properties.contains_key("summary"));
 
-    config.spine_feedback_tool_visible = true;
-    let (specs, registry) = build_specs(&config, None, None, &[]);
-    assert!(
-        registry
-            .tool_exposure(&ToolName::namespaced("spine", "feedback"))
-            .is_some()
-    );
-    let spine_function_names = namespace_function_names(&specs, "spine");
-    assert_eq!(
-        spine_function_names
-            .iter()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>(),
-        std::collections::BTreeSet::from([
-            "tree".to_string(),
-            "open".to_string(),
-            "close".to_string(),
-            "next".to_string(),
-            "feedback".to_string()
-        ])
-    );
-    let feedback_tool = find_namespace_function_tool(&specs, "spine", "feedback");
-    let (feedback_properties, feedback_required) = expect_object_schema(&feedback_tool.parameters);
-    assert_eq!(feedback_required, Some(&vec!["content".to_string()]));
-    assert_eq!(
-        feedback_tool.parameters.additional_properties,
-        Some(AdditionalProperties::Boolean(false))
-    );
-    assert_eq!(
-        feedback_properties.keys().cloned().collect::<Vec<_>>(),
-        vec!["content".to_string()]
-    );
-    assert!(expect_string_description(&feedback_properties["content"]).contains("feedback"));
-
-    config.spine_feedback_tool_visible = false;
     config.spine_jit = false;
     config.spine_trim = true;
     config.spine_jit_tools_visible = false;
