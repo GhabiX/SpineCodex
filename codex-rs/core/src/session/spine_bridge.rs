@@ -1616,17 +1616,10 @@ impl Session {
                 completed_toolcall,
                 raw_items,
             )?;
-        let defer_tree_update_until_raw_output = commit_application
-            .as_ref()
-            .is_some_and(|application| application.defer_tree_update_until_raw_output());
-        if let Some(commit_application) = commit_application.as_ref() {
-            commit_application
-                .validate_against_host_history(call_id, state.clone_history().raw_items())?;
-        }
         let reference_context_item = state.reference_context_item();
-        let history_update = spine.commit_application_publication_history_update(
+        let mut commit_publication = spine.prepare_commit_publication(
             call_id,
-            commit_application.as_ref(),
+            commit_application,
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
@@ -1640,11 +1633,13 @@ impl Session {
                 reference_context_item,
             },
         )?;
-        let host_effects = SpineHostEffects::from_optional_history_update(history_update);
-        if let Some(commit_application) = commit_application.as_ref()
-            && let Err(err) =
-                spine.persist_prepared_commit_application_side_effects(commit_application)
-        {
+        let defer_tree_update_until_raw_output =
+            commit_publication.defer_tree_update_until_raw_output();
+        let has_commit_application = commit_publication.has_application();
+        let host_effects = SpineHostEffects::from_optional_history_update(
+            commit_publication.take_history_update(),
+        );
+        if let Err(err) = spine.persist_commit_publication_side_effects(&commit_publication) {
             guard.invalidate(format!(
                 "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
             ));
@@ -1656,8 +1651,8 @@ impl Session {
             ));
             return Err(SpineError::Invariant(err));
         }
-        let snapshot = if let Some(commit_application) = commit_application {
-            spine.install_prepared_commit_application(commit_application);
+        let snapshot = if has_commit_application {
+            spine.install_commit_publication(commit_publication);
             let token_info = state.token_info();
             Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?)
         } else {

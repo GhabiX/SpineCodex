@@ -14,6 +14,7 @@ use super::pending::CompletedToolCallSegment;
 use super::pending::PendingTransition;
 use super::prepared::HistoryPublicationPlan;
 use super::prepared::SpineCommitKind;
+use super::prepared::SpineCommitPublication;
 use super::prepared::SpinePreparedCommit;
 use super::prepared::SpinePreparedCommitApplication;
 use super::support::close_commit_marker;
@@ -636,6 +637,16 @@ impl SpineRuntime {
         self.persist_prepared_commit_side_effects(application.as_prepared_commit())
     }
 
+    pub(crate) fn persist_commit_publication_side_effects<T>(
+        &mut self,
+        publication: &SpineCommitPublication<T>,
+    ) -> Result<(), SpineError> {
+        if let Some(application) = publication.application() {
+            self.persist_prepared_commit_application_side_effects(application)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn install_prepared_commit(&mut self, prepared: SpinePreparedCommit) {
         if let Some(final_parse_stack) = prepared.final_parse_stack {
             self.parse_stack = final_parse_stack;
@@ -650,6 +661,12 @@ impl SpineRuntime {
         application: SpinePreparedCommitApplication,
     ) {
         self.install_prepared_commit(application.into_prepared_commit());
+    }
+
+    pub(crate) fn install_commit_publication<T>(&mut self, publication: SpineCommitPublication<T>) {
+        if let Some(application) = publication.into_application() {
+            self.install_prepared_commit_application(application);
+        }
     }
 
     pub(crate) fn commit_publication_history_update<T>(
@@ -702,6 +719,31 @@ impl SpineRuntime {
             history_items,
             build_update,
         )
+    }
+
+    pub(crate) fn prepare_commit_publication<T>(
+        &self,
+        call_id: &str,
+        application: Option<SpinePreparedCommitApplication>,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
+        history_items: &[ResponseItem],
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<SpineCommitPublication<T>, SpineError> {
+        if let Some(application) = application.as_ref() {
+            application.validate_against_host_history(call_id, history_items)?;
+        }
+        let history_update = self.commit_application_publication_history_update(
+            call_id,
+            application.as_ref(),
+            tool_resp_item,
+            tool_resp_already_recorded,
+            raw_items,
+            history_items,
+            build_update,
+        )?;
+        Ok(SpineCommitPublication::new(application, history_update))
     }
 
     fn commit_publication_history_update_parts(

@@ -65,6 +65,13 @@ pub(crate) struct SpinePreparedCommitApplication {
 }
 
 #[derive(Debug)]
+pub(crate) struct SpineCommitPublication<T> {
+    application: Option<SpinePreparedCommitApplication>,
+    history_update: Option<T>,
+    defer_tree_update_until_raw_output: bool,
+}
+
+#[derive(Debug)]
 pub(crate) struct SpinePreparedRootCompact {
     pub(super) result: SpineRootCompactResult,
     pub(super) final_parse_stack: ParseStack,
@@ -135,5 +142,41 @@ impl SpinePreparedCommitApplication {
 
     pub(super) fn into_prepared_commit(self) -> SpinePreparedCommit {
         self.prepared
+    }
+}
+
+impl<T> SpineCommitPublication<T> {
+    pub(super) fn new(
+        application: Option<SpinePreparedCommitApplication>,
+        history_update: Option<T>,
+    ) -> Self {
+        let defer_tree_update_until_raw_output = application
+            .as_ref()
+            .is_some_and(SpinePreparedCommitApplication::defer_tree_update_until_raw_output);
+        Self {
+            application,
+            history_update,
+            defer_tree_update_until_raw_output,
+        }
+    }
+
+    pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
+        self.defer_tree_update_until_raw_output
+    }
+
+    pub(crate) fn has_application(&self) -> bool {
+        self.application.is_some()
+    }
+
+    pub(crate) fn take_history_update(&mut self) -> Option<T> {
+        self.history_update.take()
+    }
+
+    pub(super) fn application(&self) -> Option<&SpinePreparedCommitApplication> {
+        self.application.as_ref()
+    }
+
+    pub(super) fn into_application(self) -> Option<SpinePreparedCommitApplication> {
+        self.application
     }
 }
