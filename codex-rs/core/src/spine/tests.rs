@@ -100,6 +100,8 @@ mod trim;
 mod trim_candidates;
 #[path = "tests/trim_projection.rs"]
 mod trim_projection;
+#[path = "tests/trim_targeting.rs"]
+mod trim_targeting;
 
 // Shared raw/context fixtures.
 
