@@ -1,15 +1,13 @@
 use super::*;
 
-// Rollback replay over sparse raw history.
-
 #[test]
-fn rollback_keeps_open_when_request_item_survives() {
+fn rollback_skips_open_when_request_item_is_stale() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw = vec![
         Some(text_item("before")),
-        Some(spine_call(SPINE_TOOL_OPEN, "open")),
         None,
+        Some(function_output("open")),
     ];
 
     let mut runtime = SpineRuntime::load_or_create(&rollout, 1).expect("create spine");
@@ -35,9 +33,8 @@ fn rollback_keeps_open_when_request_item_survives() {
         .expect("load spine")
         .expect("sidecar exists");
     let tree = replayed.render_tree().expect("render tree");
-    assert!(tree.contains("Cursor: 1.1.1"), "{tree}");
-    assert!(tree.contains("- [1.1] Open"), "{tree}");
-    assert!(tree.contains("- [1.1.1] Current child task"), "{tree}");
+    assert!(tree.contains("Cursor: 1.1"), "{tree}");
+    assert!(tree.contains("- [1.1] Current"), "{tree}");
     assert_eq!(
         replayed.materialize_history(&raw).expect("materialize"),
         vec![anchored_text_item(1, "before")]

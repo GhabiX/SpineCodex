@@ -206,6 +206,8 @@ mod rollback_sparse;
 mod rollback_sparse_hole;
 #[path = "tests/rollback_sparse_materialization.rs"]
 mod rollback_sparse_materialization;
+#[path = "tests/rollback_sparse_stale.rs"]
+mod rollback_sparse_stale;
 #[path = "tests/root_compact_boundary.rs"]
 mod root_compact_boundary;
 #[path = "tests/root_compact_boundary_checkpoint.rs"]
