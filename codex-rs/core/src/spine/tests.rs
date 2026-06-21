@@ -210,6 +210,8 @@ mod root_compact_example_trace;
 mod root_compact_failures;
 #[path = "tests/root_compact_lifecycle.rs"]
 mod root_compact_lifecycle;
+#[path = "tests/root_compact_lifecycle_close_open.rs"]
+mod root_compact_lifecycle_close_open;
 #[path = "tests/root_compact_prepared.rs"]
 mod root_compact_prepared;
 #[path = "tests/root_compact_prepared_install.rs"]
