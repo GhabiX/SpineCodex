@@ -128,6 +128,8 @@ mod prepared_commit;
 mod prepared_commit_side_effect_failures;
 #[path = "tests/provider_baseline.rs"]
 mod provider_baseline;
+#[path = "tests/provider_baseline_capture.rs"]
+mod provider_baseline_capture;
 #[path = "tests/provider_legacy_pressure.rs"]
 mod provider_legacy_pressure;
 #[path = "tests/raw_coverage.rs"]
