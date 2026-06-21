@@ -470,8 +470,29 @@ impl SpineSessionState {
 
     pub(crate) fn prepare_completed_toolcall_commit(
         &mut self,
-        input: SpineToolcallCommitInput<'_>,
+        call_id: &str,
+        completed_toolcall: CompletedToolCall,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
+        history_items: &[ResponseItem],
+        expected_history: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+        pre_compact_provider_input_tokens: Option<i64>,
+        current_turn_provider_input_tokens: Option<i64>,
     ) -> Result<Option<PreparedSpineToolcallCommit>, SpineError> {
+        let input = SpineToolcallCommitInput {
+            call_id,
+            completed_toolcall,
+            tool_resp_item,
+            tool_resp_already_recorded,
+            raw_items,
+            history_items,
+            expected_history,
+            reference_context_item,
+            pre_compact_provider_input_tokens,
+            current_turn_provider_input_tokens,
+        };
         self.ensure_valid()?;
         if self.runtime().is_none() {
             return Ok(None);

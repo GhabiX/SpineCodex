@@ -15,7 +15,6 @@ use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
-use crate::spine::SpineToolcallCommitInput;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use codex_protocol::models::ContentItem;
@@ -1484,20 +1483,19 @@ impl Session {
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
-        let input = SpineToolcallCommitInput {
+        let Some(prepared_commit) = guard.prepare_completed_toolcall_commit(
             call_id,
             completed_toolcall,
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
-            history_items: history.raw_items(),
+            history.raw_items(),
             expected_history,
             reference_context_item,
             pre_compact_provider_input_tokens,
-            current_turn_provider_input_tokens: current_turn_token_info
-                .and_then(provider_input_context_tokens),
-        };
-        let Some(prepared_commit) = guard.prepare_completed_toolcall_commit(input)? else {
+            current_turn_token_info.and_then(provider_input_context_tokens),
+        )?
+        else {
             return Ok(SpineCommitAttempt::RuntimeMissing);
         };
         let committed = guard.commit_prepared_toolcall_with_host_effects(
