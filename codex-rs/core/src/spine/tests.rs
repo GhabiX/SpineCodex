@@ -114,6 +114,8 @@ mod materialize_projection_guards;
 mod materialize_projection_memory;
 #[path = "tests/message_anchor_multimodal.rs"]
 mod message_anchor_multimodal;
+#[path = "tests/message_anchor_validation.rs"]
+mod message_anchor_validation;
 #[path = "tests/message_anchors.rs"]
 mod message_anchors;
 #[path = "tests/next_failure.rs"]
