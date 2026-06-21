@@ -2114,9 +2114,7 @@ async fn drain_in_flight(
                     sess.on_spine_toolcall_with_client_session(
                         &turn_context,
                         client_session,
-                        SpineCompletedToolCallOutputs::Single {
-                            item: &response_item,
-                        },
+                        SpineCompletedToolCallOutputs::single(&response_item),
                     )
                     .await
                     .map_err(|err| {
@@ -2273,11 +2271,11 @@ async fn drain_deferred_spine_tool_group(
         .on_spine_toolcall_with_client_session(
             &turn_context,
             client_session,
-            SpineCompletedToolCallOutputs::Grouped {
-                commit_call_id: &commit_call_id,
-                tool_call_ids: &tool_call_ids,
-                output_items: &response_items,
-            },
+            SpineCompletedToolCallOutputs::grouped(
+                &commit_call_id,
+                &tool_call_ids,
+                &response_items,
+            ),
         )
         .await
         .map_err(|err| {
@@ -2377,11 +2375,11 @@ async fn drain_conflicting_spine_control_tool_group(
         .on_spine_toolcall_with_client_session(
             &turn_context,
             client_session,
-            SpineCompletedToolCallOutputs::Grouped {
-                commit_call_id: &commit_call_id,
-                tool_call_ids: &tool_call_ids,
-                output_items: &response_items,
-            },
+            SpineCompletedToolCallOutputs::grouped(
+                &commit_call_id,
+                &tool_call_ids,
+                &response_items,
+            ),
         )
         .await
         .map_err(|err| {

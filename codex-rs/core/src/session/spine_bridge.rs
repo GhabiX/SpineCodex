@@ -74,6 +74,24 @@ pub(crate) enum SpineCompletedToolCallOutputs<'a> {
     },
 }
 
+impl<'a> SpineCompletedToolCallOutputs<'a> {
+    pub(crate) fn single(item: &'a ResponseItem) -> Self {
+        Self::Single { item }
+    }
+
+    pub(crate) fn grouped(
+        commit_call_id: &'a str,
+        tool_call_ids: &'a [String],
+        output_items: &'a [ResponseItem],
+    ) -> Self {
+        Self::Grouped {
+            commit_call_id,
+            tool_call_ids,
+            output_items,
+        }
+    }
+}
+
 pub(crate) enum SpineToolExecutionReceiptInput {
     Open { summary: String },
     Close { memory: String },
@@ -1033,7 +1051,7 @@ impl Session {
         self.on_spine_toolcall_with_client_session(
             turn_context,
             client_session,
-            SpineCompletedToolCallOutputs::Single { item },
+            SpineCompletedToolCallOutputs::single(item),
         )
         .await
     }
@@ -1186,11 +1204,7 @@ impl Session {
         self.on_spine_toolcall_with_client_session(
             turn_context,
             client_session,
-            SpineCompletedToolCallOutputs::Grouped {
-                commit_call_id,
-                tool_call_ids,
-                output_items,
-            },
+            SpineCompletedToolCallOutputs::grouped(commit_call_id, tool_call_ids, output_items),
         )
         .await
     }
