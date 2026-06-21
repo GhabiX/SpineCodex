@@ -154,6 +154,8 @@ mod trim_candidates;
 mod trim_only;
 #[path = "tests/trim_projection.rs"]
 mod trim_projection;
+#[path = "tests/trim_projection_composition.rs"]
+mod trim_projection_composition;
 #[path = "tests/trim_projection_slice.rs"]
 mod trim_projection_slice;
 #[path = "tests/trim_rollback_fork.rs"]
