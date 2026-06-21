@@ -126,6 +126,8 @@ mod tree_snapshot;
 mod trim_candidates;
 #[path = "tests/trim_projection.rs"]
 mod trim_projection;
+#[path = "tests/trim_projection_slice.rs"]
+mod trim_projection_slice;
 #[path = "tests/trim_rollback_fork.rs"]
 mod trim_rollback_fork;
 #[path = "tests/trim_targeting.rs"]
