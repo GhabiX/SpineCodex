@@ -126,6 +126,8 @@ mod rollback_checkpoint_restore;
 mod rollback_sparse;
 #[path = "tests/root_compact_boundary.rs"]
 mod root_compact_boundary;
+#[path = "tests/root_compact_checkpoint_retry.rs"]
+mod root_compact_checkpoint_retry;
 #[path = "tests/root_compact_failures.rs"]
 mod root_compact_failures;
 #[path = "tests/root_compact_lifecycle.rs"]
