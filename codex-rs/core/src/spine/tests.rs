@@ -196,6 +196,8 @@ mod root_compact_lifecycle;
 mod root_compact_prepared;
 #[path = "tests/root_compact_replay.rs"]
 mod root_compact_replay;
+#[path = "tests/root_compact_replay_rollback.rs"]
+mod root_compact_replay_rollback;
 #[path = "tests/root_compact_staging_failures.rs"]
 mod root_compact_staging_failures;
 #[path = "tests/root_compact_token_baseline.rs"]
