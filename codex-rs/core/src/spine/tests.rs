@@ -94,12 +94,12 @@ mod toolcall_lexer;
 mod tree_accounting;
 #[path = "tests/tree_snapshot.rs"]
 mod tree_snapshot;
-#[path = "tests/trim.rs"]
-mod trim;
 #[path = "tests/trim_candidates.rs"]
 mod trim_candidates;
 #[path = "tests/trim_projection.rs"]
 mod trim_projection;
+#[path = "tests/trim_rollback_fork.rs"]
+mod trim_rollback_fork;
 #[path = "tests/trim_targeting.rs"]
 mod trim_targeting;
 
