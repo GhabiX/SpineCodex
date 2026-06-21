@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn compact_checkpoint_same_boundary_hash_multiple_token_seq_fails_closed() {
+fn compact_checkpoint_same_boundary_hash_token_seq_multiple_records_fails_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let store = SpineStore::create_for_rollout(&rollout).expect("create store");
@@ -43,30 +43,19 @@ fn compact_checkpoint_same_boundary_hash_multiple_token_seq_fails_closed() {
             next_open_input_tokens: None,
             next_open_context_tokens: None,
         })
-        .expect("append first root compact");
+        .expect("append root compact");
+
+    let mut corrupted =
+        root_compact_checkpoint_for_memory(&rollout, &mem, body, 1, 2, body_path.clone());
+    corrupted.context_len += 1;
+    store
+        .append_compact_checkpoint(&corrupted)
+        .expect("append corrupted compact checkpoint");
     store
         .append_compact_checkpoint(&root_compact_checkpoint_for_memory(
-            &rollout,
-            &mem,
-            body,
-            1,
-            2,
-            body_path.clone(),
+            &rollout, &mem, body, 1, 2, body_path,
         ))
-        .expect("append valid compact checkpoint");
-    store
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 0,
-            context_index: 0,
-            from_user: true,
-            user_anchor: None,
-        })
-        .expect("append non-root marker at second checkpoint predecessor");
-    store
-        .append_compact_checkpoint(&root_compact_checkpoint_for_memory(
-            &rollout, &mem, body, 3, 4, body_path,
-        ))
-        .expect("append ambiguous newer compact checkpoint");
+        .expect("append duplicate valid compact checkpoint");
 
     let err = store
         .validate_compact_checkpoint_for_boundary(
@@ -76,10 +65,10 @@ fn compact_checkpoint_same_boundary_hash_multiple_token_seq_fails_closed() {
             0,
             &[memory_response_item(body)],
         )
-        .expect_err("multiple compact token seq candidates must fail closed");
+        .expect_err("multiple compact proof records must fail closed");
     assert!(
         err.to_string()
-            .contains("ambiguous spine compact checkpoint token_seq"),
+            .contains("ambiguous spine compact checkpoint proof"),
         "unexpected checkpoint validation error: {err}"
     );
 }

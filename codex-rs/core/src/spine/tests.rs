@@ -82,6 +82,8 @@ mod commit_marker_resume_failures;
 mod commit_marker_root_compact;
 #[path = "tests/compact_checkpoint_ambiguity.rs"]
 mod compact_checkpoint_ambiguity;
+#[path = "tests/compact_checkpoint_ambiguity_proofs.rs"]
+mod compact_checkpoint_ambiguity_proofs;
 #[path = "tests/compact_checkpoint_clone.rs"]
 mod compact_checkpoint_clone;
 #[path = "tests/compact_checkpoint_proofs.rs"]
