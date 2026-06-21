@@ -2,26 +2,18 @@ use super::*;
 
 #[test]
 #[serial(spine_writer_lock)]
-fn second_live_runtime_for_same_sidecar_fails_fast() {
+fn installing_replayed_runtime_requires_sidecar_writer_ownership() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create first live spine");
-
     let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
         .expect("read-only replay must not need writer ownership")
         .expect("sidecar exists");
-    drop(replayed);
+    let mut state = SpineSessionState::new();
 
-    let err = SpineRuntime::load_for_rollout_items_for_writer(&rollout, &[], &[])
-        .expect_err("live replay must fail fast while another writer owns the sidecar");
-    assert!(
-        err.to_string()
-            .contains("already owned by another live Codex process"),
-        "unexpected writer replay lock error: {err}"
-    );
-
-    let err =
-        SpineRuntime::load_or_create(&rollout, 0).expect_err("second live writer must fail fast");
+    let err = state
+        .set_replayed(runtime.raw_len, Some(replayed))
+        .expect_err("installing replay as a live runtime must require writer ownership");
     assert!(
         err.to_string()
             .contains("already owned by another live Codex process"),
@@ -29,5 +21,5 @@ fn second_live_runtime_for_same_sidecar_fails_fast() {
     );
 
     drop(runtime);
-    drop(eventually_load_or_create_writer(&rollout, 0));
+    eventually_set_replayed_writer(&mut state, &rollout, 0);
 }

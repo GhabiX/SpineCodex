@@ -192,6 +192,8 @@ mod root_compact_token_baseline;
 mod runtime_lifecycle;
 #[path = "tests/runtime_lifecycle_trim_ledger.rs"]
 mod runtime_lifecycle_trim_ledger;
+#[path = "tests/runtime_lifecycle_writer_ownership.rs"]
+mod runtime_lifecycle_writer_ownership;
 #[path = "tests/store_basics.rs"]
 mod store_basics;
 #[path = "tests/toolcall_grouping.rs"]
