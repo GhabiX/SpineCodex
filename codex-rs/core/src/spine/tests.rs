@@ -42,6 +42,8 @@ mod clone_structural_pressure;
 mod close_lifecycle;
 #[path = "tests/close_output_projection.rs"]
 mod close_output_projection;
+#[path = "tests/close_reduce_edges.rs"]
+mod close_reduce_edges;
 #[path = "tests/close_source_plan.rs"]
 mod close_source_plan;
 #[path = "tests/closed_memory_accounting.rs"]
