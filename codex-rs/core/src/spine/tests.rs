@@ -120,6 +120,8 @@ mod materialize_projection_memory;
 mod message_anchor_image_only;
 #[path = "tests/message_anchor_multimodal.rs"]
 mod message_anchor_multimodal;
+#[path = "tests/message_anchor_non_user.rs"]
+mod message_anchor_non_user;
 #[path = "tests/message_anchor_validation.rs"]
 mod message_anchor_validation;
 #[path = "tests/message_anchors.rs"]
