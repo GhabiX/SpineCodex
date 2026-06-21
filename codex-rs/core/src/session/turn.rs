@@ -42,7 +42,7 @@ use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
-use crate::session::spine_bridge::SpineCompletedToolCallOutputs;
+use crate::session::spine_bridge::SpineToolCallEvidence;
 use crate::session::turn_context::TurnContext;
 use crate::spine::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 use crate::spine::SPINE_NAMESPACE;
@@ -2114,7 +2114,7 @@ async fn drain_in_flight(
                     sess.on_toolcall(
                         &turn_context,
                         client_session,
-                        SpineCompletedToolCallOutputs::single(&response_item),
+                        SpineToolCallEvidence::single(&response_item),
                     )
                     .await
                     .map_err(|err| {
@@ -2271,11 +2271,7 @@ async fn drain_deferred_spine_tool_group(
         .on_toolcall(
             &turn_context,
             client_session,
-            SpineCompletedToolCallOutputs::grouped(
-                &commit_call_id,
-                &tool_call_ids,
-                &response_items,
-            ),
+            SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
         )
         .await
         .map_err(|err| {
@@ -2375,11 +2371,7 @@ async fn drain_conflicting_spine_control_tool_group(
         .on_toolcall(
             &turn_context,
             client_session,
-            SpineCompletedToolCallOutputs::grouped(
-                &commit_call_id,
-                &tool_call_ids,
-                &response_items,
-            ),
+            SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
         )
         .await
         .map_err(|err| {

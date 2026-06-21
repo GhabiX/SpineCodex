@@ -57,11 +57,11 @@ pub(crate) struct SpineToolCommit {
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
-pub(crate) struct SpineCompletedToolCallOutputs<'a> {
-    kind: SpineCompletedToolCallOutputsKind<'a>,
+pub(crate) struct SpineToolCallEvidence<'a> {
+    kind: SpineToolCallEvidenceKind<'a>,
 }
 
-enum SpineCompletedToolCallOutputsKind<'a> {
+enum SpineToolCallEvidenceKind<'a> {
     Single {
         item: &'a ResponseItem,
     },
@@ -72,10 +72,10 @@ enum SpineCompletedToolCallOutputsKind<'a> {
     },
 }
 
-impl<'a> SpineCompletedToolCallOutputs<'a> {
+impl<'a> SpineToolCallEvidence<'a> {
     pub(crate) fn single(item: &'a ResponseItem) -> Self {
         Self {
-            kind: SpineCompletedToolCallOutputsKind::Single { item },
+            kind: SpineToolCallEvidenceKind::Single { item },
         }
     }
 
@@ -85,7 +85,7 @@ impl<'a> SpineCompletedToolCallOutputs<'a> {
         output_items: &'a [ResponseItem],
     ) -> Self {
         Self {
-            kind: SpineCompletedToolCallOutputsKind::Grouped {
+            kind: SpineToolCallEvidenceKind::Grouped {
                 commit_call_id,
                 tool_call_ids,
                 output_items,
@@ -101,7 +101,7 @@ struct SpineCommitOutput {
     spine_context_already_observed: bool,
 }
 
-struct SpineToolCallEvidence<'a> {
+struct SpinePreparedToolCallEvidence<'a> {
     call_id: &'a str,
     response_item: &'a ResponseItem,
     completed_toolcall: SpineCompletedToolCallEvidence,
@@ -114,7 +114,7 @@ struct SpineToolCallHostRecording {
 }
 
 struct CompletedSpineToolCall<'a> {
-    evidence: SpineToolCallEvidence<'a>,
+    evidence: SpinePreparedToolCallEvidence<'a>,
     host_recording: SpineToolCallHostRecording,
 }
 
@@ -1010,7 +1010,7 @@ impl Session {
         self.on_toolcall(
             turn_context,
             client_session,
-            SpineCompletedToolCallOutputs::single(item),
+            SpineToolCallEvidence::single(item),
         )
         .await
     }
@@ -1020,11 +1020,11 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
-        outputs: SpineCompletedToolCallOutputs<'_>,
+        evidence: SpineToolCallEvidence<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
         // TODO(spine-hook-refactor): remove this compatibility wrapper once
         // tests and callers use the semantic `on_toolcall` hook name.
-        self.on_toolcall(turn_context, client_session, outputs)
+        self.on_toolcall(turn_context, client_session, evidence)
             .await
     }
 
@@ -1033,11 +1033,11 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
-        outputs: SpineCompletedToolCallOutputs<'_>,
+        evidence: SpineToolCallEvidence<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
         // TODO(spine-hook-refactor): remove this compatibility wrapper once
         // tests call the semantic `on_toolcall` hook name.
-        self.on_toolcall(turn_context, client_session, outputs)
+        self.on_toolcall(turn_context, client_session, evidence)
             .await
     }
 
@@ -1045,14 +1045,14 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
-        outputs: SpineCompletedToolCallOutputs<'_>,
+        evidence: SpineToolCallEvidence<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
-        let Some(completed) = (match outputs.kind {
-            SpineCompletedToolCallOutputsKind::Single { item } => {
+        let Some(completed) = (match evidence.kind {
+            SpineToolCallEvidenceKind::Single { item } => {
                 self.single_completed_spine_toolcall_output(turn_context, item)
                     .await?
             }
-            SpineCompletedToolCallOutputsKind::Grouped {
+            SpineToolCallEvidenceKind::Grouped {
                 commit_call_id,
                 tool_call_ids,
                 output_items,
@@ -1159,7 +1159,7 @@ impl Session {
             completed_toolcall
         };
         Ok(Some(CompletedSpineToolCall {
-            evidence: SpineToolCallEvidence {
+            evidence: SpinePreparedToolCallEvidence {
                 call_id,
                 response_item: item,
                 completed_toolcall,
@@ -1186,7 +1186,7 @@ impl Session {
         self.on_toolcall(
             turn_context,
             client_session,
-            SpineCompletedToolCallOutputs::grouped(commit_call_id, tool_call_ids, output_items),
+            SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, output_items),
         )
         .await
     }
@@ -1230,7 +1230,7 @@ impl Session {
             completed_toolcall
         };
         Ok(Some(CompletedSpineToolCall {
-            evidence: SpineToolCallEvidence {
+            evidence: SpinePreparedToolCallEvidence {
                 call_id: commit_call_id,
                 response_item: commit_output,
                 completed_toolcall,
