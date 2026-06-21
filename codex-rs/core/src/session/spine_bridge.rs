@@ -1133,22 +1133,18 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn maybe_commit_spine_tool_output(
+    pub(crate) async fn test_on_toolcall_single(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         item: &ResponseItem,
     ) -> Result<SpineToolCommit, SpineError> {
         let mut client_session = self.services.model_client.new_session();
-        self.maybe_commit_spine_tool_output_with_client_session(
-            turn_context,
-            &mut client_session,
-            item,
-        )
-        .await
+        self.test_on_toolcall_single_with_client_session(turn_context, &mut client_session, item)
+            .await
     }
 
     #[cfg(test)]
-    pub(crate) async fn maybe_commit_spine_tool_output_with_client_session(
+    pub(crate) async fn test_on_toolcall_single_with_client_session(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
@@ -1327,7 +1323,7 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn record_spine_toolcall_group_outputs_and_commit_with_client_session(
+    pub(crate) async fn test_on_toolcall_group_with_client_session(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
