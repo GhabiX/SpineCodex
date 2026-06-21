@@ -138,6 +138,8 @@ mod pending_control;
 mod pending_control_raw_requests;
 #[path = "tests/pending_control_receipt_abort.rs"]
 mod pending_control_receipt_abort;
+#[path = "tests/pending_control_receipt_duplicates.rs"]
+mod pending_control_receipt_duplicates;
 #[path = "tests/pending_control_receipts.rs"]
 mod pending_control_receipts;
 #[path = "tests/prepared_commit.rs"]
