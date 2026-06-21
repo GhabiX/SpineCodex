@@ -296,6 +296,8 @@ mod trim_projection_slice_rejections;
 mod trim_projection_slice_tail;
 #[path = "tests/trim_rollback_fork.rs"]
 mod trim_rollback_fork;
+#[path = "tests/trim_rollback_fork_candidate.rs"]
+mod trim_rollback_fork_candidate;
 #[path = "tests/trim_rollback_fork_clone.rs"]
 mod trim_rollback_fork_clone;
 #[path = "tests/trim_targeting.rs"]
