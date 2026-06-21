@@ -154,6 +154,8 @@ mod prepared_commit_side_effect_failures;
 mod provider_baseline;
 #[path = "tests/provider_baseline_capture.rs"]
 mod provider_baseline_capture;
+#[path = "tests/provider_baseline_capture_replay.rs"]
+mod provider_baseline_capture_replay;
 #[path = "tests/provider_legacy_pressure.rs"]
 mod provider_legacy_pressure;
 #[path = "tests/raw_coverage.rs"]
