@@ -235,4 +235,30 @@ impl SpineSessionState {
             )
             .map(Some)
     }
+
+    pub(crate) fn persist_commit_publication_side_effects<T>(
+        &mut self,
+        publication: &SpineCommitPublication<T>,
+    ) -> Result<(), SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing before commit publication side effects".to_string(),
+            ));
+        };
+        runtime.persist_commit_publication_side_effects(publication)
+    }
+
+    pub(crate) fn install_commit_publication<T>(
+        &mut self,
+        publication: SpineCommitPublication<T>,
+    ) -> Result<bool, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Err(SpineError::InvalidStore(
+                "spine runtime missing before commit publication install".to_string(),
+            ));
+        };
+        Ok(runtime.install_commit_publication(publication))
+    }
 }

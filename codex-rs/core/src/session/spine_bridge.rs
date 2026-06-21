@@ -1648,10 +1648,7 @@ impl Session {
         let host_effects = SpineHostEffects::from_optional_history_update(
             commit_publication.take_history_update(),
         );
-        let Some(spine) = guard.runtime_mut() else {
-            return Ok(SpineCommitAttempt::RuntimeMissing);
-        };
-        if let Err(err) = spine.persist_commit_publication_side_effects(&commit_publication) {
+        if let Err(err) = guard.persist_commit_publication_side_effects(&commit_publication) {
             guard.invalidate(format!(
                 "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
             ));
@@ -1663,7 +1660,11 @@ impl Session {
             ));
             return Err(SpineError::Invariant(err));
         }
-        let snapshot = if spine.install_commit_publication(commit_publication) {
+        let installed_publication = guard.install_commit_publication(commit_publication)?;
+        let snapshot = if installed_publication {
+            let Some(spine) = guard.runtime() else {
+                return Ok(SpineCommitAttempt::RuntimeMissing);
+            };
             let token_info = state.token_info();
             Some(build_annotated_tree_snapshot(spine, token_info.as_ref())?)
         } else {
