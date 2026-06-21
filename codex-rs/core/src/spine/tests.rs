@@ -180,6 +180,8 @@ mod provider_baseline;
 mod provider_baseline_capture;
 #[path = "tests/provider_baseline_capture_replay.rs"]
 mod provider_baseline_capture_replay;
+#[path = "tests/provider_baseline_legacy_encoding.rs"]
+mod provider_baseline_legacy_encoding;
 #[path = "tests/provider_legacy_pressure.rs"]
 mod provider_legacy_pressure;
 #[path = "tests/provider_legacy_pressure_corrupt.rs"]
