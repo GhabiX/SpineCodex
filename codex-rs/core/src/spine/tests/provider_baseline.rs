@@ -92,9 +92,7 @@ fn closed_child_tree_snapshot_preserves_zero_source_suffix_accounting() {
         &mut raw,
         "open-zero-child",
         "zero child",
-        SpineTokenBaselines {
-            provider_input_tokens: Some(5_000),
-        },
+        provider_token_baselines(5_000),
     );
     append_msg(&mut runtime, &mut raw, "zero child work");
     close_task_with_token_baselines(
@@ -102,9 +100,7 @@ fn closed_child_tree_snapshot_preserves_zero_source_suffix_accounting() {
         &mut raw,
         "close-zero-child",
         "1.1.1",
-        SpineTokenBaselines {
-            provider_input_tokens: Some(5_000),
-        },
+        provider_token_baselines(5_000),
     );
 
     let Some(Symbol::SpineTreeNodes(nodes)) = runtime.parse_stack().symbols.last() else {
@@ -125,14 +121,7 @@ fn closed_child_tree_snapshot_preserves_zero_source_suffix_accounting() {
     let nodes = snapshot_nodes_by_id(&snapshot);
     assert_eq!(
         nodes["1.1.1"].accounting,
-        Some(SpineTreeNodeAccountingSnapshot {
-            current_node_context_tokens: None,
-            current_node_context_problem: None,
-            current_node_context_baseline_source: None,
-            closed_source_suffix_tokens: Some(0),
-            closed_memory_context_tokens: None,
-            memory_output_tokens: Some(1_250),
-        })
+        closed_child_accounting_with_source_suffix(0)
     );
 
     let replayed = SpineRuntime::load_for_rollout(&rollout, runtime.raw_len)
@@ -158,9 +147,7 @@ fn close_prefers_structural_open_baseline_over_pressure_overlay() {
         &mut raw,
         "open-structural-child",
         "structural child",
-        SpineTokenBaselines {
-            provider_input_tokens: Some(5_500),
-        },
+        provider_token_baselines(5_500),
     );
     append_msg(&mut runtime, &mut raw, "child work");
     std::fs::write(
@@ -192,21 +179,31 @@ fn close_prefers_structural_open_baseline_over_pressure_overlay() {
         &mut raw,
         "close-structural-child",
         "1.1.1",
-        SpineTokenBaselines {
-            provider_input_tokens: Some(9_500),
-        },
+        provider_token_baselines(9_500),
     );
     let snapshot = runtime.build_tree_snapshot().expect("snapshot");
     let nodes = snapshot_nodes_by_id(&snapshot);
     assert_eq!(
         nodes["1.1.1"].accounting,
-        Some(SpineTreeNodeAccountingSnapshot {
-            current_node_context_tokens: None,
-            current_node_context_problem: None,
-            current_node_context_baseline_source: None,
-            closed_source_suffix_tokens: Some(4_000),
-            closed_memory_context_tokens: None,
-            memory_output_tokens: Some(1_250),
-        })
+        closed_child_accounting_with_source_suffix(4_000)
     );
+}
+
+fn provider_token_baselines(provider_input_tokens: u64) -> SpineTokenBaselines {
+    SpineTokenBaselines {
+        provider_input_tokens: Some(provider_input_tokens),
+    }
+}
+
+fn closed_child_accounting_with_source_suffix(
+    closed_source_suffix_tokens: u64,
+) -> Option<SpineTreeNodeAccountingSnapshot> {
+    Some(SpineTreeNodeAccountingSnapshot {
+        current_node_context_tokens: None,
+        current_node_context_problem: None,
+        current_node_context_baseline_source: None,
+        closed_source_suffix_tokens: Some(closed_source_suffix_tokens),
+        closed_memory_context_tokens: None,
+        memory_output_tokens: Some(1_250),
+    })
 }
