@@ -1016,12 +1016,8 @@ impl Session {
         }) else {
             return Ok(Self::no_spine_tool_commit());
         };
-        self.on_completed_spine_toolcall_with_client_session(
-            turn_context,
-            client_session,
-            completed,
-        )
-        .await
+        self.commit_completed_spine_toolcall(turn_context, client_session, completed)
+            .await
     }
 
     async fn single_completed_spine_toolcall_output<'a>(
@@ -1191,7 +1187,7 @@ impl Session {
         }))
     }
 
-    async fn on_completed_spine_toolcall_with_client_session(
+    async fn commit_completed_spine_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         client_session: &mut ModelClientSession,
