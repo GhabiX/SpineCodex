@@ -2,12 +2,12 @@ use super::SpineCloneBoundary;
 use super::SpineStore;
 use super::clone_rewrite;
 use super::locator;
-use super::trim;
 use crate::spine::SpineError;
 use crate::spine::model::RawMask;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+mod boundary;
 mod checkpoints;
 mod events;
 mod memory_copy;
@@ -19,52 +19,14 @@ impl SpineStore {
         source_rollout_path: &Path,
         raw_ordinal_limit: u64,
     ) -> Result<Option<SpineCloneBoundary>, SpineError> {
-        if !Self::has_for_rollout(source_rollout_path)? {
-            return Ok(None);
-        }
-        let source = Self::for_rollout(source_rollout_path)?;
-        let structural_seq_limit = event_seq_limit_for_clone(&source)?;
-        let trim_seq_watermark = source.next_trim_seq()?.checked_sub(1);
-        Ok(Some(SpineCloneBoundary {
-            source_rollout_path: source_rollout_path.to_path_buf(),
-            raw_ordinal_limit,
-            structural_seq_limit,
-            pressure_seq_watermark: source.next_pressure_seq()?.checked_sub(1),
-            trim_seq_watermark,
-            trim_toolcall_seq_limit: if source.tree_path().exists() {
-                structural_seq_limit
-            } else {
-                source.trim_toolcall_seq_limit(trim_seq_watermark)?
-            },
-        }))
+        boundary::clone_boundary_for_rollout(source_rollout_path, raw_ordinal_limit)
     }
 
     pub(crate) fn clone_boundary_for_checkpoint(
         source_rollout_path: &Path,
         raw_ordinal: u64,
     ) -> Result<Option<SpineCloneBoundary>, SpineError> {
-        if !Self::has_for_rollout(source_rollout_path)? {
-            return Ok(None);
-        }
-        let source = Self::for_rollout(source_rollout_path)?;
-        if !source.tree_path().exists() {
-            return source
-                .trim_only_clone_boundary_for_raw_ordinal(source_rollout_path, raw_ordinal);
-        }
-        let checkpoint = source.checkpoint_for_raw_ordinal(raw_ordinal)?;
-        let structural_seq_limit = checkpoint.token_seq;
-        Ok(Some(SpineCloneBoundary {
-            source_rollout_path: source_rollout_path.to_path_buf(),
-            raw_ordinal_limit: raw_ordinal,
-            structural_seq_limit,
-            pressure_seq_watermark: checkpoint.pressure_seq_watermark,
-            trim_seq_watermark: checkpoint.trim_seq_watermark,
-            trim_toolcall_seq_limit: if source.tree_path().exists() {
-                structural_seq_limit
-            } else {
-                source.trim_toolcall_seq_limit(checkpoint.trim_seq_watermark)?
-            },
-        }))
+        boundary::clone_boundary_for_checkpoint(source_rollout_path, raw_ordinal)
     }
 
     pub(crate) fn clone_for_rollout_with_raw_live(
@@ -105,38 +67,6 @@ impl SpineStore {
             locator::discard_unpublished_sidecar(&staging_root);
         }
         result
-    }
-
-    fn trim_only_clone_boundary_for_raw_ordinal(
-        &self,
-        source_rollout_path: &Path,
-        raw_ordinal: u64,
-    ) -> Result<Option<SpineCloneBoundary>, SpineError> {
-        let trim_events = self.trim_events()?;
-        let trim_seq_watermark = trim::seq_watermark_for_raw_boundary(&trim_events, raw_ordinal);
-        Ok(Some(SpineCloneBoundary {
-            source_rollout_path: source_rollout_path.to_path_buf(),
-            raw_ordinal_limit: raw_ordinal,
-            structural_seq_limit: 0,
-            pressure_seq_watermark: None,
-            trim_seq_watermark,
-            trim_toolcall_seq_limit: trim::toolcall_seq_limit_from_events(
-                &trim_events,
-                trim_seq_watermark,
-            )?,
-        }))
-    }
-
-    fn trim_toolcall_seq_limit(&self, trim_seq_watermark: Option<u64>) -> Result<u64, SpineError> {
-        trim::toolcall_seq_limit_from_events(&self.trim_events()?, trim_seq_watermark)
-    }
-}
-
-fn event_seq_limit_for_clone(source: &SpineStore) -> Result<u64, SpineError> {
-    if source.tree_path().exists() {
-        source.next_event_seq()
-    } else {
-        Ok(0)
     }
 }
 
