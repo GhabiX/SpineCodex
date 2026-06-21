@@ -198,6 +198,8 @@ mod toolcall_spine_tree;
 mod tree_accounting;
 #[path = "tests/tree_snapshot.rs"]
 mod tree_snapshot;
+#[path = "tests/tree_snapshot_historical_descendants.rs"]
+mod tree_snapshot_historical_descendants;
 #[path = "tests/trim_candidate_rejections.rs"]
 mod trim_candidate_rejections;
 #[path = "tests/trim_candidates.rs"]
