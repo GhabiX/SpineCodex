@@ -1650,10 +1650,8 @@ impl Session {
             state.clone_history().raw_items(),
         )?;
         let memory_assembly = memory_assembly.map(|(compact, _)| compact);
-        let pending_commit = spine.pending_commit(call_id)?;
         let prepared_commit = spine.prepare_or_observe_completed_toolcall_with_pending_baselines(
             call_id,
-            pending_commit.as_ref(),
             memory_assembly,
             pre_compact_token_baselines,
             token_baselines_from_info(current_turn_token_info),

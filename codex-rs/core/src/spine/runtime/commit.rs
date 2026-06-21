@@ -174,13 +174,13 @@ impl SpineRuntime {
     pub(crate) fn prepare_or_observe_completed_toolcall_with_pending_baselines(
         &mut self,
         call_id: &str,
-        pending_commit: Option<&SpinePendingCommit>,
         memory_assembly: Option<SpineCloseMemoryAssembly>,
         pre_compact_token_baselines: Option<SpineTokenBaselines>,
         current_turn_token_baselines: SpineTokenBaselines,
         completed_toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpinePreparedCommit>, SpineError> {
+        let pending_commit = self.pending_commit(call_id)?;
         let token_baselines = match pending_commit {
             Some(SpinePendingCommit::Close { .. }) => {
                 pre_compact_token_baselines.unwrap_or(current_turn_token_baselines)
@@ -190,7 +190,7 @@ impl SpineRuntime {
         };
         self.prepare_or_observe_completed_toolcall_for_commit(
             call_id,
-            pending_commit,
+            pending_commit.as_ref(),
             memory_assembly,
             token_baselines,
             completed_toolcall,
