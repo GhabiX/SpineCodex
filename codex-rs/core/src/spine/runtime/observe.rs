@@ -47,7 +47,52 @@ impl SpineRuntime {
         if !self.jit_enabled {
             return Ok(());
         }
-        let context_index_u64 = u64::try_from(context_index)
+        if let ResponseItem::FunctionCall {
+            name,
+            namespace: Some(namespace),
+            ..
+        } = item
+            && namespace == SPINE_NAMESPACE
+            && is_spine_parser_control_tool_name(name)
+        {
+            return self.observe_toolcall_request_anchor(raw_ordinal, context_index, item);
+        }
+        if let ResponseItem::FunctionCall {
+            name,
+            namespace: Some(namespace),
+            ..
+        } = item
+            && namespace == SPINE_NAMESPACE
+            && name == SPINE_TOOL_TREE
+        {
+            return self.observe_toolcall_request_anchor(raw_ordinal, context_index, item);
+        }
+        if tool_request_call_id(item).is_some() {
+            return self.observe_toolcall_request_anchor(raw_ordinal, context_index, item);
+        }
+        if tool_response_call_id(item).is_some() {
+            return self.observe_toolcall_response_anchor(raw_ordinal, context_index, item);
+        }
+        if matches!(
+            item,
+            ResponseItem::ToolSearchOutput { call_id: None, .. }
+                | ResponseItem::ToolSearchCall { call_id: None, .. }
+        ) {
+            return Ok(());
+        }
+        self.on_non_toolcall_msg(raw_ordinal, context_index, item)
+    }
+
+    pub(crate) fn observe_toolcall_request_anchor(
+        &mut self,
+        raw_ordinal: u64,
+        context_index: usize,
+        item: &ResponseItem,
+    ) -> Result<(), SpineError> {
+        if !self.jit_enabled {
+            return Ok(());
+        }
+        let context_index = u64::try_from(context_index)
             .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
         if let ResponseItem::FunctionCall {
             call_id,
@@ -64,24 +109,13 @@ impl SpineRuntime {
                     "duplicate spine.open request anchor for {call_id}"
                 )));
             }
-            if self.ordinary_tool_requests.contains_key(call_id) {
-                return Err(SpineError::InvalidEvent(format!(
-                    "duplicate tool request anchor for {call_id}"
-                )));
-            }
-            self.ordinary_tool_requests.insert(
-                call_id.clone(),
-                PendingToolRequest {
-                    raw_ordinal,
-                    context_index: context_index_u64,
-                },
-            );
+            self.insert_tool_request_anchor(call_id, raw_ordinal, context_index, "tool request")?;
             if name == SPINE_TOOL_OPEN {
                 self.open_requests.insert(
                     call_id.clone(),
                     OpenRequestAnchor {
                         raw_ordinal,
-                        context_index: context_index_u64,
+                        context_index,
                     },
                 );
             }
@@ -97,63 +131,75 @@ impl SpineRuntime {
             && name == SPINE_TOOL_TREE
         {
             self.tree_call_ids.insert(call_id.clone());
-            if self.ordinary_tool_requests.contains_key(call_id) {
-                return Err(SpineError::InvalidEvent(format!(
-                    "duplicate tool request anchor for {call_id}"
-                )));
-            }
-            self.ordinary_tool_requests.insert(
-                call_id.clone(),
-                PendingToolRequest {
-                    raw_ordinal,
-                    context_index: context_index_u64,
-                },
+            return self.insert_tool_request_anchor(
+                call_id,
+                raw_ordinal,
+                context_index,
+                "tool request",
             );
+        }
+        let Some(call_id) = tool_request_call_id(item) else {
+            return Err(SpineError::InvalidEvent(
+                "observe_toolcall_request_anchor received non-request item".to_string(),
+            ));
+        };
+        self.insert_tool_request_anchor(
+            call_id,
+            raw_ordinal,
+            context_index,
+            "ordinary tool request",
+        )
+    }
+
+    pub(crate) fn observe_toolcall_response_anchor(
+        &mut self,
+        _raw_ordinal: u64,
+        _context_index: usize,
+        item: &ResponseItem,
+    ) -> Result<(), SpineError> {
+        if !self.jit_enabled {
             return Ok(());
         }
-        if let Some(call_id) = tool_request_call_id(item) {
-            if self.ordinary_tool_requests.contains_key(call_id) {
-                return Err(SpineError::InvalidEvent(format!(
-                    "duplicate ordinary tool request anchor for {call_id}"
-                )));
-            }
-            self.ordinary_tool_requests.insert(
-                call_id.to_string(),
-                PendingToolRequest {
-                    raw_ordinal,
-                    context_index: context_index_u64,
-                },
-            );
-            return Ok(());
+        let Some(call_id) = tool_response_call_id(item) else {
+            return Err(SpineError::InvalidEvent(
+                "observe_toolcall_response_anchor received non-response item".to_string(),
+            ));
+        };
+        #[cfg(test)]
+        let context_index = u64::try_from(_context_index)
+            .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
+        #[cfg(test)]
+        self.pending_tool_responses
+            .entry(call_id.to_string())
+            .or_default()
+            .push(PendingToolResponse {
+                raw_ordinal: _raw_ordinal,
+                context_index,
+            });
+        self.tree_call_ids.remove(call_id);
+        Ok(())
+    }
+
+    fn insert_tool_request_anchor(
+        &mut self,
+        call_id: &str,
+        raw_ordinal: u64,
+        context_index: u64,
+        duplicate_label: &str,
+    ) -> Result<(), SpineError> {
+        if self.ordinary_tool_requests.contains_key(call_id) {
+            return Err(SpineError::InvalidEvent(format!(
+                "duplicate {duplicate_label} anchor for {call_id}"
+            )));
         }
-        if let Some(call_id) = tool_response_call_id(item) {
-            #[cfg(test)]
-            self.pending_tool_responses
-                .entry(call_id.to_string())
-                .or_default()
-                .push(PendingToolResponse {
-                    raw_ordinal,
-                    context_index: context_index_u64,
-                });
-            if self.control_call_ids.contains(call_id)
-                || self.tree_call_ids.remove(call_id)
-                || self
-                    .pending
-                    .as_ref()
-                    .is_some_and(|pending| pending.call_id() == call_id)
-            {
-                return Ok(());
-            }
-            return Ok(());
-        }
-        if matches!(
-            item,
-            ResponseItem::ToolSearchOutput { call_id: None, .. }
-                | ResponseItem::ToolSearchCall { call_id: None, .. }
-        ) {
-            return Ok(());
-        }
-        self.on_non_toolcall_msg(raw_ordinal, context_index, item)
+        self.ordinary_tool_requests.insert(
+            call_id.to_string(),
+            PendingToolRequest {
+                raw_ordinal,
+                context_index,
+            },
+        );
+        Ok(())
     }
 
     pub(crate) fn on_non_toolcall_msg(
