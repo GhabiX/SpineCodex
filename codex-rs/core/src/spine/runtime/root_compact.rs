@@ -1,6 +1,7 @@
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
 
+use super::PreparedSpineRootCompactCommit;
 use super::SpineError;
 use super::SpinePreparedRootCompact;
 use super::SpinePreparedRootCompactInstall;
@@ -86,6 +87,22 @@ impl SpineRuntime {
     ) -> Result<SpinePreparedRootCompactInstall, SpineError> {
         self.prepare_root_compact_with_checkpoint(rollout_path, body, raw_items, token_metadata)
             .map(SpinePreparedRootCompact::into_install)
+    }
+
+    pub(crate) fn prepare_root_compact_commit_with_checkpoint(
+        &mut self,
+        rollout_path: &Path,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        token_metadata: SpineRootCompactTokenMetadata,
+    ) -> Result<PreparedSpineRootCompactCommit, SpineError> {
+        self.prepare_root_compact_install_with_checkpoint(
+            rollout_path,
+            body,
+            raw_items,
+            token_metadata,
+        )
+        .map(PreparedSpineRootCompactCommit::from_install)
     }
 
     fn root_compact_impl(

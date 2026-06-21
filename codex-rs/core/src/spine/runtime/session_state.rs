@@ -5,6 +5,8 @@ use std::path::Path;
 use super::CompletedToolCall;
 use super::SpineError;
 use super::SpinePreparedRootCompactInstall;
+#[cfg(test)]
+use super::SpineRootCompactResult;
 use super::SpineRuntime;
 use super::prepared::SpineCommitPublication;
 use super::types::SpinePreparedCloseMemory;
@@ -24,6 +26,25 @@ impl<T> PreparedSpineToolcallCommit<T> {
 
     pub(crate) fn take_history_update(&mut self) -> Option<T> {
         self.publication.take_history_update()
+    }
+}
+
+pub(crate) struct PreparedSpineRootCompactCommit {
+    install: SpinePreparedRootCompactInstall,
+}
+
+impl PreparedSpineRootCompactCommit {
+    pub(crate) fn from_install(install: SpinePreparedRootCompactInstall) -> Self {
+        Self { install }
+    }
+
+    pub(crate) fn materialized(&self) -> &[ResponseItem] {
+        &self.install.result().materialized
+    }
+
+    #[cfg(test)]
+    pub(crate) fn result(&self) -> SpineRootCompactResult {
+        self.install.result().clone()
     }
 }
 
@@ -186,9 +207,9 @@ impl SpineSessionState {
         Ok(Some(snapshot))
     }
 
-    pub(crate) fn install_prepared_root_compact_after_history_publish(
+    pub(crate) fn apply_root_compact_after_history_publish(
         &mut self,
-        install: SpinePreparedRootCompactInstall,
+        commit: PreparedSpineRootCompactCommit,
         published_history_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         self.ensure_valid()?;
@@ -197,7 +218,7 @@ impl SpineSessionState {
                 "spine runtime missing before root compact PS install".to_string(),
             ));
         };
-        runtime.install_prepared_root_compact_install(install);
+        runtime.install_prepared_root_compact_install(commit.install);
         let current_open_index = runtime.current_open_index()?;
         if current_open_index != published_history_len {
             return Err(SpineError::InvalidStore(format!(
