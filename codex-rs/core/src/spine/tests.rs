@@ -138,6 +138,8 @@ mod tree_accounting;
 mod tree_snapshot;
 #[path = "tests/trim_candidates.rs"]
 mod trim_candidates;
+#[path = "tests/trim_only.rs"]
+mod trim_only;
 #[path = "tests/trim_projection.rs"]
 mod trim_projection;
 #[path = "tests/trim_projection_slice.rs"]
