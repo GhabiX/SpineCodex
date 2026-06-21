@@ -12,6 +12,7 @@ mod checkpoints;
 mod events;
 mod memory_copy;
 mod memory_ids;
+mod side_ledgers;
 
 impl SpineStore {
     pub(crate) fn clone_boundary_for_rollout(
@@ -221,25 +222,14 @@ fn clone_for_rollout_into_store(
             required_memory_ids.insert(memory.compact_id.clone());
         }
     }
-    for pressure in source.pressure_events()? {
-        if boundary
-            .pressure_seq_watermark
-            .is_some_and(|watermark| pressure.pressure_seq <= watermark)
-            && pressure.allowed_by(source_raw_live)
-        {
-            target.append_logged_pressure_event(&pressure)?;
-        }
-    }
-    for trim in source_trim_events {
-        if boundary
-            .trim_seq_watermark
-            .is_some_and(|watermark| trim.trim_seq <= watermark)
-            && trim.allowed_by(mask)?
-            && trim::event_within_toolcall_boundary(&trim, boundary.trim_toolcall_seq_limit)
-        {
-            target.append_logged_trim_event(&trim)?;
-        }
-    }
+    side_ledgers::copy_pressure_and_trim(
+        source,
+        target,
+        source_trim_events,
+        boundary,
+        source_raw_live,
+        mask,
+    )?;
     let cloned_memory_paths = memory_copy::copy_required_memories(
         source,
         target,
