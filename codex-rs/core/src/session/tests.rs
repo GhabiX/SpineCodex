@@ -11929,15 +11929,17 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
     let next_output = function_output("grouped-durable-overflow-next");
     let mut client_session = session.services.model_client.new_session();
     let commit = session
-        .test_on_toolcall_group_with_client_session(
+        .on_toolcall(
             &turn_context,
             &mut client_session,
-            "grouped-durable-overflow-next",
-            &[
-                "grouped-durable-ordinary".to_string(),
-                "grouped-durable-overflow-next".to_string(),
-            ],
-            &[ordinary_output.clone(), next_output.clone()],
+            SpineToolCallEvidence::grouped(
+                "grouped-durable-overflow-next",
+                &[
+                    "grouped-durable-ordinary".to_string(),
+                    "grouped-durable-overflow-next".to_string(),
+                ],
+                &[ordinary_output.clone(), next_output.clone()],
+            ),
         )
         .await
         .expect("direct-memory grouped next opens sibling and keeps durable toolcall");
@@ -16602,15 +16604,17 @@ async fn grouped_toolcall_prevalidates_request_anchors_before_recording_outputs(
     let before_history = session.clone_history().await.raw_items().to_vec();
     let mut client_session = session.services.model_client.new_session();
     let err = session
-        .test_on_toolcall_group_with_client_session(
+        .on_toolcall(
             &turn_context,
             &mut client_session,
-            "anchored-call",
-            &["anchored-call".to_string(), "missing-request".to_string()],
-            &[
-                function_output("anchored-call"),
-                function_output("missing-request"),
-            ],
+            SpineToolCallEvidence::grouped(
+                "anchored-call",
+                &["anchored-call".to_string(), "missing-request".to_string()],
+                &[
+                    function_output("anchored-call"),
+                    function_output("missing-request"),
+                ],
+            ),
         )
         .await
         .expect_err("missing request anchor must fail before recording outputs");
@@ -16649,15 +16653,17 @@ async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
     let before_history = session.clone_history().await.raw_items().to_vec();
     let mut client_session = session.services.model_client.new_session();
     let err = session
-        .test_on_toolcall_group_with_client_session(
+        .on_toolcall(
             &turn_context,
             &mut client_session,
-            "anchored-call",
-            &["anchored-call".to_string()],
-            &[
-                function_output("anchored-call"),
-                function_output("extra-call"),
-            ],
+            SpineToolCallEvidence::grouped(
+                "anchored-call",
+                &["anchored-call".to_string()],
+                &[
+                    function_output("anchored-call"),
+                    function_output("extra-call"),
+                ],
+            ),
         )
         .await
         .expect_err("unexpected grouped output must fail before recording outputs");
@@ -16758,12 +16764,14 @@ async fn grouped_spine_open_after_close_uses_rollout_raw_evidence_for_projection
 
     let mut client_session = session.services.model_client.new_session();
     session
-        .test_on_toolcall_group_with_client_session(
+        .on_toolcall(
             &turn_context,
             &mut client_session,
-            "open-sibling",
-            &["open-sibling".to_string()],
-            &[function_output("open-sibling")],
+            SpineToolCallEvidence::grouped(
+                "open-sibling",
+                &["open-sibling".to_string()],
+                &[function_output("open-sibling")],
+            ),
         )
         .await
         .expect("grouped sibling open commit must use rollout raw evidence");

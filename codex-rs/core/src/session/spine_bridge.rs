@@ -1083,25 +1083,6 @@ impl Session {
         }))
     }
 
-    #[cfg(test)]
-    pub(crate) async fn test_on_toolcall_group_with_client_session(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        client_session: &mut ModelClientSession,
-        commit_call_id: &str,
-        tool_call_ids: &[String],
-        output_items: &[ResponseItem],
-    ) -> Result<SpineToolCommit, SpineError> {
-        // TODO(spine-hook-refactor): remove this compatibility wrapper once
-        // tests call the unified completed-toolcall hook.
-        self.on_toolcall(
-            turn_context,
-            client_session,
-            SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, output_items),
-        )
-        .await
-    }
-
     async fn grouped_completed_spine_toolcall_outputs<'a>(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
