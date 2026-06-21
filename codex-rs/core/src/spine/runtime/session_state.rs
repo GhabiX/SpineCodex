@@ -61,6 +61,47 @@ pub(crate) struct SpineToolcallCommitEvidence {
     completed_toolcall: SpineCompletedToolCallEvidence,
 }
 
+pub(crate) struct SpineToolCallEvidence<'a> {
+    kind: SpineToolCallEvidenceKind<'a>,
+}
+
+pub(crate) enum SpineToolCallEvidenceKind<'a> {
+    Single {
+        item: &'a ResponseItem,
+    },
+    Grouped {
+        commit_call_id: &'a str,
+        tool_call_ids: &'a [String],
+        output_items: &'a [ResponseItem],
+    },
+}
+
+impl<'a> SpineToolCallEvidence<'a> {
+    pub(crate) fn single(item: &'a ResponseItem) -> Self {
+        Self {
+            kind: SpineToolCallEvidenceKind::Single { item },
+        }
+    }
+
+    pub(crate) fn grouped(
+        commit_call_id: &'a str,
+        tool_call_ids: &'a [String],
+        output_items: &'a [ResponseItem],
+    ) -> Self {
+        Self {
+            kind: SpineToolCallEvidenceKind::Grouped {
+                commit_call_id,
+                tool_call_ids,
+                output_items,
+            },
+        }
+    }
+
+    pub(crate) fn kind(&self) -> &SpineToolCallEvidenceKind<'a> {
+        &self.kind
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpineToolOutputRecording {
     Skip,
@@ -112,9 +153,8 @@ impl SpineToolcallCommitPreparation {
         tool_resp_already_recorded: bool,
         recorded_inside_hook: bool,
     ) -> SpineToolOutputRecording {
-        let raw_only_durable_without_emission = self.requires_close_like_commit
-            && !tool_resp_already_recorded
-            && !recorded_inside_hook;
+        let raw_only_durable_without_emission =
+            self.requires_close_like_commit && !tool_resp_already_recorded && !recorded_inside_hook;
         SpineToolOutputRecording::after_successful_toolcall_commit(
             recorded_inside_hook,
             raw_only_durable_without_emission,

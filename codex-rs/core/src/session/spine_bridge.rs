@@ -17,6 +17,8 @@ use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
+use crate::spine::SpineToolCallEvidence;
+use crate::spine::SpineToolCallEvidenceKind;
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineTreeUpdateDelivery;
@@ -58,43 +60,6 @@ impl PreparedSpineReplay {
 pub(crate) struct SpineToolCommit {
     pub(crate) recording: SpineToolOutputRecording,
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
-}
-
-pub(crate) struct SpineToolCallEvidence<'a> {
-    kind: SpineToolCallEvidenceKind<'a>,
-}
-
-enum SpineToolCallEvidenceKind<'a> {
-    Single {
-        item: &'a ResponseItem,
-    },
-    Grouped {
-        commit_call_id: &'a str,
-        tool_call_ids: &'a [String],
-        output_items: &'a [ResponseItem],
-    },
-}
-
-impl<'a> SpineToolCallEvidence<'a> {
-    pub(crate) fn single(item: &'a ResponseItem) -> Self {
-        Self {
-            kind: SpineToolCallEvidenceKind::Single { item },
-        }
-    }
-
-    pub(crate) fn grouped(
-        commit_call_id: &'a str,
-        tool_call_ids: &'a [String],
-        output_items: &'a [ResponseItem],
-    ) -> Self {
-        Self {
-            kind: SpineToolCallEvidenceKind::Grouped {
-                commit_call_id,
-                tool_call_ids,
-                output_items,
-            },
-        }
-    }
 }
 
 const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
@@ -903,7 +868,7 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         evidence: SpineToolCallEvidence<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
-        let Some(completed) = (match evidence.kind {
+        let Some(completed) = (match evidence.kind() {
             SpineToolCallEvidenceKind::Single { item } => {
                 self.single_completed_spine_toolcall_output(turn_context, item)
                     .await?

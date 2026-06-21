@@ -96,10 +96,12 @@ pub(crate) use replay::trim_projection_from_events_for_checkpoint;
 pub(crate) use session_state::PreparedSpineRootCompactApply;
 pub(crate) use session_state::SpineObservedContextItem;
 pub(crate) use session_state::SpineSessionState;
+pub(crate) use session_state::SpineToolCallEvidence;
+pub(crate) use session_state::SpineToolCallEvidenceKind;
+pub(crate) use session_state::SpineToolOutputRecording;
 pub(crate) use session_state::SpineToolcallCommitEvidence;
 pub(crate) use session_state::SpineToolcallCommitInput;
 pub(crate) use session_state::SpineToolcallCommitPreparation;
-pub(crate) use session_state::SpineToolOutputRecording;
 pub(crate) use support::is_real_user_message;
 #[cfg(test)]
 pub(crate) use support::is_spine_close_like_tool_name;

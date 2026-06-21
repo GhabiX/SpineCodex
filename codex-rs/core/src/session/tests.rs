@@ -1,4 +1,3 @@
-use super::spine_bridge::SpineToolCallEvidence;
 use super::spine_bridge::SpineToolCommit;
 use super::turn_context::TurnEnvironment;
 use super::*;
@@ -16,6 +15,7 @@ use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::spine::SPINE_TOOL_TRIM;
+use crate::spine::SpineToolCallEvidence;
 use crate::spine::SpineToolOutputRecording;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
