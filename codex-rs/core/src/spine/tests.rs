@@ -112,6 +112,8 @@ mod materialize_projection;
 mod materialize_projection_guards;
 #[path = "tests/materialize_projection_memory.rs"]
 mod materialize_projection_memory;
+#[path = "tests/message_anchor_image_only.rs"]
+mod message_anchor_image_only;
 #[path = "tests/message_anchor_multimodal.rs"]
 mod message_anchor_multimodal;
 #[path = "tests/message_anchor_validation.rs"]
