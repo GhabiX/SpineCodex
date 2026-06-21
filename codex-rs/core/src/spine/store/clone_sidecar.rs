@@ -4,13 +4,13 @@ use super::clone_rewrite;
 use super::locator;
 use super::trim;
 use crate::spine::SpineError;
-use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 mod checkpoints;
 mod events;
+mod memory_copy;
 mod memory_ids;
 
 impl SpineStore {
@@ -240,31 +240,13 @@ fn clone_for_rollout_into_store(
             target.append_logged_trim_event(&trim)?;
         }
     }
-    let mut cloned_memory_paths = BTreeMap::new();
-    for mem in source_mems {
-        if mem.allowed_by(mask)? {
-            // Memory records do not carry a structural sequence, so any
-            // raw-visible record must still be readable. Only records
-            // referenced by cloned events/checkpoints are copied.
-            let body = source.read_memory_body(&mem)?;
-            if required_memory_ids.contains(&mem.compact_id) {
-                let body_path = target.write_memory_body(&mem.compact_id, &body)?;
-                cloned_memory_paths.insert(mem.compact_id.clone(), body_path.clone());
-                let cloned = MemRecord { body_path, ..mem };
-                target.append_mem(&cloned)?;
-            }
-        }
-    }
-    for accounting in source.mem_accounting()? {
-        if cloned_memory_paths.contains_key(&accounting.compact_id) {
-            target.append_mem_accounting(&accounting)?;
-        }
-    }
-    for witness in source.mem_accounting_witnesses()? {
-        if cloned_memory_paths.contains_key(witness.compact_id()) {
-            target.append_mem_accounting_witness(&witness)?;
-        }
-    }
+    let cloned_memory_paths = memory_copy::copy_required_memories(
+        source,
+        target,
+        source_mems,
+        &required_memory_ids,
+        mask,
+    )?;
     for checkpoint in cloned_compact_checkpoints {
         let checkpoint = clone_rewrite::clone_compact_checkpoint_for_target(
             checkpoint,
