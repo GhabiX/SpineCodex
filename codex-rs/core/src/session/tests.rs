@@ -476,13 +476,6 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
     client_session: &mut crate::client::ModelClientSession,
     response_item: ResponseItem,
 ) -> CodexResult<ResponseItem> {
-    let is_pending_close_like = session
-        .is_pending_spine_close_like_output(&response_item)
-        .await
-        .map_err(|err| CodexErr::SpineTerminalFailure {
-            operation: "inspect Spine tool output".to_string(),
-            reason: err.to_string(),
-        })?;
     let output_recorded_before_spine_commit = session.enabled(Feature::SpineJit);
     if output_recorded_before_spine_commit {
         session
@@ -512,7 +505,7 @@ async fn commit_spine_output_and_record_raw_durable_with_client_session_for_test
                 .send_spine_tree_update(turn_context.as_ref(), snapshot)
                 .await;
         }
-    } else if is_pending_close_like {
+    } else if commit.record_raw_only_durable_without_emission {
         session
             .record_conversation_items_raw_only_durable_without_emission(
                 turn_context,

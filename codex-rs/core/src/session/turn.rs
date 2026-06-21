@@ -2090,15 +2090,6 @@ async fn drain_in_flight(
                 let response_item = response_input.into();
                 let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
                 let spine_trim_enabled = sess.features.enabled(Feature::SpineTrim);
-                let is_pending_spine_close_like = sess
-                    .is_pending_spine_close_like_output(&response_item)
-                    .await
-                    .map_err(|err| {
-                        SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
-                            operation: "inspect Spine tool output".to_string(),
-                            reason: err.to_string(),
-                        })
-                    })?;
                 let output_recorded_before_spine_commit = if spine_jit_enabled {
                     sess.record_conversation_items_without_spine_observe(
                         &turn_context,
@@ -2138,7 +2129,7 @@ async fn drain_in_flight(
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
-                } else if is_pending_spine_close_like {
+                } else if commit.record_raw_only_durable_without_emission {
                     sess.record_conversation_items_raw_only_durable_without_emission(
                         &turn_context,
                         std::slice::from_ref(&response_item),

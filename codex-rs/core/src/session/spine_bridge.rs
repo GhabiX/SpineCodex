@@ -57,6 +57,7 @@ impl PreparedSpineReplay {
 #[derive(Debug)]
 pub(crate) struct SpineToolCommit {
     pub(crate) record_output: bool,
+    pub(crate) record_raw_only_durable_without_emission: bool,
     pub(crate) spine_context_already_observed: bool,
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
@@ -147,6 +148,7 @@ impl Session {
     pub(crate) fn no_spine_tool_commit() -> SpineToolCommit {
         SpineToolCommit {
             record_output: true,
+            record_raw_only_durable_without_emission: false,
             spine_context_already_observed: false,
             deferred_tree_update: None,
         }
@@ -1133,6 +1135,9 @@ impl Session {
         } else {
             None
         };
+        let record_raw_only_durable_without_emission = has_pending_close_commit
+            && !tool_resp_already_recorded
+            && !recorded_output_inside_reduce;
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
         let mut lock_retries = 0;
@@ -1216,6 +1221,7 @@ impl Session {
         }
         Ok(SpineToolCommit {
             record_output: !recorded_output_inside_reduce,
+            record_raw_only_durable_without_emission,
             spine_context_already_observed,
             deferred_tree_update,
         })
@@ -1302,22 +1308,6 @@ impl Session {
         Ok(spine_raw_items_after_rollback(
             &rollout_history.get_rollout_items(),
         ))
-    }
-
-    pub(crate) async fn is_pending_spine_close_like_output(
-        &self,
-        item: &ResponseItem,
-    ) -> Result<bool, SpineError> {
-        let ResponseItem::FunctionCallOutput { call_id, .. } = item else {
-            return Ok(false);
-        };
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(false);
-        };
-        let raw_items = self.spine_raw_items_from_rollout().await?;
-        let guard = spine_slot.lock().await;
-        guard.ensure_valid()?;
-        guard.completed_toolcall_requires_durable_output(call_id, &raw_items)
     }
 
     pub(crate) async fn is_spine_control_output_response_item(
