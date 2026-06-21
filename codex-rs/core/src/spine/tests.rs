@@ -38,6 +38,8 @@ mod checkpoint_failures;
 mod clone_missing_memory;
 #[path = "tests/clone_structural_pressure.rs"]
 mod clone_structural_pressure;
+#[path = "tests/close_commit_failures.rs"]
+mod close_commit_failures;
 #[path = "tests/close_lifecycle.rs"]
 mod close_lifecycle;
 #[path = "tests/close_output_projection.rs"]
