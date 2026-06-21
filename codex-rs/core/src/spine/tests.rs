@@ -96,6 +96,8 @@ mod commit_marker_replay;
 mod commit_marker_replay_classification;
 #[path = "tests/commit_marker_required.rs"]
 mod commit_marker_required;
+#[path = "tests/commit_marker_required_next.rs"]
+mod commit_marker_required_next;
 #[path = "tests/commit_marker_resume_failures.rs"]
 mod commit_marker_resume_failures;
 #[path = "tests/commit_marker_root_compact.rs"]
