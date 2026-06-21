@@ -4,6 +4,7 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::path::Path;
 
 use super::CompletedToolCall;
+use super::CompletedToolCallSegment;
 use super::SpineError;
 use super::SpineHistoryUpdate;
 use super::SpineHostEffects;
@@ -14,6 +15,7 @@ use super::SpineRuntime;
 use super::SpineTreeUpdateDelivery;
 use super::prepared::SpineCommitPublication;
 use super::types::SpinePreparedCloseMemory;
+use crate::spine::model::ToolCallSegmentKind;
 
 pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
@@ -31,6 +33,15 @@ pub(crate) struct SpineToolcallCommitInput<'a> {
     pub(crate) reference_context_item: Option<TurnContextItem>,
     pub(crate) pre_compact_provider_input_tokens: Option<i64>,
     pub(crate) current_turn_provider_input_tokens: Option<i64>,
+}
+
+struct CompletedToolCallEvidenceParts {
+    call_id: String,
+    request_call_ids: Vec<String>,
+    request_segments: Vec<CompletedToolCallSegment>,
+    response_segments: Vec<CompletedToolCallSegment>,
+    missing_request_error: &'static str,
+    missing_response_error: &'static str,
 }
 
 pub(crate) struct SpinePostApplyEffectPolicy {
@@ -97,6 +108,101 @@ impl PreparedSpineRootCompactCommit {
     pub(crate) fn result(&self) -> SpineRootCompactResult {
         self.install.result().clone()
     }
+}
+
+fn completed_toolcall_request_segment(
+    raw_ordinal: u64,
+    context_index: usize,
+) -> CompletedToolCallSegment {
+    CompletedToolCallSegment {
+        kind: ToolCallSegmentKind::Request,
+        raw_ordinal,
+        context_index,
+    }
+}
+
+fn completed_toolcall_response_segment(
+    raw_ordinal: u64,
+    context_index: usize,
+) -> CompletedToolCallSegment {
+    CompletedToolCallSegment {
+        kind: ToolCallSegmentKind::Response,
+        raw_ordinal,
+        context_index,
+    }
+}
+
+fn completed_toolcall_request_segments(
+    request_anchors: impl IntoIterator<Item = (u64, usize)>,
+) -> Vec<CompletedToolCallSegment> {
+    request_anchors
+        .into_iter()
+        .map(|(raw_ordinal, context_index)| {
+            completed_toolcall_request_segment(raw_ordinal, context_index)
+        })
+        .collect()
+}
+
+fn completed_toolcall_response_segments(
+    response_raw_ordinals: &[Option<u64>],
+    context_start: usize,
+) -> Vec<CompletedToolCallSegment> {
+    response_raw_ordinals
+        .iter()
+        .enumerate()
+        .filter_map(|(index, raw_ordinal)| {
+            raw_ordinal.map(|raw_ordinal| {
+                completed_toolcall_response_segment(raw_ordinal, context_start + index)
+            })
+        })
+        .collect()
+}
+
+fn completed_toolcall_evidence_from_segments(
+    call_id: &str,
+    request_call_ids: &[String],
+    request_segments: Vec<CompletedToolCallSegment>,
+    response_segments: Vec<CompletedToolCallSegment>,
+    missing_request_error: &'static str,
+    missing_response_error: &'static str,
+) -> Result<CompletedToolCall, SpineError> {
+    completed_toolcall_evidence(CompletedToolCallEvidenceParts {
+        call_id: call_id.to_string(),
+        request_call_ids: request_call_ids.to_vec(),
+        request_segments,
+        response_segments,
+        missing_request_error,
+        missing_response_error,
+    })
+}
+
+fn completed_toolcall_evidence(
+    parts: CompletedToolCallEvidenceParts,
+) -> Result<CompletedToolCall, SpineError> {
+    let CompletedToolCallEvidenceParts {
+        call_id,
+        request_call_ids,
+        mut request_segments,
+        mut response_segments,
+        missing_request_error,
+        missing_response_error,
+    } = parts;
+    request_segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
+    response_segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
+    if request_segments.is_empty() {
+        return Err(SpineError::InvalidEvent(missing_request_error.to_string()));
+    }
+    if response_segments.is_empty() {
+        return Err(SpineError::InvalidEvent(missing_response_error.to_string()));
+    }
+    let mut segments = Vec::with_capacity(request_segments.len() + response_segments.len());
+    segments.extend(request_segments);
+    segments.extend(response_segments);
+    Ok(CompletedToolCall {
+        call_id,
+        request_call_ids,
+        segments,
+    })
 }
 
 #[derive(Debug)]
@@ -306,6 +412,63 @@ impl SpineSessionState {
             .map(Some)
     }
 
+    pub(crate) fn single_completed_toolcall_evidence(
+        &self,
+        call_id: &str,
+        response_anchor: (u64, usize),
+    ) -> Result<Option<CompletedToolCall>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        let request_anchor = runtime.pending_tool_request_anchor(call_id)?;
+        completed_toolcall_evidence_from_segments(
+            call_id,
+            &[call_id.to_string()],
+            vec![completed_toolcall_request_segment(
+                request_anchor.raw_ordinal,
+                request_anchor.context_index,
+            )],
+            vec![completed_toolcall_response_segment(
+                response_anchor.0,
+                response_anchor.1,
+            )],
+            "completed toolcall must contain a request",
+            "completed toolcall must contain a response",
+        )
+        .map(Some)
+    }
+
+    pub(crate) fn grouped_completed_toolcall_evidence(
+        &self,
+        commit_call_id: &str,
+        tool_call_ids: &[String],
+        response_raw_ordinals: &[Option<u64>],
+        response_context_start: usize,
+    ) -> Result<Option<CompletedToolCall>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        let request_anchors = tool_call_ids
+            .iter()
+            .map(|call_id| runtime.pending_tool_request_anchor(call_id))
+            .collect::<Result<Vec<_>, SpineError>>()?;
+        completed_toolcall_evidence_from_segments(
+            commit_call_id,
+            tool_call_ids,
+            completed_toolcall_request_segments(
+                request_anchors
+                    .iter()
+                    .map(|anchor| (anchor.raw_ordinal, anchor.context_index)),
+            ),
+            completed_toolcall_response_segments(response_raw_ordinals, response_context_start),
+            "completed grouped toolcall must contain at least one request",
+            "completed grouped toolcall must contain at least one response",
+        )
+        .map(Some)
+    }
+
     pub(crate) fn prepare_completed_toolcall_commit(
         &mut self,
         input: SpineToolcallCommitInput<'_>,
@@ -452,5 +615,71 @@ impl SpineSessionState {
             installed_commit,
             post_apply_effect_policy,
         })
+    }
+}
+
+#[cfg(test)]
+mod completed_toolcall_evidence_tests {
+    use super::*;
+
+    fn segment_tuple(segment: &CompletedToolCallSegment) -> (ToolCallSegmentKind, u64, usize) {
+        (segment.kind, segment.raw_ordinal, segment.context_index)
+    }
+
+    #[test]
+    fn single_completed_toolcall_evidence_orders_request_before_response() {
+        let toolcall = completed_toolcall_evidence_from_segments(
+            "call-a",
+            &["call-a".to_string()],
+            vec![completed_toolcall_request_segment(10, 5)],
+            vec![completed_toolcall_response_segment(11, 6)],
+            "completed toolcall must contain a request",
+            "completed toolcall must contain a response",
+        )
+        .expect("single evidence");
+
+        assert_eq!(toolcall.call_id, "call-a");
+        assert_eq!(toolcall.request_call_ids, vec!["call-a".to_string()]);
+        assert_eq!(
+            toolcall
+                .segments
+                .iter()
+                .map(segment_tuple)
+                .collect::<Vec<_>>(),
+            vec![
+                (ToolCallSegmentKind::Request, 10, 5),
+                (ToolCallSegmentKind::Response, 11, 6),
+            ]
+        );
+    }
+
+    #[test]
+    fn grouped_completed_toolcall_evidence_sorts_requests_and_responses_separately() {
+        let tool_call_ids = vec!["call-b".to_string(), "call-a".to_string()];
+        let toolcall = completed_toolcall_evidence_from_segments(
+            "call-a",
+            &tool_call_ids,
+            completed_toolcall_request_segments([(20, 9), (10, 3)]),
+            completed_toolcall_response_segments(&[Some(31), Some(30)], 7),
+            "completed grouped toolcall must contain at least one request",
+            "completed grouped toolcall must contain at least one response",
+        )
+        .expect("grouped evidence");
+
+        assert_eq!(toolcall.call_id, "call-a");
+        assert_eq!(toolcall.request_call_ids, tool_call_ids);
+        assert_eq!(
+            toolcall
+                .segments
+                .iter()
+                .map(segment_tuple)
+                .collect::<Vec<_>>(),
+            vec![
+                (ToolCallSegmentKind::Request, 10, 3),
+                (ToolCallSegmentKind::Request, 20, 9),
+                (ToolCallSegmentKind::Response, 31, 7),
+                (ToolCallSegmentKind::Response, 30, 8),
+            ]
+        );
     }
 }
