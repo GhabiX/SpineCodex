@@ -2973,14 +2973,12 @@ impl Session {
         let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
         let projected = {
             let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(runtime) = guard.runtime() else {
+            let Some(projected) =
+                guard.materialize_history_if_no_pending_tool_request(&raw_items)?
+            else {
                 return Ok(());
             };
-            if runtime.has_pending_tool_request() {
-                return Ok(());
-            }
-            runtime.materialize_history(&raw_items)?
+            projected
         };
         if projected.as_slice() != self.clone_history().await.raw_items() {
             self.replace_history(projected, self.reference_context_item().await)
