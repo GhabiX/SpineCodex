@@ -38,7 +38,6 @@ use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
-use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
 #[cfg(test)]
 use crate::spine::model::TrimEvent;
@@ -62,6 +61,7 @@ mod accounting;
 mod coverage;
 mod load;
 mod observe;
+mod pending;
 mod prepared;
 mod replay;
 mod session_state;
@@ -71,6 +71,17 @@ mod types;
 
 #[cfg(test)]
 use crate::spine::model::commit_marker_structural_event_seqs;
+pub(crate) use pending::CompletedToolCall;
+pub(crate) use pending::CompletedToolCallSegment;
+use pending::OpenRequestAnchor;
+use pending::PendingMemoryContextAccounting;
+use pending::PendingMsg;
+use pending::PendingToolRequest;
+#[cfg(test)]
+use pending::PendingToolResponse;
+use pending::PendingTransition;
+use pending::SpineControlToolReceipt;
+pub(crate) use pending::ToolRequestAnchor;
 pub(crate) use prepared::HistoryPublicationPlan;
 pub(crate) use prepared::SpineCommitKind;
 pub(crate) use prepared::SpinePreparedCommit;
@@ -177,102 +188,6 @@ impl SpineLedgerCache {
             .retain(|event| watermark.is_some_and(|watermark| event.trim_seq <= watermark));
         self.next_trim_seq = next_trim_seq;
     }
-}
-
-#[derive(Clone, Debug)]
-struct OpenRequestAnchor {
-    raw_ordinal: u64,
-    context_index: u64,
-}
-
-#[derive(Clone, Debug)]
-struct PendingMemoryContextAccounting {
-    compact_id: String,
-    replacement_prefix_baseline_tokens: i64,
-    close_input_tokens: Option<i64>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ToolRequestAnchor {
-    pub(crate) raw_ordinal: u64,
-    pub(crate) context_index: usize,
-}
-
-#[derive(Clone, Debug)]
-enum PendingTransition {
-    Open {
-        call_id: String,
-        summary: String,
-        boundary: u64,
-        index: u64,
-    },
-    Close {
-        call_id: String,
-        memory: String,
-    },
-    NextSugar {
-        call_id: String,
-        summary: String,
-        memory: String,
-    },
-}
-
-impl PendingTransition {
-    fn call_id(&self) -> &str {
-        match self {
-            Self::Open { call_id, .. }
-            | Self::Close { call_id, .. }
-            | Self::NextSugar { call_id, .. } => call_id,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-enum SpineControlToolReceipt {
-    Open { summary: String },
-    Close { memory: String },
-    Next { summary: String, memory: String },
-}
-
-impl SpineControlToolReceipt {
-    fn is_close_like(&self) -> bool {
-        matches!(self, Self::Close { .. } | Self::Next { .. })
-    }
-}
-
-#[derive(Clone, Debug)]
-struct PendingMsg {
-    raw_ordinal: u64,
-    context_index: u64,
-    from_user: bool,
-    user_anchor: Option<u64>,
-}
-
-#[derive(Clone, Debug)]
-struct PendingToolRequest {
-    raw_ordinal: u64,
-    context_index: u64,
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug)]
-struct PendingToolResponse {
-    raw_ordinal: u64,
-    context_index: u64,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CompletedToolCall {
-    pub(crate) call_id: String,
-    pub(crate) request_call_ids: Vec<String>,
-    pub(crate) segments: Vec<CompletedToolCallSegment>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CompletedToolCallSegment {
-    pub(crate) kind: ToolCallSegmentKind,
-    pub(crate) raw_ordinal: u64,
-    pub(crate) context_index: usize,
 }
 
 struct PreparedCloseCommit {
