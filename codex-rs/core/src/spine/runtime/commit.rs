@@ -643,6 +643,16 @@ impl SpineRuntime {
     }
 
     #[cfg(test)]
+    pub(in crate::spine) fn prepared_close_memory_for_test(
+        &self,
+        memory_assembly: Option<SpineCloseMemoryAssembly>,
+        token_baselines: SpineTokenBaselines,
+    ) -> Result<crate::spine::model::MemoryRef, SpineError> {
+        self.prepare_close_commit(memory_assembly, token_baselines)
+            .map(|prepared| prepared.memory)
+    }
+
+    #[cfg(test)]
     fn observed_completed_toolcall(
         &self,
         call_id: &str,

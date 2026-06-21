@@ -1,15 +1,23 @@
 use super::*;
 use crate::spine::CHECKPOINT_VERSION;
 use crate::spine::SpineCloneBoundary;
+use crate::spine::archive::memory_ref;
 use crate::spine::archive::tree_meta;
 use crate::spine::checkpoint::CheckpointMemoryRef;
 use crate::spine::compact_checkpoint::CompactCheckpointMemoryItemRef;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
 use crate::spine::io::hash_response_items;
+use crate::spine::io::sha1_hex;
+use crate::spine::model::MemKind;
+use crate::spine::model::MemRecord;
+use crate::spine::model::NodeId;
 use crate::spine::model::PressureEvent;
+use crate::spine::model::SpineCommitKindMarker;
+use crate::spine::model::SpineToken;
 use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegment;
 use crate::spine::model::TrimResponseKind;
+use crate::spine::render::memory_response_item;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
@@ -24,14 +32,25 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+#[path = "tests/checkpoint_failures.rs"]
 mod checkpoint_failures;
+#[path = "tests/commit_markers.rs"]
 mod commit_markers;
+#[path = "tests/error_classification.rs"]
 mod error_classification;
+#[path = "tests/m0_trace.rs"]
 mod m0_trace;
+#[path = "tests/message_anchors.rs"]
 mod message_anchors;
+#[path = "tests/pending_control.rs"]
 mod pending_control;
+#[path = "tests/provider_baseline.rs"]
 mod provider_baseline;
+#[path = "tests/runtime_lifecycle.rs"]
 mod runtime_lifecycle;
+#[path = "tests/toolcall_lexer.rs"]
+mod toolcall_lexer;
+#[path = "tests/tree_snapshot.rs"]
 mod tree_snapshot;
 
 // Shared raw/context fixtures.
@@ -1944,122 +1963,6 @@ fn next_at_root_cursor_fails_without_pending_transition() {
 }
 
 // Control carriers, parser shifts, and pending commits.
-
-#[test]
-fn ordinary_tool_items_shift_as_toolcall_token_and_render_full_transaction() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let rollout = rollout_path(&dir);
-    let request = ResponseItem::FunctionCall {
-        id: None,
-        name: "shell_command".to_string(),
-        namespace: None,
-        arguments: "{\"command\":\"pwd\"}".to_string(),
-        call_id: "ordinary-tool".to_string(),
-    };
-    let output_1 = function_output("ordinary-tool");
-    let output_2 = function_output("ordinary-tool");
-    let raw = vec![
-        Some(request.clone()),
-        Some(output_1.clone()),
-        Some(output_2.clone()),
-    ];
-    let runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
-    let mut parse_stack = runtime.parse_stack().clone();
-
-    parse_stack
-        .shift(
-            SpineToken::ToolCall {
-                segments: vec![tool_req(0, 0), tool_resp(1, 1), tool_resp(2, 2)],
-            },
-            &runtime.archive(),
-        )
-        .expect("shift completed toolcall");
-
-    assert_eq!(
-        parse_stack.symbols[2],
-        Symbol::SpineTreeNodes(vec![SpineTreeNode::ToolCallAsLeafNode {
-            segments: vec![tool_req(0, 0), tool_resp(1, 1), tool_resp(2, 2)],
-        }])
-    );
-    assert_eq!(
-        render_parse_stack_to_context(&parse_stack, &raw).expect("render ordinary toolcall"),
-        vec![request, output_1, output_2]
-    );
-}
-
-#[test]
-fn ordinary_tool_transaction_observes_toolcall_leaf_and_replays() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let rollout = rollout_path(&dir);
-    let request = ResponseItem::FunctionCall {
-        id: None,
-        name: "shell_command".to_string(),
-        namespace: None,
-        arguments: "{\"command\":\"pwd\"}".to_string(),
-        call_id: "ordinary-tool".to_string(),
-    };
-    let output = function_output("ordinary-tool");
-    let raw = vec![Some(request.clone()), Some(output.clone())];
-    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
-
-    runtime.observe_raw_items(1).expect("record request raw");
-    runtime
-        .observe_context_item(0, 0, &request)
-        .expect("observe request");
-    assert_eq!(
-        runtime
-            .materialize_history(&raw)
-            .expect("request alone is not a completed toolcall"),
-        Vec::<ResponseItem>::new()
-    );
-    assert_eq!(runtime.parse_stack_msg_leaf_count_for_test(), 0);
-    assert_eq!(runtime.parse_stack_toolcall_leaf_count_for_test(), 0);
-    assert!(!matches!(
-        event_log(&runtime).last(),
-        Some(SpineLedgerEvent::Msg { .. })
-    ));
-
-    runtime.observe_raw_items(1).expect("record output raw");
-    runtime
-        .observe_context_item(1, 1, &output)
-        .expect("observe output raw/context");
-    assert_eq!(
-        runtime
-            .materialize_history(&raw)
-            .expect("response alone still waits for completed toolcall hook"),
-        Vec::<ResponseItem>::new()
-    );
-    runtime
-        .observe_completed_toolcall(completed_toolcall(
-            "ordinary-tool",
-            vec![tool_req(0, 0), tool_resp(1, 1)],
-        ))
-        .expect("observe completed toolcall");
-
-    let rendered = runtime
-        .materialize_history(&raw)
-        .expect("toolcall renders full transaction");
-    assert_eq!(rendered, vec![request.clone(), output.clone()]);
-    assert_eq!(runtime.parse_stack_msg_leaf_count_for_test(), 0);
-    assert_eq!(runtime.parse_stack_toolcall_leaf_count_for_test(), 1);
-    assert!(matches!(
-        event_log(&runtime).last(),
-        Some(SpineLedgerEvent::ToolCall { segments })
-            if segments == &vec![event_tool_req(0, 0), event_tool_resp(1, 1)]
-    ));
-
-    let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[])
-        .expect("load replayed runtime")
-        .expect("runtime exists");
-    assert_eq!(
-        replayed
-            .materialize_history(&raw)
-            .expect("replayed toolcall renders"),
-        vec![request, output]
-    );
-    assert_eq!(replayed.parse_stack_msg_leaf_count_for_test(), 0);
-    assert_eq!(replayed.parse_stack_toolcall_leaf_count_for_test(), 1);
-}
 
 #[test]
 fn completed_toolcall_tags_long_text_tool_response_for_next_turn_trim() {
@@ -5369,15 +5272,15 @@ fn close_retry_reduces_existing_pending_close_token() {
     let memory_assembly =
         memory_assembly_with_context_range("1.1.1", suffix_start..close_request_index);
 
-    let prepared = runtime
-        .prepare_close_commit(
+    let prepared_memory = runtime
+        .prepared_close_memory_for_test(
             Some(memory_assembly.clone()),
             SpineTokenBaselines::default(),
         )
         .expect("prepare close commit");
     runtime
         .parse_stack
-        .shift_pending_close(prepared.memory.clone(), &runtime.archive())
+        .shift_pending_close(prepared_memory, &runtime.archive())
         .expect("simulate retryable pending Close token");
     assert!(matches!(
         runtime.parse_stack().symbols.as_slice(),
