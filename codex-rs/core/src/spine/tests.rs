@@ -40,6 +40,8 @@ mod clone_missing_memory;
 mod clone_structural_pressure;
 #[path = "tests/close_lifecycle.rs"]
 mod close_lifecycle;
+#[path = "tests/close_output_projection.rs"]
+mod close_output_projection;
 #[path = "tests/close_source_plan.rs"]
 mod close_source_plan;
 #[path = "tests/closed_memory_accounting.rs"]
