@@ -112,6 +112,23 @@ struct SpineHostEffects {
     effects: Vec<SpineHostEffect>,
 }
 
+enum SpineToolCallAppendEvidence<'a> {
+    Request {
+        raw_ordinal: u64,
+        context_index: usize,
+        item: &'a ResponseItem,
+    },
+    Response {
+        raw_ordinal: u64,
+        context_index: usize,
+        item: &'a ResponseItem,
+    },
+    RecordedOutputs {
+        outputs: &'a [(String, u64, usize)],
+        raw_items: &'a [Option<ResponseItem>],
+    },
+}
+
 impl SpineHostEffects {
     fn none() -> Self {
         Self {
@@ -783,22 +800,26 @@ impl Session {
                 let mut guard = spine_slot.lock().await;
                 guard.ensure_valid()?;
                 if let Some(runtime) = guard.runtime_mut() {
-                    observe_spine_toolcall_response_anchor(
+                    observe_appended_spine_toolcall_evidence(
                         runtime,
-                        raw_ordinal,
-                        append.context_index,
-                        item,
+                        SpineToolCallAppendEvidence::Response {
+                            raw_ordinal,
+                            context_index: append.context_index,
+                            item,
+                        },
                     )?;
                 }
             } else if tool_request_call_id(item).is_some() {
                 let mut guard = spine_slot.lock().await;
                 guard.ensure_valid()?;
                 if let Some(runtime) = guard.runtime_mut() {
-                    observe_spine_toolcall_request_anchor(
+                    observe_appended_spine_toolcall_evidence(
                         runtime,
-                        raw_ordinal,
-                        append.context_index,
-                        item,
+                        SpineToolCallAppendEvidence::Request {
+                            raw_ordinal,
+                            context_index: append.context_index,
+                            item,
+                        },
                     )?;
                 }
             }
@@ -807,7 +828,13 @@ impl Session {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
             if let Some(runtime) = guard.runtime_mut() {
-                observe_recorded_spine_tool_outputs(runtime, &recorded_tool_outputs, &raw_items)?;
+                observe_appended_spine_toolcall_evidence(
+                    runtime,
+                    SpineToolCallAppendEvidence::RecordedOutputs {
+                        outputs: &recorded_tool_outputs,
+                        raw_items: &raw_items,
+                    },
+                )?;
             }
         }
         Ok(())
@@ -1946,6 +1973,27 @@ fn observe_spine_toolcall_response_anchor(
     item: &ResponseItem,
 ) -> Result<(), SpineError> {
     runtime.observe_toolcall_response_anchor(raw_ordinal, context_index, item)
+}
+
+fn observe_appended_spine_toolcall_evidence(
+    runtime: &mut SpineRuntime,
+    evidence: SpineToolCallAppendEvidence<'_>,
+) -> Result<(), SpineError> {
+    match evidence {
+        SpineToolCallAppendEvidence::Request {
+            raw_ordinal,
+            context_index,
+            item,
+        } => observe_spine_toolcall_request_anchor(runtime, raw_ordinal, context_index, item),
+        SpineToolCallAppendEvidence::Response {
+            raw_ordinal,
+            context_index,
+            item,
+        } => observe_spine_toolcall_response_anchor(runtime, raw_ordinal, context_index, item),
+        SpineToolCallAppendEvidence::RecordedOutputs { outputs, raw_items } => {
+            observe_recorded_spine_tool_outputs(runtime, outputs, raw_items)
+        }
+    }
 }
 
 fn context_append_raw_item<'a>(
