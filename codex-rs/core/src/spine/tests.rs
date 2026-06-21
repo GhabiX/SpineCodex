@@ -44,6 +44,8 @@ mod close_lifecycle;
 mod close_source_plan;
 #[path = "tests/closed_memory_accounting.rs"]
 mod closed_memory_accounting;
+#[path = "tests/commit_marker_carriers.rs"]
+mod commit_marker_carriers;
 #[path = "tests/commit_markers.rs"]
 mod commit_markers;
 #[path = "tests/compact_checkpoint_proofs.rs"]
