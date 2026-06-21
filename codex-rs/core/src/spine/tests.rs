@@ -80,6 +80,8 @@ mod materialize_history;
 mod message_anchors;
 #[path = "tests/next_lifecycle.rs"]
 mod next_lifecycle;
+#[path = "tests/next_transactions.rs"]
+mod next_transactions;
 #[path = "tests/open_lifecycle.rs"]
 mod open_lifecycle;
 #[path = "tests/pending_control.rs"]
