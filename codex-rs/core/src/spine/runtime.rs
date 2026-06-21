@@ -1,7 +1,6 @@
 use codex_protocol::models::ResponseItem;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::collections::btree_map::Entry;
 #[cfg(test)]
 use std::ops::Range;
 use thiserror::Error;
@@ -10,16 +9,21 @@ use crate::spine::archive::SpineArchive;
 use crate::spine::archive::flush_archive_writes;
 use crate::spine::archive::memory_ref;
 use crate::spine::archive::tree_meta_with_token_baselines;
+#[cfg(test)]
+use crate::spine::io::hash_raw_live;
 use crate::spine::io::sha1_hex;
 #[cfg(test)]
 use crate::spine::model::COMMIT_MARKER_VERSION;
 use crate::spine::model::ContextBaselineSource;
+#[cfg(test)]
+use crate::spine::model::ControlSymbol;
 use crate::spine::model::LoggedPressureEvent;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::NodeId;
+#[cfg(test)]
 use crate::spine::model::RawMask;
 #[cfg(test)]
 use crate::spine::model::SegRef;
@@ -29,6 +33,12 @@ use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineCommitMemoryRef;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
+#[cfg(test)]
+use crate::spine::model::SpineTreeNode;
+#[cfg(test)]
+use crate::spine::model::Symbol;
+#[cfg(test)]
+use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
 #[cfg(test)]
 use crate::spine::model::TrimEvent;
@@ -79,6 +89,7 @@ use pending::PendingToolRequest;
 use pending::PendingToolResponse;
 use pending::PendingTransition;
 use pending::SpineControlToolReceipt;
+#[allow(unused_imports)]
 pub(crate) use pending::ToolRequestAnchor;
 pub(crate) use prepared::HistoryPublicationPlan;
 pub(crate) use prepared::SpineCommitKind;
@@ -101,7 +112,6 @@ pub(crate) use support::is_real_user_message;
 pub(crate) use support::is_spine_close_like_tool_name;
 pub(crate) use support::is_user_message;
 use support::mem_record_matches;
-use support::user_anchor_refs_in_memory;
 use support::validate_model_node_memory;
 pub(crate) use types::LiveRootCompact;
 pub(crate) use types::SpineCloseMemoryAssembly;
@@ -203,35 +213,6 @@ impl IntoSpineNodeMemory for String {
 }
 
 impl SpineRuntime {
-    fn validate_control_tool_receipt_pending_view(
-        &self,
-        receipt: &SpineControlToolReceipt,
-    ) -> Result<(), SpineError> {
-        match receipt {
-            SpineControlToolReceipt::Open { summary } => {
-                if summary.trim().is_empty() {
-                    return Err(SpineError::ToolUse(
-                        "spine.open summary must not be empty".to_string(),
-                    ));
-                }
-            }
-            SpineControlToolReceipt::Close { memory } => {
-                validate_model_node_memory(memory)?;
-                self.validate_memory_user_anchor_refs(memory)?;
-            }
-            SpineControlToolReceipt::Next { summary, memory } => {
-                if summary.trim().is_empty() {
-                    return Err(SpineError::ToolUse(
-                        "spine.next summary must not be empty".to_string(),
-                    ));
-                }
-                validate_model_node_memory(memory)?;
-                self.validate_memory_user_anchor_refs(memory)?;
-            }
-        }
-        Ok(())
-    }
-
     pub(crate) fn append_feedback_markdown(&self, entry: &str) -> Result<(), SpineError> {
         self.store.append_feedback_markdown(entry)
     }
@@ -410,235 +391,6 @@ impl SpineRuntime {
             from_user: msg.from_user,
             user_anchor: msg.user_anchor,
         })
-    }
-
-    pub(crate) fn stage_open(
-        &mut self,
-        call_id: String,
-        summary: String,
-    ) -> Result<(), SpineError> {
-        self.ensure_no_pending_transition()?;
-        let summary = summary.trim().to_string();
-        if summary.is_empty() {
-            return Err(SpineError::ToolUse(
-                "spine.open summary must not be empty".to_string(),
-            ));
-        }
-        let anchor = self.open_requests.remove(&call_id).ok_or_else(|| {
-            SpineError::Operation(format!(
-                "missing spine.open request anchor for call_id={call_id}"
-            ))
-        })?;
-        self.stage(PendingTransition::Open {
-            call_id,
-            summary,
-            boundary: anchor.raw_ordinal,
-            index: anchor.context_index,
-        })
-    }
-
-    pub(crate) fn stage_close<M: IntoSpineNodeMemory>(
-        &mut self,
-        call_id: String,
-        memory: M,
-    ) -> Result<(), SpineError> {
-        self.ensure_no_pending_transition()?;
-        let memory = memory.into_spine_node_memory()?;
-        self.validate_memory_user_anchor_refs(&memory)?;
-        if !self.control_call_ids.contains(&call_id) {
-            return Err(SpineError::Operation(format!(
-                "missing spine.close request anchor for call_id={call_id}"
-            )));
-        }
-        self.current_close_open_meta()?;
-        self.stage(PendingTransition::Close { call_id, memory })
-    }
-
-    pub(crate) fn stage_next<M: IntoSpineNodeMemory>(
-        &mut self,
-        call_id: String,
-        summary: String,
-        memory: M,
-    ) -> Result<(), SpineError> {
-        self.ensure_no_pending_transition()?;
-        let summary = summary.trim().to_string();
-        if summary.is_empty() {
-            return Err(SpineError::ToolUse(
-                "spine.next summary must not be empty".to_string(),
-            ));
-        }
-        let memory = memory.into_spine_node_memory()?;
-        self.validate_memory_user_anchor_refs(&memory)?;
-        if !self.control_call_ids.contains(&call_id) {
-            return Err(SpineError::Operation(format!(
-                "missing spine.next request anchor for call_id={call_id}"
-            )));
-        }
-        self.current_close_open_meta()?;
-        self.stage(PendingTransition::NextSugar {
-            call_id,
-            summary,
-            memory,
-        })
-    }
-
-    fn validate_memory_user_anchor_refs(&self, memory: &str) -> Result<(), SpineError> {
-        let refs = user_anchor_refs_in_memory(memory)?;
-        if refs.is_empty() {
-            return Ok(());
-        }
-        let existing = self.live_user_anchors()?;
-        for anchor in refs {
-            if !existing.contains(&anchor) {
-                return Err(SpineError::ToolUse(format!(
-                    "spine.close/next memory references unknown user anchor [U{anchor}]"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn live_user_anchors(&self) -> Result<BTreeSet<u64>, SpineError> {
-        let raw_mask = RawMask::new(&self.raw_live);
-        let mut anchors = BTreeSet::new();
-        for event in &self.ledger.events {
-            if !event.allowed_by(raw_mask)? {
-                continue;
-            }
-            if let SpineLedgerEvent::Msg {
-                user_anchor: Some(anchor),
-                ..
-            } = &event.event
-            {
-                anchors.insert(*anchor);
-            }
-        }
-        Ok(anchors)
-    }
-
-    fn stage(&mut self, pending: PendingTransition) -> Result<(), SpineError> {
-        self.ensure_no_pending_transition()?;
-        self.pending = Some(pending);
-        Ok(())
-    }
-
-    pub(crate) fn record_open_tool_receipt(
-        &mut self,
-        call_id: String,
-        summary: String,
-    ) -> Result<(), SpineError> {
-        self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Open { summary })
-    }
-
-    pub(crate) fn record_close_tool_receipt(
-        &mut self,
-        call_id: String,
-        memory: String,
-    ) -> Result<(), SpineError> {
-        self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Close { memory })
-    }
-
-    pub(crate) fn record_next_tool_receipt(
-        &mut self,
-        call_id: String,
-        summary: String,
-        memory: String,
-    ) -> Result<(), SpineError> {
-        self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Next { summary, memory })
-    }
-
-    fn record_control_tool_receipt(
-        &mut self,
-        call_id: String,
-        receipt: SpineControlToolReceipt,
-    ) -> Result<(), SpineError> {
-        self.ensure_jit_enabled("Spine control tool receipt")?;
-        if !self.control_call_ids.contains(&call_id) {
-            return Err(SpineError::Operation(format!(
-                "missing Spine control request anchor for call_id={call_id}"
-            )));
-        }
-        match self.control_receipts.entry(call_id.clone()) {
-            Entry::Vacant(entry) => {
-                entry.insert(receipt);
-            }
-            Entry::Occupied(_) => {
-                return Err(SpineError::InvalidEvent(format!(
-                    "duplicate Spine control receipt for call_id={call_id}"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn ensure_pending_from_receipt(&mut self, call_id: &str) -> Result<(), SpineError> {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.call_id() == call_id)
-        {
-            return Ok(());
-        }
-        let Some(receipt) = self.control_receipts.get(call_id).cloned() else {
-            return Ok(());
-        };
-        match receipt {
-            SpineControlToolReceipt::Open { summary } => {
-                self.stage_open(call_id.to_string(), summary)?;
-            }
-            SpineControlToolReceipt::Close { memory } => {
-                self.stage_close(call_id.to_string(), memory)?;
-            }
-            SpineControlToolReceipt::Next { summary, memory } => {
-                self.stage_next(call_id.to_string(), summary, memory)?;
-            }
-        };
-        self.control_receipts.remove(call_id);
-        Ok(())
-    }
-
-    fn ensure_no_pending_transition(&self) -> Result<(), SpineError> {
-        if self.pending.is_some() {
-            let pending_call_id = self
-                .pending
-                .as_ref()
-                .map(PendingTransition::call_id)
-                .unwrap_or("<unknown>");
-            return Err(SpineError::Operation(format!(
-                "another spine transition is already pending: call_id={pending_call_id}"
-            )));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn abort_pending(&mut self, call_id: &str) -> bool {
-        let removed_receipt = self.control_receipts.remove(call_id).is_some();
-        if self
-            .pending
-            .as_ref()
-            .is_none_or(|pending| pending.call_id() != call_id)
-        {
-            if removed_receipt {
-                self.control_call_ids.remove(call_id);
-            }
-            return removed_receipt;
-        }
-        let Some(pending) = self.pending.take() else {
-            if removed_receipt {
-                self.control_call_ids.remove(call_id);
-            }
-            return removed_receipt;
-        };
-        self.control_call_ids.remove(pending.call_id());
-        true
-    }
-
-    pub(crate) fn abort_any_pending(&mut self) -> Option<String> {
-        let pending = self.pending.take()?;
-        let call_id = pending.call_id().to_string();
-        self.control_call_ids.remove(&call_id);
-        self.control_receipts.remove(&call_id);
-        Some(call_id)
     }
 
     #[cfg(test)]
@@ -1246,111 +998,6 @@ impl SpineRuntime {
         })
     }
 
-    pub(crate) fn pending_commit(
-        &self,
-        call_id: &str,
-    ) -> Result<Option<SpinePendingCommit>, SpineError> {
-        if let Some(pending) = self.pending.as_ref()
-            && pending.call_id() == call_id
-        {
-            return Ok(Some(match pending {
-                PendingTransition::Open { .. } => SpinePendingCommit::Open,
-                PendingTransition::Close { memory, .. } => {
-                    let open_meta = self.current_close_open_meta()?;
-                    SpinePendingCommit::Close {
-                        action: SpinePendingCloseAction::Close,
-                        node: open_meta.id.clone(),
-                        suffix_start: open_meta.index,
-                        memory: memory.clone(),
-                        next_summary: None,
-                    }
-                }
-                PendingTransition::NextSugar {
-                    summary, memory, ..
-                } => {
-                    let open_meta = self.current_close_open_meta()?;
-                    SpinePendingCommit::Close {
-                        action: SpinePendingCloseAction::Next,
-                        node: open_meta.id.clone(),
-                        suffix_start: open_meta.index,
-                        memory: memory.clone(),
-                        next_summary: Some(summary.clone()),
-                    }
-                }
-            }));
-        }
-        Ok(self
-            .control_receipts
-            .get(call_id)
-            .map(|receipt| {
-                self.validate_control_tool_receipt_pending_view(receipt)?;
-                match receipt {
-                    SpineControlToolReceipt::Open { .. } => {
-                        Ok::<SpinePendingCommit, SpineError>(SpinePendingCommit::Open)
-                    }
-                    SpineControlToolReceipt::Close { memory } => {
-                        let open_meta = self.current_close_open_meta()?;
-                        Ok(SpinePendingCommit::Close {
-                            action: SpinePendingCloseAction::Close,
-                            node: open_meta.id.clone(),
-                            suffix_start: open_meta.index,
-                            memory: memory.clone(),
-                            next_summary: None,
-                        })
-                    }
-                    SpineControlToolReceipt::Next { summary, memory } => {
-                        let open_meta = self.current_close_open_meta()?;
-                        Ok(SpinePendingCommit::Close {
-                            action: SpinePendingCloseAction::Next,
-                            node: open_meta.id.clone(),
-                            suffix_start: open_meta.index,
-                            memory: memory.clone(),
-                            next_summary: Some(summary.clone()),
-                        })
-                    }
-                }
-            })
-            .transpose()?)
-    }
-
-    pub(crate) fn has_close_like_control_receipt(&self, call_id: &str) -> bool {
-        self.control_receipts
-            .get(call_id)
-            .is_some_and(SpineControlToolReceipt::is_close_like)
-            || self.pending.as_ref().is_some_and(|pending| {
-                pending.call_id() == call_id
-                    && matches!(
-                        pending,
-                        PendingTransition::Close { .. } | PendingTransition::NextSugar { .. }
-                    )
-            })
-    }
-
-    pub(crate) fn pending_tool_request_anchor(
-        &self,
-        call_id: &str,
-    ) -> Result<ToolRequestAnchor, SpineError> {
-        if let Some(anchor) = self.open_requests.get(call_id) {
-            return Ok(ToolRequestAnchor {
-                raw_ordinal: anchor.raw_ordinal,
-                context_index: usize::try_from(anchor.context_index).map_err(|_| {
-                    SpineError::InvalidEvent("spine.open context index overflow".to_string())
-                })?,
-            });
-        }
-        let Some(request) = self.ordinary_tool_requests.get(call_id) else {
-            return Err(SpineError::Operation(format!(
-                "missing tool request anchor for call_id={call_id}"
-            )));
-        };
-        Ok(ToolRequestAnchor {
-            raw_ordinal: request.raw_ordinal,
-            context_index: usize::try_from(request.context_index).map_err(|_| {
-                SpineError::InvalidEvent("tool request context index overflow".to_string())
-            })?,
-        })
-    }
-
     #[cfg(test)]
     fn observed_completed_toolcall(
         &self,
@@ -1386,14 +1033,6 @@ impl SpineRuntime {
             ))
             .collect(),
         }))
-    }
-
-    pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
-        self.control_call_ids.contains(call_id)
-            || self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.call_id() == call_id)
     }
 
     fn write_prepared_memory_body(&self, mem: &MemRecord, body: &str) -> Result<(), SpineError> {
@@ -1545,10 +1184,6 @@ impl SpineRuntime {
             raw_items,
             &trim_projection,
         )
-    }
-
-    pub(crate) fn has_pending_tool_request(&self) -> bool {
-        !self.ordinary_tool_requests.is_empty()
     }
 }
 
