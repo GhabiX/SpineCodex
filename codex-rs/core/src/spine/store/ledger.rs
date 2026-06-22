@@ -13,6 +13,8 @@ use crate::spine::model::MemoryContextAccountingWitnessRecord;
 use crate::spine::model::PressureEvent;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
+use serde::Deserialize;
+use std::path::Path;
 
 impl SpineStore {
     pub(in crate::spine) fn append_event(
@@ -144,45 +146,39 @@ impl SpineStore {
     }
 
     pub(in crate::spine) fn mems(&self) -> Result<Vec<MemRecord>, SpineError> {
-        if !self.mem_path().exists() {
-            return Ok(Vec::new());
-        }
-        read_json_lines(&self.mem_path())
+        read_optional_json_lines(&self.mem_path())
     }
 
     pub(in crate::spine) fn mem_accounting(
         &self,
     ) -> Result<Vec<MemoryContextAccountingRecord>, SpineError> {
-        if !self.mem_accounting_path().exists() {
-            return Ok(Vec::new());
-        }
-        read_json_lines(&self.mem_accounting_path())
+        read_optional_json_lines(&self.mem_accounting_path())
     }
 
     pub(in crate::spine) fn mem_accounting_witnesses(
         &self,
     ) -> Result<Vec<MemoryContextAccountingWitnessRecord>, SpineError> {
-        if !self.mem_accounting_witness_path().exists() {
-            return Ok(Vec::new());
-        }
-        read_json_lines(&self.mem_accounting_witness_path())
+        read_optional_json_lines(&self.mem_accounting_witness_path())
     }
 
     pub(in crate::spine) fn commit_markers(&self) -> Result<Vec<SpineCommitMarker>, SpineError> {
-        if !self.commit_path().exists() {
-            return Ok(Vec::new());
-        }
-        read_json_lines(&self.commit_path())
+        read_optional_json_lines(&self.commit_path())
     }
 
     pub(in crate::spine) fn compact_checkpoints(
         &self,
     ) -> Result<Vec<SpineCompactCheckpoint>, SpineError> {
-        if !self.compact_checkpoint_path().exists() {
-            return Ok(Vec::new());
-        }
-        read_json_lines(&self.compact_checkpoint_path())
+        read_optional_json_lines(&self.compact_checkpoint_path())
     }
+}
+
+fn read_optional_json_lines<T: for<'de> Deserialize<'de>>(
+    path: &Path,
+) -> Result<Vec<T>, SpineError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    read_json_lines(path)
 }
 
 fn next_ledger_seq(
