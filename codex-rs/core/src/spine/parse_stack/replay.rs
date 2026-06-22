@@ -4,6 +4,7 @@ use crate::spine::archive::SpineArchive;
 use crate::spine::archive::memory_ref;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
+use crate::spine::model::MemoryRef;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
@@ -58,23 +59,7 @@ pub(in crate::spine) fn event_to_token(
                 SpineError::InvalidEvent(format!("missing memory for close node {node}"))
             })?;
             validate_replay_memory_raw_evidence(mem, raw_mask)?;
-            crate::spine::lexer::lex_close_token(memory_ref(
-                archive,
-                mem.compact_id.clone(),
-                mem.node.clone(),
-                mem.body_hash.clone(),
-                mem.raw_start..mem.raw_end,
-                mem.context_start..mem.context_end,
-                event.seq..event.seq + 1,
-                mem.open_input_tokens,
-                mem.close_input_tokens,
-                mem.open_context_tokens,
-                mem.close_context_tokens,
-                mem.closed_source_suffix_tokens,
-                mem.closed_memory_context_tokens,
-                mem.open_context_source,
-                mem.memory_output_tokens,
-            ))
+            crate::spine::lexer::lex_close_token(replay_memory_ref(archive, mem, event.seq))
         }
         SpineLedgerEvent::RootCompact {
             mem,
@@ -85,23 +70,7 @@ pub(in crate::spine) fn event_to_token(
                 SpineError::InvalidEvent("missing memory for root compact".to_string())
             })?;
             validate_replay_memory_raw_evidence(mem, raw_mask)?;
-            let memory = memory_ref(
-                archive,
-                mem.compact_id.clone(),
-                mem.node.clone(),
-                mem.body_hash.clone(),
-                mem.raw_start..mem.raw_end,
-                mem.context_start..mem.context_end,
-                event.seq..event.seq + 1,
-                mem.open_input_tokens,
-                mem.close_input_tokens,
-                mem.open_context_tokens,
-                mem.close_context_tokens,
-                mem.closed_source_suffix_tokens,
-                mem.closed_memory_context_tokens,
-                mem.open_context_source,
-                mem.memory_output_tokens,
-            );
+            let memory = replay_memory_ref(archive, mem, event.seq);
             crate::spine::lexer::plan_root_compact().lex_compact_token(
                 memory,
                 usize::try_from(*next_open_index).map_err(|_| {
@@ -115,6 +84,26 @@ pub(in crate::spine) fn event_to_token(
             "OpenContextBaseline is metadata and cannot be converted to a SpineToken".to_string(),
         )),
     }
+}
+
+fn replay_memory_ref(archive: &SpineArchive, mem: &MemRecord, event_seq: u64) -> MemoryRef {
+    memory_ref(
+        archive,
+        mem.compact_id.clone(),
+        mem.node.clone(),
+        mem.body_hash.clone(),
+        mem.raw_start..mem.raw_end,
+        mem.context_start..mem.context_end,
+        event_seq..event_seq + 1,
+        mem.open_input_tokens,
+        mem.close_input_tokens,
+        mem.open_context_tokens,
+        mem.close_context_tokens,
+        mem.closed_source_suffix_tokens,
+        mem.closed_memory_context_tokens,
+        mem.open_context_source,
+        mem.memory_output_tokens,
+    )
 }
 
 fn validate_replay_memory_raw_evidence(
