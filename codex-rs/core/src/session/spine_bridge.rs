@@ -209,7 +209,7 @@ impl Session {
         .await
         .map_err(SpineToolcallTurnError::Codex)?;
 
-        self.commit_toolcall_response_with_spine(
+        self.on_toolcall(
             turn_context,
             SpineToolCallEvidence::single(response_item),
             "commit Spine tool output",
@@ -225,7 +225,7 @@ impl Session {
         response_items: &[ResponseItem],
         operation: &'static str,
     ) -> Result<(), SpineToolcallTurnError> {
-        self.commit_toolcall_response_with_spine(
+        self.on_toolcall(
             turn_context,
             SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items),
             operation,
@@ -233,7 +233,7 @@ impl Session {
         .await
     }
 
-    async fn commit_toolcall_response_with_spine(
+    async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         evidence: SpineToolCallEvidence<'_>,
@@ -1101,7 +1101,7 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn on_toolcall(
+    pub(crate) async fn test_on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         evidence: SpineToolCallEvidence<'_>,

@@ -538,7 +538,7 @@ async fn test_on_toolcall_single(
     item: &ResponseItem,
 ) -> Result<SpineToolCommit, SpineError> {
     session
-        .on_toolcall(turn_context, SpineToolCallEvidence::single(item))
+        .test_on_toolcall(turn_context, SpineToolCallEvidence::single(item))
         .await
 }
 
@@ -11918,7 +11918,7 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
     let ordinary_output = function_output("grouped-durable-ordinary");
     let next_output = function_output("grouped-durable-overflow-next");
     let commit = session
-        .on_toolcall(
+        .test_on_toolcall(
             &turn_context,
             SpineToolCallEvidence::grouped(
                 "grouped-durable-overflow-next",
@@ -16739,7 +16739,7 @@ async fn grouped_toolcall_prevalidates_request_anchors_before_recording_outputs(
         .expect("record anchored request");
     let before_history = session.clone_history().await.raw_items().to_vec();
     let err = session
-        .on_toolcall(
+        .test_on_toolcall(
             &turn_context,
             SpineToolCallEvidence::grouped(
                 "anchored-call",
@@ -16786,7 +16786,7 @@ async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
         .expect("record anchored request");
     let before_history = session.clone_history().await.raw_items().to_vec();
     let err = session
-        .on_toolcall(
+        .test_on_toolcall(
             &turn_context,
             SpineToolCallEvidence::grouped(
                 "anchored-call",
@@ -16895,7 +16895,7 @@ async fn grouped_spine_open_after_close_uses_rollout_raw_evidence_for_projection
         .expect("stage sibling open");
 
     session
-        .on_toolcall(
+        .test_on_toolcall(
             &turn_context,
             SpineToolCallEvidence::grouped(
                 "open-sibling",
