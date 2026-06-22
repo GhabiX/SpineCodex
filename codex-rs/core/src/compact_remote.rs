@@ -228,10 +228,11 @@ async fn run_remote_compact_task_inner_impl(
             Err(err)
         })
         .await?;
+    let spine_root_compact_source = process_compacted_history_without_initial_context(new_history);
     new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
-        new_history,
+        spine_root_compact_source.clone(),
         initial_context_injection,
     )
     .await;
@@ -257,6 +258,7 @@ async fn run_remote_compact_task_inner_impl(
             new_history,
             reference_context_item,
             compacted_item,
+            Some(spine_root_compact_source),
         )
         .await?;
     let spine_tree_snapshot = replace_outcome.spine_tree_snapshot;
@@ -300,8 +302,15 @@ pub(crate) async fn process_compacted_history(
         Vec::new()
     };
 
-    compacted_history.retain(should_keep_compacted_history_item);
+    compacted_history = process_compacted_history_without_initial_context(compacted_history);
     insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
+}
+
+pub(crate) fn process_compacted_history_without_initial_context(
+    mut compacted_history: Vec<ResponseItem>,
+) -> Vec<ResponseItem> {
+    compacted_history.retain(should_keep_compacted_history_item);
+    compacted_history
 }
 
 #[cfg(test)]

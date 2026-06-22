@@ -29,6 +29,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context::is_contextual_user_fragment;
 use crate::context_manager::ContextAppend;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
@@ -1375,11 +1376,16 @@ impl Session {
         } else {
             None
         };
-        self.replace_history(
-            spine_history.unwrap_or(reconstructed_rollout.history),
-            reconstructed_rollout.reference_context_item,
-        )
-        .await;
+        let history = if let Some(spine_history) = spine_history {
+            Self::merge_fixed_context_with_spine_history(
+                reconstructed_rollout.history,
+                spine_history,
+            )
+        } else {
+            reconstructed_rollout.history
+        };
+        self.replace_history(history, reconstructed_rollout.reference_context_item)
+            .await;
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
         Ok(previous_turn_settings)
@@ -3068,9 +3074,18 @@ impl Session {
         mut items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         mut compacted_item: CompactedItem,
+        spine_root_compact_source: Option<Vec<ResponseItem>>,
     ) -> CodexResult<ReplaceCompactedHistoryOutcome> {
+        let fallback_spine_root_compact_source;
+        let spine_root_compact_source = match spine_root_compact_source.as_deref() {
+            Some(source) => source,
+            None => {
+                fallback_spine_root_compact_source = items.clone();
+                fallback_spine_root_compact_source.as_slice()
+            }
+        };
         let prepared_spine_root_compact = self
-            .on_compact(&mut items, &mut compacted_item)
+            .on_compact(spine_root_compact_source, &mut items, &mut compacted_item)
             .await?;
         let installed_spine_root_compact = prepared_spine_root_compact.is_some();
         let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
@@ -3092,11 +3107,17 @@ impl Session {
             .await;
         let spine_tree_snapshot =
             if let Some(prepared_spine_root_compact) = prepared_spine_root_compact {
-                let published_history_len = self.clone_history().await.raw_items().len();
+                let published_variable_history_len = self
+                    .clone_history()
+                    .await
+                    .raw_items()
+                    .iter()
+                    .filter(|item| !Self::is_spine_fixed_prefix_item(item))
+                    .count();
                 match self
                     .finalize_spine_root_compact_after_history_publish(
                         prepared_spine_root_compact,
-                        published_history_len,
+                        published_variable_history_len,
                     )
                     .await
                 {
@@ -3140,6 +3161,47 @@ impl Session {
             }],
             phase: None,
         }
+    }
+
+    fn is_spine_fixed_prefix_item(item: &ResponseItem) -> bool {
+        let ResponseItem::Message { role, content, .. } = item else {
+            return false;
+        };
+        match role.as_str() {
+            "developer" => true,
+            "user" => content.iter().any(is_contextual_user_fragment),
+            _ => false,
+        }
+    }
+
+    fn merge_fixed_context_with_spine_history(
+        reconstructed_history: Vec<ResponseItem>,
+        spine_history: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        let Some(first_variable) = reconstructed_history
+            .iter()
+            .position(|item| !Self::is_spine_fixed_prefix_item(item))
+        else {
+            let mut history = reconstructed_history;
+            history.extend(spine_history);
+            return history;
+        };
+        let last_variable = reconstructed_history
+            .iter()
+            .rposition(|item| !Self::is_spine_fixed_prefix_item(item))
+            .expect("first variable item exists");
+
+        let mut history = Vec::with_capacity(
+            first_variable
+                + spine_history.len()
+                + reconstructed_history
+                    .len()
+                    .saturating_sub(last_variable + 1),
+        );
+        history.extend(reconstructed_history[..first_variable].iter().cloned());
+        history.extend(spine_history);
+        history.extend(reconstructed_history[last_variable + 1..].iter().cloned());
+        history
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {

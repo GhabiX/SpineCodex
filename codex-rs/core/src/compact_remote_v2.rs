@@ -12,6 +12,7 @@ use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::native_compact_tools;
 use crate::compact_remote::process_compacted_history;
+use crate::compact_remote::process_compacted_history_without_initial_context;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -234,10 +235,12 @@ async fn run_remote_compact_task_inner_impl(
     );
     let (compaction_output, response_id) = compaction_output_result?;
     let compacted_history = build_v2_compacted_history(&prompt_input, compaction_output);
+    let spine_root_compact_source =
+        process_compacted_history_without_initial_context(compacted_history);
     let new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
-        compacted_history,
+        spine_root_compact_source.clone(),
         initial_context_injection,
     )
     .await;
@@ -260,6 +263,7 @@ async fn run_remote_compact_task_inner_impl(
             new_history,
             reference_context_item,
             compacted_item,
+            Some(spine_root_compact_source),
         )
         .await?;
     let spine_tree_snapshot = replace_outcome.spine_tree_snapshot;

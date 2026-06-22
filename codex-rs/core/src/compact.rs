@@ -265,7 +265,9 @@ async fn run_compact_task_inner_impl(
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
 
-    let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
+    let spine_root_compact_source =
+        build_compacted_history(Vec::new(), &user_messages, &summary_text);
+    let mut new_history = spine_root_compact_source.clone();
 
     if matches!(
         initial_context_injection,
@@ -289,6 +291,7 @@ async fn run_compact_task_inner_impl(
             new_history,
             reference_context_item,
             compacted_item,
+            Some(spine_root_compact_source),
         )
         .await
     {

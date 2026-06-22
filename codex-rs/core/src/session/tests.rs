@@ -325,6 +325,14 @@ fn message_text_contains(item: &ResponseItem, expected: &str) -> bool {
     )
 }
 
+fn variable_spine_items(items: &[ResponseItem]) -> Vec<ResponseItem> {
+    items
+        .iter()
+        .filter(|item| !Session::is_spine_fixed_prefix_item(item))
+        .cloned()
+        .collect()
+}
+
 fn clone_spine_sidecar_for_test(source_rollout: &Path, target_rollout: &Path, raw_live: &[bool]) {
     let boundary = SpineStore::clone_boundary_for_rollout(
         source_rollout,
@@ -13351,7 +13359,7 @@ async fn spine_native_compact_post_hook_ignores_stale_compacted_item_carrier() {
     session
         .replace_compacted_history(
             &turn_context,
-            replaced_context,
+            replaced_context.clone(),
             None,
             CompactedItem {
                 message: "stale compacted item carrier must not become Spine memory".to_string(),
@@ -13359,6 +13367,7 @@ async fn spine_native_compact_post_hook_ignores_stale_compacted_item_carrier() {
                     "stale compacted item replacement history must not become Spine memory",
                 )]),
             },
+            Some(replaced_context),
         )
         .await
         .expect("install root compact after native compact");
@@ -13477,9 +13486,13 @@ async fn spine_mid_turn_native_compact_appends_cwd_only_environment_context_suff
         })
         .expect("native compact should persist replacement_history");
 
-    assert_eq!(replacement_history.len(), 1);
-    let [ResponseItem::Message { content, .. }] = replacement_history.as_slice() else {
-        panic!("expected one root memory item, got {replacement_history:#?}");
+    let variable_replacement_history = variable_spine_items(replacement_history);
+    assert_eq!(
+        variable_replacement_history, materialized,
+        "mid-turn compact replacement_history variable context must equal h(PS)"
+    );
+    let [ResponseItem::Message { content, .. }] = variable_replacement_history.as_slice() else {
+        panic!("expected one variable root memory item, got {replacement_history:#?}");
     };
     let [ContentItem::InputText { text }] = content.as_slice() else {
         panic!("expected root memory text, got {content:#?}");
@@ -13499,17 +13512,21 @@ async fn spine_mid_turn_native_compact_appends_cwd_only_environment_context_suff
     assert!(text.contains("<spine_memory>"), "root memory text: {text}");
 
     let history_items = session.clone_history().await.raw_items().to_vec();
-    assert_eq!(history_items, materialized);
-    assert_eq!(history_items.len(), 2);
-    let cwd_context_text = match &history_items[1] {
-        ResponseItem::Message { role, content, .. } => {
+    assert_eq!(
+        variable_spine_items(&history_items),
+        materialized,
+        "mid-turn compact live variable context must equal h(PS)"
+    );
+    let cwd_context_text = match history_items.last() {
+        Some(ResponseItem::Message { role, content, .. }) => {
             assert_eq!(role, "user");
             match content.as_slice() {
                 [ContentItem::InputText { text }] => text.as_str(),
                 other => panic!("expected one cwd-only input text item, got {other:?}"),
             }
         }
-        other => panic!("expected cwd-only environment context message, got {other:?}"),
+        Some(other) => panic!("expected cwd-only environment context message, got {other:?}"),
+        None => panic!("expected live history to contain cwd-only environment context"),
     };
     #[allow(deprecated)]
     let cwd = turn_context.cwd.to_string_lossy();
@@ -14108,7 +14125,20 @@ async fn spine_root_compact_reduce_publishes_host_history_before_return() {
     }
     while rx.try_recv().is_ok() {}
 
-    let replacement = vec![assistant_message("root compact publish body")];
+    let fixed_developer = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "fixed developer instruction outside PS".to_string(),
+        }],
+        phase: None,
+    };
+    let fixed_agents = user_message(
+        "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nfixed agents outside PS\n</INSTRUCTIONS>",
+    );
+    let spine_source = vec![assistant_message("root compact publish body")];
+    let mut replacement = vec![fixed_developer.clone(), fixed_agents.clone()];
+    replacement.extend(spine_source.clone());
     let outcome = session
         .replace_compacted_history(
             &turn_context,
@@ -14118,6 +14148,7 @@ async fn spine_root_compact_reduce_publishes_host_history_before_return() {
                 message: "native compact carrier for publication contract".to_string(),
                 replacement_history: None,
             },
+            Some(spine_source),
         )
         .await
         .expect("root compact reduce should publish host history");
@@ -14158,10 +14189,21 @@ async fn spine_root_compact_reduce_publishes_host_history_before_return() {
     let materialized = runtime
         .materialize_history(&raw_items)
         .expect("materialize root compact h(PS)");
+    let host_history = session.clone_history().await.raw_items().to_vec();
     assert_eq!(
-        session.clone_history().await.raw_items(),
-        materialized.as_slice(),
-        "root compact reduce success must leave ContextManager.items equal to h(PS)"
+        host_history.first(),
+        Some(&fixed_developer),
+        "root compact reduce must retain developer fixed prefix outside h(PS)"
+    );
+    assert_eq!(
+        host_history.get(1),
+        Some(&fixed_agents),
+        "root compact reduce must retain AGENTS fixed prefix outside h(PS)"
+    );
+    assert_eq!(
+        variable_spine_items(&host_history),
+        materialized,
+        "root compact reduce success must leave variable ContextManager.items equal to h(PS)"
     );
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
         .await
@@ -14179,8 +14221,9 @@ async fn spine_root_compact_reduce_publishes_host_history_before_return() {
         })
         .expect("native compact boundary should persist replacement_history");
     assert_eq!(
-        rollout_replacement_history, &materialized,
-        "root compact reduce success must persist replacement_history equal to h(PS)"
+        variable_spine_items(rollout_replacement_history),
+        materialized,
+        "root compact reduce success must persist variable replacement_history equal to h(PS)"
     );
     assert_eq!(
         materialized.len(),
@@ -14192,6 +14235,132 @@ async fn spine_root_compact_reduce_publishes_host_history_before_return() {
             .iter()
             .any(|item| message_text_contains(item, "root compact publish body")),
         "root compact memory must contain the model-authored compact body"
+    );
+    assert!(
+        !materialized
+            .iter()
+            .any(|item| message_text_contains(item, "fixed developer instruction outside PS")),
+        "root compact memory must not archive fixed developer prefix"
+    );
+    assert!(
+        !materialized
+            .iter()
+            .any(|item| message_text_contains(item, "fixed agents outside PS")),
+        "root compact memory must not archive AGENTS fixed prefix"
+    );
+}
+
+#[tokio::test]
+async fn spine_root_compact_resume_preserves_fixed_prefix_outside_h_ps() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let source_rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("record initial history");
+
+    let fixed_developer = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "fixed resume developer instruction outside PS".to_string(),
+        }],
+        phase: None,
+    };
+    let fixed_agents = user_message(
+        "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nfixed resume agents outside PS\n</INSTRUCTIONS>",
+    );
+    let spine_source = vec![assistant_message("root compact resume body")];
+    let mut replacement = vec![fixed_developer.clone(), fixed_agents.clone()];
+    replacement.extend(spine_source.clone());
+
+    session
+        .replace_compacted_history(
+            &turn_context,
+            replacement,
+            None,
+            CompactedItem {
+                message: "native compact carrier for resume contract".to_string(),
+                replacement_history: None,
+            },
+            Some(spine_source),
+        )
+        .await
+        .expect("install source root compact");
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("flush source rollout");
+
+    let InitialHistory::Resumed(resumed) =
+        RolloutRecorder::get_rollout_history(&source_rollout_path)
+            .await
+            .expect("read source rollout")
+    else {
+        panic!("expected resumed source rollout history");
+    };
+    let rollout_items = resumed.history;
+    let raw_items = spine_raw_items_after_rollback(&rollout_items);
+    let runtime = SpineRuntime::load_for_rollout_items(&source_rollout_path, &raw_items, &[])
+        .expect("load source runtime")
+        .expect("source sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize source h(PS)");
+
+    let (mut resumed_session, _resumed_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    let resumed_rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut resumed_session).expect("resumed session should be unique"),
+    )
+    .await;
+    let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
+    clone_spine_sidecar_for_test(&source_rollout_path, &resumed_rollout_path, &raw_live);
+
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: Some(source_rollout_path),
+        }))
+        .await
+        .expect("resume root compact rollout");
+
+    let host_history = resumed_session.clone_history().await.raw_items().to_vec();
+    assert_eq!(
+        host_history.first(),
+        Some(&fixed_developer),
+        "resume must retain developer fixed prefix outside h(PS)"
+    );
+    assert_eq!(
+        host_history.get(1),
+        Some(&fixed_agents),
+        "resume must retain AGENTS fixed prefix outside h(PS)"
+    );
+    assert_eq!(
+        variable_spine_items(&host_history),
+        materialized,
+        "resume must restore only variable history from h(PS)"
     );
 }
 

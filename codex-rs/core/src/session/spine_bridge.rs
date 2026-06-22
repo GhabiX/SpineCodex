@@ -402,12 +402,14 @@ impl Session {
                         .to_string(),
                 ));
             };
+            let base_variable_replacement_history =
+                Self::variable_spine_items_for_root_compact(&base_boundary.replacement_history);
             store.validate_compact_checkpoint_for_boundary(
                 &rollout_path,
                 &raw_live,
                 raw_items,
                 base_boundary.raw_boundary,
-                &base_boundary.replacement_history,
+                &base_variable_replacement_history,
             )?;
             validate_live_root_compacts_have_rollout_boundary_proofs(
                 &prepared_runtime.live_root_compacts,
@@ -471,6 +473,16 @@ impl Session {
             .await
             .set_replayed(replay.raw_len, replay.runtime)?;
         Ok(replay.materialized)
+    }
+
+    pub(crate) fn variable_spine_items_for_root_compact(
+        items: &[ResponseItem],
+    ) -> Vec<ResponseItem> {
+        items
+            .iter()
+            .filter(|item| !Self::is_spine_fixed_prefix_item(item))
+            .cloned()
+            .collect()
     }
 
     pub(super) async fn observe_spine_raw_items(&self, count: usize) -> Result<(), SpineError> {
@@ -599,6 +611,9 @@ impl Session {
         let mut tool_items = Vec::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
+            if Self::is_spine_fixed_prefix_item(item) {
+                continue;
+            }
             if is_non_toolcall_msg(item) {
                 observed_user_message |= self
                     .on_non_toolcall_msg(raw_ordinal, append.context_index, item, &raw_items)
@@ -1331,11 +1346,12 @@ impl Session {
 
     pub(crate) async fn on_compact(
         &self,
+        spine_root_compact_source: &[ResponseItem],
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
     ) -> CodexResult<Option<SpineRootCompactPublish>> {
         let Some(materialized) = self
-            .prepare_spine_root_compact_from_native_history(items)
+            .prepare_spine_root_compact_from_native_history(spine_root_compact_source)
             .await
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
@@ -1345,14 +1361,20 @@ impl Session {
             return Ok(None);
         };
         let publish = SpineRootCompactPublish::new(materialized.len());
-        *items = materialized;
+        let fixed_prefix: Vec<ResponseItem> = items
+            .iter()
+            .filter(|item| Self::is_spine_fixed_prefix_item(item))
+            .cloned()
+            .collect();
+        *items = fixed_prefix;
+        items.extend(materialized);
         compacted_item.replacement_history = Some(items.clone());
         Ok(Some(publish))
     }
 
     async fn prepare_spine_root_compact_from_native_history(
         &self,
-        items: &[ResponseItem],
+        spine_root_compact_source: &[ResponseItem],
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
@@ -1379,7 +1401,7 @@ impl Session {
         let mut guard = spine_slot.lock().await;
         guard.prepare_native_root_compact_from_history_with_checkpoint(
             &rollout_path,
-            items,
+            spine_root_compact_source,
             &raw_items,
             close_provider_input_tokens,
         )
@@ -1480,7 +1502,7 @@ fn prove_live_root_compact_with_rollout_boundary(
             raw_live,
             raw_items,
             boundary.raw_boundary,
-            &boundary.replacement_history,
+            &Session::variable_spine_items_for_root_compact(&boundary.replacement_history),
         )?;
         if checkpoint_token_seq.checked_sub(1) == Some(compact.token_seq) {
             return Ok(Some(()));
