@@ -88,10 +88,8 @@ pub(in crate::spine::store::clone_sidecar) fn select_cloned_events(
         if event.seq >= boundary.structural_seq_limit {
             continue;
         }
-        if marker_proved_event_seqs.contains(&event.seq) {
-            cloned_events.push(event);
-        } else if !all_marker_structural_event_seqs.contains(&event.seq)
-            && event.allowed_by(mask)?
+        if marker_proved_event_seqs.contains(&event.seq)
+            || (!all_marker_structural_event_seqs.contains(&event.seq) && event.allowed_by(mask)?)
         {
             cloned_events.push(event);
         }
