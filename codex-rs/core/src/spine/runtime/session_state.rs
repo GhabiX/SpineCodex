@@ -1338,6 +1338,18 @@ impl SpineSessionState {
         self.apply_root_compact_after_history_publish(prepared, published_history_len)
     }
 
+    pub(crate) fn take_pending_root_compact_host_effects_after_history_publish(
+        &mut self,
+        published_history_len: usize,
+    ) -> Result<SpineHostEffects, SpineError> {
+        let snapshot =
+            self.take_pending_root_compact_after_history_publish(published_history_len)?;
+        Ok(SpineHostEffects::tree_update(
+            snapshot,
+            SpineTreeUpdateDelivery::Immediate,
+        ))
+    }
+
     pub(crate) fn prepare_single_toolcall_output_recording(
         &self,
         call_id: &str,

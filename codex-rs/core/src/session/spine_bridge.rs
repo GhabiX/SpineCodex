@@ -1587,7 +1587,7 @@ impl Session {
         &self,
         prepared: SpineRootCompactPublish,
         published_history_len: usize,
-    ) -> CodexResult<SpineTreeUpdateEvent> {
+    ) -> CodexResult<SpineHostEffects> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Err(CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
@@ -1605,11 +1605,32 @@ impl Session {
             });
         }
         guard
-            .take_pending_root_compact_after_history_publish(published_history_len)
+            .take_pending_root_compact_host_effects_after_history_publish(published_history_len)
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),
             })
+    }
+
+    pub(crate) fn root_compact_tree_snapshot_from_host_effects(
+        effects: SpineHostEffects,
+    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
+        let (immediate, deferred) = effects.into_tree_host_updates().into_parts();
+        if !deferred.is_empty() {
+            return Err(CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: "root compact hook cannot defer tree update delivery".to_string(),
+            });
+        }
+        let mut snapshots = immediate.into_iter();
+        let snapshot = snapshots.next();
+        if snapshots.next().is_some() {
+            return Err(CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: "root compact hook returned multiple tree updates".to_string(),
+            });
+        }
+        Ok(snapshot)
     }
 }
 
