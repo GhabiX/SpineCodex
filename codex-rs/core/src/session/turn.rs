@@ -48,6 +48,7 @@ use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
+use crate::spine::SpineToolCallEvidence;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -2103,9 +2104,13 @@ async fn drain_in_flight(
                 let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
                 let spine_trim_enabled = sess.features.enabled(Feature::SpineTrim);
                 if spine_jit_enabled {
-                    sess.record_single_toolcall_response_with_spine(&turn_context, &response_item)
-                        .await
-                        .map_err(|err| map_spine_toolcall_turn_error(err))?;
+                    sess.record_toolcall_response_with_spine(
+                        &turn_context,
+                        SpineToolCallEvidence::single(&response_item),
+                        "commit Spine tool output",
+                    )
+                    .await
+                    .map_err(|err| map_spine_toolcall_turn_error(err))?;
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
@@ -2196,11 +2201,9 @@ async fn drain_deferred_spine_tool_group(
             }
         }
     }
-    sess.commit_grouped_toolcall_response_with_spine(
+    sess.record_toolcall_response_with_spine(
         &turn_context,
-        &commit_call_id,
-        &tool_call_ids,
-        &response_items,
+        SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
         "commit grouped Spine toolcall",
     )
     .await
@@ -2287,11 +2290,14 @@ async fn drain_conflicting_spine_control_tool_group(
         response_items.push(item);
     }
 
-    sess.record_conflicting_spine_control_group_with_spine(
+    sess.record_toolcall_response_with_spine(
         &turn_context,
-        &commit_call_id,
-        &tool_call_ids,
-        &response_items,
+        SpineToolCallEvidence::grouped_as_ordinary(
+            &commit_call_id,
+            &tool_call_ids,
+            &response_items,
+        ),
+        "commit conflicting Spine toolcall",
     )
     .await
     .map_err(|err| map_spine_toolcall_turn_error(err))?;

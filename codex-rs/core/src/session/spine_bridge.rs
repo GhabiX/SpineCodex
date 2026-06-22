@@ -198,65 +198,36 @@ impl Session {
             .await;
     }
 
-    pub(crate) async fn record_single_toolcall_response_with_spine(
+    pub(crate) async fn record_toolcall_response_with_spine(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        response_item: &ResponseItem,
-    ) -> Result<(), SpineToolcallTurnError> {
-        self.record_conversation_items_without_spine_observe(
-            turn_context,
-            std::slice::from_ref(response_item),
-        )
-        .await
-        .map_err(SpineToolcallTurnError::Codex)?;
-
-        self.on_toolcall(turn_context, SpineToolCallEvidence::single(response_item))
-            .await
-            .map_err(|err| SpineToolcallTurnError::Terminal {
-                operation: "commit Spine tool output",
-                reason: err.to_string(),
-            })
-    }
-
-    pub(crate) async fn commit_grouped_toolcall_response_with_spine(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        commit_call_id: &str,
-        tool_call_ids: &[String],
-        response_items: &[ResponseItem],
+        evidence: SpineToolCallEvidence<'_>,
         operation: &'static str,
     ) -> Result<(), SpineToolcallTurnError> {
-        self.on_toolcall(
-            turn_context,
-            SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items),
-        )
-        .await
-        .map_err(|err| SpineToolcallTurnError::Terminal {
-            operation,
-            reason: err.to_string(),
-        })
-    }
-
-    pub(crate) async fn record_conflicting_spine_control_group_with_spine(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        commit_call_id: &str,
-        tool_call_ids: &[String],
-        response_items: &[ResponseItem],
-    ) -> Result<(), SpineToolcallTurnError> {
-        self.on_toolcall(
-            turn_context,
-            SpineToolCallEvidence::grouped_as_ordinary(
-                commit_call_id,
-                tool_call_ids,
-                response_items,
-            ),
-        )
-        .await
-        .map_err(|err| SpineToolcallTurnError::Terminal {
-            operation: "commit conflicting Spine toolcall",
-            reason: err.to_string(),
-        })
+        let output =
+            evidence
+                .completed_output()
+                .map_err(|err| SpineToolcallTurnError::Terminal {
+                    operation,
+                    reason: err.to_string(),
+                })?;
+        if let Some(output) = output.as_ref()
+            && let Some(item) = output.single_output_item()
+        {
+            self.record_conversation_items_without_spine_observe(
+                turn_context,
+                std::slice::from_ref(item),
+            )
+            .await
+            .map_err(SpineToolcallTurnError::Codex)?;
+        }
+        drop(output);
+        self.on_toolcall(turn_context, evidence)
+            .await
+            .map_err(|err| SpineToolcallTurnError::Terminal {
+                operation,
+                reason: err.to_string(),
+            })
     }
 
     async fn on_toolcall(

@@ -208,6 +208,14 @@ impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
         self.call_id
     }
 
+    pub(crate) fn single_output_item(&self) -> Option<&'a ResponseItem> {
+        matches!(
+            self.recording,
+            SpineToolCallOutputHostRecording::MaybePreRecordSingle
+        )
+        .then_some(self.commit_output_item)
+    }
+
     pub(crate) fn commit_output_item(&self) -> &'a ResponseItem {
         self.commit_output_item
     }
