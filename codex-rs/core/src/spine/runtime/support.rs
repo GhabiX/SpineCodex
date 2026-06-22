@@ -71,15 +71,9 @@ pub(super) fn raw_item_requires_spine_coverage(
             namespace: Some(namespace),
             name,
             ..
-        } if namespace == SPINE_NAMESPACE && is_spine_parser_control_tool_name(name) => {
-            completed_tool_call_ids.contains(call_id)
-        }
-        ResponseItem::FunctionCall {
-            call_id,
-            namespace: Some(namespace),
-            name,
-            ..
-        } if namespace == SPINE_NAMESPACE && name == SPINE_TOOL_TREE => {
+        } if namespace == SPINE_NAMESPACE
+            && (is_spine_parser_control_tool_name(name) || name == SPINE_TOOL_TREE) =>
+        {
             completed_tool_call_ids.contains(call_id)
         }
         ResponseItem::Other | ResponseItem::CompactionTrigger => false,
