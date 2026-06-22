@@ -1,15 +1,13 @@
 use super::*;
-use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
-use codex_protocol::spine_tree::SpineTreeUpdateEvent;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-
 #[path = "workflow_lifecycle_fixtures.rs"]
 mod workflow_lifecycle_fixtures;
 pub(super) use workflow_lifecycle_fixtures::*;
 #[path = "workflow_close_source_fixtures.rs"]
 mod workflow_close_source_fixtures;
 pub(super) use workflow_close_source_fixtures::*;
+#[path = "workflow_tree_fixtures.rs"]
+mod workflow_tree_fixtures;
+pub(super) use workflow_tree_fixtures::*;
 
 pub(super) fn memory_assembly_with_context_range(
     node_id: &str,
@@ -83,30 +81,4 @@ pub(super) fn observe_item_at_context_index(
         .observe_context_item(raw_ordinal, context_index, &item)
         .expect("observe context item");
     (item, raw_ordinal, context_index)
-}
-
-pub(super) fn snapshot_nodes_by_id(
-    snapshot: &SpineTreeUpdateEvent,
-) -> BTreeMap<&str, &SpineTreeNodeSnapshot> {
-    snapshot
-        .nodes
-        .iter()
-        .map(|node| (node.node_id.as_str(), node))
-        .collect()
-}
-
-pub(super) fn assert_snapshot_is_self_contained_forest(snapshot: &SpineTreeUpdateEvent) {
-    let ids = snapshot
-        .nodes
-        .iter()
-        .map(|node| node.node_id.as_str())
-        .collect::<BTreeSet<_>>();
-    for node in &snapshot.nodes {
-        if let Some(parent_id) = node.parent_id.as_deref() {
-            assert!(
-                ids.contains(parent_id),
-                "dangling parent {parent_id} in {snapshot:?}"
-            );
-        }
-    }
 }
