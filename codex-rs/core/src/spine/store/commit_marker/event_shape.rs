@@ -13,33 +13,23 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
 ) -> Result<(), SpineError> {
     let shape = commit_marker_event_shape(marker.kind);
     validate_commit_marker_width(marker, shape.width())?;
-    match shape {
-        CommitMarkerEventShape::Close => {
-            let (node, boundary) = close_event_at_marker_start(marker, events_by_seq)?;
-            validate_close_marker_fields(marker, node, *boundary)?;
-            validate_required_trailing_toolcall(
-                marker,
-                events_by_seq,
-                marker_shape_seq(marker, shape.trailing_toolcall_offset())?,
-            )?;
-            Ok(())
-        }
-        CommitMarkerEventShape::CloseThenOpen => {
-            validate_close_prefix(marker, events_by_seq)?;
-            validate_required_synthetic_open(
-                marker,
-                events_by_seq,
-                marker_shape_seq(marker, shape.synthetic_open_offset())?,
-            )?;
-            validate_required_trailing_toolcall(
-                marker,
-                events_by_seq,
-                marker_shape_seq(marker, shape.trailing_toolcall_offset())?,
-            )?;
-            Ok(())
-        }
-        CommitMarkerEventShape::RootCompact => validate_root_compact_shape(marker, events_by_seq),
+    if shape.requires_close_prefix() {
+        validate_close_prefix(marker, events_by_seq)?;
     }
+    if let Some(offset) = shape.synthetic_open_offset() {
+        validate_required_synthetic_open(marker, events_by_seq, marker_shape_seq(marker, offset)?)?;
+    }
+    if let Some(offset) = shape.trailing_toolcall_offset() {
+        validate_required_trailing_toolcall(
+            marker,
+            events_by_seq,
+            marker_shape_seq(marker, offset)?,
+        )?;
+    }
+    if shape.requires_root_compact() {
+        validate_root_compact_shape(marker, events_by_seq)?;
+    }
+    Ok(())
 }
 
 fn validate_close_prefix(
@@ -132,19 +122,27 @@ impl CommitMarkerEventShape {
         }
     }
 
-    fn synthetic_open_offset(self) -> u64 {
+    fn requires_close_prefix(self) -> bool {
+        matches!(self, Self::Close | Self::CloseThenOpen)
+    }
+
+    fn synthetic_open_offset(self) -> Option<u64> {
         match self {
-            Self::CloseThenOpen => 1,
-            Self::Close | Self::RootCompact => 0,
+            Self::CloseThenOpen => Some(1),
+            Self::Close | Self::RootCompact => None,
         }
     }
 
-    fn trailing_toolcall_offset(self) -> u64 {
+    fn trailing_toolcall_offset(self) -> Option<u64> {
         match self {
-            Self::Close => 1,
-            Self::CloseThenOpen => 2,
-            Self::RootCompact => 0,
+            Self::Close => Some(1),
+            Self::CloseThenOpen => Some(2),
+            Self::RootCompact => None,
         }
+    }
+
+    fn requires_root_compact(self) -> bool {
+        matches!(self, Self::RootCompact)
     }
 }
 
