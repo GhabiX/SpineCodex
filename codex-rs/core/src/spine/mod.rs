@@ -58,6 +58,7 @@ pub(crate) use runtime::is_real_user_message;
 #[cfg(test)]
 pub(crate) use runtime::is_spine_close_like_tool_name;
 pub(crate) use runtime::is_user_message;
+pub(crate) use runtime::spine_root_compact_body;
 pub use store::SpineCloneBoundary;
 pub(crate) use store::SpineStore;
 pub(crate) use user_message_projection::user_message_memory_body;
