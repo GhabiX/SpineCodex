@@ -13,10 +13,10 @@ use super::support::user_anchor_refs_in_memory;
 use super::support::validate_model_node_memory;
 use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::ParsedControlToolIntent;
+use crate::spine::lexer::ToolCallLexSegment;
 use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::model::ToolCallSegmentKind;
 use codex_protocol::models::ResponseItem;
 
 #[derive(Clone, Debug)]
@@ -110,12 +110,7 @@ pub(crate) struct CompletedToolCall {
     pub(crate) segments: Vec<CompletedToolCallSegment>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct CompletedToolCallSegment {
-    pub(crate) kind: ToolCallSegmentKind,
-    pub(crate) raw_ordinal: u64,
-    pub(crate) context_index: usize,
-}
+pub(crate) type CompletedToolCallSegment = ToolCallLexSegment;
 
 impl SpineRuntime {
     #[cfg(test)]

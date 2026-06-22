@@ -549,10 +549,10 @@ pub(in crate::spine) fn lex_root_compact_token(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(in crate::spine) struct ToolCallLexSegment {
-    pub(in crate::spine) kind: ToolCallSegmentKind,
-    pub(in crate::spine) raw_ordinal: u64,
-    pub(in crate::spine) context_index: usize,
+pub(crate) struct ToolCallLexSegment {
+    pub(crate) kind: ToolCallSegmentKind,
+    pub(crate) raw_ordinal: u64,
+    pub(crate) context_index: usize,
 }
 
 pub(in crate::spine) fn lex_toolcall(
