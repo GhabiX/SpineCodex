@@ -13,6 +13,7 @@ use super::support::mark_raw_prefix_covered;
 use super::support::raw_item_requires_spine_coverage;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
+use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 
@@ -42,33 +43,7 @@ impl SpineRuntime {
             if !event.allowed_by(RawMask::new(&self.raw_live))? {
                 continue;
             }
-            match &event.event {
-                SpineLedgerEvent::Msg { raw_ordinal, .. } => {
-                    mark_raw_covered(&mut covered, *raw_ordinal)?;
-                }
-                SpineLedgerEvent::ToolCall { segments } => {
-                    for segment in segments {
-                        mark_raw_covered(&mut covered, segment.raw_ordinal)?;
-                    }
-                }
-                SpineLedgerEvent::Open {
-                    child,
-                    boundary,
-                    summary,
-                    ..
-                } => {
-                    if !(summary == "root"
-                        && child.parent().is_some_and(|parent| parent.is_root_epoch()))
-                    {
-                        mark_raw_covered(&mut covered, *boundary)?;
-                    }
-                }
-                SpineLedgerEvent::Close { boundary, .. }
-                | SpineLedgerEvent::RootCompact { boundary, .. } => {
-                    mark_raw_prefix_covered(&mut covered, *boundary)?;
-                }
-                SpineLedgerEvent::Init { .. } | SpineLedgerEvent::OpenContextBaseline { .. } => {}
-            }
+            mark_raw_covered_by_event(&mut covered, event)?;
         }
         for (index, item) in raw_items.iter().enumerate() {
             if item.as_ref().is_some_and(|item| {
@@ -108,6 +83,38 @@ impl SpineRuntime {
         }
         Ok(compacts)
     }
+}
+
+fn mark_raw_covered_by_event(
+    covered: &mut [bool],
+    event: &LoggedSpineLedgerEvent,
+) -> Result<(), SpineError> {
+    match &event.event {
+        SpineLedgerEvent::Msg { raw_ordinal, .. } => {
+            mark_raw_covered(covered, *raw_ordinal)?;
+        }
+        SpineLedgerEvent::ToolCall { segments } => {
+            for segment in segments {
+                mark_raw_covered(covered, segment.raw_ordinal)?;
+            }
+        }
+        SpineLedgerEvent::Open {
+            child,
+            boundary,
+            summary,
+            ..
+        } => {
+            if !(summary == "root" && child.parent().is_some_and(|parent| parent.is_root_epoch())) {
+                mark_raw_covered(covered, *boundary)?;
+            }
+        }
+        SpineLedgerEvent::Close { boundary, .. }
+        | SpineLedgerEvent::RootCompact { boundary, .. } => {
+            mark_raw_prefix_covered(covered, *boundary)?;
+        }
+        SpineLedgerEvent::Init { .. } | SpineLedgerEvent::OpenContextBaseline { .. } => {}
+    }
+    Ok(())
 }
 
 fn collect_raw_tool_call_ids(raw_items: &[Option<ResponseItem>]) -> RawToolCallIds {
