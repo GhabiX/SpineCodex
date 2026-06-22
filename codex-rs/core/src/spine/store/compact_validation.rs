@@ -77,13 +77,10 @@ fn unique_compact_checkpoint_for_boundary(
             "ambiguous spine compact checkpoint token_seq for raw boundary {raw_boundary}"
         )));
     }
-    if checkpoints.len() != 1 {
-        return Err(SpineError::InvalidStore(format!(
+    match checkpoints.as_slice() {
+        [checkpoint] => Ok(checkpoint.clone()),
+        _ => Err(SpineError::InvalidStore(format!(
             "ambiguous spine compact checkpoint proof for raw boundary {raw_boundary}"
-        )));
+        ))),
     }
-    Ok(checkpoints
-        .into_iter()
-        .next()
-        .expect("checkpoint length checked above"))
 }
