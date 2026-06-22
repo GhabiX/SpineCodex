@@ -232,27 +232,12 @@ impl SelectedCloneRecords {
 impl SourceCloneRecords {
     fn read(source: &SpineStore) -> Result<Self, SpineError> {
         let clone_jit_records = source.tree_path().exists();
-        let events = if clone_jit_records {
-            source.events()?
-        } else {
-            Vec::new()
-        };
+        let events = read_jit_records(clone_jit_records, || source.events())?;
         let mems = source.mems()?;
-        let checkpoints = if clone_jit_records {
-            source.checkpoints()?
-        } else {
-            Vec::new()
-        };
-        let compact_checkpoints = if clone_jit_records {
-            source.compact_checkpoints()?
-        } else {
-            Vec::new()
-        };
-        let commit_markers = if clone_jit_records {
-            source.commit_markers()?
-        } else {
-            Vec::new()
-        };
+        let checkpoints = read_jit_records(clone_jit_records, || source.checkpoints())?;
+        let compact_checkpoints =
+            read_jit_records(clone_jit_records, || source.compact_checkpoints())?;
+        let commit_markers = read_jit_records(clone_jit_records, || source.commit_markers())?;
         let trim_events = source.trim_events()?;
         Ok(Self {
             events,
@@ -262,5 +247,16 @@ impl SourceCloneRecords {
             commit_markers,
             trim_events,
         })
+    }
+}
+
+fn read_jit_records<T>(
+    clone_jit_records: bool,
+    read: impl FnOnce() -> Result<Vec<T>, SpineError>,
+) -> Result<Vec<T>, SpineError> {
+    if clone_jit_records {
+        read()
+    } else {
+        Ok(Vec::new())
     }
 }
