@@ -261,9 +261,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        guard.ensure_runtime(&rollout_path)?;
-        guard.checkpoint_initial_if_jit(&rollout_path, &[])?;
-        Ok(())
+        guard.on_init(&rollout_path)
     }
 
     pub(super) async fn spine_tools_visible(&self) -> bool {
