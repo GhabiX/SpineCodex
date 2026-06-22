@@ -28,7 +28,6 @@ use crate::spine::archive::flush_archive_writes;
 use crate::spine::archive::memory_ref;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
-use crate::spine::model::SpineLedgerEvent;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::parse_stack::ParseStack;
@@ -546,15 +545,16 @@ impl SpineRuntime {
                 let open_index_u64 = u64::try_from(open_index).map_err(|_| {
                     SpineError::InvalidEvent("spine.next synthetic open index overflow".to_string())
                 })?;
-                let event = SpineLedgerEvent::Open {
-                    child: child.clone(),
-                    boundary: self.raw_len,
-                    index: open_index_u64,
-                    summary: summary.clone(),
-                    open_input_tokens: None,
-                    open_context_tokens: None,
-                    open_context_source: None,
-                };
+                let (event, _token) = crate::spine::lexer::lex_open_event_token(
+                    &self.archive(),
+                    child.clone(),
+                    self.raw_len,
+                    open_index_u64,
+                    summary.clone(),
+                    None,
+                    None,
+                    None,
+                )?;
                 Ok(CloseFamilyPlan {
                     operation: "spine.next",
                     missing_toolcall_error: "spine.next commit requires completed toolcall evidence",
