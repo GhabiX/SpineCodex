@@ -338,12 +338,6 @@ enum SpineToolcallCommitFailureAction {
     NoSpineCommit,
 }
 
-pub(crate) struct SpineToolcallCommitHostAction {
-    failure_action: SpineToolcallCommitFailureAction,
-    reason: &'static str,
-    error: SpineError,
-}
-
 struct SpineToolcallCommitLoopDecision {
     kind: SpineToolcallCommitLoopDecisionKind,
 }
@@ -352,14 +346,25 @@ pub(crate) enum SpineToolcallCommitLoopAction {
     Done(SpineCommitOutput),
     Retry,
     NoSpineCommit,
-    HostAction(SpineToolcallCommitHostAction),
+    HostAction(SpineToolcallCommitTerminalHostAction),
+}
+
+pub(crate) enum SpineToolcallCommitTerminalHostAction {
+    FailClosed {
+        reason: &'static str,
+        error: SpineError,
+    },
+    AbortPending {
+        reason: &'static str,
+        error: SpineError,
+    },
 }
 
 enum SpineToolcallCommitLoopDecisionKind {
     Done(SpineCommitOutput),
     Retry,
     NoSpineCommit,
-    HostAction(SpineToolcallCommitHostAction),
+    HostAction(SpineToolcallCommitTerminalHostAction),
 }
 
 impl SpineToolcallCommitPreparation {
@@ -466,15 +471,16 @@ impl SpineToolcallCommitHostPlan {
         call_id: &str,
     ) -> Result<SpineToolcallCommitLoopDecision, SpineError> {
         match self.commit_missing_action {
-            SpineToolcallCommitFailureAction::FailClosed => Ok(
-                SpineToolcallCommitLoopDecision::host_action(SpineToolcallCommitHostAction::new(
-                    SpineToolcallCommitFailureAction::FailClosed,
-                    SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON,
-                    SpineError::Invariant(format!(
-                        "{SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON} for call_id={call_id}"
-                    )),
-                )),
-            ),
+            SpineToolcallCommitFailureAction::FailClosed => {
+                Ok(SpineToolcallCommitLoopDecision::host_action(
+                    SpineToolcallCommitTerminalHostAction::fail_closed(
+                        SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON,
+                        SpineError::Invariant(format!(
+                            "{SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON} for call_id={call_id}"
+                        )),
+                    ),
+                ))
+            }
             SpineToolcallCommitFailureAction::NoSpineCommit => {
                 Ok(SpineToolcallCommitLoopDecision::no_spine_commit())
             }
@@ -494,13 +500,15 @@ impl SpineToolcallCommitHostPlan {
         }
         match self.retry_limit_action {
             action @ (SpineToolcallCommitFailureAction::FailClosed
-            | SpineToolcallCommitFailureAction::AbortPending) => Ok(
-                SpineToolcallCommitLoopDecision::host_action(SpineToolcallCommitHostAction::new(
-                    action,
-                    SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
-                    self.retry_limit_error(call_id),
-                )),
-            ),
+            | SpineToolcallCommitFailureAction::AbortPending) => {
+                Ok(SpineToolcallCommitLoopDecision::host_action(
+                    SpineToolcallCommitTerminalHostAction::from_failure_action(
+                        action,
+                        SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
+                        self.retry_limit_error(call_id),
+                    ),
+                ))
+            }
             SpineToolcallCommitFailureAction::NoSpineCommit => Err(SpineError::Invariant(format!(
                 "unsupported Spine retry-limit action for call_id={call_id}"
             ))),
@@ -534,7 +542,7 @@ impl SpineToolcallCommitLoopDecision {
         }
     }
 
-    fn host_action(host_action: SpineToolcallCommitHostAction) -> Self {
+    fn host_action(host_action: SpineToolcallCommitTerminalHostAction) -> Self {
         Self {
             kind: SpineToolcallCommitLoopDecisionKind::HostAction(host_action),
         }
@@ -556,30 +564,27 @@ impl SpineToolcallCommitLoopDecision {
     }
 }
 
-impl SpineToolcallCommitHostAction {
-    fn new(
-        failure_action: SpineToolcallCommitFailureAction,
+impl SpineToolcallCommitTerminalHostAction {
+    fn from_failure_action(
+        action: SpineToolcallCommitFailureAction,
         reason: &'static str,
         error: SpineError,
     ) -> Self {
-        Self {
-            failure_action,
-            reason,
-            error,
+        match action {
+            SpineToolcallCommitFailureAction::FailClosed => Self::fail_closed(reason, error),
+            SpineToolcallCommitFailureAction::AbortPending => Self::abort_pending(reason, error),
+            SpineToolcallCommitFailureAction::NoSpineCommit => {
+                unreachable!("no-commit is not a terminal host action")
+            }
         }
     }
 
-    pub(crate) fn fail_closed_reason(&self) -> Option<&'static str> {
-        (self.failure_action == SpineToolcallCommitFailureAction::FailClosed).then_some(self.reason)
+    fn fail_closed(reason: &'static str, error: SpineError) -> Self {
+        Self::FailClosed { reason, error }
     }
 
-    pub(crate) fn abort_pending_reason(&self) -> Option<&'static str> {
-        (self.failure_action == SpineToolcallCommitFailureAction::AbortPending)
-            .then_some(self.reason)
-    }
-
-    pub(crate) fn into_error(self) -> SpineError {
-        self.error
+    fn abort_pending(reason: &'static str, error: SpineError) -> Self {
+        Self::AbortPending { reason, error }
     }
 }
 struct SpineToolcallCommitInput<'a> {
