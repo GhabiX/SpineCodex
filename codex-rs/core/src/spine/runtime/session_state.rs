@@ -325,6 +325,12 @@ pub(crate) struct SpineToolcallCommitHostPlan {
     lock_retry_limit: usize,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct SpineToolcallCommitProviderInputTokens {
+    pre_compact: Option<i64>,
+    current_turn: Option<i64>,
+}
+
 const SPINE_TOOLCALL_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
 const SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON: &str =
     "spine runtime missing during completed toolcall commit";
@@ -424,13 +430,19 @@ impl SpineToolcallCommitPreparation {
 }
 
 impl SpineToolcallCommitHostPlan {
-    pub(crate) fn pre_compact_provider_input_tokens(&self) -> Option<i64> {
-        self.pre_compact_provider_input_tokens
-    }
-
     #[cfg(test)]
     pub(crate) fn output_recording(&self) -> SpineToolOutputRecording {
         self.output_recording
+    }
+
+    pub(crate) fn provider_input_tokens(
+        &self,
+        current_turn_provider_input_tokens: Option<i64>,
+    ) -> SpineToolcallCommitProviderInputTokens {
+        SpineToolcallCommitProviderInputTokens {
+            pre_compact: self.pre_compact_provider_input_tokens,
+            current_turn: current_turn_provider_input_tokens,
+        }
     }
 
     fn interpret_attempt(
@@ -517,6 +529,16 @@ impl SpineToolcallCommitHostPlan {
             "spine tool output commit could not acquire session locks after {} retries for call_id={call_id}",
             self.lock_retry_limit
         ))
+    }
+}
+
+impl SpineToolcallCommitProviderInputTokens {
+    pub(crate) fn pre_compact(&self) -> Option<i64> {
+        self.pre_compact
+    }
+
+    pub(crate) fn current_turn(&self) -> Option<i64> {
+        self.current_turn
     }
 }
 

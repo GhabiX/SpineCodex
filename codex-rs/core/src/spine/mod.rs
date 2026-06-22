@@ -55,6 +55,7 @@ pub(crate) use runtime::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineToolcallCommitEvidence;
+pub(crate) use runtime::SpineToolcallCommitProviderInputTokens;
 pub(crate) use runtime::SpineTrimOutcome;
 pub(crate) use runtime::is_non_toolcall_msg;
 pub(crate) use runtime::is_real_user_message;
