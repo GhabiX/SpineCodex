@@ -47,11 +47,7 @@ pub(in crate::spine::store::clone_sidecar) fn clone_boundary_for_checkpoint(
         structural_seq_limit,
         pressure_seq_watermark: checkpoint.pressure_seq_watermark,
         trim_seq_watermark: checkpoint.trim_seq_watermark,
-        trim_toolcall_seq_limit: if source.tree_path().exists() {
-            structural_seq_limit
-        } else {
-            trim_toolcall_seq_limit(&source, checkpoint.trim_seq_watermark)?
-        },
+        trim_toolcall_seq_limit: structural_seq_limit,
     }))
 }
 
