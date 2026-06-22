@@ -3,11 +3,9 @@ use std::collections::BTreeSet;
 
 use super::CompletedToolCall;
 use super::CompletedToolCallSegment;
-use super::SPINE_NAMESPACE;
 use super::SPINE_TOOL_CLOSE;
 use super::SPINE_TOOL_NEXT;
 use super::SPINE_TOOL_OPEN;
-use super::SPINE_TOOL_TREE;
 use super::SpineCompactSourceEntryKind;
 use super::SpineCompactSourcePlanEntry;
 use super::SpineError;
@@ -56,16 +54,6 @@ pub(super) fn raw_item_requires_spine_coverage(
     completed_tool_call_ids: &BTreeSet<String>,
 ) -> bool {
     match item {
-        ResponseItem::FunctionCall {
-            call_id,
-            namespace: Some(namespace),
-            name,
-            ..
-        } if namespace == SPINE_NAMESPACE
-            && (is_spine_parser_control_tool_name(name) || name == SPINE_TOOL_TREE) =>
-        {
-            completed_tool_call_ids.contains(call_id)
-        }
         ResponseItem::Other | ResponseItem::CompactionTrigger => false,
         item => {
             if let Some(call_id) = tool_response_call_id(item) {
