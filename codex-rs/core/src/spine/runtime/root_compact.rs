@@ -19,7 +19,6 @@ use crate::spine::io::sha1_hex;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::model::SpineToken;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::PreparedRootEpochReduction;
 use crate::spine::render::render_parse_stack_to_context_with_memory_body_and_trim_projection;
@@ -466,15 +465,13 @@ impl SpineRuntime {
                 // Probe first because source_context_range records the pre-compact source
                 // span, while next_open_index is the post-compact h(PS) materialized len.
                 let mut probe_parse_stack = self.parse_stack.clone();
-                probe_parse_stack.shift(
-                    SpineToken::Compact {
-                        memory: memory.clone(),
-                        next_open_index: 0,
-                        next_open_input_tokens: token_metadata.next_open_input_tokens,
-                        next_open_context_tokens: token_metadata.next_open_context_tokens,
-                    },
-                    &self.archive(),
+                let token = crate::spine::lexer::lex_root_compact_token(
+                    memory.clone(),
+                    0,
+                    token_metadata.next_open_input_tokens,
+                    token_metadata.next_open_context_tokens,
                 )?;
+                probe_parse_stack.shift(token, &self.archive())?;
                 render_parse_stack_to_context_with_memory_body_and_trim_projection(
                     &probe_parse_stack,
                     raw_items,
@@ -514,8 +511,6 @@ impl SpineRuntime {
                 materialized.len()
             )));
         }
-        let next_open_index_u64 = u64::try_from(next_open_index_usize)
-            .map_err(|_| SpineError::InvalidEvent("root open index overflow".to_string()))?;
         let token_seq_after = seq.checked_add(1).ok_or_else(|| {
             SpineError::InvalidEvent("root compact token seq overflow".to_string())
         })?;
@@ -538,15 +533,15 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let root_compact_event = SpineLedgerEvent::RootCompact {
+        let (root_compact_event, _token) = crate::spine::lexer::lex_root_compact_event_token(
             node,
-            boundary: self.raw_len,
-            mem: compact_id,
-            next_open_index: next_open_index_u64,
+            self.raw_len,
+            memory.clone(),
+            next_open_index_usize,
             raw_live_hash,
-            next_open_input_tokens: token_metadata.next_open_input_tokens,
-            next_open_context_tokens: token_metadata.next_open_context_tokens,
-        };
+            token_metadata.next_open_input_tokens,
+            token_metadata.next_open_context_tokens,
+        )?;
         Ok(PreparedRootCompactCommit {
             result,
             mem,

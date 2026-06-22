@@ -101,30 +101,31 @@ pub(in crate::spine) fn event_to_token(
                     mem.compact_id
                 )));
             }
-            Ok(SpineToken::Compact {
-                memory: memory_ref(
-                    archive,
-                    mem.compact_id.clone(),
-                    mem.node.clone(),
-                    mem.body_hash.clone(),
-                    mem.raw_start..mem.raw_end,
-                    mem.context_start..mem.context_end,
-                    event.seq..event.seq + 1,
-                    mem.open_input_tokens,
-                    mem.close_input_tokens,
-                    mem.open_context_tokens,
-                    mem.close_context_tokens,
-                    mem.closed_source_suffix_tokens,
-                    mem.closed_memory_context_tokens,
-                    mem.open_context_source,
-                    mem.memory_output_tokens,
-                ),
-                next_open_index: usize::try_from(*next_open_index).map_err(|_| {
+            let memory = memory_ref(
+                archive,
+                mem.compact_id.clone(),
+                mem.node.clone(),
+                mem.body_hash.clone(),
+                mem.raw_start..mem.raw_end,
+                mem.context_start..mem.context_end,
+                event.seq..event.seq + 1,
+                mem.open_input_tokens,
+                mem.close_input_tokens,
+                mem.open_context_tokens,
+                mem.close_context_tokens,
+                mem.closed_source_suffix_tokens,
+                mem.closed_memory_context_tokens,
+                mem.open_context_source,
+                mem.memory_output_tokens,
+            );
+            crate::spine::lexer::lex_root_compact_token(
+                memory,
+                usize::try_from(*next_open_index).map_err(|_| {
                     SpineError::InvalidEvent("root open index overflow".to_string())
                 })?,
-                next_open_input_tokens: None,
-                next_open_context_tokens: None,
-            })
+                None,
+                None,
+            )
         }
         SpineLedgerEvent::OpenContextBaseline { .. } => Err(SpineError::InvalidEvent(
             "OpenContextBaseline is metadata and cannot be converted to a SpineToken".to_string(),

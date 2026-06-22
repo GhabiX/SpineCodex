@@ -2,6 +2,7 @@ use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::tree_meta_with_token_baselines;
 use crate::spine::model::ContextBaselineSource;
+use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::SegRef;
 use crate::spine::model::SpineLedgerEvent;
@@ -162,6 +163,71 @@ pub(in crate::spine) fn lex_open_token(
         open_context_source,
     )?
     .into_single_token("open")
+}
+
+pub(in crate::spine) fn lex_root_compact(
+    node: NodeId,
+    boundary: u64,
+    memory: MemoryRef,
+    next_open_index: usize,
+    raw_live_hash: String,
+    next_open_input_tokens: Option<i64>,
+    next_open_context_tokens: Option<i64>,
+) -> Result<LexedTokenBatch, SpineError> {
+    let next_open_index_u64 = u64::try_from(next_open_index)
+        .map_err(|_| SpineError::InvalidEvent("root open index overflow".to_string()))?;
+    Ok(LexedTokenBatch::single(
+        SpineLedgerEvent::RootCompact {
+            node,
+            boundary,
+            mem: memory.compact_id.clone(),
+            next_open_index: next_open_index_u64,
+            raw_live_hash,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        },
+        lex_root_compact_token(
+            memory,
+            next_open_index,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        )?,
+    ))
+}
+
+pub(in crate::spine) fn lex_root_compact_event_token(
+    node: NodeId,
+    boundary: u64,
+    memory: MemoryRef,
+    next_open_index: usize,
+    raw_live_hash: String,
+    next_open_input_tokens: Option<i64>,
+    next_open_context_tokens: Option<i64>,
+) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+    lex_root_compact(
+        node,
+        boundary,
+        memory,
+        next_open_index,
+        raw_live_hash,
+        next_open_input_tokens,
+        next_open_context_tokens,
+    )?
+    .into_single("root compact")
+}
+
+pub(in crate::spine) fn lex_root_compact_token(
+    memory: MemoryRef,
+    next_open_index: usize,
+    next_open_input_tokens: Option<i64>,
+    next_open_context_tokens: Option<i64>,
+) -> Result<SpineToken, SpineError> {
+    Ok(SpineToken::Compact {
+        memory,
+        next_open_index,
+        next_open_input_tokens,
+        next_open_context_tokens,
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -406,6 +472,64 @@ mod tests {
             SpineError::InvalidEvent(message)
                 if message.contains("mismatched provider input baseline encoding")
         ));
+    }
+
+    #[test]
+    fn lex_root_compact_produces_matching_event_and_token() {
+        let node = NodeId::root_epoch(2);
+        let memory = MemoryRef {
+            compact_id: "root-2-9".to_string(),
+            node_id: node.clone(),
+            body_path: PathBuf::from("/tmp/spine-lexer-test/body/root-2-9.md"),
+            body_hash: "abc123".to_string(),
+            source_raw_range: 0..9,
+            source_context_range: 0..4,
+            source_token_seq: 5..6,
+            open_input_tokens: None,
+            close_input_tokens: Some(900),
+            open_context_tokens: None,
+            close_context_tokens: Some(800),
+            closed_source_suffix_tokens: None,
+            closed_memory_context_tokens: None,
+            open_context_source: None,
+            memory_output_tokens: None,
+        };
+
+        let lexed = lex_root_compact(
+            node.clone(),
+            9,
+            memory.clone(),
+            3,
+            "raw-live-hash".to_string(),
+            Some(111),
+            Some(222),
+        )
+        .expect("root compact lexes");
+
+        assert_eq!(lexed.events.len(), 1);
+        assert!(matches!(
+            lexed.events.first(),
+            Some(SpineLedgerEvent::RootCompact {
+                node: event_node,
+                boundary: 9,
+                mem,
+                next_open_index: 3,
+                raw_live_hash,
+                next_open_input_tokens: Some(111),
+                next_open_context_tokens: Some(222),
+            }) if event_node == &node
+                && mem == "root-2-9"
+                && raw_live_hash == "raw-live-hash"
+        ));
+        assert_eq!(
+            lexed.tokens,
+            vec![SpineToken::Compact {
+                memory,
+                next_open_index: 3,
+                next_open_input_tokens: Some(111),
+                next_open_context_tokens: Some(222),
+            }]
+        );
     }
 
     #[test]
