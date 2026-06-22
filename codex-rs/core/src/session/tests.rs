@@ -3578,7 +3578,7 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 
 #[tokio::test]
 async fn clone_spine_sidecar_for_fork_replays_interrupted_child_suffix() {
-    let (mut source_session, _source_context, _source_rx) =
+    let (mut source_session, source_context, _source_rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
@@ -3600,20 +3600,11 @@ async fn clone_spine_sidecar_for_fork_replays_interrupted_child_suffix() {
         .expect("initialize source spine");
     let source_item = user_message("source-visible");
     source_session
-        .observe_spine_raw_items(1)
+        .record_conversation_items(&source_context, std::slice::from_ref(&source_item))
         .await
-        .expect("observe source raw");
-    source_session
-        .observe_spine_context_items(
-            &[Some(0)],
-            std::slice::from_ref(&source_item),
-            &[ContextAppend {
-                input_index: 0,
-                context_index: 0,
-            }],
-        )
-        .await
-        .expect("observe source context");
+        .expect("record source context");
+    source_session.ensure_rollout_materialized().await;
+    source_session.flush_rollout().await.expect("flush source rollout");
 
     let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout_path, 1)
         .expect("capture boundary")
