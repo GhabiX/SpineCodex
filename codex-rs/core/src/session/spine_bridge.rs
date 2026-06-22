@@ -218,8 +218,31 @@ impl Session {
         evidence: SpineToolCallEvidence<'_>,
         operation: &'static str,
     ) -> Result<(), SpineToolcallTurnError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let Some(output) =
+            evidence
+                .completed_output()
+                .map_err(|err| SpineToolcallTurnError::Terminal {
+                    operation,
+                    reason: err.to_string(),
+                })?
+        else {
+            return Ok(());
+        };
+        let Some(completed) = self
+            .prepare_completed_spine_toolcall_output(turn_context, spine_slot, output)
+            .await
+            .map_err(|err| SpineToolcallTurnError::Terminal {
+                operation,
+                reason: err.to_string(),
+            })?
+        else {
+            return Ok(());
+        };
         let mut commit = self
-            .on_toolcall(turn_context, evidence)
+            .commit_completed_spine_toolcall(turn_context, completed)
             .await
             .map_err(|err| SpineToolcallTurnError::Terminal {
                 operation,
