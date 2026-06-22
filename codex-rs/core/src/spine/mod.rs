@@ -3,6 +3,7 @@ mod checkpoint;
 mod compact_checkpoint;
 mod instructions;
 mod io;
+mod lexer;
 mod model;
 mod parse_stack;
 mod render;

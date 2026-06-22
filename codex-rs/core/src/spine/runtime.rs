@@ -377,15 +377,6 @@ impl SpineRuntime {
         Ok(())
     }
 
-    fn append_msg_event(&mut self, msg: &PendingMsg) -> Result<u64, SpineError> {
-        self.append_cached_event(SpineLedgerEvent::Msg {
-            raw_ordinal: msg.raw_ordinal,
-            context_index: msg.context_index,
-            from_user: msg.from_user,
-            user_anchor: msg.user_anchor,
-        })
-    }
-
     pub(crate) fn materialize_history(
         &self,
         raw_items: &[Option<ResponseItem>],

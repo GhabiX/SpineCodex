@@ -496,22 +496,6 @@ impl SpineRuntime {
         Ok(toolcall)
     }
 
-    fn push_msg_token(&mut self, msg: &PendingMsg) -> Result<(), SpineError> {
-        self.parse_stack.shift(
-            SpineToken::Msg {
-                seg: SegRef::ResponseItem {
-                    raw_ordinal: msg.raw_ordinal,
-                    context_index: usize::try_from(msg.context_index).map_err(|_| {
-                        SpineError::InvalidEvent("context index overflow".to_string())
-                    })?,
-                },
-                from_user: msg.from_user,
-                user_anchor: msg.user_anchor,
-            },
-            &self.archive(),
-        )
-    }
-
     fn push_completed_toolcall_token(
         &mut self,
         segments: Vec<ToolCallSegment>,
@@ -521,7 +505,18 @@ impl SpineRuntime {
     }
 
     fn append_and_shift_msg(&mut self, msg: &PendingMsg) -> Result<(), SpineError> {
-        self.append_msg_event(msg)?;
-        self.push_msg_token(msg)
+        let lexed = crate::spine::lexer::lex_msg(
+            msg.raw_ordinal,
+            msg.context_index,
+            msg.from_user,
+            msg.user_anchor,
+        )?;
+        for event in lexed.events {
+            self.append_cached_event(event)?;
+        }
+        for token in lexed.tokens {
+            self.parse_stack.shift(token, &self.archive())?;
+        }
+        Ok(())
     }
 }

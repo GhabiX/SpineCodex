@@ -34,15 +34,19 @@ pub(in crate::spine) fn event_to_token(
             context_index,
             from_user,
             user_anchor,
-        } => Ok(SpineToken::Msg {
-            seg: SegRef::ResponseItem {
-                raw_ordinal: *raw_ordinal,
-                context_index: usize::try_from(*context_index)
-                    .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?,
-            },
-            from_user: *from_user,
-            user_anchor: *user_anchor,
-        }),
+        } => crate::spine::lexer::lex_msg(*raw_ordinal, *context_index, *from_user, *user_anchor)
+            .and_then(|lexed| {
+                let mut tokens = lexed.tokens.into_iter();
+                let token = tokens.next().ok_or_else(|| {
+                    SpineError::Invariant("msg lexer produced no token".to_string())
+                })?;
+                if tokens.next().is_some() {
+                    return Err(SpineError::Invariant(
+                        "msg lexer produced multiple tokens".to_string(),
+                    ));
+                }
+                Ok(token)
+            }),
         SpineLedgerEvent::ToolCall { segments } => Ok(SpineToken::ToolCall {
             segments: segments
                 .iter()
