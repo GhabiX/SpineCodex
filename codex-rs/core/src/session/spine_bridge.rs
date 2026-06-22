@@ -8,6 +8,7 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
+use crate::spine::SpineCommitAttempt;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
@@ -60,10 +61,6 @@ pub(crate) struct SpineToolCommit {
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
-struct SpineCommitOutput {
-    post_commit_effects: SpineHostEffects,
-}
-
 pub(crate) struct SpineRootCompactPublish {
     materialized_len: usize,
 }
@@ -112,12 +109,6 @@ struct SpineToolcallCommitAttemptInput<'a> {
     toolcall_evidence: SpineToolcallCommitEvidence,
     tool_resp_already_recorded: bool,
     raw_items: &'a [Option<ResponseItem>],
-}
-
-enum SpineCommitAttempt {
-    Done(SpineCommitOutput),
-    Retry,
-    RuntimeMissing,
 }
 
 enum SpineTrimRequest {
@@ -1195,9 +1186,7 @@ impl Session {
                 }
             }
         };
-        let SpineCommitOutput {
-            post_commit_effects,
-        } = commit_output;
+        let post_commit_effects = commit_output.into_post_commit_effects();
         let deferred_tree_update = self
             .apply_spine_post_commit_effects(turn_context, post_commit_effects)
             .await;
@@ -1259,11 +1248,7 @@ impl Session {
         } else {
             None
         };
-        let post_commit_effects =
-            guard.committed_toolcall_post_apply_host_effects(committed, snapshot);
-        Ok(SpineCommitAttempt::Done(SpineCommitOutput {
-            post_commit_effects,
-        }))
+        Ok(SpineCommitAttempt::done(&mut guard, committed, snapshot))
     }
 
     async fn spine_raw_items_from_rollout_for_commit(

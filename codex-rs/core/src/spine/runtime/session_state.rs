@@ -36,6 +36,16 @@ pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
 }
 
+pub(crate) enum SpineCommitAttempt {
+    Done(SpineCommitOutput),
+    Retry,
+    RuntimeMissing,
+}
+
+pub(crate) struct SpineCommitOutput {
+    post_commit_effects: SpineHostEffects,
+}
+
 pub(crate) struct PreparedSpineReplayRuntime {
     pub(crate) runtime: Option<SpineRuntime>,
     pub(crate) materialized: Option<Vec<ResponseItem>>,
@@ -459,6 +469,25 @@ impl PreparedSpineToolcallCommit {
             SpineTreeUpdateDelivery::Immediate
         };
         SpinePostApplyEffectPolicy { delivery }
+    }
+}
+
+impl SpineCommitAttempt {
+    pub(crate) fn done(
+        state: &mut SpineSessionState,
+        committed: CommittedSpineToolcall,
+        snapshot: Option<SpineTreeUpdateEvent>,
+    ) -> Self {
+        Self::Done(SpineCommitOutput {
+            post_commit_effects: state
+                .committed_toolcall_post_apply_host_effects(committed, snapshot),
+        })
+    }
+}
+
+impl SpineCommitOutput {
+    pub(crate) fn into_post_commit_effects(self) -> SpineHostEffects {
+        self.post_commit_effects
     }
 }
 
