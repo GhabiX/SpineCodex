@@ -34,16 +34,7 @@ impl SpineRuntime {
         match matching_mems.as_slice() {
             [] => self.store.append_mem(mem),
             [existing] if mem_record_matches(existing, mem) => {
-                let existing_body = self.store.read_memory_body(existing)?;
-                let existing_body_hash = sha1_hex(existing_body.as_bytes());
-                let body_hash = sha1_hex(body.as_bytes());
-                if existing_body_hash != body_hash || existing_body_hash != mem.body_hash {
-                    return Err(SpineError::InvalidStore(format!(
-                        "existing prepared memory body mismatch for {}",
-                        mem.compact_id
-                    )));
-                }
-                Ok(())
+                self.validate_existing_prepared_memory_body(existing, mem, body)
             }
             [_] => Err(SpineError::InvalidStore(format!(
                 "existing prepared memory record mismatch for {}",
@@ -54,6 +45,24 @@ impl SpineRuntime {
                 mem.compact_id
             ))),
         }
+    }
+
+    fn validate_existing_prepared_memory_body(
+        &self,
+        existing: &MemRecord,
+        mem: &MemRecord,
+        body: &str,
+    ) -> Result<(), SpineError> {
+        let existing_body = self.store.read_memory_body(existing)?;
+        let existing_body_hash = sha1_hex(existing_body.as_bytes());
+        let body_hash = sha1_hex(body.as_bytes());
+        if existing_body_hash != body_hash || existing_body_hash != mem.body_hash {
+            return Err(SpineError::InvalidStore(format!(
+                "existing prepared memory body mismatch for {}",
+                mem.compact_id
+            )));
+        }
+        Ok(())
     }
 
     pub(super) fn stage_close_mem(
