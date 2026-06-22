@@ -84,6 +84,7 @@ pub(crate) struct SpineCompletedToolCallEvidence {
 pub(crate) struct SpineToolcallCommitEvidence {
     call_id: String,
     completed_toolcall: SpineCompletedToolCallEvidence,
+    control_policy: SpineToolCallControlPolicy,
 }
 
 pub(crate) struct SpineToolCallEvidence<'a> {
@@ -227,10 +228,6 @@ impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
 
     pub(crate) fn commit_output_item(&self) -> &'a ResponseItem {
         self.commit_output_item
-    }
-
-    pub(crate) fn commit_as_ordinary(&self) -> bool {
-        self.control_policy == SpineToolCallControlPolicy::ForceOrdinary
     }
 
     pub(crate) fn single_output_requiring_optional_prerecord(
@@ -653,7 +650,17 @@ impl SpineToolcallCommitEvidence {
         Self {
             call_id: call_id.into(),
             completed_toolcall,
+            control_policy: SpineToolCallControlPolicy::Normal,
         }
+    }
+
+    fn with_control_policy(mut self, control_policy: SpineToolCallControlPolicy) -> Self {
+        self.control_policy = control_policy;
+        self
+    }
+
+    fn force_ordinary(&self) -> bool {
+        self.control_policy == SpineToolCallControlPolicy::ForceOrdinary
     }
 }
 
@@ -1331,17 +1338,18 @@ impl SpineSessionState {
 
     pub(crate) fn prepare_completed_toolcall_for_commit(
         &mut self,
-        call_id: &str,
+        evidence: &SpineToolcallCommitEvidence,
         raw_items: &[Option<ResponseItem>],
         current_turn_provider_input_tokens: Option<i64>,
         tool_resp_already_recorded: bool,
         recorded_inside_hook: bool,
-        force_ordinary: bool,
     ) -> Result<Option<SpineToolcallCommitHostPlan>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
             return Ok(None);
         };
+        let call_id = evidence.call_id.as_str();
+        let force_ordinary = evidence.force_ordinary();
         if !force_ordinary {
             runtime.ensure_pending_from_toolcall_request(call_id, raw_items)?;
         }
@@ -1732,7 +1740,7 @@ impl SpineSessionState {
         output_raw_ordinals: &[Option<u64>],
         output_context_start: usize,
     ) -> Result<Option<SpineToolcallCommitEvidence>, SpineError> {
-        match &output.request_call_ids {
+        let evidence = match &output.request_call_ids {
             SpineCompletedToolCallRequestIds::Single(call_id) => self
                 .single_completed_toolcall_evidence(
                     call_id,
@@ -1756,7 +1764,8 @@ impl SpineSessionState {
                     output_raw_ordinals,
                     output_context_start,
                 ),
-        }
+        }?;
+        Ok(evidence.map(|evidence| evidence.with_control_policy(output.control_policy)))
     }
 
     fn prepare_completed_toolcall_commit(
