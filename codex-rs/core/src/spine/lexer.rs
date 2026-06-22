@@ -1,4 +1,8 @@
 use crate::spine::SpineError;
+use crate::spine::archive::SpineArchive;
+use crate::spine::archive::tree_meta_with_token_baselines;
+use crate::spine::model::ContextBaselineSource;
+use crate::spine::model::NodeId;
 use crate::spine::model::SegRef;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
@@ -74,6 +78,90 @@ pub(in crate::spine) fn lex_msg(
             user_anchor,
         },
     ))
+}
+
+pub(in crate::spine) fn lex_open(
+    archive: &SpineArchive,
+    child: NodeId,
+    boundary: u64,
+    index: u64,
+    summary: String,
+    open_input_tokens: Option<i64>,
+    open_context_tokens: Option<i64>,
+    open_context_source: Option<ContextBaselineSource>,
+) -> Result<LexedTokenBatch, SpineError> {
+    if open_input_tokens != open_context_tokens {
+        return Err(SpineError::InvalidEvent(format!(
+            "open event for node {child} has mismatched provider input baseline encoding"
+        )));
+    }
+    Ok(LexedTokenBatch::single(
+        SpineLedgerEvent::Open {
+            child: child.clone(),
+            boundary,
+            index,
+            summary: summary.clone(),
+            open_input_tokens,
+            open_context_tokens,
+            open_context_source,
+        },
+        SpineToken::Open {
+            meta: tree_meta_with_token_baselines(
+                archive,
+                child,
+                index,
+                summary,
+                open_input_tokens,
+                open_context_source,
+            )?,
+        },
+    ))
+}
+
+pub(in crate::spine) fn lex_open_event_token(
+    archive: &SpineArchive,
+    child: NodeId,
+    boundary: u64,
+    index: u64,
+    summary: String,
+    open_input_tokens: Option<i64>,
+    open_context_tokens: Option<i64>,
+    open_context_source: Option<ContextBaselineSource>,
+) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+    lex_open(
+        archive,
+        child,
+        boundary,
+        index,
+        summary,
+        open_input_tokens,
+        open_context_tokens,
+        open_context_source,
+    )?
+    .into_single("open")
+}
+
+pub(in crate::spine) fn lex_open_token(
+    archive: &SpineArchive,
+    child: NodeId,
+    boundary: u64,
+    index: u64,
+    summary: String,
+    open_input_tokens: Option<i64>,
+    open_context_tokens: Option<i64>,
+    open_context_source: Option<ContextBaselineSource>,
+) -> Result<SpineToken, SpineError> {
+    lex_open(
+        archive,
+        child,
+        boundary,
+        index,
+        summary,
+        open_input_tokens,
+        open_context_tokens,
+        open_context_source,
+    )?
+    .into_single_token("open")
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -212,6 +300,7 @@ fn validate_toolcall_segments(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn lex_msg_produces_matching_event_and_token() {
@@ -238,6 +327,85 @@ mod tests {
                 user_anchor: Some(2),
             }]
         );
+    }
+
+    #[test]
+    fn lex_open_produces_matching_event_and_token() {
+        let archive = SpineArchive::new(PathBuf::from("/tmp/spine-lexer-test"));
+        let child = NodeId::root_epoch(1).child(2);
+        let lexed = lex_open(
+            &archive,
+            child.clone(),
+            11,
+            7,
+            "child summary".to_string(),
+            Some(123),
+            Some(123),
+            Some(ContextBaselineSource::ProviderAtOpen),
+        )
+        .expect("open lexes");
+
+        assert_eq!(lexed.events.len(), 1);
+        match lexed.events.first() {
+            Some(SpineLedgerEvent::Open {
+                child: event_child,
+                boundary,
+                index,
+                summary,
+                open_input_tokens,
+                open_context_tokens,
+                open_context_source,
+            }) => {
+                assert_eq!(event_child, &child);
+                assert_eq!(*boundary, 11);
+                assert_eq!(*index, 7);
+                assert_eq!(summary, "child summary");
+                assert_eq!(*open_input_tokens, Some(123));
+                assert_eq!(*open_context_tokens, Some(123));
+                assert_eq!(
+                    *open_context_source,
+                    Some(ContextBaselineSource::ProviderAtOpen)
+                );
+            }
+            other => panic!("unexpected open event: {other:?}"),
+        }
+
+        assert_eq!(
+            lexed.tokens,
+            vec![SpineToken::Open {
+                meta: crate::spine::model::TreeMeta {
+                    id: child,
+                    index: 7,
+                    summary: "child summary".to_string(),
+                    open_input_tokens: Some(123),
+                    open_context_tokens: Some(123),
+                    open_context_source: Some(ContextBaselineSource::ProviderAtOpen),
+                    node_dir: PathBuf::from("/tmp/spine-lexer-test/nodes/1/2"),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn lex_open_rejects_mismatched_provider_baselines() {
+        let archive = SpineArchive::new(PathBuf::from("/tmp/spine-lexer-test"));
+        let err = lex_open(
+            &archive,
+            NodeId::root_epoch(1).child(2),
+            11,
+            7,
+            "child summary".to_string(),
+            Some(123),
+            Some(122),
+            Some(ContextBaselineSource::ProviderAtOpen),
+        )
+        .expect_err("mismatched baselines are rejected");
+
+        assert!(matches!(
+            err,
+            SpineError::InvalidEvent(message)
+                if message.contains("mismatched provider input baseline encoding")
+        ));
     }
 
     #[test]

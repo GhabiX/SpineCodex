@@ -26,7 +26,6 @@ use super::types::SpineTokenBaselines;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::flush_archive_writes;
 use crate::spine::archive::memory_ref;
-use crate::spine::archive::tree_meta_with_token_baselines;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
 use crate::spine::model::SpineLedgerEvent;
@@ -325,29 +324,18 @@ impl SpineRuntime {
         let open_context_source = token_baselines
             .provider_input_tokens
             .map(|_| ContextBaselineSource::ProviderAtOpen);
-        let event = SpineLedgerEvent::Open {
-            child: child.clone(),
+        let (event, token) = crate::spine::lexer::lex_open_event_token(
+            &self.archive(),
+            child,
             boundary,
             index,
-            summary: summary.clone(),
-            open_input_tokens: token_baselines.provider_input_tokens,
-            open_context_tokens: token_baselines.provider_input_tokens,
+            summary,
+            token_baselines.provider_input_tokens,
+            token_baselines.provider_input_tokens,
             open_context_source,
-        };
-        let mut staged_parse_stack = self.parse_stack.clone();
-        staged_parse_stack.shift(
-            SpineToken::Open {
-                meta: tree_meta_with_token_baselines(
-                    &self.archive(),
-                    child,
-                    index,
-                    summary,
-                    token_baselines.provider_input_tokens,
-                    open_context_source,
-                )?,
-            },
-            &self.archive(),
         )?;
+        let mut staged_parse_stack = self.parse_stack.clone();
+        staged_parse_stack.shift(token, &self.archive())?;
         if let Some(completed_toolcall) = completed_toolcall {
             let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
             staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
@@ -478,19 +466,17 @@ impl SpineRuntime {
             prepared.task_tree_reduction,
         )?;
         if let Some(open) = plan.open.as_ref() {
-            final_parse_stack.shift(
-                SpineToken::Open {
-                    meta: tree_meta_with_token_baselines(
-                        &self.archive(),
-                        open.child.clone(),
-                        open.open_index_u64,
-                        open.summary.clone(),
-                        None,
-                        None,
-                    )?,
-                },
+            let token = crate::spine::lexer::lex_open_token(
                 &self.archive(),
+                open.child.clone(),
+                self.raw_len,
+                open.open_index_u64,
+                open.summary.clone(),
+                None,
+                None,
+                None,
             )?;
+            final_parse_stack.shift(token, &self.archive())?;
         }
         final_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
         if let Err(err) = self.commit_close_family_transaction(CloseFamilyTransaction {

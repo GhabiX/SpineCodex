@@ -3,7 +3,6 @@ use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::memory_ref;
 use crate::spine::archive::tree_meta;
-use crate::spine::archive::tree_meta_with_token_baselines;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
 use crate::spine::model::NodeId;
@@ -41,29 +40,23 @@ pub(in crate::spine) fn event_to_token(
         }
         SpineLedgerEvent::Open {
             child,
+            boundary,
             index,
             summary,
             open_input_tokens,
             open_context_tokens,
             open_context_source,
             ..
-        } => {
-            if open_input_tokens != open_context_tokens {
-                return Err(SpineError::InvalidEvent(format!(
-                    "open event for node {child} has mismatched provider input baseline encoding"
-                )));
-            }
-            Ok(SpineToken::Open {
-                meta: tree_meta_with_token_baselines(
-                    archive,
-                    child.clone(),
-                    *index,
-                    summary.clone(),
-                    *open_input_tokens,
-                    *open_context_source,
-                )?,
-            })
-        }
+        } => crate::spine::lexer::lex_open_token(
+            archive,
+            child.clone(),
+            *boundary,
+            *index,
+            summary.clone(),
+            *open_input_tokens,
+            *open_context_tokens,
+            *open_context_source,
+        ),
         SpineLedgerEvent::Close { node, .. } => {
             let mem = mems.values().find(|mem| &mem.node == node).ok_or_else(|| {
                 SpineError::InvalidEvent(format!("missing memory for close node {node}"))
