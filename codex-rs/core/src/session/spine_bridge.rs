@@ -204,24 +204,17 @@ impl Session {
         evidence: SpineToolCallEvidence<'_>,
         operation: &'static str,
     ) -> Result<(), SpineToolcallTurnError> {
-        let output =
-            evidence
-                .completed_output()
-                .map_err(|err| SpineToolcallTurnError::Terminal {
-                    operation,
-                    reason: err.to_string(),
-                })?;
-        if let Some(output) = output.as_ref()
-            && let Some(item) = output.single_output_item()
-        {
-            self.record_conversation_items_without_spine_observe(
-                turn_context,
-                std::slice::from_ref(item),
-            )
-            .await
-            .map_err(SpineToolcallTurnError::Codex)?;
+        let host_items = evidence.host_items_to_record_before_hook().map_err(|err| {
+            SpineToolcallTurnError::Terminal {
+                operation,
+                reason: err.to_string(),
+            }
+        })?;
+        if let Some(items) = host_items {
+            self.record_conversation_items_without_spine_observe(turn_context, items)
+                .await
+                .map_err(SpineToolcallTurnError::Codex)?;
         }
-        drop(output);
         self.commit_toolcall_evidence(turn_context, evidence)
             .await
             .map_err(|err| SpineToolcallTurnError::Terminal {
