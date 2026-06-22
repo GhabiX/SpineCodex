@@ -150,9 +150,8 @@ impl TrimEvent {
                 raw_boundary,
                 raw_live_hash,
                 ..
-            } => raw_mask.prefix_hash_matches(*raw_boundary, raw_live_hash),
-            TrimEvent::Candidate { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
-            TrimEvent::Cleared {
+            }
+            | TrimEvent::Cleared {
                 raw_boundary,
                 raw_live_hash,
                 ..
