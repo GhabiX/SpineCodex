@@ -3,6 +3,7 @@ use std::path::Path;
 
 use super::SpineError;
 use super::SpineRuntime;
+use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::checkpoint::build_checkpoint;
 
 impl SpineRuntime {
@@ -17,17 +18,7 @@ impl SpineRuntime {
         let prefix = raw_items.get(..raw_end).ok_or_else(|| {
             SpineError::InvalidEvent("checkpoint raw ordinal outside raw history".to_string())
         })?;
-        let context = self.materialize_history(prefix)?;
-        let checkpoint = build_checkpoint(
-            rollout_path,
-            raw_ordinal,
-            self.ledger.next_event_seq,
-            self.pressure_seq_watermark()?,
-            self.trim_seq_watermark()?,
-            &self.raw_live,
-            &self.parse_stack,
-            &context,
-        )?;
+        let checkpoint = self.build_runtime_checkpoint(rollout_path, raw_ordinal, prefix)?;
         self.store.write_checkpoint(&checkpoint)
     }
 
@@ -36,18 +27,27 @@ impl SpineRuntime {
         rollout_path: &Path,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
+        let mut checkpoint = self.build_runtime_checkpoint(rollout_path, 0, raw_items)?;
+        checkpoint.checkpoint_id = "initial".to_string();
+        self.store.write_initial_checkpoint(&checkpoint)
+    }
+
+    fn build_runtime_checkpoint(
+        &self,
+        rollout_path: &Path,
+        raw_ordinal: u64,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineCheckpoint, SpineError> {
         let context = self.materialize_history(raw_items)?;
-        let mut checkpoint = build_checkpoint(
+        build_checkpoint(
             rollout_path,
-            0,
+            raw_ordinal,
             self.ledger.next_event_seq,
             self.pressure_seq_watermark()?,
             self.trim_seq_watermark()?,
             &self.raw_live,
             &self.parse_stack,
             &context,
-        )?;
-        checkpoint.checkpoint_id = "initial".to_string();
-        self.store.write_initial_checkpoint(&checkpoint)
+        )
     }
 }
