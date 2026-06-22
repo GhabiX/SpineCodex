@@ -13,6 +13,7 @@ use super::support::user_anchor_refs_in_memory;
 use super::support::validate_model_node_memory;
 use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::ParsedControlToolIntent;
+use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::ToolCallSegmentKind;
@@ -422,7 +423,8 @@ impl SpineRuntime {
         raw_items: &[Option<ResponseItem>],
     ) -> Result<bool, SpineError> {
         if self.pending.as_ref().is_some_and(|pending| {
-            pending.call_id() == call_id && pending.control_intent().is_close_like()
+            pending.call_id() == call_id
+                && plan_control_toolcall(pending.control_intent()).is_close_like()
         }) {
             return Ok(true);
         }
@@ -589,7 +591,8 @@ impl SpineRuntime {
             .get(call_id)
             .is_some_and(SpineControlToolReceipt::is_close_like)
             || self.pending.as_ref().is_some_and(|pending| {
-                pending.call_id() == call_id && pending.control_intent().is_close_like()
+                pending.call_id() == call_id
+                    && plan_control_toolcall(pending.control_intent()).is_close_like()
             })
     }
 

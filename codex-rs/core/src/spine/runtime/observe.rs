@@ -19,6 +19,7 @@ use super::support::tool_response_call_id;
 use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::ToolCallLexSegment;
+use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 use crate::spine::model::ToolCallSegmentKind;
@@ -414,10 +415,8 @@ impl SpineRuntime {
         &self,
         toolcall: &CompletedToolCall,
     ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
-        debug_assert_eq!(
-            crate::spine::lexer::control_toolcall_token_sequence(ControlIntent::Ordinary),
-            &[LexedTokenKind::ToolCall]
-        );
+        let plan = plan_control_toolcall(ControlIntent::Ordinary);
+        debug_assert_eq!(plan.token_sequence(), &[LexedTokenKind::ToolCall]);
         let lexed = crate::spine::lexer::lex_toolcall(
             toolcall.segments.iter().map(|segment| ToolCallLexSegment {
                 kind: segment.kind,

@@ -26,7 +26,9 @@ use super::types::SpineTokenBaselines;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::flush_archive_writes;
 use crate::spine::archive::memory_ref;
+use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::LexedTokenKind;
+use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
 #[cfg(test)]
@@ -245,7 +247,7 @@ impl SpineRuntime {
             return Ok(None);
         }
         let pending = pending.clone();
-        let intent = pending.control_intent();
+        let plan = plan_control_toolcall(pending.control_intent());
         let commit_kind = match pending {
             PendingTransition::Open {
                 summary,
@@ -253,8 +255,9 @@ impl SpineRuntime {
                 index,
                 ..
             } => {
+                debug_assert_eq!(plan.intent(), ControlIntent::Open);
                 debug_assert_eq!(
-                    crate::spine::lexer::control_toolcall_token_sequence(intent),
+                    plan.token_sequence(),
                     &[LexedTokenKind::Open, LexedTokenKind::ToolCall]
                 );
                 self.commit_open_pending(
@@ -267,8 +270,9 @@ impl SpineRuntime {
                 )?
             }
             PendingTransition::Close { .. } => {
+                debug_assert_eq!(plan.intent(), ControlIntent::Close);
                 debug_assert_eq!(
-                    crate::spine::lexer::control_toolcall_token_sequence(intent),
+                    plan.token_sequence(),
                     &[LexedTokenKind::Close, LexedTokenKind::ToolCall]
                 );
                 self.commit_close_pending(
@@ -279,8 +283,9 @@ impl SpineRuntime {
                 )?
             }
             PendingTransition::NextSugar { summary, .. } => {
+                debug_assert_eq!(plan.intent(), ControlIntent::Next);
                 debug_assert_eq!(
-                    crate::spine::lexer::control_toolcall_token_sequence(intent),
+                    plan.token_sequence(),
                     &[
                         LexedTokenKind::Close,
                         LexedTokenKind::Open,

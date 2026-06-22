@@ -91,10 +91,31 @@ pub(in crate::spine) enum LexedTokenKind {
     ToolCall,
 }
 
-pub(in crate::spine) fn control_toolcall_token_sequence(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::spine) struct ControlToolCallPlan {
     intent: ControlIntent,
-) -> &'static [LexedTokenKind] {
-    intent.token_sequence()
+    token_sequence: &'static [LexedTokenKind],
+}
+
+impl ControlToolCallPlan {
+    pub(in crate::spine) fn intent(self) -> ControlIntent {
+        self.intent
+    }
+
+    pub(in crate::spine) fn token_sequence(self) -> &'static [LexedTokenKind] {
+        self.token_sequence
+    }
+
+    pub(in crate::spine) fn is_close_like(self) -> bool {
+        self.intent.is_close_like()
+    }
+}
+
+pub(in crate::spine) fn plan_control_toolcall(intent: ControlIntent) -> ControlToolCallPlan {
+    ControlToolCallPlan {
+        intent,
+        token_sequence: intent.token_sequence(),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -547,19 +568,19 @@ mod tests {
     #[test]
     fn control_intent_token_sequences_match_formular_def() {
         assert_eq!(
-            control_toolcall_token_sequence(ControlIntent::Ordinary),
+            plan_control_toolcall(ControlIntent::Ordinary).token_sequence(),
             &[LexedTokenKind::ToolCall]
         );
         assert_eq!(
-            control_toolcall_token_sequence(ControlIntent::Open),
+            plan_control_toolcall(ControlIntent::Open).token_sequence(),
             &[LexedTokenKind::Open, LexedTokenKind::ToolCall]
         );
         assert_eq!(
-            control_toolcall_token_sequence(ControlIntent::Close),
+            plan_control_toolcall(ControlIntent::Close).token_sequence(),
             &[LexedTokenKind::Close, LexedTokenKind::ToolCall]
         );
         assert_eq!(
-            control_toolcall_token_sequence(ControlIntent::Next),
+            plan_control_toolcall(ControlIntent::Next).token_sequence(),
             &[
                 LexedTokenKind::Close,
                 LexedTokenKind::Open,
@@ -569,11 +590,15 @@ mod tests {
     }
 
     #[test]
-    fn control_intent_close_like_classification_matches_close_family() {
-        assert!(!ControlIntent::Ordinary.is_close_like());
-        assert!(!ControlIntent::Open.is_close_like());
-        assert!(ControlIntent::Close.is_close_like());
-        assert!(ControlIntent::Next.is_close_like());
+    fn control_toolcall_plan_exposes_intent_and_close_like_classification() {
+        assert_eq!(
+            plan_control_toolcall(ControlIntent::Open).intent(),
+            ControlIntent::Open
+        );
+        assert!(!plan_control_toolcall(ControlIntent::Ordinary).is_close_like());
+        assert!(!plan_control_toolcall(ControlIntent::Open).is_close_like());
+        assert!(plan_control_toolcall(ControlIntent::Close).is_close_like());
+        assert!(plan_control_toolcall(ControlIntent::Next).is_close_like());
     }
 
     #[test]
