@@ -48,7 +48,6 @@ use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
-use crate::spine::SpineToolCallEvidence;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -133,7 +132,7 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
-use super::spine_bridge::SpineSingleToolcallTurnError;
+use super::spine_bridge::SpineToolcallTurnError;
 
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
@@ -190,10 +189,10 @@ impl From<CodexErr> for SamplingRequestError {
 
 impl SamplingRequestError {}
 
-fn map_spine_single_toolcall_turn_error(err: SpineSingleToolcallTurnError) -> SamplingRequestError {
+fn map_spine_toolcall_turn_error(err: SpineToolcallTurnError) -> SamplingRequestError {
     match err {
-        SpineSingleToolcallTurnError::Codex(err) => SamplingRequestError::Codex(err),
-        SpineSingleToolcallTurnError::Terminal { operation, reason } => {
+        SpineToolcallTurnError::Codex(err) => SamplingRequestError::Codex(err),
+        SpineToolcallTurnError::Terminal { operation, reason } => {
             SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
                 operation: operation.to_string(),
                 reason,
@@ -2106,7 +2105,7 @@ async fn drain_in_flight(
                 if spine_jit_enabled {
                     sess.record_single_toolcall_response_with_spine(&turn_context, &response_item)
                         .await
-                        .map_err(|err| map_spine_single_toolcall_turn_error(err))?;
+                        .map_err(|err| map_spine_toolcall_turn_error(err))?;
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
@@ -2197,18 +2196,15 @@ async fn drain_deferred_spine_tool_group(
             }
         }
     }
-    let mut commit = sess
-        .on_toolcall(
-            &turn_context,
-            SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
-        )
-        .await
-        .map_err(|err| {
-            SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
-                operation: "commit grouped Spine toolcall".to_string(),
-                reason: err.to_string(),
-            })
-        })?;
+    sess.commit_grouped_toolcall_response_with_spine(
+        &turn_context,
+        &commit_call_id,
+        &tool_call_ids,
+        &response_items,
+        "commit grouped Spine toolcall",
+    )
+    .await
+    .map_err(|err| map_spine_toolcall_turn_error(err))?;
     for response_item in &response_items {
         mark_thread_memory_mode_polluted_if_external_context(
             sess.as_ref(),
@@ -2218,10 +2214,6 @@ async fn drain_deferred_spine_tool_group(
         .await;
     }
     spine_control_overlay.remove_call_ids(&tool_call_ids);
-    if let Some(snapshot) = commit.take_deferred_tree_update() {
-        sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
-            .await;
-    }
     Ok(())
 }
 
@@ -2295,18 +2287,15 @@ async fn drain_conflicting_spine_control_tool_group(
         response_items.push(item);
     }
 
-    let mut commit = sess
-        .on_toolcall(
-            &turn_context,
-            SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
-        )
-        .await
-        .map_err(|err| {
-            SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
-                operation: "commit conflicting Spine toolcall".to_string(),
-                reason: err.to_string(),
-            })
-        })?;
+    sess.commit_grouped_toolcall_response_with_spine(
+        &turn_context,
+        &commit_call_id,
+        &tool_call_ids,
+        &response_items,
+        "commit conflicting Spine toolcall",
+    )
+    .await
+    .map_err(|err| map_spine_toolcall_turn_error(err))?;
     for response_item in &response_items {
         mark_thread_memory_mode_polluted_if_external_context(
             sess.as_ref(),
@@ -2316,10 +2305,6 @@ async fn drain_conflicting_spine_control_tool_group(
         .await;
     }
     spine_control_overlay.remove_call_ids(&control_call_ids);
-    if let Some(snapshot) = commit.take_deferred_tree_update() {
-        sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
-            .await;
-    }
     Ok(())
 }
 

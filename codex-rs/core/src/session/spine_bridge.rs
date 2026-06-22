@@ -65,7 +65,7 @@ pub(crate) struct SpineRootCompactPublish {
     materialized_len: usize,
 }
 
-pub(crate) enum SpineSingleToolcallTurnError {
+pub(crate) enum SpineToolcallTurnError {
     Codex(CodexErr),
     Terminal {
         operation: &'static str,
@@ -180,19 +180,44 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         response_item: &ResponseItem,
-    ) -> Result<(), SpineSingleToolcallTurnError> {
+    ) -> Result<(), SpineToolcallTurnError> {
         self.record_conversation_items_without_spine_observe(
             turn_context,
             std::slice::from_ref(response_item),
         )
         .await
-        .map_err(SpineSingleToolcallTurnError::Codex)?;
+        .map_err(SpineToolcallTurnError::Codex)?;
 
         let mut commit = self
             .on_toolcall(turn_context, SpineToolCallEvidence::single(response_item))
             .await
-            .map_err(|err| SpineSingleToolcallTurnError::Terminal {
+            .map_err(|err| SpineToolcallTurnError::Terminal {
                 operation: "commit Spine tool output",
+                reason: err.to_string(),
+            })?;
+        if let Some(snapshot) = commit.take_deferred_tree_update() {
+            self.send_spine_tree_update(turn_context.as_ref(), snapshot)
+                .await;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn commit_grouped_toolcall_response_with_spine(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        commit_call_id: &str,
+        tool_call_ids: &[String],
+        response_items: &[ResponseItem],
+        operation: &'static str,
+    ) -> Result<(), SpineToolcallTurnError> {
+        let mut commit = self
+            .on_toolcall(
+                turn_context,
+                SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items),
+            )
+            .await
+            .map_err(|err| SpineToolcallTurnError::Terminal {
+                operation,
                 reason: err.to_string(),
             })?;
         if let Some(snapshot) = commit.take_deferred_tree_update() {
