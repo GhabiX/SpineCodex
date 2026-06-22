@@ -289,13 +289,7 @@ impl SpineRuntime {
         &mut self,
         pending: PendingMemoryContextAccounting,
     ) -> Result<(), SpineError> {
-        if let Some(existing) = self.pending_memory_context_accounting.take() {
-            self.consume_memory_context_accounting_pending(
-                existing,
-                None,
-                MemoryContextAccountingSkipReason::SupersededByNewPending,
-            )?;
-        }
+        self.consume_superseded_memory_context_accounting_pending()?;
         if self
             .memory_context_accounting_by_id()?
             .contains_key(&pending.compact_id)
@@ -310,6 +304,17 @@ impl SpineRuntime {
             },
         )?;
         self.pending_memory_context_accounting = Some(pending);
+        Ok(())
+    }
+
+    fn consume_superseded_memory_context_accounting_pending(&mut self) -> Result<(), SpineError> {
+        if let Some(existing) = self.pending_memory_context_accounting.take() {
+            self.consume_memory_context_accounting_pending(
+                existing,
+                None,
+                MemoryContextAccountingSkipReason::SupersededByNewPending,
+            )?;
+        }
         Ok(())
     }
 
@@ -351,13 +356,7 @@ impl SpineRuntime {
         mem: &MemRecord,
     ) -> Result<(), SpineError> {
         let Some(baseline) = replacement_prefix_baseline_tokens(mem) else {
-            if let Some(existing) = self.pending_memory_context_accounting.take() {
-                self.consume_memory_context_accounting_pending(
-                    existing,
-                    None,
-                    MemoryContextAccountingSkipReason::SupersededByNewPending,
-                )?;
-            }
+            self.consume_superseded_memory_context_accounting_pending()?;
             return Ok(());
         };
         self.append_memory_context_accounting_pending(PendingMemoryContextAccounting {
