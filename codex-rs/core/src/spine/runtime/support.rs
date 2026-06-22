@@ -43,14 +43,6 @@ pub(super) fn mark_raw_prefix_covered(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum ToolRawItemKind {
-    SpineControlRequest,
-    SpineTreeRequest,
-    Request,
-    Response,
-}
-
 pub(super) fn completed_toolcall_first_segment(
     toolcall: &CompletedToolCall,
 ) -> Result<&CompletedToolCallSegment, SpineError> {
@@ -61,8 +53,6 @@ pub(super) fn completed_toolcall_first_segment(
 
 pub(super) fn raw_item_requires_spine_coverage(
     item: &ResponseItem,
-    _spine_control_call_ids: &BTreeSet<String>,
-    _spine_tree_call_ids: &BTreeSet<String>,
     completed_tool_call_ids: &BTreeSet<String>,
 ) -> bool {
     match item {

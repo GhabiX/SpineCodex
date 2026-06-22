@@ -2,12 +2,8 @@ use codex_protocol::models::ResponseItem;
 use std::collections::BTreeSet;
 
 use super::LiveRootCompact;
-use super::SPINE_NAMESPACE;
-use super::SPINE_TOOL_TREE;
 use super::SpineError;
 use super::SpineRuntime;
-use super::support::ToolRawItemKind;
-use super::support::is_spine_parser_control_tool_name;
 use super::support::mark_raw_covered;
 use super::support::mark_raw_prefix_covered;
 use super::support::raw_item_requires_spine_coverage;
@@ -18,8 +14,6 @@ use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 
 struct RawToolCallIds {
-    spine_control: BTreeSet<String>,
-    spine_tree: BTreeSet<String>,
     request: BTreeSet<String>,
     response: BTreeSet<String>,
 }
@@ -47,12 +41,7 @@ impl SpineRuntime {
         }
         for (index, item) in raw_items.iter().enumerate() {
             if item.as_ref().is_some_and(|item| {
-                raw_item_requires_spine_coverage(
-                    item,
-                    &call_ids.spine_control,
-                    &call_ids.spine_tree,
-                    &completed_tool_call_ids,
-                )
+                raw_item_requires_spine_coverage(item, &completed_tool_call_ids)
             }) && !covered[index]
             {
                 return Err(SpineError::SidecarCorruption(format!(
@@ -121,52 +110,22 @@ fn collect_raw_tool_call_ids(raw_items: &[Option<ResponseItem>]) -> RawToolCallI
     raw_items
         .iter()
         .filter_map(|item| match item.as_ref()? {
-            ResponseItem::FunctionCall {
-                call_id,
-                namespace: Some(namespace),
-                name,
-                ..
-            } if namespace == SPINE_NAMESPACE && is_spine_parser_control_tool_name(name) => {
-                Some((call_id.clone(), ToolRawItemKind::SpineControlRequest))
-            }
-            ResponseItem::FunctionCall {
-                call_id,
-                namespace: Some(namespace),
-                name,
-                ..
-            } if namespace == SPINE_NAMESPACE && name == SPINE_TOOL_TREE => {
-                Some((call_id.clone(), ToolRawItemKind::SpineTreeRequest))
-            }
             item => tool_request_call_id(item)
-                .map(|call_id| (call_id.to_string(), ToolRawItemKind::Request))
+                .map(|call_id| (call_id.to_string(), true))
                 .or_else(|| {
-                    tool_response_call_id(item)
-                        .map(|call_id| (call_id.to_string(), ToolRawItemKind::Response))
+                    tool_response_call_id(item).map(|call_id| (call_id.to_string(), false))
                 }),
         })
         .fold(
             RawToolCallIds {
-                spine_control: BTreeSet::new(),
-                spine_tree: BTreeSet::new(),
                 request: BTreeSet::new(),
                 response: BTreeSet::new(),
             },
-            |mut ids, (call_id, kind)| {
-                match kind {
-                    ToolRawItemKind::SpineControlRequest => {
-                        ids.spine_control.insert(call_id.clone());
-                        ids.request.insert(call_id);
-                    }
-                    ToolRawItemKind::SpineTreeRequest => {
-                        ids.spine_tree.insert(call_id.clone());
-                        ids.request.insert(call_id);
-                    }
-                    ToolRawItemKind::Request => {
-                        ids.request.insert(call_id);
-                    }
-                    ToolRawItemKind::Response => {
-                        ids.response.insert(call_id);
-                    }
+            |mut ids, (call_id, is_request)| {
+                if is_request {
+                    ids.request.insert(call_id);
+                } else {
+                    ids.response.insert(call_id);
                 }
                 ids
             },
