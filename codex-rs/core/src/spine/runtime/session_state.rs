@@ -331,6 +331,20 @@ pub(crate) struct SpineToolcallCommitProviderInputTokens {
     current_turn: Option<i64>,
 }
 
+pub(crate) enum SpineToolcallCommitHostStep {
+    Done(SpineHostEffects),
+    Retry,
+    NoSpineCommit,
+    FailClosed {
+        reason: &'static str,
+        error: SpineError,
+    },
+    AbortPending {
+        reason: &'static str,
+        error: SpineError,
+    },
+}
+
 const SPINE_TOOLCALL_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
 const SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON: &str =
     "spine runtime missing during completed toolcall commit";
@@ -460,19 +474,14 @@ impl SpineToolcallCommitHostPlan {
         }
     }
 
-    pub(crate) fn interpret_attempt_for_host<T>(
+    pub(crate) fn interpret_attempt_for_host(
         &self,
         attempt: SpineCommitAttempt,
         lock_retries: usize,
         call_id: &str,
-        done: impl FnOnce(SpineHostEffects) -> T,
-        retry: impl FnOnce() -> T,
-        no_spine_commit: impl FnOnce() -> T,
-        fail_closed: impl FnOnce(&'static str, SpineError) -> T,
-        abort_pending: impl FnOnce(&'static str, SpineError) -> T,
-    ) -> Result<T, SpineError> {
+    ) -> Result<SpineToolcallCommitHostStep, SpineError> {
         let decision = self.interpret_attempt(attempt, lock_retries, call_id)?;
-        Ok(decision.into_host_step(done, retry, no_spine_commit, fail_closed, abort_pending))
+        Ok(decision.into_host_step())
     }
 
     fn commit_missing_decision(
@@ -567,20 +576,17 @@ impl SpineToolcallCommitLoopDecision {
         }
     }
 
-    fn into_host_step<T>(
-        self,
-        done: impl FnOnce(SpineHostEffects) -> T,
-        retry: impl FnOnce() -> T,
-        no_spine_commit: impl FnOnce() -> T,
-        fail_closed: impl FnOnce(&'static str, SpineError) -> T,
-        abort_pending: impl FnOnce(&'static str, SpineError) -> T,
-    ) -> T {
+    fn into_host_step(self) -> SpineToolcallCommitHostStep {
         match self.kind {
-            SpineToolcallCommitLoopDecisionKind::Done(effects) => done(effects),
-            SpineToolcallCommitLoopDecisionKind::Retry => retry(),
-            SpineToolcallCommitLoopDecisionKind::NoSpineCommit => no_spine_commit(),
+            SpineToolcallCommitLoopDecisionKind::Done(effects) => {
+                SpineToolcallCommitHostStep::Done(effects)
+            }
+            SpineToolcallCommitLoopDecisionKind::Retry => SpineToolcallCommitHostStep::Retry,
+            SpineToolcallCommitLoopDecisionKind::NoSpineCommit => {
+                SpineToolcallCommitHostStep::NoSpineCommit
+            }
             SpineToolcallCommitLoopDecisionKind::HostAction(host_action) => {
-                host_action.into_host_step(fail_closed, abort_pending)
+                host_action.into_host_step()
             }
         }
     }
@@ -609,14 +615,14 @@ impl SpineToolcallCommitTerminalHostAction {
         Self::AbortPending { reason, error }
     }
 
-    fn into_host_step<T>(
-        self,
-        fail_closed: impl FnOnce(&'static str, SpineError) -> T,
-        abort_pending: impl FnOnce(&'static str, SpineError) -> T,
-    ) -> T {
+    fn into_host_step(self) -> SpineToolcallCommitHostStep {
         match self {
-            Self::FailClosed { reason, error } => fail_closed(reason, error),
-            Self::AbortPending { reason, error } => abort_pending(reason, error),
+            Self::FailClosed { reason, error } => {
+                SpineToolcallCommitHostStep::FailClosed { reason, error }
+            }
+            Self::AbortPending { reason, error } => {
+                SpineToolcallCommitHostStep::AbortPending { reason, error }
+            }
         }
     }
 }
