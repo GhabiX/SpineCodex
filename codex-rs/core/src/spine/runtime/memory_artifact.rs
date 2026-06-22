@@ -17,8 +17,9 @@ impl SpineRuntime {
         mem: &MemRecord,
         body: &str,
     ) -> Result<(), SpineError> {
-        self.store.write_memory_body(&mem.compact_id, body)?;
-        Ok(())
+        self.store
+            .write_memory_body(&mem.compact_id, body)
+            .map(|_| ())
     }
 
     pub(super) fn commit_prepared_memory_record(
