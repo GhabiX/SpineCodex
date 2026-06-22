@@ -185,11 +185,8 @@ fn next_ledger_seq(
     seqs: impl Iterator<Item = u64>,
     overflow_message: &str,
 ) -> Result<u64, SpineError> {
-    seqs.max()
-        .map(|seq| {
-            seq.checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent(overflow_message.to_string()))
-        })
-        .transpose()
-        .map(|seq| seq.unwrap_or(0))
+    seqs.max().map_or(Ok(0), |seq| {
+        seq.checked_add(1)
+            .ok_or_else(|| SpineError::InvalidEvent(overflow_message.to_string()))
+    })
 }
