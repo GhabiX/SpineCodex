@@ -3,7 +3,13 @@ use super::SpineStore;
 use super::clone_rewrite;
 use super::locator;
 use crate::spine::SpineError;
+use crate::spine::checkpoint::SpineCheckpoint;
+use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
+use crate::spine::model::LoggedSpineLedgerEvent;
+use crate::spine::model::LoggedTrimEvent;
+use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
+use crate::spine::model::SpineCommitMarker;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -82,43 +88,25 @@ fn clone_for_rollout_into_store(
     let source_raw_live = &raw_live[..raw_ordinal_limit];
     let mask = RawMask::new(source_raw_live);
     target.ensure_trim_ledger_exists()?;
-    let clone_jit_records = source.tree_path().exists();
-    let source_events = if clone_jit_records {
-        source.events()?
-    } else {
-        Vec::new()
-    };
-    let source_mems = source.mems()?;
-    let source_checkpoints = if clone_jit_records {
-        source.checkpoints()?
-    } else {
-        Vec::new()
-    };
-    let source_compact_checkpoints = if clone_jit_records {
-        source.compact_checkpoints()?
-    } else {
-        Vec::new()
-    };
-    let source_commit_markers = if clone_jit_records {
-        source.commit_markers()?
-    } else {
-        Vec::new()
-    };
-    let source_trim_events = source.trim_events()?;
-    let source_events_by_seq = source_events
+    let source_records = SourceCloneRecords::read(source)?;
+    let source_events_by_seq = source_records
+        .events
         .iter()
         .map(|event| (event.seq, event))
         .collect::<BTreeMap<_, _>>();
-    let cloned_checkpoints =
-        checkpoints::select_cloned_checkpoints(source_checkpoints, boundary, source_raw_live)?;
+    let cloned_checkpoints = checkpoints::select_cloned_checkpoints(
+        source_records.checkpoints,
+        boundary,
+        source_raw_live,
+    )?;
     let cloned_compact_checkpoints = checkpoints::select_cloned_compact_checkpoints(
-        source_compact_checkpoints,
+        source_records.compact_checkpoints,
         boundary,
         source_raw_live,
     )?;
     let (cloned_commit_markers, all_marker_structural_event_seqs) =
         events::select_cloned_commit_markers(
-            source_commit_markers,
+            source_records.commit_markers,
             &source_events_by_seq,
             boundary,
             source_raw_live,
@@ -126,7 +114,7 @@ fn clone_for_rollout_into_store(
         )?;
     drop(source_events_by_seq);
     let cloned_events = events::select_cloned_events(
-        source_events,
+        source_records.events,
         &cloned_commit_markers,
         &all_marker_structural_event_seqs,
         boundary,
@@ -135,8 +123,11 @@ fn clone_for_rollout_into_store(
     for event in &cloned_events {
         target.append_logged_event(event)?;
     }
-    let mut required_memory_ids =
-        memory_ids::required_memory_ids_for_cloned_events(&cloned_events, &source_mems, mask)?;
+    let mut required_memory_ids = memory_ids::required_memory_ids_for_cloned_events(
+        &cloned_events,
+        &source_records.mems,
+        mask,
+    )?;
     memory_ids::add_required_memory_refs(
         &mut required_memory_ids,
         &cloned_compact_checkpoints,
@@ -146,7 +137,7 @@ fn clone_for_rollout_into_store(
     side_ledgers::copy_pressure_and_trim(
         source,
         target,
-        source_trim_events,
+        source_records.trim_events,
         boundary,
         source_raw_live,
         mask,
@@ -154,7 +145,7 @@ fn clone_for_rollout_into_store(
     let cloned_memory_paths = memory_copy::copy_required_memories(
         source,
         target,
-        source_mems,
+        source_records.mems,
         &required_memory_ids,
         mask,
     )?;
@@ -180,4 +171,49 @@ fn clone_for_rollout_into_store(
         target.append_commit_marker(&marker)?;
     }
     Ok(())
+}
+
+struct SourceCloneRecords {
+    events: Vec<LoggedSpineLedgerEvent>,
+    mems: Vec<MemRecord>,
+    checkpoints: Vec<SpineCheckpoint>,
+    compact_checkpoints: Vec<SpineCompactCheckpoint>,
+    commit_markers: Vec<SpineCommitMarker>,
+    trim_events: Vec<LoggedTrimEvent>,
+}
+
+impl SourceCloneRecords {
+    fn read(source: &SpineStore) -> Result<Self, SpineError> {
+        let clone_jit_records = source.tree_path().exists();
+        let events = if clone_jit_records {
+            source.events()?
+        } else {
+            Vec::new()
+        };
+        let mems = source.mems()?;
+        let checkpoints = if clone_jit_records {
+            source.checkpoints()?
+        } else {
+            Vec::new()
+        };
+        let compact_checkpoints = if clone_jit_records {
+            source.compact_checkpoints()?
+        } else {
+            Vec::new()
+        };
+        let commit_markers = if clone_jit_records {
+            source.commit_markers()?
+        } else {
+            Vec::new()
+        };
+        let trim_events = source.trim_events()?;
+        Ok(Self {
+            events,
+            mems,
+            checkpoints,
+            compact_checkpoints,
+            commit_markers,
+            trim_events,
+        })
+    }
 }
