@@ -214,6 +214,8 @@ mod provider_legacy_pressure_corrupt;
 mod raw_coverage;
 #[path = "tests/rollback_checkpoint_continuation.rs"]
 mod rollback_checkpoint_continuation;
+#[path = "tests/rollback_checkpoint_continuation_alias.rs"]
+mod rollback_checkpoint_continuation_alias;
 #[path = "tests/rollback_checkpoint_fail_closed.rs"]
 mod rollback_checkpoint_fail_closed;
 #[path = "tests/rollback_checkpoint_fail_closed_rendered.rs"]

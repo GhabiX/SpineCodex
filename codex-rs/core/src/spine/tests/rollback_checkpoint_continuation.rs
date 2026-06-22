@@ -5,12 +5,7 @@ fn rollback_checkpoint_new_open_reuses_restored_sibling_id() {
     assert_rollback_checkpoint_new_open_reuses_restored_sibling_id();
 }
 
-#[test]
-fn rollback_allocates_correct_sibling_after_restore() {
-    assert_rollback_checkpoint_new_open_reuses_restored_sibling_id();
-}
-
-fn assert_rollback_checkpoint_new_open_reuses_restored_sibling_id() {
+pub(super) fn assert_rollback_checkpoint_new_open_reuses_restored_sibling_id() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![
