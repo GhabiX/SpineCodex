@@ -11,13 +11,17 @@ pub(in crate::spine::store::clone_sidecar) fn select_cloned_checkpoints(
 ) -> Result<Vec<SpineCheckpoint>, SpineError> {
     let mut cloned = Vec::new();
     for checkpoint in checkpoints {
-        let checkpoint_boundary = usize::try_from(checkpoint.raw_ordinal)
-            .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
+        let checkpoint_boundary =
+            raw_boundary_usize(checkpoint.raw_ordinal, "checkpoint raw ordinal overflow")?;
         if checkpoint.checkpoint_id != "initial"
-            && checkpoint.token_seq <= boundary.structural_seq_limit
-            && checkpoint.raw_ordinal <= boundary.raw_ordinal_limit
-            && checkpoint_boundary <= source_raw_live.len()
-            && checkpoint.raw_live_hash == hash_raw_live(&source_raw_live[..checkpoint_boundary])
+            && checkpoint_in_clone_boundary(
+                checkpoint.token_seq,
+                checkpoint.raw_ordinal,
+                checkpoint_boundary,
+                &checkpoint.raw_live_hash,
+                boundary,
+                source_raw_live,
+            )
         {
             cloned.push(checkpoint);
         }
@@ -32,16 +36,39 @@ pub(in crate::spine::store::clone_sidecar) fn select_cloned_compact_checkpoints(
 ) -> Result<Vec<SpineCompactCheckpoint>, SpineError> {
     let mut cloned = Vec::new();
     for checkpoint in checkpoints {
-        let checkpoint_boundary = usize::try_from(checkpoint.raw_boundary).map_err(|_| {
-            SpineError::InvalidEvent("compact checkpoint raw boundary overflow".to_string())
-        })?;
-        if checkpoint.token_seq <= boundary.structural_seq_limit
-            && checkpoint.raw_boundary <= boundary.raw_ordinal_limit
-            && checkpoint_boundary <= source_raw_live.len()
-            && checkpoint.raw_live_hash == hash_raw_live(&source_raw_live[..checkpoint_boundary])
-        {
+        let checkpoint_boundary = raw_boundary_usize(
+            checkpoint.raw_boundary,
+            "compact checkpoint raw boundary overflow",
+        )?;
+        if checkpoint_in_clone_boundary(
+            checkpoint.token_seq,
+            checkpoint.raw_boundary,
+            checkpoint_boundary,
+            &checkpoint.raw_live_hash,
+            boundary,
+            source_raw_live,
+        ) {
             cloned.push(checkpoint);
         }
     }
     Ok(cloned)
+}
+
+fn raw_boundary_usize(raw_boundary: u64, overflow_message: &str) -> Result<usize, SpineError> {
+    usize::try_from(raw_boundary)
+        .map_err(|_| SpineError::InvalidEvent(overflow_message.to_string()))
+}
+
+fn checkpoint_in_clone_boundary(
+    token_seq: u64,
+    raw_boundary: u64,
+    raw_boundary_usize: usize,
+    raw_live_hash: &str,
+    boundary: &SpineCloneBoundary,
+    source_raw_live: &[bool],
+) -> bool {
+    token_seq <= boundary.structural_seq_limit
+        && raw_boundary <= boundary.raw_ordinal_limit
+        && raw_boundary_usize <= source_raw_live.len()
+        && raw_live_hash == hash_raw_live(&source_raw_live[..raw_boundary_usize])
 }
