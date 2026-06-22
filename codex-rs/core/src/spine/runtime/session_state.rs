@@ -91,7 +91,7 @@ enum SpineCompletedToolCallRequestIds<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SpineToolCallOutputHostRecording {
+enum SpineToolCallOutputHostRecording {
     MaybePreRecordSingle,
     RecordGroupBeforeCommit,
 }
@@ -157,16 +157,26 @@ impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
         self.call_id
     }
 
-    pub(crate) fn output_items(&self) -> &'a [ResponseItem] {
-        self.output_items
-    }
-
     pub(crate) fn commit_output_item(&self) -> &'a ResponseItem {
         self.commit_output_item
     }
 
-    pub(crate) fn recording(&self) -> SpineToolCallOutputHostRecording {
-        self.recording
+    pub(crate) fn single_output_requiring_optional_prerecord(
+        &self,
+    ) -> Option<(&'a str, &'a ResponseItem)> {
+        match self.recording {
+            SpineToolCallOutputHostRecording::MaybePreRecordSingle => {
+                Some((self.call_id, self.commit_output_item))
+            }
+            SpineToolCallOutputHostRecording::RecordGroupBeforeCommit => None,
+        }
+    }
+
+    pub(crate) fn output_group_to_record_before_commit(&self) -> Option<&'a [ResponseItem]> {
+        match self.recording {
+            SpineToolCallOutputHostRecording::MaybePreRecordSingle => None,
+            SpineToolCallOutputHostRecording::RecordGroupBeforeCommit => Some(self.output_items),
+        }
     }
 }
 

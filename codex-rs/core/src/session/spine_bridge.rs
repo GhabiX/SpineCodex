@@ -19,7 +19,6 @@ use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 use crate::spine::SpineToolCallEvidence;
-use crate::spine::SpineToolCallOutputHostRecording;
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineTreeUpdateDelivery;
@@ -934,41 +933,38 @@ impl Session {
         spine_slot: &Mutex<SpineSessionState>,
         output: &SpineCompletedToolCallOutputEvidence<'_>,
     ) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError> {
-        match output.recording() {
-            SpineToolCallOutputHostRecording::MaybePreRecordSingle => {
-                self.record_single_spine_toolcall_output_if_needed(
+        if let Some((call_id, item)) = output.single_output_requiring_optional_prerecord() {
+            return self
+                .record_single_spine_toolcall_output_if_needed(
                     turn_context,
                     spine_slot,
-                    output.call_id(),
-                    output.commit_output_item(),
+                    call_id,
+                    item,
                 )
-                .await
-            }
-            SpineToolCallOutputHostRecording::RecordGroupBeforeCommit => {
-                let (output_raw_ordinals, _) = {
-                    let raw_start = spine_slot.lock().await.raw_len();
-                    assign_spine_raw_ordinals(raw_start, output.output_items())?
-                };
-                let output_context_start = self.clone_history().await.raw_items().len();
-                self.record_conversation_items_without_spine_observe(
-                    turn_context,
-                    output.output_items(),
-                )
-                .await
-                .map_err(|err| {
-                    SpineError::Operation(format!(
-                        "failed to record grouped Spine tool outputs before commit: {err}"
-                    ))
-                })?;
-                Ok(Some(SpineCompletedToolCallOutputAnchor {
-                    raw_ordinals: output_raw_ordinals,
-                    context_start: output_context_start,
-                    already_recorded: true,
-                    recorded_inside_reduce: false,
-                    history_before_recorded_output: None,
-                }))
-            }
+                .await;
         }
+        let Some(output_items) = output.output_group_to_record_before_commit() else {
+            return Ok(None);
+        };
+        let (output_raw_ordinals, _) = {
+            let raw_start = spine_slot.lock().await.raw_len();
+            assign_spine_raw_ordinals(raw_start, output_items)?
+        };
+        let output_context_start = self.clone_history().await.raw_items().len();
+        self.record_conversation_items_without_spine_observe(turn_context, output_items)
+            .await
+            .map_err(|err| {
+                SpineError::Operation(format!(
+                    "failed to record grouped Spine tool outputs before commit: {err}"
+                ))
+            })?;
+        Ok(Some(SpineCompletedToolCallOutputAnchor {
+            raw_ordinals: output_raw_ordinals,
+            context_start: output_context_start,
+            already_recorded: true,
+            recorded_inside_reduce: false,
+            history_before_recorded_output: None,
+        }))
     }
 
     async fn record_single_spine_toolcall_output_if_needed(

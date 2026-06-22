@@ -98,7 +98,6 @@ pub(crate) use session_state::SpineCompletedToolCallOutputEvidence;
 pub(crate) use session_state::SpineObservedContextItem;
 pub(crate) use session_state::SpineSessionState;
 pub(crate) use session_state::SpineToolCallEvidence;
-pub(crate) use session_state::SpineToolCallOutputHostRecording;
 pub(crate) use session_state::SpineToolOutputRecording;
 pub(crate) use session_state::SpineToolcallCommitEvidence;
 pub(crate) use session_state::SpineToolcallCommitInput;
