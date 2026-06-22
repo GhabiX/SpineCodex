@@ -5,7 +5,6 @@ use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::spine::SPINE_TOOL_TRIM;
-use crate::spine::SpineTrimOutcome;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -357,24 +356,8 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
                     }
                 }
                 .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
-                let message = match outcome {
-                    SpineTrimOutcome::Cleared { trim_id } => {
-                        format!("Trimmed tool response {trim_id}.")
-                    }
-                    SpineTrimOutcome::AlreadyCleared { trim_id } => {
-                        format!("Tool response {trim_id} was already cleared.")
-                    }
-                    SpineTrimOutcome::Sliced { trim_id } => {
-                        format!("Sliced tool response {trim_id}.")
-                    }
-                    SpineTrimOutcome::Miss { trim_id } => {
-                        format!(
-                            "Could not find trim id {trim_id} in the previous completed toolcall. Do not retry this TRIM_ID."
-                        )
-                    }
-                };
                 Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                    message,
+                    outcome.model_response_message(),
                     Some(true),
                 )))
             }

@@ -124,6 +124,23 @@ pub(crate) enum SpineTrimOutcome {
     Miss { trim_id: String },
 }
 
+impl SpineTrimOutcome {
+    pub(crate) fn model_response_message(&self) -> String {
+        match self {
+            Self::Cleared { trim_id } => format!("Trimmed tool response {trim_id}."),
+            Self::AlreadyCleared { trim_id } => {
+                format!("Tool response {trim_id} was already cleared.")
+            }
+            Self::Sliced { trim_id } => format!("Sliced tool response {trim_id}."),
+            Self::Miss { trim_id } => {
+                format!(
+                    "Could not find trim id {trim_id} in the previous completed toolcall. Do not retry this TRIM_ID."
+                )
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct LiveRootCompact {
     pub(crate) raw_boundary: u64,
