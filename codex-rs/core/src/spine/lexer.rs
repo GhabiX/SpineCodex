@@ -586,6 +586,19 @@ pub(in crate::spine) fn lex_toolcall(
     ))
 }
 
+pub(in crate::spine) fn lex_toolcall_event_token(
+    segments: impl IntoIterator<Item = ToolCallLexSegment>,
+    request_call_id_count: Option<usize>,
+) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+    let (event, token) = lex_toolcall(segments, request_call_id_count)?.into_single("toolcall")?;
+    if !matches!(token, SpineToken::ToolCall { .. }) {
+        return Err(SpineError::Invariant(
+            "toolcall lexer produced non-toolcall token".to_string(),
+        ));
+    }
+    Ok((event, token))
+}
+
 pub(in crate::spine) fn lex_toolcall_event(
     segments: impl IntoIterator<Item = ToolCallEventSegment>,
 ) -> Result<LexedTokenBatch, SpineError> {

@@ -18,6 +18,7 @@ use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::ToolCallLexSegment;
 use crate::spine::lexer::lex_observed_msg;
+use crate::spine::lexer::lex_toolcall_event_token;
 use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
@@ -402,21 +403,14 @@ impl SpineRuntime {
     ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
         let plan = plan_control_toolcall(ControlIntent::Ordinary);
         debug_assert_eq!(plan.token_sequence(), &[LexedTokenKind::ToolCall]);
-        let lexed = crate::spine::lexer::lex_toolcall(
+        lex_toolcall_event_token(
             toolcall.segments.iter().map(|segment| ToolCallLexSegment {
                 kind: segment.kind,
                 raw_ordinal: segment.raw_ordinal,
                 context_index: segment.context_index,
             }),
             Some(toolcall.request_call_ids.len()),
-        )?;
-        let (event, token) = lexed.into_single("toolcall")?;
-        if !matches!(token, SpineToken::ToolCall { .. }) {
-            return Err(SpineError::Invariant(
-                "toolcall lexer produced non-toolcall token".to_string(),
-            ));
-        }
-        Ok((event, token))
+        )
     }
 
     pub(super) fn clear_completed_toolcall_anchors(&mut self, toolcall: &CompletedToolCall) {
