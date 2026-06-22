@@ -74,6 +74,10 @@ pub(crate) struct SpineRootCompactPublish {
     prepared: SpineRootCompactHostPublish,
 }
 
+pub(crate) struct SpineRootCompactHostOutcome {
+    spine_tree_snapshot: Option<SpineTreeUpdateEvent>,
+}
+
 pub(crate) enum SpineToolcallTurnError {
     Codex(CodexErr),
     Terminal {
@@ -139,6 +143,18 @@ impl SpineRootCompactPublish {
 
     fn materialized(&self) -> &[ResponseItem] {
         self.prepared.materialized()
+    }
+}
+
+impl SpineRootCompactHostOutcome {
+    fn new(spine_tree_snapshot: Option<SpineTreeUpdateEvent>) -> Self {
+        Self {
+            spine_tree_snapshot,
+        }
+    }
+
+    pub(crate) fn into_spine_tree_snapshot(self) -> Option<SpineTreeUpdateEvent> {
+        self.spine_tree_snapshot
     }
 }
 
@@ -1587,7 +1603,7 @@ impl Session {
         &self,
         prepared: SpineRootCompactPublish,
         published_history_len: usize,
-    ) -> CodexResult<SpineHostEffects> {
+    ) -> CodexResult<SpineRootCompactHostOutcome> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Err(CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
@@ -1604,17 +1620,18 @@ impl Session {
                 ),
             });
         }
-        guard
+        let effects = guard
             .take_pending_root_compact_host_effects_after_history_publish(published_history_len)
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),
-            })
+            })?;
+        Self::root_compact_host_outcome_from_effects(effects)
     }
 
-    pub(crate) fn root_compact_tree_snapshot_from_host_effects(
+    fn root_compact_host_outcome_from_effects(
         effects: SpineHostEffects,
-    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
+    ) -> CodexResult<SpineRootCompactHostOutcome> {
         let (immediate, deferred) = effects.into_tree_host_updates().into_parts();
         if !deferred.is_empty() {
             return Err(CodexErr::SpineTerminalFailure {
@@ -1630,7 +1647,7 @@ impl Session {
                 reason: "root compact hook returned multiple tree updates".to_string(),
             });
         }
-        Ok(snapshot)
+        Ok(SpineRootCompactHostOutcome::new(snapshot))
     }
 }
 
