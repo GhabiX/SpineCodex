@@ -36,7 +36,11 @@ pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
 }
 
-pub(crate) enum SpineCommitAttempt {
+pub(crate) struct SpineCommitAttempt {
+    kind: SpineCommitAttemptKind,
+}
+
+enum SpineCommitAttemptKind {
     Done(SpineCommitOutput),
     Retry,
     RuntimeMissing,
@@ -378,10 +382,12 @@ impl SpineToolcallCommitHostPlan {
         lock_retries: usize,
         call_id: &str,
     ) -> Result<SpineToolcallCommitLoopDecision, SpineError> {
-        match attempt {
-            SpineCommitAttempt::Done(output) => Ok(SpineToolcallCommitLoopDecision::done(output)),
-            SpineCommitAttempt::RuntimeMissing => self.commit_missing_decision(call_id),
-            SpineCommitAttempt::Retry => self.retry_decision(lock_retries, call_id),
+        match attempt.kind {
+            SpineCommitAttemptKind::Done(output) => {
+                Ok(SpineToolcallCommitLoopDecision::done(output))
+            }
+            SpineCommitAttemptKind::RuntimeMissing => self.commit_missing_decision(call_id),
+            SpineCommitAttemptKind::Retry => self.retry_decision(lock_retries, call_id),
         }
     }
 
@@ -622,15 +628,29 @@ impl PreparedSpineToolcallCommit {
 }
 
 impl SpineCommitAttempt {
+    pub(crate) fn retry() -> Self {
+        Self {
+            kind: SpineCommitAttemptKind::Retry,
+        }
+    }
+
+    fn runtime_missing() -> Self {
+        Self {
+            kind: SpineCommitAttemptKind::RuntimeMissing,
+        }
+    }
+
     pub(crate) fn done(
         state: &mut SpineSessionState,
         committed: CommittedSpineToolcall,
         snapshot: Option<SpineTreeUpdateEvent>,
     ) -> Self {
-        Self::Done(SpineCommitOutput {
-            post_commit_effects: state
-                .committed_toolcall_post_apply_host_effects(committed, snapshot),
-        })
+        Self {
+            kind: SpineCommitAttemptKind::Done(SpineCommitOutput {
+                post_commit_effects: state
+                    .committed_toolcall_post_apply_host_effects(committed, snapshot),
+            }),
+        }
     }
 }
 
@@ -1840,7 +1860,7 @@ impl SpineSessionState {
             current_turn_provider_input_tokens,
         )?
         else {
-            return Ok(SpineCommitAttempt::RuntimeMissing);
+            return Ok(SpineCommitAttempt::runtime_missing());
         };
         let committed = self.commit_prepared_toolcall_with_host_effects(
             &call_id,
