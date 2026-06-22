@@ -120,6 +120,8 @@ mod compact_checkpoint_clone_boundary;
 mod compact_checkpoint_proofs;
 #[path = "tests/compact_checkpoint_validation.rs"]
 mod compact_checkpoint_validation;
+#[path = "tests/compact_checkpoint_validation_missing_marker.rs"]
+mod compact_checkpoint_validation_missing_marker;
 #[path = "tests/error_classification.rs"]
 mod error_classification;
 #[path = "tests/error_classification_runtime.rs"]
