@@ -232,6 +232,8 @@ mod rollback_checkpoint_records_initial;
 mod rollback_checkpoint_records_provider;
 #[path = "tests/rollback_checkpoint_restore.rs"]
 mod rollback_checkpoint_restore;
+#[path = "tests/rollback_checkpoint_restore_alias.rs"]
+mod rollback_checkpoint_restore_alias;
 #[path = "tests/rollback_sparse.rs"]
 mod rollback_sparse;
 #[path = "tests/rollback_sparse_hole.rs"]
