@@ -65,6 +65,16 @@ struct SpineCommitOutput {
     post_commit_effects: SpineHostEffects,
 }
 
+pub(crate) struct SpineRootCompactPublish {
+    install: SpineRootCompactHostInstall,
+}
+
+impl SpineRootCompactPublish {
+    fn new(install: SpineRootCompactHostInstall) -> Self {
+        Self { install }
+    }
+}
+
 struct SpinePreparedToolCallEvidence<'a> {
     call_id: &'a str,
     response_item: &'a ResponseItem,
@@ -1343,7 +1353,7 @@ impl Session {
         &self,
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
-    ) -> CodexResult<Option<SpineRootCompactHostInstall>> {
+    ) -> CodexResult<Option<SpineRootCompactPublish>> {
         let Some(root_compact) = self
             .prepare_spine_root_compact_from_native_history(items)
             .await
@@ -1356,7 +1366,7 @@ impl Session {
         };
         *items = root_compact.materialized().to_vec();
         compacted_item.replacement_history = Some(items.clone());
-        Ok(Some(root_compact))
+        Ok(Some(SpineRootCompactPublish::new(root_compact)))
     }
 
     async fn prepare_spine_root_compact_from_native_history(
@@ -1396,7 +1406,7 @@ impl Session {
 
     pub(crate) async fn finalize_spine_root_compact_after_history_publish(
         &self,
-        prepared: SpineRootCompactHostInstall,
+        prepared: SpineRootCompactPublish,
         published_history_len: usize,
     ) -> CodexResult<SpineTreeUpdateEvent> {
         let Some(spine_slot) = self.spine.as_ref() else {
@@ -1407,7 +1417,7 @@ impl Session {
         };
         let mut guard = spine_slot.lock().await;
         guard
-            .apply_root_compact_after_history_publish(prepared, published_history_len)
+            .apply_root_compact_after_history_publish(prepared.install, published_history_len)
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),
