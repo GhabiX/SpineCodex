@@ -39,21 +39,7 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
     raw_live: &[bool],
 ) -> Result<(), SpineError> {
     for memory in &marker.memory_refs {
-        let mut matching_mems = mems
-            .iter()
-            .filter(|record| record.compact_id == memory.compact_id);
-        let Some(mem) = matching_mems.next() else {
-            return Err(SpineError::InvalidStore(format!(
-                "Spine commit marker {} references missing memory {}",
-                marker.op_id, memory.compact_id
-            )));
-        };
-        if matching_mems.next().is_some() {
-            return Err(SpineError::InvalidStore(format!(
-                "Spine commit marker {} references ambiguous memory {}",
-                marker.op_id, memory.compact_id
-            )));
-        }
+        let mem = unique_committed_memory_for_ref(marker, memory, mems)?;
         if memory.kind != mem.kind
             || memory.node != mem.node
             || memory.raw_start != mem.raw_start
@@ -93,6 +79,29 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
         )));
     }
     Ok(())
+}
+
+fn unique_committed_memory_for_ref<'a>(
+    marker: &SpineCommitMarker,
+    memory: &SpineCommitMemoryRef,
+    mems: &'a [MemRecord],
+) -> Result<&'a MemRecord, SpineError> {
+    let mut matching_mems = mems
+        .iter()
+        .filter(|record| record.compact_id == memory.compact_id);
+    let Some(mem) = matching_mems.next() else {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} references missing memory {}",
+            marker.op_id, memory.compact_id
+        )));
+    };
+    if matching_mems.next().is_some() {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} references ambiguous memory {}",
+            marker.op_id, memory.compact_id
+        )));
+    }
+    Ok(mem)
 }
 
 fn commit_memory_ref_allowed_by_source_live(
