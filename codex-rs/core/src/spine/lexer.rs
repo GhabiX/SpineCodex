@@ -300,6 +300,15 @@ pub(in crate::spine) fn lex_msg(
     ))
 }
 
+pub(in crate::spine) fn lex_msg_token(
+    raw_ordinal: u64,
+    context_index: u64,
+    from_user: bool,
+    user_anchor: Option<u64>,
+) -> Result<SpineToken, SpineError> {
+    lex_msg(raw_ordinal, context_index, from_user, user_anchor)?.into_single_token("msg")
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::spine) struct LexedObservedMsg {
     pub(in crate::spine) batch: LexedTokenBatch,
@@ -615,6 +624,12 @@ pub(in crate::spine) fn lex_toolcall_event(
         })
         .collect::<Result<Vec<_>, SpineError>>()?;
     lex_toolcall(segments, None)
+}
+
+pub(in crate::spine) fn lex_toolcall_event_as_token(
+    segments: impl IntoIterator<Item = ToolCallEventSegment>,
+) -> Result<SpineToken, SpineError> {
+    lex_toolcall_event(segments)?.into_single_token("toolcall")
 }
 
 fn validate_toolcall_segments(

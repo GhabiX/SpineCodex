@@ -25,11 +25,14 @@ pub(in crate::spine) fn event_to_token(
             context_index,
             from_user,
             user_anchor,
-        } => crate::spine::lexer::lex_msg(*raw_ordinal, *context_index, *from_user, *user_anchor)
-            .and_then(|lexed| lexed.into_single_token("msg")),
+        } => crate::spine::lexer::lex_msg_token(
+            *raw_ordinal,
+            *context_index,
+            *from_user,
+            *user_anchor,
+        ),
         SpineLedgerEvent::ToolCall { segments } => {
-            crate::spine::lexer::lex_toolcall_event(segments.iter().cloned())
-                .and_then(|lexed| lexed.into_single_token("toolcall"))
+            crate::spine::lexer::lex_toolcall_event_as_token(segments.iter().cloned())
         }
         SpineLedgerEvent::Open {
             child,
