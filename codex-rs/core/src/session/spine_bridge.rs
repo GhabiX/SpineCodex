@@ -13,6 +13,7 @@ use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
 use crate::spine::SpineMessageEvidence;
 use crate::spine::SpineObservedContextItem;
+#[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
@@ -66,12 +67,16 @@ struct SpineCommitOutput {
 }
 
 pub(crate) struct SpineRootCompactPublish {
-    install: SpineRootCompactHostInstall,
+    materialized_len: usize,
 }
 
 impl SpineRootCompactPublish {
-    fn new(install: SpineRootCompactHostInstall) -> Self {
-        Self { install }
+    fn new(materialized_len: usize) -> Self {
+        Self { materialized_len }
+    }
+
+    fn materialized_len(&self) -> usize {
+        self.materialized_len
     }
 }
 
@@ -1361,7 +1366,7 @@ impl Session {
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
     ) -> CodexResult<Option<SpineRootCompactPublish>> {
-        let Some(root_compact) = self
+        let Some(materialized) = self
             .prepare_spine_root_compact_from_native_history(items)
             .await
             .map_err(|err| CodexErr::SpineTerminalFailure {
@@ -1371,15 +1376,16 @@ impl Session {
         else {
             return Ok(None);
         };
-        *items = root_compact.materialized().to_vec();
+        let publish = SpineRootCompactPublish::new(materialized.len());
+        *items = materialized;
         compacted_item.replacement_history = Some(items.clone());
-        Ok(Some(SpineRootCompactPublish::new(root_compact)))
+        Ok(Some(publish))
     }
 
     async fn prepare_spine_root_compact_from_native_history(
         &self,
         items: &[ResponseItem],
-    ) -> Result<Option<SpineRootCompactHostInstall>, SpineError> {
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -1423,8 +1429,17 @@ impl Session {
             });
         };
         let mut guard = spine_slot.lock().await;
+        if prepared.materialized_len() != published_history_len {
+            return Err(CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: format!(
+                    "published history length {published_history_len} does not match prepared Spine root compact materialized length {}",
+                    prepared.materialized_len()
+                ),
+            });
+        }
         guard
-            .apply_root_compact_after_history_publish(prepared.install, published_history_len)
+            .take_pending_root_compact_after_history_publish(published_history_len)
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),

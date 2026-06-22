@@ -422,10 +422,12 @@ impl SpineGroupedToolcallOutputRecordingPlan {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PreparedSpineRootCompactCommit {
     install: SpinePreparedRootCompactInstall,
 }
 
+#[derive(Debug)]
 pub(crate) struct SpineRootCompactHostInstall {
     commit: PreparedSpineRootCompactCommit,
 }
@@ -578,6 +580,7 @@ fn completed_toolcall_evidence(
 pub(crate) struct SpineSessionState {
     raw_len: u64,
     runtime: Option<SpineRuntime>,
+    pending_root_compact_install: Option<SpineRootCompactHostInstall>,
     jit_enabled: bool,
     trim_enabled: bool,
     initial_tree_snapshot_emitted: bool,
@@ -593,6 +596,7 @@ impl SpineSessionState {
         Self {
             raw_len: 0,
             runtime: None,
+            pending_root_compact_install: None,
             jit_enabled,
             trim_enabled,
             initial_tree_snapshot_emitted: false,
@@ -628,6 +632,7 @@ impl SpineSessionState {
         mut runtime: Option<SpineRuntime>,
     ) -> Result<(), SpineError> {
         drop(self.runtime.take());
+        self.pending_root_compact_install = None;
         if let Some(runtime) = runtime.as_mut() {
             runtime.set_jit_enabled(self.jit_enabled);
             runtime.set_trim_enabled(self.trim_enabled);
@@ -641,14 +646,17 @@ impl SpineSessionState {
     }
 
     pub(crate) fn invalidate(&mut self, reason: impl Into<String>) {
+        self.pending_root_compact_install = None;
         self.invalid = Some(reason.into());
     }
 
     pub(crate) fn release_runtime_for_shutdown(&mut self) {
+        self.pending_root_compact_install = None;
         self.runtime = None;
     }
 
     pub(crate) fn release_runtime_for_replay(&mut self) {
+        self.pending_root_compact_install = None;
         self.runtime = None;
         self.initial_tree_snapshot_emitted = false;
     }
@@ -929,6 +937,18 @@ impl SpineSessionState {
             )));
         }
         runtime.build_tree_snapshot()
+    }
+
+    pub(crate) fn take_pending_root_compact_after_history_publish(
+        &mut self,
+        published_history_len: usize,
+    ) -> Result<SpineTreeUpdateEvent, SpineError> {
+        let prepared = self.pending_root_compact_install.take().ok_or_else(|| {
+            SpineError::InvalidStore(
+                "spine root compact publish missing prepared install".to_string(),
+            )
+        })?;
+        self.apply_root_compact_after_history_publish(prepared, published_history_len)
     }
 
     pub(crate) fn prepare_single_toolcall_output_recording(
@@ -1231,7 +1251,7 @@ impl SpineSessionState {
         compacted_history: &[ResponseItem],
         raw_items: &[Option<ResponseItem>],
         close_provider_input_tokens: Option<i64>,
-    ) -> Result<Option<SpineRootCompactHostInstall>, SpineError> {
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
         self.ensure_valid()?;
         if !self.is_ready() {
             return Ok(None);
@@ -1242,13 +1262,15 @@ impl SpineSessionState {
                     .to_string(),
             )
         })?;
-        self.prepare_native_root_compact_apply_with_checkpoint(
+        let install = self.prepare_native_root_compact_apply_with_checkpoint(
             rollout_path,
             body,
             raw_items,
             close_provider_input_tokens,
-        )
-        .map(Some)
+        )?;
+        let materialized = install.materialized().to_vec();
+        self.pending_root_compact_install = Some(install);
+        Ok(Some(materialized))
     }
 
     pub(crate) fn single_completed_toolcall_evidence(
