@@ -13,11 +13,6 @@ use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 
-struct RawToolCallIds {
-    request: BTreeSet<String>,
-    response: BTreeSet<String>,
-}
-
 impl SpineRuntime {
     pub(crate) fn validate_raw_coverage(
         &self,
@@ -26,12 +21,7 @@ impl SpineRuntime {
         if !self.jit_enabled {
             return Ok(());
         }
-        let call_ids = collect_raw_tool_call_ids(raw_items);
-        let completed_tool_call_ids = call_ids
-            .request
-            .intersection(&call_ids.response)
-            .cloned()
-            .collect::<BTreeSet<_>>();
+        let completed_tool_call_ids = completed_raw_tool_call_ids(raw_items);
         let mut covered = vec![false; raw_items.len()];
         for event in &self.ledger.events {
             if !event.allowed_by(RawMask::new(&self.raw_live))? {
@@ -106,28 +96,15 @@ fn mark_raw_covered_by_event(
     Ok(())
 }
 
-fn collect_raw_tool_call_ids(raw_items: &[Option<ResponseItem>]) -> RawToolCallIds {
-    raw_items
-        .iter()
-        .filter_map(|item| match item.as_ref()? {
-            item => tool_request_call_id(item)
-                .map(|call_id| (call_id.to_string(), true))
-                .or_else(|| {
-                    tool_response_call_id(item).map(|call_id| (call_id.to_string(), false))
-                }),
-        })
-        .fold(
-            RawToolCallIds {
-                request: BTreeSet::new(),
-                response: BTreeSet::new(),
-            },
-            |mut ids, (call_id, is_request)| {
-                if is_request {
-                    ids.request.insert(call_id);
-                } else {
-                    ids.response.insert(call_id);
-                }
-                ids
-            },
-        )
+fn completed_raw_tool_call_ids(raw_items: &[Option<ResponseItem>]) -> BTreeSet<String> {
+    let mut request = BTreeSet::new();
+    let mut response = BTreeSet::new();
+    for item in raw_items.iter().filter_map(Option::as_ref) {
+        if let Some(call_id) = tool_request_call_id(item) {
+            request.insert(call_id.to_string());
+        } else if let Some(call_id) = tool_response_call_id(item) {
+            response.insert(call_id.to_string());
+        }
+    }
+    request.intersection(&response).cloned().collect()
 }
