@@ -296,10 +296,7 @@ impl Session {
         effects: SpineHostEffects,
     ) -> Option<SpineTreeUpdateEvent> {
         let mut deferred_tree_update = None;
-        for effect in effects.into_effects() {
-            let Some((snapshot, delivery)) = effect.into_tree_update() else {
-                continue;
-            };
+        for (snapshot, delivery) in effects.into_tree_updates() {
             match delivery {
                 SpineTreeUpdateDelivery::Immediate => {
                     self.send_spine_tree_update(turn_context, snapshot).await;
@@ -785,10 +782,7 @@ impl Session {
                 )
             })?
         };
-        for effect in effects {
-            let Some((snapshot, delivery)) = effect.into_tree_update() else {
-                continue;
-            };
+        for (snapshot, delivery) in effects.into_tree_updates() {
             match delivery {
                 SpineTreeUpdateDelivery::Immediate => {
                     self.send_event_raw(Event {

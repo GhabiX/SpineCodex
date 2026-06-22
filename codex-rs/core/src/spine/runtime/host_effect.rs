@@ -29,6 +29,10 @@ impl SpineHostEffects {
         }
     }
 
+    fn many(effects: Vec<SpineHostEffect>) -> Self {
+        Self { effects }
+    }
+
     pub(crate) fn replace_history(update: SpineHistoryUpdate) -> Self {
         Self::one(SpineHostEffect::ReplaceHistory(update))
     }
@@ -51,16 +55,12 @@ impl SpineHostEffects {
         snapshot.map_or_else(Self::none, |snapshot| Self::tree_update(snapshot, delivery))
     }
 
-    pub(crate) fn into_effects(self) -> Vec<SpineHostEffect> {
-        self.effects
-    }
-
     pub(crate) fn apply_history_updates_or_keep(
         self,
         mut apply_history_update: impl FnMut(
             SpineHostEffect,
         ) -> Result<Result<(), SpineHostEffect>, String>,
-    ) -> Result<Vec<SpineHostEffect>, String> {
+    ) -> Result<Self, String> {
         let mut remaining = Vec::new();
         for effect in self.effects {
             match apply_history_update(effect)? {
@@ -68,7 +68,14 @@ impl SpineHostEffects {
                 Err(effect) => remaining.push(effect),
             }
         }
-        Ok(remaining)
+        Ok(Self::many(remaining))
+    }
+
+    pub(crate) fn into_tree_updates(self) -> Vec<(SpineTreeUpdateEvent, SpineTreeUpdateDelivery)> {
+        self.effects
+            .into_iter()
+            .filter_map(SpineHostEffect::into_tree_update)
+            .collect()
     }
 }
 
