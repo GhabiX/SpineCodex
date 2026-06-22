@@ -262,7 +262,7 @@ impl SpineToolOutputRecording {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SpineToolcallCommitPreparation {
+struct SpineToolcallCommitPreparation {
     requires_close_like_commit: bool,
 }
 
@@ -466,17 +466,17 @@ impl SpineToolcallCommitHostAction {
         self.error
     }
 }
-pub(crate) struct SpineToolcallCommitInput<'a> {
-    pub(crate) call_id: &'a str,
-    pub(crate) completed_toolcall: CompletedToolCall,
-    pub(crate) tool_resp_item: &'a ResponseItem,
-    pub(crate) tool_resp_already_recorded: bool,
-    pub(crate) raw_items: &'a [Option<ResponseItem>],
-    pub(crate) history_items: &'a [ResponseItem],
-    pub(crate) expected_history: Vec<ResponseItem>,
-    pub(crate) reference_context_item: Option<TurnContextItem>,
-    pub(crate) pre_compact_provider_input_tokens: Option<i64>,
-    pub(crate) current_turn_provider_input_tokens: Option<i64>,
+struct SpineToolcallCommitInput<'a> {
+    call_id: &'a str,
+    completed_toolcall: CompletedToolCall,
+    tool_resp_item: &'a ResponseItem,
+    tool_resp_already_recorded: bool,
+    raw_items: &'a [Option<ResponseItem>],
+    history_items: &'a [ResponseItem],
+    expected_history: Vec<ResponseItem>,
+    reference_context_item: Option<TurnContextItem>,
+    pre_compact_provider_input_tokens: Option<i64>,
+    current_turn_provider_input_tokens: Option<i64>,
 }
 
 pub(crate) struct SpineSingleToolcallOutputRecordingPlan {
