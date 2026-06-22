@@ -259,12 +259,19 @@ pub(crate) struct SpineToolcallCommitPreparation {
 pub(crate) struct SpineToolcallCommitHostPlan {
     pre_compact_provider_input_tokens: Option<i64>,
     output_recording: SpineToolOutputRecording,
-    fail_closed_on_commit_missing: bool,
-    fail_closed_on_retry_limit: bool,
+    commit_missing_action: SpineToolcallCommitFailureAction,
+    retry_limit_action: SpineToolcallCommitFailureAction,
     lock_retry_limit: usize,
 }
 
 const SPINE_TOOLCALL_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpineToolcallCommitFailureAction {
+    FailClosed,
+    AbortPending,
+    NoSpineCommit,
+}
 
 impl SpineToolcallCommitPreparation {
     fn new(requires_close_like_commit: bool) -> Self {
@@ -310,8 +317,16 @@ impl SpineToolcallCommitPreparation {
                 tool_resp_already_recorded,
                 recorded_inside_hook,
             ),
-            fail_closed_on_commit_missing: tool_resp_already_recorded,
-            fail_closed_on_retry_limit: tool_resp_already_recorded,
+            commit_missing_action: if tool_resp_already_recorded {
+                SpineToolcallCommitFailureAction::FailClosed
+            } else {
+                SpineToolcallCommitFailureAction::NoSpineCommit
+            },
+            retry_limit_action: if tool_resp_already_recorded {
+                SpineToolcallCommitFailureAction::FailClosed
+            } else {
+                SpineToolcallCommitFailureAction::AbortPending
+            },
             lock_retry_limit: SPINE_TOOLCALL_COMMIT_LOCK_RETRY_LIMIT,
         }
     }
@@ -327,11 +342,31 @@ impl SpineToolcallCommitHostPlan {
     }
 
     pub(crate) fn fail_closed_on_commit_missing(&self) -> bool {
-        self.fail_closed_on_commit_missing
+        matches!(
+            self.commit_missing_action,
+            SpineToolcallCommitFailureAction::FailClosed
+        )
+    }
+
+    pub(crate) fn no_spine_commit_on_commit_missing(&self) -> bool {
+        matches!(
+            self.commit_missing_action,
+            SpineToolcallCommitFailureAction::NoSpineCommit
+        )
     }
 
     pub(crate) fn fail_closed_on_retry_limit(&self) -> bool {
-        self.fail_closed_on_retry_limit
+        matches!(
+            self.retry_limit_action,
+            SpineToolcallCommitFailureAction::FailClosed
+        )
+    }
+
+    pub(crate) fn abort_pending_on_retry_limit(&self) -> bool {
+        matches!(
+            self.retry_limit_action,
+            SpineToolcallCommitFailureAction::AbortPending
+        )
     }
 
     pub(crate) fn lock_retry_limit(&self) -> usize {

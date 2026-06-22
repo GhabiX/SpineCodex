@@ -1165,7 +1165,12 @@ impl Session {
                             "{reason} for call_id={call_id}"
                         )));
                     }
-                    return Ok(Self::no_spine_tool_commit());
+                    if commit_host_plan.no_spine_commit_on_commit_missing() {
+                        return Ok(Self::no_spine_tool_commit());
+                    }
+                    return Err(SpineError::Invariant(format!(
+                        "unsupported Spine runtime-missing action for call_id={call_id}"
+                    )));
                 }
                 SpineCommitAttempt::Retry if lock_retries < commit_host_plan.lock_retry_limit() => {
                     lock_retries += 1;
@@ -1176,8 +1181,12 @@ impl Session {
                     if commit_host_plan.fail_closed_on_retry_limit() {
                         self.fail_closed_spine_toolcall_commit(call_id, reason)
                             .await;
-                    } else {
+                    } else if commit_host_plan.abort_pending_on_retry_limit() {
                         self.abort_spine_pending_tool(call_id, reason).await;
+                    } else {
+                        return Err(SpineError::Invariant(format!(
+                            "unsupported Spine retry-limit action for call_id={call_id}"
+                        )));
                     }
                     let retry_limit = commit_host_plan.lock_retry_limit();
                     return Err(SpineError::Operation(format!(
