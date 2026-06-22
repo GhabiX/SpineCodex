@@ -611,7 +611,21 @@ pub(in crate::spine) fn lex_toolcall_event_token(
 pub(in crate::spine) fn lex_toolcall_event(
     segments: impl IntoIterator<Item = ToolCallEventSegment>,
 ) -> Result<LexedTokenBatch, SpineError> {
-    let segments = segments
+    let segments = toolcall_event_segments_to_lex_segments(segments)?;
+    lex_toolcall(segments, None)
+}
+
+pub(in crate::spine) fn lex_toolcall_event_as_token(
+    segments: impl IntoIterator<Item = ToolCallEventSegment>,
+) -> Result<SpineToken, SpineError> {
+    let segments = toolcall_event_segments_to_lex_segments(segments)?;
+    lex_toolcall_event_token(segments, None).map(|(_, token)| token)
+}
+
+fn toolcall_event_segments_to_lex_segments(
+    segments: impl IntoIterator<Item = ToolCallEventSegment>,
+) -> Result<Vec<ToolCallLexSegment>, SpineError> {
+    segments
         .into_iter()
         .map(|segment| {
             let context_index = usize::try_from(segment.context_index)
@@ -622,14 +636,7 @@ pub(in crate::spine) fn lex_toolcall_event(
                 context_index,
             })
         })
-        .collect::<Result<Vec<_>, SpineError>>()?;
-    lex_toolcall(segments, None)
-}
-
-pub(in crate::spine) fn lex_toolcall_event_as_token(
-    segments: impl IntoIterator<Item = ToolCallEventSegment>,
-) -> Result<SpineToken, SpineError> {
-    lex_toolcall_event(segments)?.into_single_token("toolcall")
+        .collect::<Result<Vec<_>, SpineError>>()
 }
 
 fn validate_toolcall_segments(
