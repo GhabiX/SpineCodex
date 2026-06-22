@@ -14,18 +14,20 @@ pub(in crate::spine::store::clone_sidecar) fn copy_required_memories(
 ) -> Result<BTreeMap<String, String>, SpineError> {
     let mut cloned_memory_paths = BTreeMap::new();
     for mem in source_mems {
-        if mem.allowed_by(mask)? {
-            // Memory records do not carry a structural sequence, so any
-            // raw-visible record must still be readable. Only records
-            // referenced by cloned events/checkpoints are copied.
-            let body = source.read_memory_body(&mem)?;
-            if required_memory_ids.contains(&mem.compact_id) {
-                let body_path = target.write_memory_body(&mem.compact_id, &body)?;
-                cloned_memory_paths.insert(mem.compact_id.clone(), body_path.clone());
-                let cloned = MemRecord { body_path, ..mem };
-                target.append_mem(&cloned)?;
-            }
+        if !mem.allowed_by(mask)? {
+            continue;
         }
+        // Memory records do not carry a structural sequence, so any
+        // raw-visible record must still be readable. Only records
+        // referenced by cloned events/checkpoints are copied.
+        let body = source.read_memory_body(&mem)?;
+        if !required_memory_ids.contains(&mem.compact_id) {
+            continue;
+        }
+        let body_path = target.write_memory_body(&mem.compact_id, &body)?;
+        cloned_memory_paths.insert(mem.compact_id.clone(), body_path.clone());
+        let cloned = MemRecord { body_path, ..mem };
+        target.append_mem(&cloned)?;
     }
     for accounting in source.mem_accounting()? {
         if cloned_memory_paths.contains_key(&accounting.compact_id) {
