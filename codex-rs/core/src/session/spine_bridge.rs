@@ -15,7 +15,6 @@ use crate::spine::SpineHostEffects;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
-use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 use crate::spine::SpineToolCallEvidence;
@@ -1341,19 +1340,13 @@ impl Session {
             .token_usage_info()
             .await
             .and_then(|info| provider_input_context_tokens(&info));
-        let token_metadata = SpineRootCompactTokenMetadata {
-            close_input_tokens: close_provider_input_tokens,
-            close_context_tokens: close_provider_input_tokens,
-            next_open_input_tokens: None,
-            next_open_context_tokens: None,
-        };
         {
             let mut guard = spine_slot.lock().await;
-            let prepared = guard.prepare_root_compact_apply_with_checkpoint(
+            let prepared = guard.prepare_native_root_compact_apply_with_checkpoint(
                 &rollout_path,
                 body,
                 &raw_items,
-                token_metadata,
+                close_provider_input_tokens,
             )?;
             Ok(Some(prepared))
         }

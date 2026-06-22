@@ -1120,6 +1120,27 @@ impl SpineSessionState {
         .map(PreparedSpineRootCompactApply::new)
     }
 
+    pub(crate) fn prepare_native_root_compact_apply_with_checkpoint(
+        &mut self,
+        rollout_path: &Path,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        close_provider_input_tokens: Option<i64>,
+    ) -> Result<PreparedSpineRootCompactApply, SpineError> {
+        let token_metadata = SpineRootCompactTokenMetadata {
+            close_input_tokens: close_provider_input_tokens,
+            close_context_tokens: close_provider_input_tokens,
+            next_open_input_tokens: None,
+            next_open_context_tokens: None,
+        };
+        self.prepare_root_compact_apply_with_checkpoint(
+            rollout_path,
+            body,
+            raw_items,
+            token_metadata,
+        )
+    }
+
     pub(crate) fn single_completed_toolcall_evidence(
         &self,
         call_id: &str,
