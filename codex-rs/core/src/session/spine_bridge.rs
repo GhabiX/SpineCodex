@@ -198,7 +198,7 @@ impl Session {
             .await;
     }
 
-    pub(crate) async fn record_toolcall_response_with_spine(
+    pub(crate) async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         evidence: SpineToolCallEvidence<'_>,
@@ -222,7 +222,7 @@ impl Session {
             .map_err(SpineToolcallTurnError::Codex)?;
         }
         drop(output);
-        self.on_toolcall(turn_context, evidence)
+        self.commit_toolcall_evidence(turn_context, evidence)
             .await
             .map_err(|err| SpineToolcallTurnError::Terminal {
                 operation,
@@ -230,7 +230,7 @@ impl Session {
             })
     }
 
-    async fn on_toolcall(
+    async fn commit_toolcall_evidence(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         evidence: SpineToolCallEvidence<'_>,

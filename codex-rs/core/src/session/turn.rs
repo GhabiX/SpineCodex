@@ -2104,7 +2104,7 @@ async fn drain_in_flight(
                 let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
                 let spine_trim_enabled = sess.features.enabled(Feature::SpineTrim);
                 if spine_jit_enabled {
-                    sess.record_toolcall_response_with_spine(
+                    sess.on_toolcall(
                         &turn_context,
                         SpineToolCallEvidence::single(&response_item),
                         "commit Spine tool output",
@@ -2201,7 +2201,7 @@ async fn drain_deferred_spine_tool_group(
             }
         }
     }
-    sess.record_toolcall_response_with_spine(
+    sess.on_toolcall(
         &turn_context,
         SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
         "commit grouped Spine toolcall",
@@ -2290,7 +2290,7 @@ async fn drain_conflicting_spine_control_tool_group(
         response_items.push(item);
     }
 
-    sess.record_toolcall_response_with_spine(
+    sess.on_toolcall(
         &turn_context,
         SpineToolCallEvidence::grouped_as_ordinary(
             &commit_call_id,
