@@ -726,9 +726,9 @@ impl Session {
         raw_ordinals: &[Option<u64>],
         items: &[ResponseItem],
         appends: &[ContextAppend],
-    ) -> Result<bool, SpineError> {
+    ) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(false);
+            return Ok(());
         };
         spine_slot.lock().await.ensure_valid()?;
         let rollout_path = self
@@ -742,7 +742,6 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
-        let mut observed_user_message = false;
         let mut publish_materialized_history_after_batch = false;
         let mut tool_items = Vec::new();
         for append in appends {
@@ -766,8 +765,7 @@ impl Session {
         }
         if !tool_items.is_empty() {
             let mut guard = spine_slot.lock().await;
-            let outcome = guard.observe_toolcall_context_items(&tool_items, &raw_items)?;
-            observed_user_message |= outcome.observed_user_message;
+            guard.observe_toolcall_context_items(&tool_items, &raw_items)?;
         }
         if publish_materialized_history_after_batch {
             let outcome = self
@@ -777,7 +775,7 @@ impl Session {
                 .await
                 .map_err(SpineError::Invariant)?;
         }
-        Ok(observed_user_message)
+        Ok(())
     }
 
     pub(crate) async fn on_non_toolcall_msg(
