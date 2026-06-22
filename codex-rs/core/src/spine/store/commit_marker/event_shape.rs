@@ -38,42 +38,7 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
             )?;
             Ok(())
         }
-        CommitMarkerEventShape::RootCompact => {
-            let event = event_at_marker_start(marker, events_by_seq)?;
-            let SpineLedgerEvent::RootCompact {
-                node,
-                boundary,
-                mem,
-                raw_live_hash,
-                ..
-            } = &event.event
-            else {
-                return Err(SpineError::InvalidStore(format!(
-                    "Spine commit marker {} is not backed by RootCompact at token_seq {}",
-                    marker.op_id, marker.token_seq_start
-                )));
-            };
-            if *boundary != marker.raw_boundary {
-                return Err(SpineError::InvalidStore(format!(
-                    "Spine commit marker {} raw boundary {} does not match RootCompact boundary {}",
-                    marker.op_id, marker.raw_boundary, boundary
-                )));
-            }
-            if marker.raw_live_hash.as_deref() != Some(raw_live_hash.as_str()) {
-                return Err(SpineError::InvalidStore(format!(
-                    "Spine commit marker {} raw live hash does not match RootCompact",
-                    marker.op_id
-                )));
-            }
-            let memory = single_commit_memory_ref(marker)?;
-            if &memory.compact_id != mem || &memory.node != node {
-                return Err(SpineError::InvalidStore(format!(
-                    "Spine commit marker {} memory does not match RootCompact",
-                    marker.op_id
-                )));
-            }
-            Ok(())
-        }
+        CommitMarkerEventShape::RootCompact => validate_root_compact_shape(marker, events_by_seq),
     }
 }
 
@@ -106,6 +71,46 @@ fn validate_required_synthetic_open(
         return Err(SpineError::InvalidStore(format!(
             "Spine commit marker {} raw boundary {} does not match synthetic Open boundary {}",
             marker.op_id, marker.raw_boundary, boundary
+        )));
+    }
+    Ok(())
+}
+
+fn validate_root_compact_shape(
+    marker: &SpineCommitMarker,
+    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
+) -> Result<(), SpineError> {
+    let event = event_at_marker_start(marker, events_by_seq)?;
+    let SpineLedgerEvent::RootCompact {
+        node,
+        boundary,
+        mem,
+        raw_live_hash,
+        ..
+    } = &event.event
+    else {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} is not backed by RootCompact at token_seq {}",
+            marker.op_id, marker.token_seq_start
+        )));
+    };
+    if *boundary != marker.raw_boundary {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} raw boundary {} does not match RootCompact boundary {}",
+            marker.op_id, marker.raw_boundary, boundary
+        )));
+    }
+    if marker.raw_live_hash.as_deref() != Some(raw_live_hash.as_str()) {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} raw live hash does not match RootCompact",
+            marker.op_id
+        )));
+    }
+    let memory = single_commit_memory_ref(marker)?;
+    if &memory.compact_id != mem || &memory.node != node {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} memory does not match RootCompact",
+            marker.op_id
         )));
     }
     Ok(())
