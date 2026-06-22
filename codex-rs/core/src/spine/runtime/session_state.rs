@@ -1001,7 +1001,7 @@ impl SpineSessionState {
         )))
     }
 
-    pub(crate) fn committed_toolcall_tree_snapshot_projection(
+    fn committed_toolcall_tree_snapshot_projection(
         &self,
         committed: &CommittedSpineToolcall,
     ) -> Result<Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>, SpineError>
@@ -1491,7 +1491,7 @@ impl SpineSessionState {
         }
     }
 
-    pub(crate) fn prepare_completed_toolcall_commit(
+    fn prepare_completed_toolcall_commit(
         &mut self,
         evidence: SpineToolcallCommitEvidence,
         tool_resp_item: &ResponseItem,
@@ -1635,7 +1635,7 @@ impl SpineSessionState {
         Ok(runtime.install_commit_publication(prepared.publication))
     }
 
-    pub(crate) fn commit_prepared_toolcall_with_host_effects(
+    fn commit_prepared_toolcall_with_host_effects(
         &mut self,
         call_id: &str,
         mut prepared: PreparedSpineToolcallCommit,
@@ -1660,6 +1660,47 @@ impl SpineSessionState {
             installed_commit,
             post_apply_effect_policy,
         })
+    }
+
+    pub(crate) fn attempt_completed_toolcall_commit_with_host_effects(
+        &mut self,
+        evidence: SpineToolcallCommitEvidence,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
+        history_items: &[ResponseItem],
+        expected_history: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+        pre_compact_provider_input_tokens: Option<i64>,
+        current_turn_provider_input_tokens: Option<i64>,
+        apply_host_effects: impl FnOnce(SpineHostEffects) -> Result<(), String>,
+        build_snapshot: impl FnOnce(
+            Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>,
+        ) -> Result<Option<SpineTreeUpdateEvent>, SpineError>,
+    ) -> Result<SpineCommitAttempt, SpineError> {
+        let call_id = evidence.call_id.clone();
+        let Some(prepared_commit) = self.prepare_completed_toolcall_commit(
+            evidence,
+            tool_resp_item,
+            tool_resp_already_recorded,
+            raw_items,
+            history_items,
+            expected_history,
+            reference_context_item,
+            pre_compact_provider_input_tokens,
+            current_turn_provider_input_tokens,
+        )?
+        else {
+            return Ok(SpineCommitAttempt::RuntimeMissing);
+        };
+        let committed = self.commit_prepared_toolcall_with_host_effects(
+            &call_id,
+            prepared_commit,
+            apply_host_effects,
+        )?;
+        let projection = self.committed_toolcall_tree_snapshot_projection(&committed)?;
+        let snapshot = build_snapshot(projection)?;
+        Ok(SpineCommitAttempt::done(self, committed, snapshot))
     }
 }
 

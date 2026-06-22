@@ -101,7 +101,6 @@ struct CompletedSpineToolCall<'a> {
 }
 
 struct SpineToolcallCommitAttemptInput<'a> {
-    call_id: &'a str,
     tool_resp_item: &'a ResponseItem,
     expected_history: Vec<ResponseItem>,
     pre_compact_provider_input_tokens: Option<i64>,
@@ -1113,7 +1112,6 @@ impl Session {
         let mut lock_retries = 0;
         let commit_output = loop {
             let attempt_input = SpineToolcallCommitAttemptInput {
-                call_id,
                 tool_resp_item: item,
                 expected_history: expected_history.clone(),
                 pre_compact_provider_input_tokens,
@@ -1216,7 +1214,8 @@ impl Session {
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
-        let Some(prepared_commit) = guard.prepare_completed_toolcall_commit(
+        let token_info = state.token_info();
+        let attempt = guard.attempt_completed_toolcall_commit_with_host_effects(
             input.toolcall_evidence,
             input.tool_resp_item,
             input.tool_resp_already_recorded,
@@ -1228,27 +1227,19 @@ impl Session {
             input
                 .current_turn_token_info
                 .and_then(provider_input_context_tokens),
-        )?
-        else {
-            return Ok(SpineCommitAttempt::RuntimeMissing);
-        };
-        let committed = guard.commit_prepared_toolcall_with_host_effects(
-            input.call_id,
-            prepared_commit,
             |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
+            |projection| {
+                if let Some(projection) = projection {
+                    Ok(Some(build_annotated_tree_snapshot(
+                        projection,
+                        token_info.as_ref(),
+                    )?))
+                } else {
+                    Ok(None)
+                }
+            },
         )?;
-        let snapshot = if let Some(projection) =
-            guard.committed_toolcall_tree_snapshot_projection(&committed)?
-        {
-            let token_info = state.token_info();
-            Some(build_annotated_tree_snapshot(
-                projection,
-                token_info.as_ref(),
-            )?)
-        } else {
-            None
-        };
-        Ok(SpineCommitAttempt::done(&mut guard, committed, snapshot))
+        Ok(attempt)
     }
 
     async fn spine_raw_items_from_rollout_for_commit(
