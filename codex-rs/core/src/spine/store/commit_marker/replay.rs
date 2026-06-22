@@ -56,9 +56,16 @@ fn validate_committed_events_have_markers(
             continue;
         }
         match &event.event {
-            SpineLedgerEvent::Close { .. } => validate_close_event_marker(event, markers_by_start)?,
+            SpineLedgerEvent::Close { .. } => validate_event_marker_kind(
+                event,
+                markers_by_start,
+                "Close",
+                commit_kind_marks_close_event,
+            )?,
             SpineLedgerEvent::RootCompact { .. } => {
-                validate_root_compact_event_marker(event, markers_by_start)?
+                validate_event_marker_kind(event, markers_by_start, "RootCompact", |kind| {
+                    kind == SpineCommitKindMarker::RootCompact
+                })?
             }
             SpineLedgerEvent::Init { .. }
             | SpineLedgerEvent::Msg { .. }
@@ -70,25 +77,11 @@ fn validate_committed_events_have_markers(
     Ok(())
 }
 
-fn validate_close_event_marker(
-    event: &LoggedSpineLedgerEvent,
-    markers_by_start: &BTreeMap<u64, &SpineCommitMarker>,
-) -> Result<(), SpineError> {
-    validate_event_marker_kind(event, markers_by_start, "Close", |kind| {
-        matches!(
-            kind,
-            SpineCommitKindMarker::Close | SpineCommitKindMarker::CloseThenOpen
-        )
-    })
-}
-
-fn validate_root_compact_event_marker(
-    event: &LoggedSpineLedgerEvent,
-    markers_by_start: &BTreeMap<u64, &SpineCommitMarker>,
-) -> Result<(), SpineError> {
-    validate_event_marker_kind(event, markers_by_start, "RootCompact", |kind| {
-        kind == SpineCommitKindMarker::RootCompact
-    })
+fn commit_kind_marks_close_event(kind: SpineCommitKindMarker) -> bool {
+    matches!(
+        kind,
+        SpineCommitKindMarker::Close | SpineCommitKindMarker::CloseThenOpen
+    )
 }
 
 fn validate_event_marker_kind(
