@@ -52,6 +52,7 @@ pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::SpineTokenBaselines;
 pub(crate) use runtime::SpineToolCallEvidence;
+#[cfg(test)]
 pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineToolcallCommitEvidence;
 pub(crate) use runtime::SpineTreeUpdateDelivery;

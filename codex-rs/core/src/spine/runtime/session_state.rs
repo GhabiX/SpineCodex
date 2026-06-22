@@ -241,6 +241,7 @@ fn validate_grouped_toolcall_outputs<'a>(
         })
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpineToolOutputRecording {
     Skip,
@@ -249,6 +250,7 @@ pub(crate) enum SpineToolOutputRecording {
     RawOnlyDurableWithoutEmission,
 }
 
+#[cfg(test)]
 impl SpineToolOutputRecording {
     pub(crate) fn after_successful_toolcall_commit(
         recorded_inside_hook: bool,
@@ -271,6 +273,7 @@ struct SpineToolcallCommitPreparation {
 
 pub(crate) struct SpineToolcallCommitHostPlan {
     pre_compact_provider_input_tokens: Option<i64>,
+    #[cfg(test)]
     output_recording: SpineToolOutputRecording,
     commit_missing_action: SpineToolcallCommitFailureAction,
     retry_limit_action: SpineToolcallCommitFailureAction,
@@ -325,6 +328,7 @@ impl SpineToolcallCommitPreparation {
         }
     }
 
+    #[cfg(test)]
     fn output_recording_after_successful_commit(
         &self,
         tool_resp_already_recorded: bool,
@@ -344,9 +348,12 @@ impl SpineToolcallCommitPreparation {
         tool_resp_already_recorded: bool,
         recorded_inside_hook: bool,
     ) -> SpineToolcallCommitHostPlan {
+        #[cfg(not(test))]
+        let _ = recorded_inside_hook;
         SpineToolcallCommitHostPlan {
             pre_compact_provider_input_tokens: self
                 .pre_compact_provider_input_tokens(current_turn_provider_input_tokens),
+            #[cfg(test)]
             output_recording: self.output_recording_after_successful_commit(
                 tool_resp_already_recorded,
                 recorded_inside_hook,
@@ -371,6 +378,7 @@ impl SpineToolcallCommitHostPlan {
         self.pre_compact_provider_input_tokens
     }
 
+    #[cfg(test)]
     pub(crate) fn output_recording(&self) -> SpineToolOutputRecording {
         self.output_recording
     }
