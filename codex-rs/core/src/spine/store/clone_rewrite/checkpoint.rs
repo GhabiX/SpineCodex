@@ -129,8 +129,7 @@ fn rewrite_checkpoint_node_for_target(
                 rewrite_checkpoint_node_for_target(child, target_root, cloned_memory_paths)?;
             }
             let node_id = meta.id.as_path();
-            *memory_path = checkpoint_node_archive_path(&node_id, "Memory.md");
-            *trajs_path = checkpoint_node_archive_path(&node_id, "Trajs.md");
+            rewrite_checkpoint_node_archive_paths(&node_id, memory_path, trajs_path);
             Ok(())
         }
     }
@@ -184,6 +183,15 @@ fn cloned_memory_body_path(
 
 fn checkpoint_node_dir(target_root: &Path, node_id: &str) -> PathBuf {
     target_root.join("nodes").join(node_id.replace('.', "/"))
+}
+
+fn rewrite_checkpoint_node_archive_paths(
+    node_id: &str,
+    memory_path: &mut PathBuf,
+    trajs_path: &mut PathBuf,
+) {
+    *memory_path = checkpoint_node_archive_path(node_id, "Memory.md");
+    *trajs_path = checkpoint_node_archive_path(node_id, "Trajs.md");
 }
 
 fn checkpoint_node_archive_path(node_id: &str, file_name: &str) -> PathBuf {
