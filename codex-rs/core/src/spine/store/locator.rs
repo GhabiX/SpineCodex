@@ -43,14 +43,12 @@ pub(super) fn sidecar_root_for_rollout(rollout_path: &Path) -> Result<PathBuf, S
 }
 
 pub(super) fn write_locator_for_root(rollout_path: &Path, root: &Path) -> Result<(), SpineError> {
-    let locator = locator_for_root(rollout_path, root)?;
-    let content = serde_json::to_string_pretty(&locator)? + "\n";
+    let content = locator_content_for_root(rollout_path, root)?;
     write_locator_content_atomically(&locator_path(rollout_path)?, &content)
 }
 
 fn write_new_locator_for_root(rollout_path: &Path, root: &Path) -> Result<bool, SpineError> {
-    let locator = locator_for_root(rollout_path, root)?;
-    let content = serde_json::to_string_pretty(&locator)? + "\n";
+    let content = locator_content_for_root(rollout_path, root)?;
     let locator_path = locator_path(rollout_path)?;
     let temp_path = write_locator_temp(&locator_path, &content)?;
     match std::fs::hard_link(&temp_path, &locator_path) {
@@ -119,6 +117,11 @@ fn write_locator_temp(locator_path: &Path, content: &str) -> Result<PathBuf, Spi
         "failed to allocate temp locator for {}",
         locator_path.display()
     )))
+}
+
+fn locator_content_for_root(rollout_path: &Path, root: &Path) -> Result<String, SpineError> {
+    let locator = locator_for_root(rollout_path, root)?;
+    Ok(serde_json::to_string_pretty(&locator)? + "\n")
 }
 
 fn locator_for_root(rollout_path: &Path, root: &Path) -> Result<Locator, SpineError> {
