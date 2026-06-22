@@ -4,15 +4,14 @@ use std::path::PathBuf;
 #[path = "runtime_store_writer_fixtures.rs"]
 mod runtime_store_writer_fixtures;
 pub(super) use runtime_store_writer_fixtures::*;
+#[path = "runtime_store_event_fixtures.rs"]
+mod runtime_store_event_fixtures;
+pub(super) use runtime_store_event_fixtures::*;
 
 // Shared raw/context fixtures.
 
 pub(super) fn rollout_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("rollout.jsonl")
-}
-
-pub(super) fn logged_events(runtime: &SpineRuntime) -> Vec<LoggedSpineLedgerEvent> {
-    runtime.store.events_for_test().expect("events")
 }
 
 pub(super) fn clone_for_rollout_with_raw_live(
@@ -81,67 +80,6 @@ pub(super) fn root_compact_checkpoint_for_memory(
             memory_output_tokens: mem.memory_output_tokens,
         }],
     }
-}
-
-pub(super) fn event_log(runtime: &SpineRuntime) -> Vec<SpineLedgerEvent> {
-    logged_events(runtime)
-        .into_iter()
-        .map(|event| event.event)
-        .collect()
-}
-
-pub(super) fn event_log_debug(runtime: &SpineRuntime) -> Vec<String> {
-    event_log(runtime)
-        .into_iter()
-        .map(|event| format!("{event:?}"))
-        .collect()
-}
-
-pub(super) fn assert_parse_stack_tree_and_events_unchanged(
-    runtime: &SpineRuntime,
-    parse_stack_before: &ParseStack,
-    tree_before: &str,
-    events_before: &[String],
-) {
-    assert_eq!(runtime.parse_stack(), parse_stack_before);
-    assert_eq!(
-        runtime.render_tree().expect("render tree after failure"),
-        tree_before
-    );
-    assert_eq!(event_log_debug(runtime), events_before);
-}
-
-pub(super) fn ledger_event_debug(runtime: &SpineRuntime) -> Vec<String> {
-    runtime
-        .ledger
-        .events
-        .iter()
-        .map(|event| format!("{event:?}"))
-        .collect()
-}
-
-pub(super) fn assert_pending_close_retry_state(runtime: &SpineRuntime, ledger_before: &[String]) {
-    assert!(
-        runtime
-            .parse_stack()
-            .symbols
-            .iter()
-            .any(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Close(_)))),
-        "failed close-like reduce should retain the zero-width Close token for retry"
-    );
-    assert_eq!(ledger_event_debug(runtime), ledger_before);
-}
-
-pub(super) fn assert_pending_compact_retry_state(runtime: &SpineRuntime, ledger_before: &[String]) {
-    assert!(
-        runtime
-            .parse_stack()
-            .symbols
-            .iter()
-            .any(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Compact(..)))),
-        "failed root compact reduce should retain the zero-width Compact token for retry"
-    );
-    assert_eq!(ledger_event_debug(runtime), ledger_before);
 }
 
 pub(super) fn current_context_len(runtime: &SpineRuntime, raw: &[Option<ResponseItem>]) -> usize {
