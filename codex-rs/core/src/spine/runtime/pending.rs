@@ -91,14 +91,6 @@ impl SpineControlToolReceipt {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct PendingMsg {
-    pub(super) raw_ordinal: u64,
-    pub(super) context_index: u64,
-    pub(super) from_user: bool,
-    pub(super) user_anchor: Option<u64>,
-}
-
-#[derive(Clone, Debug)]
 pub(super) struct PendingToolRequest {
     pub(super) raw_ordinal: u64,
     pub(super) context_index: u64,

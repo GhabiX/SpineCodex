@@ -1,4 +1,3 @@
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use std::collections::BTreeSet;
 
@@ -405,21 +404,7 @@ pub(crate) fn is_user_message(item: &ResponseItem) -> bool {
 }
 
 pub(crate) fn is_real_user_message(item: &ResponseItem) -> bool {
-    let ResponseItem::Message { role, content, .. } = item else {
-        return false;
-    };
-    role == "user"
-        && !content
-            .iter()
-            .any(crate::context::is_contextual_user_fragment)
-        && !content.iter().any(is_spine_memory_fragment)
-}
-
-fn is_spine_memory_fragment(content_item: &ContentItem) -> bool {
-    let ContentItem::InputText { text } = content_item else {
-        return false;
-    };
-    text.trim_start().starts_with("<spine_memory>")
+    crate::spine::lexer::is_real_user_message(item)
 }
 
 pub(super) fn is_spine_parser_control_tool_name(name: &str) -> bool {

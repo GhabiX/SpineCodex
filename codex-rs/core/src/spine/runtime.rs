@@ -72,7 +72,6 @@ pub(crate) use pending::CompletedToolCall;
 pub(crate) use pending::CompletedToolCallSegment;
 use pending::OpenRequestAnchor;
 use pending::PendingMemoryContextAccounting;
-use pending::PendingMsg;
 use pending::PendingToolRequest;
 #[cfg(test)]
 use pending::PendingToolResponse;

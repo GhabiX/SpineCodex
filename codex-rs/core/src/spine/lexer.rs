@@ -1,3 +1,6 @@
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+
 use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::tree_meta;
@@ -295,6 +298,53 @@ pub(in crate::spine) fn lex_msg(
             user_anchor,
         },
     ))
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::spine) struct LexedObservedMsg {
+    pub(in crate::spine) batch: LexedTokenBatch,
+    pub(in crate::spine) next_user_anchor: u64,
+}
+
+pub(in crate::spine) fn lex_observed_msg(
+    raw_ordinal: u64,
+    context_index: u64,
+    item: &ResponseItem,
+    next_user_anchor: u64,
+) -> Result<LexedObservedMsg, SpineError> {
+    let from_user = is_real_user_message(item);
+    let (user_anchor, next_user_anchor) = if from_user {
+        (
+            Some(next_user_anchor),
+            next_user_anchor
+                .checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("user anchor overflow".to_string()))?,
+        )
+    } else {
+        (None, next_user_anchor)
+    };
+    Ok(LexedObservedMsg {
+        batch: lex_msg(raw_ordinal, context_index, from_user, user_anchor)?,
+        next_user_anchor,
+    })
+}
+
+pub(in crate::spine) fn is_real_user_message(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    role == "user"
+        && !content
+            .iter()
+            .any(crate::context::is_contextual_user_fragment)
+        && !content.iter().any(is_spine_memory_fragment)
+}
+
+fn is_spine_memory_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    text.trim_start().starts_with("<spine_memory>")
 }
 
 pub(in crate::spine) fn lex_open(
@@ -625,6 +675,7 @@ fn validate_toolcall_segments(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::models::ContentItem;
     use std::path::PathBuf;
 
     #[test]
@@ -738,6 +789,60 @@ mod tests {
                 },
                 from_user: true,
                 user_anchor: Some(2),
+            }]
+        );
+    }
+
+    #[test]
+    fn lex_observed_msg_assigns_user_anchor() {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            phase: None,
+        };
+
+        let lexed = lex_observed_msg(7, 3, &item, 41).expect("observed msg lexes");
+
+        assert_eq!(lexed.next_user_anchor, 42);
+        assert_eq!(
+            lexed.batch.tokens,
+            vec![SpineToken::Msg {
+                seg: SegRef::ResponseItem {
+                    raw_ordinal: 7,
+                    context_index: 3,
+                },
+                from_user: true,
+                user_anchor: Some(41),
+            }]
+        );
+    }
+
+    #[test]
+    fn lex_observed_msg_does_not_anchor_non_user_msg() {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "hello".to_string(),
+            }],
+            phase: None,
+        };
+
+        let lexed = lex_observed_msg(8, 4, &item, 41).expect("observed msg lexes");
+
+        assert_eq!(lexed.next_user_anchor, 41);
+        assert_eq!(
+            lexed.batch.tokens,
+            vec![SpineToken::Msg {
+                seg: SegRef::ResponseItem {
+                    raw_ordinal: 8,
+                    context_index: 4,
+                },
+                from_user: false,
+                user_anchor: None,
             }]
         );
     }

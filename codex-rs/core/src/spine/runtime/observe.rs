@@ -3,7 +3,6 @@ use codex_protocol::models::ResponseItem;
 use super::CompletedToolCall;
 use super::CompletedToolCallSegment;
 use super::OpenRequestAnchor;
-use super::PendingMsg;
 use super::PendingToolRequest;
 #[cfg(test)]
 use super::PendingToolResponse;
@@ -12,13 +11,13 @@ use super::SPINE_TOOL_OPEN;
 use super::SPINE_TOOL_TREE;
 use super::SpineError;
 use super::SpineRuntime;
-use super::support::is_real_user_message;
 use super::support::is_spine_parser_control_tool_name;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
 use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::ToolCallLexSegment;
+use crate::spine::lexer::lex_observed_msg;
 use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
@@ -225,23 +224,9 @@ impl SpineRuntime {
         }
         let context_index = u64::try_from(context_index)
             .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
-        let from_user = is_real_user_message(item);
-        let user_anchor = if from_user {
-            let user_anchor = self.next_user_anchor;
-            self.next_user_anchor = self
-                .next_user_anchor
-                .checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent("user anchor overflow".to_string()))?;
-            Some(user_anchor)
-        } else {
-            None
-        };
-        self.append_and_shift_msg(&PendingMsg {
-            raw_ordinal,
-            context_index,
-            from_user,
-            user_anchor,
-        })
+        let lexed = lex_observed_msg(raw_ordinal, context_index, item, self.next_user_anchor)?;
+        self.next_user_anchor = lexed.next_user_anchor;
+        self.append_and_shift_msg(lexed.batch)
     }
 
     pub(crate) fn observe_completed_toolcall(
@@ -475,13 +460,10 @@ impl SpineRuntime {
         self.parse_stack.shift(token, &self.archive())
     }
 
-    fn append_and_shift_msg(&mut self, msg: &PendingMsg) -> Result<(), SpineError> {
-        let lexed = crate::spine::lexer::lex_msg(
-            msg.raw_ordinal,
-            msg.context_index,
-            msg.from_user,
-            msg.user_anchor,
-        )?;
+    fn append_and_shift_msg(
+        &mut self,
+        lexed: crate::spine::lexer::LexedTokenBatch,
+    ) -> Result<(), SpineError> {
         for event in lexed.events {
             self.append_cached_event(event)?;
         }
