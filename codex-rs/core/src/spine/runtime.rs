@@ -107,6 +107,7 @@ pub(crate) use support::is_non_toolcall_msg;
 pub(crate) use support::is_real_user_message;
 #[cfg(test)]
 pub(crate) use support::is_spine_close_like_tool_name;
+pub(crate) use support::is_spine_context_observation_fixed_prefix_item;
 pub(crate) use support::is_user_message;
 use support::validate_model_node_memory;
 pub(crate) use types::LiveRootCompact;

@@ -3064,13 +3064,7 @@ impl Session {
             .await;
         let spine_tree_snapshot =
             if let Some(prepared_spine_root_compact) = prepared_spine_root_compact {
-                let published_variable_history_len = self
-                    .clone_history()
-                    .await
-                    .raw_items()
-                    .iter()
-                    .filter(|item| !Self::is_spine_fixed_prefix_item(item))
-                    .count();
+                let published_variable_history_len = prepared_spine_root_compact.materialized_len();
                 match self
                     .finalize_spine_root_compact_after_history_publish(
                         prepared_spine_root_compact,
@@ -3129,6 +3123,10 @@ impl Session {
             "user" => content.iter().any(is_contextual_user_fragment),
             _ => false,
         }
+    }
+
+    fn is_spine_context_observation_fixed_prefix_item(item: &ResponseItem) -> bool {
+        crate::spine::is_spine_context_observation_fixed_prefix_item(item)
     }
 
     fn merge_fixed_context_with_spine_history(

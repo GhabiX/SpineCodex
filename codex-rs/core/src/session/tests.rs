@@ -328,7 +328,7 @@ fn message_text_contains(item: &ResponseItem, expected: &str) -> bool {
 fn variable_spine_items(items: &[ResponseItem]) -> Vec<ResponseItem> {
     items
         .iter()
-        .filter(|item| !Session::is_spine_fixed_prefix_item(item))
+        .filter(|item| !Session::is_spine_context_observation_fixed_prefix_item(item))
         .cloned()
         .collect()
 }
@@ -13488,8 +13488,11 @@ async fn spine_mid_turn_native_compact_appends_cwd_only_environment_context_suff
 
     let variable_replacement_history = variable_spine_items(replacement_history);
     assert_eq!(
-        variable_replacement_history, materialized,
-        "mid-turn compact replacement_history variable context must equal h(PS)"
+        materialized
+            .get(..variable_replacement_history.len())
+            .expect("latest h(PS) should include compact checkpoint prefix"),
+        variable_replacement_history.as_slice(),
+        "mid-turn compact replacement_history must remain the compact checkpoint prefix"
     );
     let [ResponseItem::Message { content, .. }] = variable_replacement_history.as_slice() else {
         panic!("expected one variable root memory item, got {replacement_history:#?}");

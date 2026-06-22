@@ -61,6 +61,7 @@ pub(crate) use runtime::is_non_toolcall_msg;
 pub(crate) use runtime::is_real_user_message;
 #[cfg(test)]
 pub(crate) use runtime::is_spine_close_like_tool_name;
+pub(crate) use runtime::is_spine_context_observation_fixed_prefix_item;
 pub(crate) use runtime::is_user_message;
 pub use store::SpineCloneBoundary;
 pub(crate) use store::SpineStore;

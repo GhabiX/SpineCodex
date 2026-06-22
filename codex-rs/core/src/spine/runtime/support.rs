@@ -1,3 +1,4 @@
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use std::collections::BTreeSet;
 
@@ -9,6 +10,9 @@ use super::SPINE_TOOL_OPEN;
 use super::SpineCompactSourceEntryKind;
 use super::SpineCompactSourcePlanEntry;
 use super::SpineError;
+use crate::context::ContextualUserFragment;
+use crate::context::TurnAborted;
+use crate::context::is_contextual_user_fragment;
 use crate::spine::io::hash_response_items;
 use crate::spine::model::COMMIT_MARKER_VERSION;
 use crate::spine::model::MemRecord;
@@ -19,6 +23,8 @@ use crate::spine::model::SpineLedgerEvent;
 use crate::spine::render::VisibleItemSource;
 use crate::spine::render::memory_response_item;
 use crate::spine::render::read_memory_ref_body;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 
 pub(super) fn mark_raw_covered(covered: &mut [bool], raw_ordinal: u64) -> Result<(), SpineError> {
     let index = usize::try_from(raw_ordinal)
@@ -55,6 +61,7 @@ pub(super) fn raw_item_requires_spine_coverage(
 ) -> bool {
     match item {
         ResponseItem::Other | ResponseItem::CompactionTrigger => false,
+        item if is_spine_context_observation_fixed_prefix_item(item) => false,
         item => {
             if let Some(call_id) = tool_response_call_id(item) {
                 return completed_tool_call_ids.contains(call_id);
@@ -65,6 +72,40 @@ pub(super) fn raw_item_requires_spine_coverage(
             true
         }
     }
+}
+
+pub(crate) fn is_spine_context_observation_fixed_prefix_item(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    match role.as_str() {
+        "developer" => true,
+        "user" => {
+            content.iter().any(is_contextual_user_fragment)
+                && !content
+                    .iter()
+                    .any(is_spine_runtime_contextual_user_fragment)
+        }
+        _ => false,
+    }
+}
+
+fn is_spine_runtime_contextual_user_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    TurnAborted::matches_text(text) || is_cwd_only_environment_context_text(text)
+}
+
+fn is_cwd_only_environment_context_text(text: &str) -> bool {
+    let lines = text.trim().lines().map(str::trim).collect::<Vec<_>>();
+    let [open, cwd, close] = lines.as_slice() else {
+        return false;
+    };
+    *open == ENVIRONMENT_CONTEXT_OPEN_TAG
+        && cwd.starts_with("<cwd>")
+        && cwd.ends_with("</cwd>")
+        && *close == ENVIRONMENT_CONTEXT_CLOSE_TAG
 }
 
 pub(super) fn tool_request_call_id(item: &ResponseItem) -> Option<&str> {

@@ -132,7 +132,7 @@ impl SpineRootCompactPublish {
         Self { materialized_len }
     }
 
-    fn materialized_len(&self) -> usize {
+    pub(crate) fn materialized_len(&self) -> usize {
         self.materialized_len
     }
 }
@@ -733,7 +733,7 @@ impl Session {
         let mut tool_items = Vec::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
-            if Self::is_spine_fixed_prefix_item(item) {
+            if Self::is_spine_context_observation_fixed_prefix_item(item) {
                 continue;
             }
             if is_non_toolcall_msg(item) {
