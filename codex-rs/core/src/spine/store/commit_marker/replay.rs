@@ -74,44 +74,41 @@ fn validate_close_event_marker(
     event: &LoggedSpineLedgerEvent,
     markers_by_start: &BTreeMap<u64, &SpineCommitMarker>,
 ) -> Result<(), SpineError> {
-    match markers_by_start.get(&event.seq) {
-        Some(marker)
-            if matches!(
-                marker.kind,
-                SpineCommitKindMarker::Close | SpineCommitKindMarker::CloseThenOpen
-            ) => {}
-        Some(marker) => {
-            return Err(SpineError::InvalidStore(format!(
-                "Spine commit marker {} at token_seq {} does not commit Close",
-                marker.op_id, event.seq
-            )));
-        }
-        None => {
-            return Err(SpineError::InvalidStore(format!(
-                "missing Spine commit marker for Close ledger event at token_seq {}",
-                event.seq
-            )));
-        }
-    }
-    Ok(())
+    validate_event_marker_kind(event, markers_by_start, "Close", |kind| {
+        matches!(
+            kind,
+            SpineCommitKindMarker::Close | SpineCommitKindMarker::CloseThenOpen
+        )
+    })
 }
 
 fn validate_root_compact_event_marker(
     event: &LoggedSpineLedgerEvent,
     markers_by_start: &BTreeMap<u64, &SpineCommitMarker>,
 ) -> Result<(), SpineError> {
+    validate_event_marker_kind(event, markers_by_start, "RootCompact", |kind| {
+        kind == SpineCommitKindMarker::RootCompact
+    })
+}
+
+fn validate_event_marker_kind(
+    event: &LoggedSpineLedgerEvent,
+    markers_by_start: &BTreeMap<u64, &SpineCommitMarker>,
+    event_label: &str,
+    accepts: impl FnOnce(SpineCommitKindMarker) -> bool,
+) -> Result<(), SpineError> {
     match markers_by_start.get(&event.seq) {
-        Some(marker) if marker.kind == SpineCommitKindMarker::RootCompact => {}
+        Some(marker) if accepts(marker.kind) => {}
         Some(marker) => {
             return Err(SpineError::InvalidStore(format!(
-                "Spine commit marker {} at token_seq {} does not commit RootCompact",
-                marker.op_id, event.seq
+                "Spine commit marker {} at token_seq {} does not commit {}",
+                marker.op_id, event.seq, event_label
             )));
         }
         None => {
             return Err(SpineError::InvalidStore(format!(
-                "missing Spine commit marker for RootCompact ledger event at token_seq {}",
-                event.seq
+                "missing Spine commit marker for {} ledger event at token_seq {}",
+                event_label, event.seq
             )));
         }
     }
