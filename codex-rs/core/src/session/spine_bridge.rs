@@ -24,8 +24,6 @@ use crate::spine::SpineToolCallEvidence;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
-use crate::spine::SpineToolcallCommitLoopAction;
-use crate::spine::SpineToolcallCommitTerminalHostAction;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
@@ -156,6 +154,20 @@ struct SpineCompletedToolCallOutputAnchor {
     already_recorded: bool,
     recorded_inside_reduce: bool,
     history_before_recorded_output: Option<crate::context_manager::ContextManager>,
+}
+
+enum SpineToolcallHostLoopStep {
+    Done(SpineHostEffects),
+    Retry,
+    NoSpineCommit,
+    FailClosed {
+        reason: &'static str,
+        error: SpineError,
+    },
+    AbortPending {
+        reason: &'static str,
+        error: SpineError,
+    },
 }
 
 struct CompletedSpineToolCall<'a> {
@@ -1319,28 +1331,32 @@ impl Session {
                     return Err(err);
                 }
             };
-            match commit_host_plan.interpret_attempt_as_action(attempt, lock_retries, &call_id)? {
-                SpineToolcallCommitLoopAction::Done(effects) => break effects,
-                SpineToolcallCommitLoopAction::NoSpineCommit => {
+            match commit_host_plan.interpret_attempt_for_host(
+                attempt,
+                lock_retries,
+                &call_id,
+                SpineToolcallHostLoopStep::Done,
+                || SpineToolcallHostLoopStep::Retry,
+                || SpineToolcallHostLoopStep::NoSpineCommit,
+                |reason, error| SpineToolcallHostLoopStep::FailClosed { reason, error },
+                |reason, error| SpineToolcallHostLoopStep::AbortPending { reason, error },
+            )? {
+                SpineToolcallHostLoopStep::Done(effects) => break effects,
+                SpineToolcallHostLoopStep::NoSpineCommit => {
                     return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
                 }
-                SpineToolcallCommitLoopAction::Retry => {
+                SpineToolcallHostLoopStep::Retry => {
                     lock_retries += 1;
                     tokio::task::yield_now().await;
                     continue;
                 }
-                SpineToolcallCommitLoopAction::HostAction(host_action) => {
-                    let error = match host_action {
-                        SpineToolcallCommitTerminalHostAction::FailClosed { reason, error } => {
-                            self.fail_closed_spine_toolcall_commit(&call_id, reason)
-                                .await;
-                            error
-                        }
-                        SpineToolcallCommitTerminalHostAction::AbortPending { reason, error } => {
-                            self.abort_spine_pending_tool(&call_id, reason).await;
-                            error
-                        }
-                    };
+                SpineToolcallHostLoopStep::FailClosed { reason, error } => {
+                    self.fail_closed_spine_toolcall_commit(&call_id, reason)
+                        .await;
+                    return Err(error);
+                }
+                SpineToolcallHostLoopStep::AbortPending { reason, error } => {
+                    self.abort_spine_pending_tool(&call_id, reason).await;
                     return Err(error);
                 }
             }
