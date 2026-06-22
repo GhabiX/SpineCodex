@@ -206,5 +206,5 @@ fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
 }
 
 #[cfg(test)]
-#[path = "close_memory_assembly_slot_map.rs"]
-mod spine_close_slot_map_tests;
+#[path = "close_memory_assembly_fixtures.rs"]
+mod spine_close_memory_assembly_fixtures;
