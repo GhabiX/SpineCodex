@@ -56,13 +56,11 @@ impl SpineRuntime {
                 context_index: *context_index,
             });
         }
-        if request_call_ids.is_empty() || segments.is_empty() {
+        if segments.is_empty() {
             return Ok(());
         }
         segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
-        let call_id = request_call_ids.first().cloned().ok_or_else(|| {
-            SpineError::InvalidEvent("completed trim toolcall missing call id".to_string())
-        })?;
+        let call_id = request_call_ids[0].clone();
         self.observe_completed_toolcall_for_trim(
             CompletedToolCall {
                 call_id,
