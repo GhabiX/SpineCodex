@@ -428,7 +428,7 @@ pub(crate) struct PreparedSpineRootCompactCommit {
     install: SpinePreparedRootCompactInstall,
 }
 
-pub(crate) struct PreparedSpineRootCompactApply {
+pub(crate) struct SpineRootCompactHostInstall {
     commit: PreparedSpineRootCompactCommit,
 }
 
@@ -447,7 +447,7 @@ impl PreparedSpineRootCompactCommit {
     }
 }
 
-impl PreparedSpineRootCompactApply {
+impl SpineRootCompactHostInstall {
     fn new(commit: PreparedSpineRootCompactCommit) -> Self {
         Self { commit }
     }
@@ -900,7 +900,7 @@ impl SpineSessionState {
 
     pub(crate) fn apply_root_compact_after_history_publish(
         &mut self,
-        prepared: PreparedSpineRootCompactApply,
+        prepared: SpineRootCompactHostInstall,
         published_history_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         self.ensure_valid()?;
@@ -1182,14 +1182,14 @@ impl SpineSessionState {
         body: String,
         raw_items: &[Option<ResponseItem>],
         token_metadata: SpineRootCompactTokenMetadata,
-    ) -> Result<PreparedSpineRootCompactApply, SpineError> {
+    ) -> Result<SpineRootCompactHostInstall, SpineError> {
         self.prepare_root_compact_commit_with_checkpoint(
             rollout_path,
             body,
             raw_items,
             token_metadata,
         )
-        .map(PreparedSpineRootCompactApply::new)
+        .map(SpineRootCompactHostInstall::new)
     }
 
     pub(crate) fn prepare_native_root_compact_apply_with_checkpoint(
@@ -1198,7 +1198,7 @@ impl SpineSessionState {
         body: String,
         raw_items: &[Option<ResponseItem>],
         close_provider_input_tokens: Option<i64>,
-    ) -> Result<PreparedSpineRootCompactApply, SpineError> {
+    ) -> Result<SpineRootCompactHostInstall, SpineError> {
         let token_metadata = SpineRootCompactTokenMetadata {
             close_input_tokens: close_provider_input_tokens,
             close_context_tokens: close_provider_input_tokens,

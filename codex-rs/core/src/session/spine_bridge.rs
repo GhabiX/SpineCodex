@@ -7,13 +7,13 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 #[cfg(test)]
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
-use crate::spine::PreparedSpineRootCompactApply;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
 use crate::spine::SpineMessageEvidence;
 use crate::spine::SpineObservedContextItem;
+use crate::spine::SpineRootCompactHostInstall;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
@@ -1298,7 +1298,7 @@ impl Session {
     async fn prepare_spine_root_compact_impl(
         &self,
         body: String,
-    ) -> Result<Option<PreparedSpineRootCompactApply>, SpineError> {
+    ) -> Result<Option<SpineRootCompactHostInstall>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -1344,7 +1344,7 @@ impl Session {
         &self,
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
-    ) -> CodexResult<Option<PreparedSpineRootCompactApply>> {
+    ) -> CodexResult<Option<SpineRootCompactHostInstall>> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -1383,7 +1383,7 @@ impl Session {
 
     pub(crate) async fn finalize_spine_root_compact_after_history_publish(
         &self,
-        prepared: PreparedSpineRootCompactApply,
+        prepared: SpineRootCompactHostInstall,
         published_history_len: usize,
     ) -> CodexResult<SpineTreeUpdateEvent> {
         let Some(spine_slot) = self.spine.as_ref() else {

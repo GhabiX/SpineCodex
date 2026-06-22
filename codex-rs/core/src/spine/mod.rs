@@ -19,7 +19,6 @@ pub(crate) use runtime::CompletedToolCallSegment;
 #[cfg(test)]
 pub(crate) use runtime::IntoSpineNodeMemory;
 pub(crate) use runtime::LiveRootCompact;
-pub(crate) use runtime::PreparedSpineRootCompactApply;
 pub(crate) use runtime::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 pub(crate) use runtime::SPINE_NAMESPACE;
 pub(crate) use runtime::SPINE_TOOL_CLOSE;
@@ -43,6 +42,7 @@ pub(crate) use runtime::SpineOpenNodeContextProjection;
 pub(crate) use runtime::SpinePendingCommit;
 pub(crate) use runtime::SpinePreparedCommit;
 pub(crate) use runtime::SpinePreparedRootCompact;
+pub(crate) use runtime::SpineRootCompactHostInstall;
 #[cfg(test)]
 pub(crate) use runtime::SpineRootCompactResult;
 pub(crate) use runtime::SpineRootCompactTokenMetadata;
