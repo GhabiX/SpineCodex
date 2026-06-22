@@ -566,6 +566,11 @@ impl SpineSessionState {
         self.invalid.is_none() && self.runtime.is_some()
     }
 
+    pub(crate) fn ready_for_native_root_compact(&self) -> Result<bool, SpineError> {
+        self.ensure_valid()?;
+        Ok(self.runtime().is_some())
+    }
+
     pub(crate) fn raw_len(&self) -> u64 {
         self.raw_len
     }

@@ -1362,13 +1362,12 @@ impl Session {
         };
         {
             let guard = spine_slot.lock().await;
-            guard
-                .ensure_valid()
-                .map_err(|err| CodexErr::SpineTerminalFailure {
+            if !guard.ready_for_native_root_compact().map_err(|err| {
+                CodexErr::SpineTerminalFailure {
                     operation: "install Spine root compact".to_string(),
                     reason: err.to_string(),
-                })?;
-            if !guard.is_ready() {
+                }
+            })? {
                 return Ok(None);
             }
         }
