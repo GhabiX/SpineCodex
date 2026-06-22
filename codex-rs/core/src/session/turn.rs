@@ -47,9 +47,8 @@ use crate::spine::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_NEXT;
-use crate::spine::SpineToolCallEvidence;
 use crate::spine::SPINE_TOOL_OPEN;
-use crate::spine::SpineToolOutputRecording;
+use crate::spine::SpineToolCallEvidence;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -2101,7 +2100,7 @@ async fn drain_in_flight(
                 } else {
                     false
                 };
-                let commit = if spine_jit_enabled {
+                let mut commit = if spine_jit_enabled {
                     sess.on_toolcall(&turn_context, SpineToolCallEvidence::single(&response_item))
                         .await
                         .map_err(|err| {
@@ -2115,12 +2114,10 @@ async fn drain_in_flight(
                 } else {
                     Session::no_spine_tool_commit()
                 };
-                if commit.recording == SpineToolOutputRecording::Skip
-                    && !output_recorded_before_spine_commit
-                {
+                if commit.skips_host_recording() && !output_recorded_before_spine_commit {
                     continue;
                 }
-                let deferred_tree_update = commit.deferred_tree_update;
+                let deferred_tree_update = commit.take_deferred_tree_update();
                 if output_recorded_before_spine_commit {
                     if let Some(snapshot) = deferred_tree_update {
                         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
@@ -2129,9 +2126,7 @@ async fn drain_in_flight(
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
-                } else if commit.recording
-                    == SpineToolOutputRecording::RawOnlyDurableWithoutEmission
-                {
+                } else if commit.records_raw_only_durable_without_emission() {
                     sess.record_conversation_items_raw_only_durable_without_emission(
                         &turn_context,
                         std::slice::from_ref(&response_item),
@@ -2150,7 +2145,7 @@ async fn drain_in_flight(
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
-                } else if commit.recording == SpineToolOutputRecording::WithoutSpineObserve {
+                } else if commit.records_without_spine_observe() {
                     sess.record_conversation_items_without_spine_observe(
                         &turn_context,
                         std::slice::from_ref(&response_item),
@@ -2259,7 +2254,7 @@ async fn drain_deferred_spine_tool_group(
             }
         }
     }
-    let commit = sess
+    let mut commit = sess
         .on_toolcall(
             &turn_context,
             SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
@@ -2280,7 +2275,7 @@ async fn drain_deferred_spine_tool_group(
         .await;
     }
     spine_control_overlay.remove_call_ids(&tool_call_ids);
-    if let Some(snapshot) = commit.deferred_tree_update {
+    if let Some(snapshot) = commit.take_deferred_tree_update() {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;
     }
@@ -2357,7 +2352,7 @@ async fn drain_conflicting_spine_control_tool_group(
         response_items.push(item);
     }
 
-    let commit = sess
+    let mut commit = sess
         .on_toolcall(
             &turn_context,
             SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
@@ -2378,7 +2373,7 @@ async fn drain_conflicting_spine_control_tool_group(
         .await;
     }
     spine_control_overlay.remove_call_ids(&control_call_ids);
-    if let Some(snapshot) = commit.deferred_tree_update {
+    if let Some(snapshot) = commit.take_deferred_tree_update() {
         sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
             .await;
     }

@@ -57,12 +57,38 @@ impl PreparedSpineReplay {
 
 #[derive(Debug)]
 pub(crate) struct SpineToolCommit {
-    pub(crate) recording: SpineToolOutputRecording,
-    pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
+    recording: SpineToolOutputRecording,
+    deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
 pub(crate) struct SpineRootCompactPublish {
     materialized_len: usize,
+}
+
+impl SpineToolCommit {
+    pub(crate) fn recording(&self) -> SpineToolOutputRecording {
+        self.recording
+    }
+
+    pub(crate) fn skips_host_recording(&self) -> bool {
+        self.recording == SpineToolOutputRecording::Skip
+    }
+
+    pub(crate) fn records_raw_only_durable_without_emission(&self) -> bool {
+        self.recording == SpineToolOutputRecording::RawOnlyDurableWithoutEmission
+    }
+
+    pub(crate) fn records_without_spine_observe(&self) -> bool {
+        self.recording == SpineToolOutputRecording::WithoutSpineObserve
+    }
+
+    pub(crate) fn take_deferred_tree_update(&mut self) -> Option<SpineTreeUpdateEvent> {
+        self.deferred_tree_update.take()
+    }
+
+    pub(crate) fn has_deferred_tree_update(&self) -> bool {
+        self.deferred_tree_update.is_some()
+    }
 }
 
 impl SpineRootCompactPublish {

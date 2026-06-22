@@ -487,22 +487,22 @@ async fn commit_spine_output_and_record_raw_durable_for_test_inner(
             )
             .await?;
     }
-    let commit = test_on_toolcall_single(session, turn_context, &response_item)
+    let mut commit = test_on_toolcall_single(session, turn_context, &response_item)
         .await
         .map_err(|err| CodexErr::SpineTerminalFailure {
             operation: "commit Spine tool output".to_string(),
             reason: err.to_string(),
         })?;
-    if commit.recording == SpineToolOutputRecording::Skip && !output_recorded_before_spine_commit {
+    if commit.skips_host_recording() && !output_recorded_before_spine_commit {
         return Ok(response_item);
     }
     if output_recorded_before_spine_commit {
-        if let Some(snapshot) = commit.deferred_tree_update {
+        if let Some(snapshot) = commit.take_deferred_tree_update() {
             session
                 .send_spine_tree_update(turn_context.as_ref(), snapshot)
                 .await;
         }
-    } else if commit.recording == SpineToolOutputRecording::RawOnlyDurableWithoutEmission {
+    } else if commit.records_raw_only_durable_without_emission() {
         session
             .record_conversation_items_raw_only_durable_without_emission(
                 turn_context,
@@ -512,12 +512,12 @@ async fn commit_spine_output_and_record_raw_durable_for_test_inner(
         session
             .send_raw_response_items(turn_context, std::slice::from_ref(&response_item))
             .await;
-        if let Some(snapshot) = commit.deferred_tree_update {
+        if let Some(snapshot) = commit.take_deferred_tree_update() {
             session
                 .send_spine_tree_update(turn_context.as_ref(), snapshot)
                 .await;
         }
-    } else if commit.recording == SpineToolOutputRecording::WithoutSpineObserve {
+    } else if commit.records_without_spine_observe() {
         session
             .record_conversation_items_without_spine_observe(
                 turn_context,
@@ -1237,12 +1237,12 @@ async fn make_spine_close_window_missing_output_carrier(
         .await
         .expect("commit close-window sidecar only");
     assert_eq!(
-        commit.recording,
+        commit.recording(),
         SpineToolOutputRecording::Skip,
         "close reduce boundary should record raw output before returning success"
     );
     assert!(
-        commit.deferred_tree_update.is_some(),
+        commit.has_deferred_tree_update(),
         "close should defer tree update until output carrier is durable"
     );
 
@@ -1347,12 +1347,12 @@ async fn make_spine_next_window_missing_output_carrier(
         .await
         .expect("commit next-window sidecar only");
     assert_eq!(
-        commit.recording,
+        commit.recording(),
         SpineToolOutputRecording::Skip,
         "next reduce boundary should record raw output before returning success"
     );
     assert!(
-        commit.deferred_tree_update.is_some(),
+        commit.has_deferred_tree_update(),
         "next should defer tree update until output carrier is durable"
     );
 
@@ -10885,15 +10885,15 @@ async fn spine_close_deferred_history_failure_does_not_publish_success_events() 
     while rx.try_recv().is_ok() {}
 
     let close_output = function_output("close-history-fail");
-    let commit = test_on_toolcall_single(&session, &turn_context, &close_output)
+    let mut commit = test_on_toolcall_single(&session, &turn_context, &close_output)
         .await
         .expect("commit close output");
     assert_eq!(
-        commit.recording,
+        commit.recording(),
         SpineToolOutputRecording::Skip,
         "close reduce boundary should record raw output before returning success"
     );
-    let deferred_tree_update = commit.deferred_tree_update;
+    let deferred_tree_update = commit.take_deferred_tree_update();
     assert_no_event_matching(
         &rx,
         "close reduce must not publish committed tree state before the post-commit caller step",
@@ -11931,7 +11931,7 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
         )
         .await
         .expect("direct-memory grouped next opens sibling and keeps durable toolcall");
-    assert_ne!(commit.recording, SpineToolOutputRecording::Skip);
+    assert_ne!(commit.recording(), SpineToolOutputRecording::Skip);
     assert_no_pending_spine_commit(&session, "grouped-durable-overflow-next").await;
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -12513,7 +12513,7 @@ async fn spine_close_reduce_records_raw_output_and_publishes_host_history_before
         .await
         .expect("close reduce should record raw output and publish host history");
     assert_eq!(
-        commit.recording,
+        commit.recording(),
         SpineToolOutputRecording::Skip,
         "close reduce boundary should already record the raw output carrier"
     );
@@ -17900,7 +17900,7 @@ async fn spine_tree_tool_hides_context_problem_but_snapshot_keeps_it() {
         .await
         .expect("commit open should defer missing token usage");
     assert_eq!(
-        commit.recording,
+        commit.recording(),
         SpineToolOutputRecording::WithoutSpineObserve
     );
 
