@@ -3,6 +3,9 @@ use super::*;
 #[path = "response_toolcall_fixtures.rs"]
 mod response_toolcall_fixtures;
 pub(super) use response_toolcall_fixtures::*;
+#[path = "response_output_fixtures.rs"]
+mod response_output_fixtures;
+pub(super) use response_output_fixtures::*;
 
 pub(super) fn text_item(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -70,35 +73,6 @@ pub(super) fn ordinary_call(name: &str, call_id: &str) -> ResponseItem {
     }
 }
 
-pub(super) fn function_output(call_id: &str) -> ResponseItem {
-    function_output_text(call_id, "ok")
-}
-
-pub(super) fn function_output_text(call_id: &str, text: &str) -> ResponseItem {
-    ResponseItem::FunctionCallOutput {
-        call_id: call_id.to_string(),
-        output: codex_protocol::models::FunctionCallOutputPayload::from_text(text.to_string()),
-    }
-}
-
-pub(super) fn function_output_content_items(call_id: &str, text: &str) -> ResponseItem {
-    ResponseItem::FunctionCallOutput {
-        call_id: call_id.to_string(),
-        output: codex_protocol::models::FunctionCallOutputPayload::from_content_items(vec![
-            codex_protocol::models::FunctionCallOutputContentItem::InputText {
-                text: text.to_string(),
-            },
-        ]),
-    }
-}
-
-pub(super) fn function_output_text_content(item: &ResponseItem) -> &str {
-    let ResponseItem::FunctionCallOutput { output, .. } = item else {
-        panic!("expected FunctionCallOutput, got {item:?}");
-    };
-    output.text_content().expect("text output")
-}
-
 pub(super) fn response_item_trace_signature(item: &ResponseItem) -> String {
     match item {
         ResponseItem::Message { role, content, .. } => {
@@ -155,19 +129,4 @@ pub(super) fn materialized_trace_signature(
         .iter()
         .map(response_item_trace_signature)
         .collect()
-}
-
-pub(super) fn custom_tool_output_text(call_id: &str, text: &str) -> ResponseItem {
-    ResponseItem::CustomToolCallOutput {
-        call_id: call_id.to_string(),
-        name: Some("custom_tool".to_string()),
-        output: codex_protocol::models::FunctionCallOutputPayload::from_text(text.to_string()),
-    }
-}
-
-pub(super) fn custom_tool_output_text_content(item: &ResponseItem) -> &str {
-    let ResponseItem::CustomToolCallOutput { output, .. } = item else {
-        panic!("expected CustomToolCallOutput, got {item:?}");
-    };
-    output.text_content().expect("custom tool text output")
 }
