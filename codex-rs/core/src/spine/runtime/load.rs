@@ -289,27 +289,14 @@ impl SpineRuntime {
         )?;
         let pending_memory_context_accounting =
             pending_memory_context_accounting_from_store(&store)?;
-        Ok(Self {
+        build_jit_runtime(
             store,
             ledger,
             parse_stack,
-            raw_len: u64::try_from(raw_live.len())
-                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
             raw_live,
-            jit_enabled: true,
-            trim_enabled: true,
-            open_requests: BTreeMap::new(),
-            control_call_ids: BTreeSet::new(),
-            tree_call_ids: BTreeSet::new(),
-            ordinary_tool_requests: BTreeMap::new(),
-            #[cfg(test)]
-            pending_tool_responses: BTreeMap::new(),
-            pending: None,
-            #[cfg(test)]
-            control_receipts: BTreeMap::new(),
             pending_memory_context_accounting,
             next_user_anchor,
-        })
+        )
     }
 
     fn load_with_rollback_checkpoint(
@@ -358,28 +345,46 @@ impl SpineRuntime {
         )?;
         let pending_memory_context_accounting =
             pending_memory_context_accounting_from_store(&store)?;
-        Ok(Self {
+        build_jit_runtime(
             store,
             ledger,
             parse_stack,
-            raw_len: u64::try_from(raw_live.len())
-                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
             raw_live,
-            jit_enabled: true,
-            trim_enabled: true,
-            open_requests: BTreeMap::new(),
-            control_call_ids: BTreeSet::new(),
-            tree_call_ids: BTreeSet::new(),
-            ordinary_tool_requests: BTreeMap::new(),
-            #[cfg(test)]
-            pending_tool_responses: BTreeMap::new(),
-            pending: None,
-            #[cfg(test)]
-            control_receipts: BTreeMap::new(),
             pending_memory_context_accounting,
             next_user_anchor,
-        })
+        )
     }
+}
+
+fn build_jit_runtime(
+    store: SpineStore,
+    ledger: SpineLedgerCache,
+    parse_stack: ParseStack,
+    raw_live: Vec<bool>,
+    pending_memory_context_accounting: Option<super::PendingMemoryContextAccounting>,
+    next_user_anchor: u64,
+) -> Result<SpineRuntime, SpineError> {
+    Ok(SpineRuntime {
+        store,
+        ledger,
+        parse_stack,
+        raw_len: u64::try_from(raw_live.len())
+            .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
+        raw_live,
+        jit_enabled: true,
+        trim_enabled: true,
+        open_requests: BTreeMap::new(),
+        control_call_ids: BTreeSet::new(),
+        tree_call_ids: BTreeSet::new(),
+        ordinary_tool_requests: BTreeMap::new(),
+        #[cfg(test)]
+        pending_tool_responses: BTreeMap::new(),
+        pending: None,
+        #[cfg(test)]
+        control_receipts: BTreeMap::new(),
+        pending_memory_context_accounting,
+        next_user_anchor,
+    })
 }
 
 fn validate_checkpoint_prefix_parse_stack(
