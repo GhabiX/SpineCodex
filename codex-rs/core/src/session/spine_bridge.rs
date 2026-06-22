@@ -10,7 +10,6 @@ use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCommitAttempt;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
-use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
 use crate::spine::SpineMessageEvidence;
 use crate::spine::SpineMessageHostOutcome;
@@ -253,30 +252,21 @@ impl Session {
         }
     }
 
-    fn apply_spine_host_effect_to_locked_state(
-        state: &mut crate::state::SessionState,
-        effect: SpineHostEffect,
-    ) -> Result<Option<SpineHostEffect>, String> {
-        let history = state.clone_history();
-        effect
-            .apply_history_update_or_self(history.raw_items(), |range, replacement, reference| {
-                state
-                    .replace_history_suffix(range, replacement, reference)
-                    .map_err(|err| err.to_string())
-            })
-            .map(|result| match result {
-                Ok(()) => None,
-                Err(effect) => Some(effect),
-            })
-    }
-
     fn apply_spine_host_effects_to_locked_state(
         state: &mut crate::state::SessionState,
         effects: SpineHostEffects,
     ) -> Result<(), String> {
-        for effect in effects.into_effects() {
-            let _ = Self::apply_spine_host_effect_to_locked_state(state, effect)?;
-        }
+        let _ = effects.apply_history_updates_or_keep(|effect| {
+            let history = state.clone_history();
+            effect.apply_history_update_or_self(
+                history.raw_items(),
+                |range, replacement, reference| {
+                    state
+                        .replace_history_suffix(range, replacement, reference)
+                        .map_err(|err| err.to_string())
+                },
+            )
+        })?;
         Ok(())
     }
 
@@ -781,14 +771,21 @@ impl Session {
         &self,
         effects: SpineHostEffects,
     ) -> Result<(), String> {
-        for effect in effects.into_effects() {
+        let effects = {
             let mut state = self.state.lock().await;
-            let effect = match Self::apply_spine_host_effect_to_locked_state(&mut state, effect) {
-                Ok(None) => continue,
-                Ok(Some(effect)) => effect,
-                Err(err) => return Err(err),
-            };
-            drop(state);
+            effects.apply_history_updates_or_keep(|effect| {
+                let history = state.clone_history();
+                effect.apply_history_update_or_self(
+                    history.raw_items(),
+                    |range, replacement, reference| {
+                        state
+                            .replace_history_suffix(range, replacement, reference)
+                            .map_err(|err| err.to_string())
+                    },
+                )
+            })?
+        };
+        for effect in effects {
             let Some((snapshot, delivery)) = effect.into_tree_update() else {
                 continue;
             };

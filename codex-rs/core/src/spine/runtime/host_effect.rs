@@ -54,6 +54,22 @@ impl SpineHostEffects {
     pub(crate) fn into_effects(self) -> Vec<SpineHostEffect> {
         self.effects
     }
+
+    pub(crate) fn apply_history_updates_or_keep(
+        self,
+        mut apply_history_update: impl FnMut(
+            SpineHostEffect,
+        ) -> Result<Result<(), SpineHostEffect>, String>,
+    ) -> Result<Vec<SpineHostEffect>, String> {
+        let mut remaining = Vec::new();
+        for effect in self.effects {
+            match apply_history_update(effect)? {
+                Ok(()) => {}
+                Err(effect) => remaining.push(effect),
+            }
+        }
+        Ok(remaining)
+    }
 }
 
 pub(crate) enum SpineHostEffect {
