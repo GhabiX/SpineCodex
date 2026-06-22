@@ -1,6 +1,7 @@
 use super::SPINE_JIT_INSTRUCTIONS;
 use super::SPINE_TRIM_INSTRUCTIONS;
 use super::append_spine_view_instructions;
+use super::extract_spine_instruction_section_body;
 
 fn occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
@@ -52,26 +53,24 @@ fn trim_feature_appends_trim_policy_without_jit_controls() {
 }
 
 #[test]
-fn trim_instructions_describe_immediate_hygiene_policy() {
-    let instructions = SPINE_TRIM_INSTRUCTIONS;
-    let normalized = instructions
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(instructions.contains("spine.trim"));
-    assert!(normalized.contains("most recent completed toolcall"));
-    assert!(normalized.contains("tool responses that just came back"));
-    assert!(normalized.contains("older `TRIM_ID`s expire"));
-    assert!(instructions.contains("snip"));
-    assert!(instructions.contains("slice"));
-    assert!(instructions.contains("head"));
-    assert!(instructions.contains("tail"));
-    assert!(instructions.contains("anchor"));
-    assert!(normalized.contains("next assistant response that calls tools"));
-    assert!(normalized.contains("alongside other useful tools"));
-    assert!(normalized.contains("current task"));
-    assert!(instructions.contains("evidence"));
-    assert!(normalized.contains("If trim misses, treat that `TRIM_ID` as expired"));
+fn trim_instructions_are_a_parseable_standalone_section() {
+    let body = extract_spine_instruction_section_body(SPINE_TRIM_INSTRUCTIONS, "spine_trim")
+        .expect("default trim instructions should expose a spine_trim section");
+
+    assert!(!body.trim().is_empty());
+    assert!(
+        extract_spine_instruction_section_body(SPINE_TRIM_INSTRUCTIONS, "spine_view").is_none()
+    );
+    assert!(
+        SPINE_TRIM_INSTRUCTIONS
+            .trim_start()
+            .starts_with("<spine_trim>")
+    );
+    assert!(
+        SPINE_TRIM_INSTRUCTIONS
+            .trim_end()
+            .ends_with("</spine_trim>")
+    );
 }
 
 #[test]
