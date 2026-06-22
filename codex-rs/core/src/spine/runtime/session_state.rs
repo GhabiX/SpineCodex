@@ -261,7 +261,10 @@ pub(crate) struct SpineToolcallCommitHostPlan {
     output_recording: SpineToolOutputRecording,
     fail_closed_on_commit_missing: bool,
     fail_closed_on_retry_limit: bool,
+    lock_retry_limit: usize,
 }
+
+const SPINE_TOOLCALL_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
 
 impl SpineToolcallCommitPreparation {
     fn new(requires_close_like_commit: bool) -> Self {
@@ -309,6 +312,7 @@ impl SpineToolcallCommitPreparation {
             ),
             fail_closed_on_commit_missing: tool_resp_already_recorded,
             fail_closed_on_retry_limit: tool_resp_already_recorded,
+            lock_retry_limit: SPINE_TOOLCALL_COMMIT_LOCK_RETRY_LIMIT,
         }
     }
 }
@@ -328,6 +332,10 @@ impl SpineToolcallCommitHostPlan {
 
     pub(crate) fn fail_closed_on_retry_limit(&self) -> bool {
         self.fail_closed_on_retry_limit
+    }
+
+    pub(crate) fn lock_retry_limit(&self) -> usize {
+        self.lock_retry_limit
     }
 }
 

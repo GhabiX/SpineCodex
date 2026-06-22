@@ -60,8 +60,6 @@ pub(crate) struct SpineToolCommit {
     pub(crate) deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
-const SPINE_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
-
 struct SpineCommitOutput {
     post_commit_effects: SpineHostEffects,
 }
@@ -1169,7 +1167,7 @@ impl Session {
                     }
                     return Ok(Self::no_spine_tool_commit());
                 }
-                SpineCommitAttempt::Retry if lock_retries < SPINE_COMMIT_LOCK_RETRY_LIMIT => {
+                SpineCommitAttempt::Retry if lock_retries < commit_host_plan.lock_retry_limit() => {
                     lock_retries += 1;
                     tokio::task::yield_now().await;
                 }
@@ -1181,8 +1179,9 @@ impl Session {
                     } else {
                         self.abort_spine_pending_tool(call_id, reason).await;
                     }
+                    let retry_limit = commit_host_plan.lock_retry_limit();
                     return Err(SpineError::Operation(format!(
-                        "spine tool output commit could not acquire session locks after {SPINE_COMMIT_LOCK_RETRY_LIMIT} retries for call_id={call_id}"
+                        "spine tool output commit could not acquire session locks after {retry_limit} retries for call_id={call_id}"
                     )));
                 }
             }
