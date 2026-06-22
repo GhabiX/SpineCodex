@@ -16,6 +16,7 @@ use crate::spine::SpineMessageHostOutcome;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
+use crate::spine::SpineRootCompactHostPublish;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
@@ -70,7 +71,7 @@ struct SpineCompletedToolCallHostOutcome {
 }
 
 pub(crate) struct SpineRootCompactPublish {
-    materialized_len: usize,
+    prepared: SpineRootCompactHostPublish,
 }
 
 pub(crate) enum SpineToolcallTurnError {
@@ -128,12 +129,16 @@ impl SpineCompletedToolCallHostOutcome {
 }
 
 impl SpineRootCompactPublish {
-    fn new(materialized_len: usize) -> Self {
-        Self { materialized_len }
+    fn new(prepared: SpineRootCompactHostPublish) -> Self {
+        Self { prepared }
     }
 
     pub(crate) fn materialized_len(&self) -> usize {
-        self.materialized_len
+        self.prepared.materialized_len()
+    }
+
+    fn materialized(&self) -> &[ResponseItem] {
+        self.prepared.materialized()
     }
 }
 
@@ -1521,7 +1526,7 @@ impl Session {
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
     ) -> CodexResult<Option<SpineRootCompactPublish>> {
-        let Some(materialized) = self
+        let Some(prepared) = self
             .prepare_spine_root_compact_from_native_history(spine_root_compact_source)
             .await
             .map_err(|err| CodexErr::SpineTerminalFailure {
@@ -1531,14 +1536,14 @@ impl Session {
         else {
             return Ok(None);
         };
-        let publish = SpineRootCompactPublish::new(materialized.len());
+        let publish = SpineRootCompactPublish::new(prepared);
         let fixed_prefix: Vec<ResponseItem> = items
             .iter()
             .filter(|item| Self::is_spine_fixed_prefix_item(item))
             .cloned()
             .collect();
         *items = fixed_prefix;
-        items.extend(materialized);
+        items.extend_from_slice(publish.materialized());
         compacted_item.replacement_history = Some(items.clone());
         Ok(Some(publish))
     }
@@ -1546,7 +1551,7 @@ impl Session {
     async fn prepare_spine_root_compact_from_native_history(
         &self,
         spine_root_compact_source: &[ResponseItem],
-    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+    ) -> Result<Option<SpineRootCompactHostPublish>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };

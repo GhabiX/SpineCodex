@@ -44,6 +44,7 @@ pub(crate) use runtime::SpinePendingCommit;
 pub(crate) use runtime::SpinePreparedCommit;
 pub(crate) use runtime::SpinePreparedRootCompact;
 pub(crate) use runtime::SpineRootCompactHostInstall;
+pub(crate) use runtime::SpineRootCompactHostPublish;
 #[cfg(test)]
 pub(crate) use runtime::SpineRootCompactResult;
 pub(crate) use runtime::SpineRootCompactTokenMetadata;
