@@ -17,36 +17,11 @@ pub(in crate::spine::store::clone_sidecar) fn required_memory_ids_for_cloned_eve
     for event in events {
         match &event.event {
             SpineLedgerEvent::Close { node, .. } => {
-                let mut candidates = mems
-                    .iter()
-                    .filter(|mem| &mem.node == node)
-                    .collect::<Vec<_>>();
-                candidates.sort_by(|left, right| left.compact_id.cmp(&right.compact_id));
-                let mut selected = None;
-                for mem in candidates {
-                    if mem.allowed_by(raw_mask)? {
-                        selected = Some(mem);
-                        break;
-                    }
-                }
-                let mem = selected.ok_or_else(|| {
-                    SpineError::InvalidEvent(format!("missing memory for close node {node}"))
-                })?;
+                let mem = required_close_memory(node, mems, raw_mask)?;
                 ids.insert(mem.compact_id.clone());
             }
             SpineLedgerEvent::RootCompact { mem, .. } => {
-                let mem_record = mems
-                    .iter()
-                    .find(|record| record.compact_id == *mem)
-                    .ok_or_else(|| {
-                        SpineError::InvalidEvent("missing memory for root compact".to_string())
-                    })?;
-                if !mem_record.allowed_by(raw_mask)? {
-                    return Err(SpineError::InvalidEvent(format!(
-                        "memory {} does not cover live raw evidence",
-                        mem_record.compact_id
-                    )));
-                }
+                let mem_record = required_root_compact_memory(mem, mems, raw_mask)?;
                 ids.insert(mem.clone());
             }
             SpineLedgerEvent::Init { .. }
@@ -57,6 +32,44 @@ pub(in crate::spine::store::clone_sidecar) fn required_memory_ids_for_cloned_eve
         }
     }
     Ok(ids)
+}
+
+fn required_close_memory<'a>(
+    node: &crate::spine::model::NodeId,
+    mems: &'a [MemRecord],
+    raw_mask: RawMask<'_>,
+) -> Result<&'a MemRecord, SpineError> {
+    let mut candidates = mems
+        .iter()
+        .filter(|mem| &mem.node == node)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.compact_id.cmp(&right.compact_id));
+    for mem in candidates {
+        if mem.allowed_by(raw_mask)? {
+            return Ok(mem);
+        }
+    }
+    Err(SpineError::InvalidEvent(format!(
+        "missing memory for close node {node}"
+    )))
+}
+
+fn required_root_compact_memory<'a>(
+    compact_id: &str,
+    mems: &'a [MemRecord],
+    raw_mask: RawMask<'_>,
+) -> Result<&'a MemRecord, SpineError> {
+    let mem_record = mems
+        .iter()
+        .find(|record| record.compact_id == compact_id)
+        .ok_or_else(|| SpineError::InvalidEvent("missing memory for root compact".to_string()))?;
+    if !mem_record.allowed_by(raw_mask)? {
+        return Err(SpineError::InvalidEvent(format!(
+            "memory {} does not cover live raw evidence",
+            mem_record.compact_id
+        )));
+    }
+    Ok(mem_record)
 }
 
 pub(in crate::spine::store::clone_sidecar) fn add_required_memory_refs(
