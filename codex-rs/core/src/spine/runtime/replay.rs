@@ -56,23 +56,17 @@ pub(super) fn next_event_seq_from(events: &[LoggedSpineLedgerEvent]) -> Result<u
 pub(super) fn next_user_anchor_from_events(
     events: &[LoggedSpineLedgerEvent],
 ) -> Result<u64, SpineError> {
-    let next = events
-        .iter()
-        .filter_map(|event| match &event.event {
+    let next = next_seq_from(
+        events.iter().filter_map(|event| match &event.event {
             SpineLedgerEvent::Msg {
                 user_anchor: Some(user_anchor),
                 ..
             } => Some(*user_anchor),
             _ => None,
-        })
-        .max()
-        .map(|anchor| {
-            anchor
-                .checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent("user anchor overflow".to_string()))
-        })
-        .transpose()?;
-    Ok(next.unwrap_or(1))
+        }),
+        "user anchor overflow",
+    )?;
+    Ok(next.max(1))
 }
 
 pub(super) fn next_pressure_seq_from(events: &[LoggedPressureEvent]) -> Result<u64, SpineError> {
