@@ -23,19 +23,21 @@ impl SpineHostEffects {
         }
     }
 
-    pub(crate) fn replace_history(update: SpineHistoryUpdate) -> Self {
+    fn one(effect: SpineHostEffect) -> Self {
         Self {
-            effects: vec![SpineHostEffect::ReplaceHistory(update)],
+            effects: vec![effect],
         }
+    }
+
+    pub(crate) fn replace_history(update: SpineHistoryUpdate) -> Self {
+        Self::one(SpineHostEffect::ReplaceHistory(update))
     }
 
     pub(crate) fn tree_update(
         snapshot: SpineTreeUpdateEvent,
         delivery: SpineTreeUpdateDelivery,
     ) -> Self {
-        Self {
-            effects: vec![SpineHostEffect::TreeUpdate { snapshot, delivery }],
-        }
+        Self::one(SpineHostEffect::TreeUpdate { snapshot, delivery })
     }
 
     pub(crate) fn from_optional_history_update(update: Option<SpineHistoryUpdate>) -> Self {
