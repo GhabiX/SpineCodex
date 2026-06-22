@@ -397,14 +397,11 @@ impl SpinePostApplyEffectPolicy {
 }
 
 impl CommittedSpineToolcall {
-    pub(crate) fn installed_commit(&self) -> bool {
+    fn installed_commit(&self) -> bool {
         self.installed_commit
     }
 
-    pub(crate) fn post_apply_host_effects(
-        self,
-        snapshot: Option<SpineTreeUpdateEvent>,
-    ) -> SpineHostEffects {
+    fn post_apply_host_effects(self, snapshot: Option<SpineTreeUpdateEvent>) -> SpineHostEffects {
         self.post_apply_effect_policy.host_effects(snapshot)
     }
 }
@@ -879,6 +876,25 @@ impl SpineSessionState {
             runtime.build_tree_snapshot()?,
             runtime.open_node_context_projections(),
         )))
+    }
+
+    pub(crate) fn committed_toolcall_tree_snapshot_projection(
+        &self,
+        committed: &CommittedSpineToolcall,
+    ) -> Result<Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>, SpineError>
+    {
+        if !committed.installed_commit() {
+            return Ok(None);
+        }
+        self.tree_snapshot_projection()
+    }
+
+    pub(crate) fn committed_toolcall_post_apply_host_effects(
+        &self,
+        committed: CommittedSpineToolcall,
+        snapshot: Option<SpineTreeUpdateEvent>,
+    ) -> SpineHostEffects {
+        committed.post_apply_host_effects(snapshot)
     }
 
     pub(crate) fn render_tree_with_context_annotations(

@@ -1233,10 +1233,9 @@ impl Session {
             prepared_commit,
             |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
         )?;
-        let snapshot = if committed.installed_commit() {
-            let Some(projection) = guard.tree_snapshot_projection()? else {
-                return Ok(SpineCommitAttempt::RuntimeMissing);
-            };
+        let snapshot = if let Some(projection) =
+            guard.committed_toolcall_tree_snapshot_projection(&committed)?
+        {
             let token_info = state.token_info();
             Some(build_annotated_tree_snapshot(
                 projection,
@@ -1245,8 +1244,10 @@ impl Session {
         } else {
             None
         };
+        let post_commit_effects =
+            guard.committed_toolcall_post_apply_host_effects(committed, snapshot);
         Ok(SpineCommitAttempt::Done(SpineCommitOutput {
-            post_commit_effects: committed.post_apply_host_effects(snapshot),
+            post_commit_effects,
         }))
     }
 
