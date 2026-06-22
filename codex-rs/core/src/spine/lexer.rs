@@ -86,6 +86,7 @@ impl ControlIntent {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::spine) enum LexedTokenKind {
+    Compact,
     Open,
     Close,
     ToolCall,
@@ -115,6 +116,67 @@ pub(in crate::spine) fn plan_control_toolcall(intent: ControlIntent) -> ControlT
     ControlToolCallPlan {
         intent,
         token_sequence: intent.token_sequence(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::spine) struct RootCompactPlan {
+    token_sequence: &'static [LexedTokenKind],
+}
+
+impl RootCompactPlan {
+    pub(in crate::spine) fn token_sequence(self) -> &'static [LexedTokenKind] {
+        self.token_sequence
+    }
+
+    pub(in crate::spine) fn lex_compact_token(
+        self,
+        memory: MemoryRef,
+        next_open_index: usize,
+        next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
+    ) -> Result<SpineToken, SpineError> {
+        debug_assert_eq!(
+            self.token_sequence(),
+            &[LexedTokenKind::Compact, LexedTokenKind::Open]
+        );
+        lex_root_compact_token(
+            memory,
+            next_open_index,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        )
+    }
+
+    pub(in crate::spine) fn lex_event_token(
+        self,
+        node: NodeId,
+        boundary: u64,
+        memory: MemoryRef,
+        next_open_index: usize,
+        raw_live_hash: String,
+        next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
+    ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+        debug_assert_eq!(
+            self.token_sequence(),
+            &[LexedTokenKind::Compact, LexedTokenKind::Open]
+        );
+        lex_root_compact_event_token(
+            node,
+            boundary,
+            memory,
+            next_open_index,
+            raw_live_hash,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        )
+    }
+}
+
+pub(in crate::spine) fn plan_root_compact() -> RootCompactPlan {
+    RootCompactPlan {
+        token_sequence: &[LexedTokenKind::Compact, LexedTokenKind::Open],
     }
 }
 
@@ -599,6 +661,14 @@ mod tests {
         assert!(!plan_control_toolcall(ControlIntent::Open).is_close_like());
         assert!(plan_control_toolcall(ControlIntent::Close).is_close_like());
         assert!(plan_control_toolcall(ControlIntent::Next).is_close_like());
+    }
+
+    #[test]
+    fn root_compact_plan_matches_formular_def_macro_shape() {
+        assert_eq!(
+            plan_root_compact().token_sequence(),
+            &[LexedTokenKind::Compact, LexedTokenKind::Open]
+        );
     }
 
     #[test]

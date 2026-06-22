@@ -465,7 +465,7 @@ impl SpineRuntime {
                 // Probe first because source_context_range records the pre-compact source
                 // span, while next_open_index is the post-compact h(PS) materialized len.
                 let mut probe_parse_stack = self.parse_stack.clone();
-                let token = crate::spine::lexer::lex_root_compact_token(
+                let token = crate::spine::lexer::plan_root_compact().lex_compact_token(
                     memory.clone(),
                     0,
                     token_metadata.next_open_input_tokens,
@@ -533,15 +533,16 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let (root_compact_event, _token) = crate::spine::lexer::lex_root_compact_event_token(
-            node,
-            self.raw_len,
-            memory.clone(),
-            next_open_index_usize,
-            raw_live_hash,
-            token_metadata.next_open_input_tokens,
-            token_metadata.next_open_context_tokens,
-        )?;
+        let (root_compact_event, _token) = crate::spine::lexer::plan_root_compact()
+            .lex_event_token(
+                node,
+                self.raw_len,
+                memory.clone(),
+                next_open_index_usize,
+                raw_live_hash,
+                token_metadata.next_open_input_tokens,
+                token_metadata.next_open_context_tokens,
+            )?;
         Ok(PreparedRootCompactCommit {
             result,
             mem,
