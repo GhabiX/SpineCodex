@@ -78,19 +78,22 @@ pub(in crate::spine::store::clone_sidecar) fn add_required_memory_refs(
     checkpoints: &[SpineCheckpoint],
     commit_markers: &[SpineCommitMarker],
 ) {
-    for checkpoint in compact_checkpoints {
-        for memory in &checkpoint.memory_refs {
-            ids.insert(memory.compact_id.clone());
-        }
-    }
-    for checkpoint in checkpoints {
-        for memory in &checkpoint.memory_refs {
-            ids.insert(memory.compact_id.clone());
-        }
-    }
-    for marker in commit_markers {
-        for memory in &marker.memory_refs {
-            ids.insert(memory.compact_id.clone());
-        }
-    }
+    ids.extend(
+        compact_checkpoints
+            .iter()
+            .flat_map(|checkpoint| &checkpoint.memory_refs)
+            .map(|memory| memory.compact_id.clone()),
+    );
+    ids.extend(
+        checkpoints
+            .iter()
+            .flat_map(|checkpoint| &checkpoint.memory_refs)
+            .map(|memory| memory.compact_id.clone()),
+    );
+    ids.extend(
+        commit_markers
+            .iter()
+            .flat_map(|marker| &marker.memory_refs)
+            .map(|memory| memory.compact_id.clone()),
+    );
 }
