@@ -980,27 +980,25 @@ impl Session {
         let mut raw_len;
         let mut history_for_output_anchor;
         loop {
-            raw_len = {
-                let guard = spine_slot.lock().await;
-                let Some(raw_len) = guard.ready_raw_len()? else {
-                    return Ok(None);
-                };
-                raw_len
-            };
             history_for_output_anchor = self.clone_history().await;
             let history_items_for_output_anchor = history_for_output_anchor.raw_items();
+            let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
+            let recording_plan = {
+                let guard = spine_slot.lock().await;
+                let Some(recording_plan) =
+                    guard.prepare_single_toolcall_output_recording(call_id, &raw_items)?
+                else {
+                    return Ok(None);
+                };
+                recording_plan
+            };
+            raw_len = recording_plan.raw_len();
             let tool_resp_already_recorded =
                 history_items_for_output_anchor.last() == Some(item) && raw_len > 0;
             if tool_resp_already_recorded || recorded_output_inside_reduce {
                 break;
             }
-            let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
-            let is_close_like = {
-                let guard = spine_slot.lock().await;
-                guard.ensure_valid()?;
-                guard.completed_toolcall_requires_durable_output(call_id, &raw_items)?
-            };
-            if !is_close_like {
+            if !recording_plan.prerecord_output_before_reduce() {
                 break;
             }
             history_before_recorded_output = Some(history_for_output_anchor.clone());

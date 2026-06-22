@@ -299,6 +299,11 @@ pub(crate) struct SpineToolcallCommitInput<'a> {
     pub(crate) current_turn_provider_input_tokens: Option<i64>,
 }
 
+pub(crate) struct SpineSingleToolcallOutputRecordingPlan {
+    raw_len: u64,
+    prerecord_output_before_reduce: bool,
+}
+
 struct CompletedToolCallEvidenceParts {
     call_id: String,
     request_call_ids: Vec<String>,
@@ -395,6 +400,16 @@ impl CommittedSpineToolcall {
         snapshot: Option<SpineTreeUpdateEvent>,
     ) -> SpineHostEffects {
         self.post_apply_effect_policy.host_effects(snapshot)
+    }
+}
+
+impl SpineSingleToolcallOutputRecordingPlan {
+    pub(crate) fn raw_len(&self) -> u64 {
+        self.raw_len
+    }
+
+    pub(crate) fn prerecord_output_before_reduce(&self) -> bool {
+        self.prerecord_output_before_reduce
     }
 }
 
@@ -582,14 +597,6 @@ impl SpineSessionState {
 
     pub(crate) fn raw_len(&self) -> u64 {
         self.raw_len
-    }
-
-    pub(crate) fn ready_raw_len(&self) -> Result<Option<u64>, SpineError> {
-        self.ensure_valid()?;
-        if self.runtime().is_none() {
-            return Ok(None);
-        }
-        Ok(Some(self.raw_len))
     }
 
     pub(crate) fn set_replayed(
@@ -882,16 +889,20 @@ impl SpineSessionState {
         runtime.build_tree_snapshot()
     }
 
-    pub(crate) fn completed_toolcall_requires_durable_output(
+    pub(crate) fn prepare_single_toolcall_output_recording(
         &self,
         call_id: &str,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<bool, SpineError> {
+    ) -> Result<Option<SpineSingleToolcallOutputRecordingPlan>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime() else {
-            return Ok(false);
+            return Ok(None);
         };
-        runtime.has_close_like_control_request(call_id, raw_items)
+        Ok(Some(SpineSingleToolcallOutputRecordingPlan {
+            raw_len: self.raw_len,
+            prerecord_output_before_reduce: runtime
+                .has_close_like_control_request(call_id, raw_items)?,
+        }))
     }
 
     pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
