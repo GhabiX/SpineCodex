@@ -6,11 +6,14 @@ use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::spine::is_spine_close_like_tool_name;
 
-fn node_id(path: &[u32]) -> NodeId {
+#[path = "close_memory_assembly_node_memory.rs"]
+mod close_memory_assembly_node_memory;
+
+pub(super) fn node_id(path: &[u32]) -> NodeId {
     serde_json::from_value(serde_json::json!(path)).expect("node id")
 }
 
-fn assistant_message(text: &str) -> ResponseItem {
+pub(super) fn assistant_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
@@ -21,7 +24,7 @@ fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
-fn user_message(text: &str) -> ResponseItem {
+pub(super) fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -32,7 +35,7 @@ fn user_message(text: &str) -> ResponseItem {
     }
 }
 
-fn source_entry(
+pub(super) fn source_entry(
     context_index: usize,
     source_ordinal: usize,
     item: ResponseItem,
@@ -47,7 +50,7 @@ fn source_entry(
     )
 }
 
-fn source_entry_with_user_anchor(
+pub(super) fn source_entry_with_user_anchor(
     context_index: usize,
     source_ordinal: usize,
     item: ResponseItem,
@@ -67,7 +70,7 @@ fn source_entry_with_user_anchor(
     }
 }
 
-fn child_memory_entry(
+pub(super) fn child_memory_entry(
     context_index: usize,
     source_ordinal: usize,
     body: &str,
@@ -86,7 +89,9 @@ fn child_memory_entry(
     }
 }
 
-fn source_plan(entries: Vec<crate::spine::SpineCompactSourcePlanEntry>) -> SpineCompactSourcePlan {
+pub(super) fn source_plan(
+    entries: Vec<crate::spine::SpineCompactSourcePlanEntry>,
+) -> SpineCompactSourcePlan {
     SpineCompactSourcePlan {
         node_id: node_id(&[1, 1]),
         source_context_range: 2..2 + entries.len(),
@@ -95,7 +100,7 @@ fn source_plan(entries: Vec<crate::spine::SpineCompactSourcePlanEntry>) -> Spine
     }
 }
 
-fn source_plan_with_context_range(
+pub(super) fn source_plan_with_context_range(
     source_context_range: std::ops::Range<usize>,
     entries: Vec<crate::spine::SpineCompactSourcePlanEntry>,
 ) -> SpineCompactSourcePlan {
@@ -188,106 +193,6 @@ fn child_only_skeleton_does_not_invent_user_message() {
     assert!(body.contains("## Node Memory\npreserved node memory facts"));
     assert!(!body.contains("## Memory Slot"));
     assert!(!body.contains("## User Message"));
-}
-
-#[test]
-fn direct_node_memory_allows_markdown_content() {
-    let plan = source_plan(vec![source_entry(
-        2,
-        0,
-        assistant_message("assistant details"),
-        false,
-    )]);
-    let skeleton = SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
-
-    let body = skeleton
-        .assemble(
-            r#"Node memory can contain Markdown bullets:
-- next step remains open
-
-```json
-{"quoted":"json is content, not protocol"}
-```"#,
-        )
-        .expect("markdown node memory should be accepted");
-
-    assert!(body.contains("## Node Memory\nNode memory can contain Markdown bullets"));
-    assert!(body.contains(r#"{"quoted":"json is content, not protocol"}"#));
-}
-
-#[test]
-fn direct_node_memory_allows_inline_protocol_marker_discussion() {
-    let plan = source_plan(vec![source_entry(
-        2,
-        0,
-        assistant_message("assistant details"),
-        false,
-    )]);
-    let skeleton = SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
-
-    let body = skeleton
-        .assemble("The failure involved a literal <SPINE_SLOT_ substring in the node memory body.")
-        .expect("inline protocol marker discussion should be accepted");
-
-    assert!(body.contains("## Node Memory\nThe failure involved a literal <SPINE_SLOT_ substring"));
-}
-
-#[test]
-fn direct_node_memory_treats_structure_markers_as_opaque_content() {
-    let plan = source_plan(vec![source_entry(
-        2,
-        0,
-        assistant_message("assistant details"),
-        false,
-    )]);
-    let skeleton = SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
-    let body = skeleton
-        .assemble("## User Message\nquoted historical text")
-        .expect("node memory body is opaque text except for non-empty validation");
-
-    assert!(body.contains("## Node Memory\n## User Message\nquoted historical text"));
-}
-
-#[test]
-fn direct_node_memory_allows_standalone_body_control_tags_as_text() {
-    let plan = source_plan(vec![source_entry(
-        2,
-        0,
-        assistant_message("assistant details"),
-        false,
-    )]);
-    let skeleton = SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
-
-    let nested_slot_tag = skeleton
-        .assemble("before\n<SPINE_SLOT_1>\nafter")
-        .expect("standalone slot-like tag is opaque node memory text");
-    assert!(nested_slot_tag.contains("## Node Memory\nbefore\n<SPINE_SLOT_1>\nafter"));
-
-    let runtime_tag = skeleton
-        .assemble("before\n<spine_memory>\nafter")
-        .expect("standalone runtime-like tag is opaque node memory text");
-    assert!(runtime_tag.contains("## Node Memory\nbefore\n<spine_memory>\nafter"));
-}
-
-#[test]
-fn direct_node_memory_rejects_empty_and_allows_user_msg_text() {
-    let plan = source_plan(vec![source_entry(
-        2,
-        0,
-        assistant_message("assistant details"),
-        false,
-    )]);
-    let skeleton = SpineMemoryAssemblySkeleton::from_source_plan("1.1", &plan).expect("skeleton");
-
-    let empty_node = skeleton
-        .assemble("  ")
-        .expect_err("empty node memory must fail");
-    assert!(empty_node.to_string().contains("empty node memory"));
-
-    let user_msg = skeleton
-        .assemble("before\n<USER_MSG_1>\ndo not return this\n</USER_MSG_1>\nafter")
-        .expect("user-msg-like tags are opaque node memory text");
-    assert!(user_msg.contains("## Node Memory\nbefore\n<USER_MSG_1>\ndo not return this"));
 }
 
 #[test]
