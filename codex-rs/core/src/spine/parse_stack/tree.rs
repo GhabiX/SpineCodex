@@ -41,6 +41,14 @@ struct NodeAccounting {
     memory_output_tokens: Option<i64>,
 }
 
+impl NodeAccounting {
+    fn is_empty(&self) -> bool {
+        self.closed_source_suffix_tokens.is_none()
+            && self.closed_memory_context_tokens.is_none()
+            && self.memory_output_tokens.is_none()
+    }
+}
+
 #[cfg(test)]
 pub(super) fn render_tree(parse_stack: &ParseStack) -> Result<String, SpineError> {
     let rows = tree_rows(parse_stack)?;
@@ -397,11 +405,7 @@ fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
         closed_memory_context_tokens: memory.closed_memory_context_tokens,
         memory_output_tokens: memory.memory_output_tokens.filter(|tokens| *tokens > 0),
     })
-    .filter(|accounting| {
-        accounting.closed_source_suffix_tokens.is_some()
-            || accounting.closed_memory_context_tokens.is_some()
-            || accounting.memory_output_tokens.is_some()
-    })
+    .filter(|accounting| !accounting.is_empty())
 }
 
 fn snapshot_accounting(accounting: &NodeAccounting) -> Option<SpineTreeNodeAccountingSnapshot> {
@@ -413,11 +417,7 @@ fn snapshot_accounting(accounting: &NodeAccounting) -> Option<SpineTreeNodeAccou
         closed_memory_context_tokens: accounting.closed_memory_context_tokens,
         memory_output_tokens: accounting.memory_output_tokens,
     })
-    .filter(|accounting| {
-        accounting.closed_source_suffix_tokens.is_some()
-            || accounting.closed_memory_context_tokens.is_some()
-            || accounting.memory_output_tokens.is_some()
-    })
+    .filter(|_| !accounting.is_empty())
 }
 
 fn format_node_accounting(accounting: &NodeAccounting) -> Option<String> {
