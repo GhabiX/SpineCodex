@@ -63,7 +63,7 @@ pub(crate) struct SpineToolCommit {
     deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
-struct SpineCompletedToolCallCommit {
+struct SpineCompletedToolCallHostOutcome {
     #[cfg(test)]
     recording: SpineToolOutputRecording,
     deferred_tree_update: Option<SpineTreeUpdateEvent>,
@@ -108,7 +108,7 @@ impl SpineToolCommit {
     }
 }
 
-impl SpineCompletedToolCallCommit {
+impl SpineCompletedToolCallHostOutcome {
     fn no_spine_commit() -> Self {
         Self {
             #[cfg(test)]
@@ -261,24 +261,24 @@ impl Session {
         else {
             return Ok(());
         };
-        let mut commit = self
+        let mut outcome = self
             .commit_completed_spine_toolcall(turn_context, completed)
             .await
             .map_err(|err| SpineToolcallTurnError::Terminal {
                 operation,
                 reason: err.to_string(),
             })?;
-        self.apply_completed_spine_toolcall_commit(turn_context.as_ref(), &mut commit)
+        self.apply_completed_spine_toolcall_host_outcome(turn_context.as_ref(), &mut outcome)
             .await;
         Ok(())
     }
 
-    async fn apply_completed_spine_toolcall_commit(
+    async fn apply_completed_spine_toolcall_host_outcome(
         &self,
         turn_context: &TurnContext,
-        commit: &mut SpineCompletedToolCallCommit,
+        outcome: &mut SpineCompletedToolCallHostOutcome,
     ) {
-        if let Some(snapshot) = commit.deferred_tree_update.take() {
+        if let Some(snapshot) = outcome.deferred_tree_update.take() {
             self.send_spine_tree_update(turn_context, snapshot).await;
         }
     }
@@ -1106,20 +1106,20 @@ impl Session {
         evidence: SpineToolCallEvidence<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(SpineCompletedToolCallCommit::no_spine_commit().into_tool_commit());
+            return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit().into_tool_commit());
         };
         let Some(output) = evidence.completed_output()? else {
-            return Ok(SpineCompletedToolCallCommit::no_spine_commit().into_tool_commit());
+            return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit().into_tool_commit());
         };
         let Some(completed) = self
             .prepare_completed_spine_toolcall_output(turn_context, spine_slot, output)
             .await?
         else {
-            return Ok(SpineCompletedToolCallCommit::no_spine_commit().into_tool_commit());
+            return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit().into_tool_commit());
         };
         self.commit_completed_spine_toolcall(turn_context, completed)
             .await
-            .map(SpineCompletedToolCallCommit::into_tool_commit)
+            .map(SpineCompletedToolCallHostOutcome::into_tool_commit)
     }
 
     async fn prepare_completed_spine_toolcall_output<'a>(
@@ -1294,9 +1294,9 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         toolcall: CompletedSpineToolCall<'_>,
-    ) -> Result<SpineCompletedToolCallCommit, SpineError> {
+    ) -> Result<SpineCompletedToolCallHostOutcome, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(SpineCompletedToolCallCommit::no_spine_commit());
+            return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
         };
         let call_id = toolcall.evidence.call_id;
         let item = toolcall.evidence.response_item;
@@ -1319,7 +1319,7 @@ impl Session {
                 recorded_output_inside_reduce,
             )?
             else {
-                return Ok(SpineCompletedToolCallCommit::no_spine_commit());
+                return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
             };
             commit_host_plan
         };
@@ -1367,7 +1367,7 @@ impl Session {
                 Err(decision) => decision,
             };
             if decision.is_no_spine_commit() {
-                return Ok(SpineCompletedToolCallCommit::no_spine_commit());
+                return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
             }
             if decision.should_retry() {
                 lock_retries += 1;
@@ -1394,7 +1394,7 @@ impl Session {
                 "deferring Spine close-like tree update until raw output evidence is durable"
             );
         }
-        Ok(SpineCompletedToolCallCommit {
+        Ok(SpineCompletedToolCallHostOutcome {
             #[cfg(test)]
             recording: commit_host_plan.output_recording(),
             deferred_tree_update,
