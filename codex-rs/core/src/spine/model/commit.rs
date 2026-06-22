@@ -47,19 +47,11 @@ pub(in crate::spine) fn commit_marker_structural_event_seqs(
     marker: &SpineCommitMarker,
 ) -> Result<BTreeSet<u64>, SpineError> {
     let mut seqs = BTreeSet::new();
-    match marker.kind {
-        SpineCommitKindMarker::Close => {
-            seqs.insert(marker.token_seq_start);
-        }
-        SpineCommitKindMarker::CloseThenOpen => {
-            seqs.insert(marker.token_seq_start);
-            seqs.insert(marker.token_seq_start.checked_add(1).ok_or_else(|| {
-                SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
-            })?);
-        }
-        SpineCommitKindMarker::RootCompact => {
-            seqs.insert(marker.token_seq_start);
-        }
+    seqs.insert(marker.token_seq_start);
+    if marker.kind == SpineCommitKindMarker::CloseThenOpen {
+        seqs.insert(marker.token_seq_start.checked_add(1).ok_or_else(|| {
+            SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
+        })?);
     }
     Ok(seqs)
 }
