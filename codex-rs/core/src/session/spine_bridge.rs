@@ -65,6 +65,14 @@ pub(crate) struct SpineRootCompactPublish {
     materialized_len: usize,
 }
 
+pub(crate) enum SpineSingleToolcallTurnError {
+    Codex(CodexErr),
+    Terminal {
+        operation: &'static str,
+        reason: String,
+    },
+}
+
 impl SpineToolCommit {
     pub(crate) fn recording(&self) -> SpineToolOutputRecording {
         self.recording
@@ -166,6 +174,32 @@ impl Session {
     ) {
         self.send_event(turn_context, EventMsg::SpineTreeUpdate(snapshot))
             .await;
+    }
+
+    pub(crate) async fn record_single_toolcall_response_with_spine(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        response_item: &ResponseItem,
+    ) -> Result<(), SpineSingleToolcallTurnError> {
+        self.record_conversation_items_without_spine_observe(
+            turn_context,
+            std::slice::from_ref(response_item),
+        )
+        .await
+        .map_err(SpineSingleToolcallTurnError::Codex)?;
+
+        let mut commit = self
+            .on_toolcall(turn_context, SpineToolCallEvidence::single(response_item))
+            .await
+            .map_err(|err| SpineSingleToolcallTurnError::Terminal {
+                operation: "commit Spine tool output",
+                reason: err.to_string(),
+            })?;
+        if let Some(snapshot) = commit.take_deferred_tree_update() {
+            self.send_spine_tree_update(turn_context.as_ref(), snapshot)
+                .await;
+        }
+        Ok(())
     }
 
     fn apply_spine_host_effect_to_locked_state(

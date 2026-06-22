@@ -133,6 +133,8 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+use super::spine_bridge::SpineSingleToolcallTurnError;
+
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
 ///
@@ -187,6 +189,18 @@ impl From<CodexErr> for SamplingRequestError {
 }
 
 impl SamplingRequestError {}
+
+fn map_spine_single_toolcall_turn_error(err: SpineSingleToolcallTurnError) -> SamplingRequestError {
+    match err {
+        SpineSingleToolcallTurnError::Codex(err) => SamplingRequestError::Codex(err),
+        SpineSingleToolcallTurnError::Terminal { operation, reason } => {
+            SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
+                operation: operation.to_string(),
+                reason,
+            })
+        }
+    }
+}
 
 #[expect(
     clippy::await_holding_invalid_type,
@@ -2089,81 +2103,10 @@ async fn drain_in_flight(
                 let response_item = response_input.into();
                 let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
                 let spine_trim_enabled = sess.features.enabled(Feature::SpineTrim);
-                let output_recorded_before_spine_commit = if spine_jit_enabled {
-                    sess.record_conversation_items_without_spine_observe(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await
-                    .map_err(SamplingRequestError::Codex)?;
-                    true
-                } else {
-                    false
-                };
-                let mut commit = if spine_jit_enabled {
-                    sess.on_toolcall(&turn_context, SpineToolCallEvidence::single(&response_item))
+                if spine_jit_enabled {
+                    sess.record_single_toolcall_response_with_spine(&turn_context, &response_item)
                         .await
-                        .map_err(|err| {
-                            SamplingRequestError::FailedNoTurnComplete(
-                                CodexErr::SpineTerminalFailure {
-                                    operation: "commit Spine tool output".to_string(),
-                                    reason: err.to_string(),
-                                },
-                            )
-                        })?
-                } else {
-                    Session::no_spine_tool_commit()
-                };
-                if commit.skips_host_recording() && !output_recorded_before_spine_commit {
-                    continue;
-                }
-                let deferred_tree_update = commit.take_deferred_tree_update();
-                if output_recorded_before_spine_commit {
-                    if let Some(snapshot) = deferred_tree_update {
-                        sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
-                            .await;
-                    }
-                    if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
-                        spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
-                    }
-                } else if commit.records_raw_only_durable_without_emission() {
-                    sess.record_conversation_items_raw_only_durable_without_emission(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await
-                    .map_err(SamplingRequestError::Codex)?;
-                    sess.send_raw_response_items(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
-                    if let Some(snapshot) = deferred_tree_update {
-                        sess.send_spine_tree_update(turn_context.as_ref(), snapshot)
-                            .await;
-                    }
-                    if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
-                        spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
-                    }
-                } else if commit.records_without_spine_observe() {
-                    sess.record_conversation_items_without_spine_observe(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await
-                    .map_err(SamplingRequestError::Codex)?;
-                    if spine_trim_enabled {
-                        sess.apply_spine_trim_projection_if_available()
-                            .await
-                            .map_err(|err| {
-                                SamplingRequestError::FailedNoTurnComplete(
-                                    CodexErr::SpineTerminalFailure {
-                                        operation: "apply Spine trim projection".to_string(),
-                                        reason: err.to_string(),
-                                    },
-                                )
-                            })?;
-                    }
+                        .map_err(|err| map_spine_single_toolcall_turn_error(err))?;
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
