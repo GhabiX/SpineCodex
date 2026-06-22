@@ -71,11 +71,6 @@ pub(crate) struct SpineMessageEvidence<'a> {
     pub(crate) raw_items: &'a [Option<ResponseItem>],
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SpineContextObserveOutcome {
-    pub(crate) observed_user_message: bool,
-}
-
 pub(crate) struct SpineMessageHostOutcome {
     publish_materialized_history_after_batch: bool,
 }
@@ -1305,10 +1300,10 @@ impl SpineSessionState {
         &mut self,
         items: &[SpineObservedContextItem<'_>],
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineContextObserveOutcome, SpineError> {
+    ) -> Result<(), SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
-            return Ok(SpineContextObserveOutcome::default());
+            return Ok(());
         };
         let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
         for item in items {
@@ -1347,7 +1342,7 @@ impl SpineSessionState {
                 raw_items,
             )?;
         }
-        Ok(SpineContextObserveOutcome::default())
+        Ok(())
     }
 
     pub(crate) fn observe_non_toolcall_msg(
