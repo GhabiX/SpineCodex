@@ -36,6 +36,8 @@ use std::time::Instant;
 mod checkpoint_failures;
 #[path = "tests/checkpoint_failures_hash.rs"]
 mod checkpoint_failures_hash;
+#[path = "tests/checkpoint_failures_rollback.rs"]
+mod checkpoint_failures_rollback;
 #[path = "tests/clone_boundary_pressure.rs"]
 mod clone_boundary_pressure;
 #[path = "tests/clone_boundary_pressure_alias.rs"]

@@ -5,12 +5,7 @@ fn checkpoint_missing_required_field_fails_closed() {
     assert_checkpoint_missing_required_field_fails_closed();
 }
 
-#[test]
-fn rollback_checkpoint_missing_field_fails_closed() {
-    assert_checkpoint_missing_required_field_fails_closed();
-}
-
-fn assert_checkpoint_missing_required_field_fails_closed() {
+pub(super) fn assert_checkpoint_missing_required_field_fails_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![Some(text_item("kept")), None];
