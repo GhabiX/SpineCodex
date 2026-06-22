@@ -188,18 +188,12 @@ impl Session {
         .await
         .map_err(SpineToolcallTurnError::Codex)?;
 
-        let mut commit = self
-            .on_toolcall(turn_context, SpineToolCallEvidence::single(response_item))
-            .await
-            .map_err(|err| SpineToolcallTurnError::Terminal {
-                operation: "commit Spine tool output",
-                reason: err.to_string(),
-            })?;
-        if let Some(snapshot) = commit.take_deferred_tree_update() {
-            self.send_spine_tree_update(turn_context.as_ref(), snapshot)
-                .await;
-        }
-        Ok(())
+        self.commit_toolcall_response_with_spine(
+            turn_context,
+            SpineToolCallEvidence::single(response_item),
+            "commit Spine tool output",
+        )
+        .await
     }
 
     pub(crate) async fn commit_grouped_toolcall_response_with_spine(
@@ -210,11 +204,22 @@ impl Session {
         response_items: &[ResponseItem],
         operation: &'static str,
     ) -> Result<(), SpineToolcallTurnError> {
+        self.commit_toolcall_response_with_spine(
+            turn_context,
+            SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items),
+            operation,
+        )
+        .await
+    }
+
+    async fn commit_toolcall_response_with_spine(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        evidence: SpineToolCallEvidence<'_>,
+        operation: &'static str,
+    ) -> Result<(), SpineToolcallTurnError> {
         let mut commit = self
-            .on_toolcall(
-                turn_context,
-                SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items),
-            )
+            .on_toolcall(turn_context, evidence)
             .await
             .map_err(|err| SpineToolcallTurnError::Terminal {
                 operation,
