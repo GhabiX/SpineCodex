@@ -12,11 +12,11 @@ use super::support::user_anchor_refs_in_memory;
 #[cfg(test)]
 use super::support::validate_model_node_memory;
 use crate::spine::lexer::ControlIntent;
+use crate::spine::lexer::ParsedControlToolIntent;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::ToolCallSegmentKind;
 use codex_protocol::models::ResponseItem;
-use serde::Deserialize;
 
 #[derive(Clone, Debug)]
 pub(super) struct OpenRequestAnchor {
@@ -87,25 +87,6 @@ impl SpineControlToolReceipt {
     pub(super) fn is_close_like(&self) -> bool {
         matches!(self, Self::Close { .. } | Self::Next { .. })
     }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OpenToolArgs {
-    summary: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CloseToolArgs {
-    memory: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NextToolArgs {
-    summary: String,
-    memory: String,
 }
 
 #[derive(Clone, Debug)]
@@ -421,30 +402,17 @@ impl SpineRuntime {
                 "raw item for call_id={call_id} is not a Spine parser control request"
             )));
         }
-        match name.as_str() {
-            super::SPINE_TOOL_OPEN => {
-                let args: OpenToolArgs = serde_json::from_str(arguments).map_err(|err| {
-                    SpineError::ToolUse(format!("failed to parse spine.open arguments: {err}"))
-                })?;
-                self.stage_open(call_id.to_string(), args.summary)
+        match crate::spine::lexer::parse_control_tool_intent(name, arguments)? {
+            Some(ParsedControlToolIntent::Open { summary }) => {
+                self.stage_open(call_id.to_string(), summary)
             }
-            super::SPINE_TOOL_CLOSE => {
-                let args: CloseToolArgs = serde_json::from_str(arguments).map_err(|err| {
-                    SpineError::ToolUse(format!("failed to parse spine.close arguments: {err}"))
-                })?;
-                self.stage_close(call_id.to_string(), args.memory.trim().to_string())
+            Some(ParsedControlToolIntent::Close { memory }) => {
+                self.stage_close(call_id.to_string(), memory)
             }
-            super::SPINE_TOOL_NEXT => {
-                let args: NextToolArgs = serde_json::from_str(arguments).map_err(|err| {
-                    SpineError::ToolUse(format!("failed to parse spine.next arguments: {err}"))
-                })?;
-                self.stage_next(
-                    call_id.to_string(),
-                    args.summary,
-                    args.memory.trim().to_string(),
-                )
+            Some(ParsedControlToolIntent::Next { summary, memory }) => {
+                self.stage_next(call_id.to_string(), summary, memory)
             }
-            _ => Ok(()),
+            None => Ok(()),
         }
     }
 

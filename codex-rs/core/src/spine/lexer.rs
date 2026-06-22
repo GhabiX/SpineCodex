@@ -11,6 +11,7 @@ use crate::spine::model::SpineToken;
 use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegment;
 use crate::spine::model::ToolCallSegmentKind;
+use serde::Deserialize;
 
 #[derive(Clone, Debug)]
 pub(in crate::spine) struct LexedTokenBatch {
@@ -94,6 +95,66 @@ pub(in crate::spine) fn control_toolcall_token_sequence(
     intent: ControlIntent,
 ) -> &'static [LexedTokenKind] {
     intent.token_sequence()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::spine) enum ParsedControlToolIntent {
+    Open { summary: String },
+    Close { memory: String },
+    Next { summary: String, memory: String },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenToolArgs {
+    summary: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CloseToolArgs {
+    memory: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NextToolArgs {
+    summary: String,
+    memory: String,
+}
+
+pub(in crate::spine) fn parse_control_tool_intent(
+    tool_name: &str,
+    arguments: &str,
+) -> Result<Option<ParsedControlToolIntent>, SpineError> {
+    match tool_name {
+        "open" => {
+            let args: OpenToolArgs = serde_json::from_str(arguments).map_err(|err| {
+                SpineError::ToolUse(format!("failed to parse spine.open arguments: {err}"))
+            })?;
+            Ok(Some(ParsedControlToolIntent::Open {
+                summary: args.summary,
+            }))
+        }
+        "close" => {
+            let args: CloseToolArgs = serde_json::from_str(arguments).map_err(|err| {
+                SpineError::ToolUse(format!("failed to parse spine.close arguments: {err}"))
+            })?;
+            Ok(Some(ParsedControlToolIntent::Close {
+                memory: args.memory.trim().to_string(),
+            }))
+        }
+        "next" => {
+            let args: NextToolArgs = serde_json::from_str(arguments).map_err(|err| {
+                SpineError::ToolUse(format!("failed to parse spine.next arguments: {err}"))
+            })?;
+            Ok(Some(ParsedControlToolIntent::Next {
+                summary: args.summary,
+                memory: args.memory.trim().to_string(),
+            }))
+        }
+        _ => Ok(None),
+    }
 }
 
 pub(in crate::spine) fn lex_init(
@@ -513,6 +574,50 @@ mod tests {
         assert!(!ControlIntent::Open.is_close_like());
         assert!(ControlIntent::Close.is_close_like());
         assert!(ControlIntent::Next.is_close_like());
+    }
+
+    #[test]
+    fn parse_control_tool_intent_decodes_open_close_and_next_args() {
+        assert_eq!(
+            parse_control_tool_intent("open", r#"{"summary":"child"}"#).expect("open parses"),
+            Some(ParsedControlToolIntent::Open {
+                summary: "child".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_control_tool_intent("close", r#"{"memory":"  done  "}"#).expect("close parses"),
+            Some(ParsedControlToolIntent::Close {
+                memory: "done".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_control_tool_intent("next", r#"{"summary":"next","memory":"  handoff  "}"#)
+                .expect("next parses"),
+            Some(ParsedControlToolIntent::Next {
+                summary: "next".to_string(),
+                memory: "handoff".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_control_tool_intent_ignores_non_control_tool() {
+        assert_eq!(
+            parse_control_tool_intent("tree", "{}").expect("tree is non-control"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_control_tool_intent_rejects_unknown_fields() {
+        let err = parse_control_tool_intent("close", r#"{"memory":"done","extra":"not allowed"}"#)
+            .expect_err("unknown fields are rejected");
+
+        assert!(matches!(
+            err,
+            SpineError::ToolUse(message)
+                if message.contains("failed to parse spine.close arguments")
+        ));
     }
 
     #[test]
