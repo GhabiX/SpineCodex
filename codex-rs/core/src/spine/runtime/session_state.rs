@@ -1076,9 +1076,7 @@ impl SpineSessionState {
     }
 
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
-        if let Some(err) = self.invalid_error() {
-            return Err(err);
-        }
+        self.ensure_valid()?;
         let count = u64::try_from(count)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
         self.raw_len = self
@@ -1094,9 +1092,7 @@ impl SpineSessionState {
     }
 
     pub(crate) fn ensure_runtime(&mut self, rollout_path: &Path) -> Result<(), SpineError> {
-        if let Some(err) = self.invalid_error() {
-            return Err(err);
-        }
+        self.ensure_valid()?;
         if self.runtime.is_none() {
             let mut runtime = SpineRuntime::load_or_create_with_jit(
                 rollout_path,
@@ -1133,9 +1129,7 @@ impl SpineSessionState {
     pub(crate) fn take_initial_tree_snapshot(
         &mut self,
     ) -> Result<Option<SpineTreeUpdateEvent>, SpineError> {
-        if let Some(err) = self.invalid_error() {
-            return Err(err);
-        }
+        self.ensure_valid()?;
         if self.initial_tree_snapshot_emitted {
             return Ok(None);
         }
