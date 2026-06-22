@@ -20,6 +20,7 @@ use super::SpineRuntime;
 use super::SpineTreeUpdateDelivery;
 use super::SpineTrimOutcome;
 use super::prepared::SpineCommitPublication;
+use super::support::is_non_toolcall_msg;
 use super::support::is_real_user_message;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
@@ -44,6 +45,14 @@ pub(crate) struct SpineObservedContextItem<'a> {
     pub(crate) raw_ordinal: u64,
     pub(crate) context_index: usize,
     pub(crate) item: &'a ResponseItem,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SpineMessageEvidence<'a> {
+    pub(crate) raw_ordinal: u64,
+    pub(crate) context_index: usize,
+    pub(crate) item: &'a ResponseItem,
+    pub(crate) raw_items: &'a [Option<ResponseItem>],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -960,20 +969,27 @@ impl SpineSessionState {
     pub(crate) fn observe_non_toolcall_msg(
         &mut self,
         rollout_path: &Path,
-        raw_ordinal: u64,
-        context_index: usize,
-        item: &ResponseItem,
-        raw_items: &[Option<ResponseItem>],
+        evidence: SpineMessageEvidence<'_>,
     ) -> Result<bool, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
             return Ok(false);
         };
-        if runtime.jit_enabled() && is_real_user_message(item) {
-            runtime.checkpoint_before_user_msg(rollout_path, raw_ordinal, raw_items)?;
+        if !is_non_toolcall_msg(evidence.item) {
+            return Err(SpineError::InvalidEvent(
+                "on_non_toolcall_msg received toolcall item".to_string(),
+            ));
         }
-        runtime.on_non_toolcall_msg(raw_ordinal, context_index, item)?;
-        Ok(is_real_user_message(item))
+        let observed_user_message = is_real_user_message(evidence.item);
+        if runtime.jit_enabled() && observed_user_message {
+            runtime.checkpoint_before_user_msg(
+                rollout_path,
+                evidence.raw_ordinal,
+                evidence.raw_items,
+            )?;
+        }
+        runtime.on_non_toolcall_msg(evidence.raw_ordinal, evidence.context_index, evidence.item)?;
+        Ok(observed_user_message)
     }
 
     pub(crate) fn trim_tool_response(

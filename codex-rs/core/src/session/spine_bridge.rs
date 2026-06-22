@@ -12,6 +12,7 @@ use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
+use crate::spine::SpineMessageEvidence;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
@@ -614,11 +615,6 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(false);
         };
-        if !is_non_toolcall_msg(item) {
-            return Err(SpineError::InvalidEvent(
-                "on_non_toolcall_msg received toolcall item".to_string(),
-            ));
-        }
         let rollout_path = self
             .current_rollout_path()
             .await
@@ -627,7 +623,15 @@ impl Session {
                 SpineError::InvalidStore("spine_jit checkpoint requires rollout path".to_string())
             })?;
         let mut guard = spine_slot.lock().await;
-        guard.observe_non_toolcall_msg(&rollout_path, raw_ordinal, context_index, item, raw_items)
+        guard.observe_non_toolcall_msg(
+            &rollout_path,
+            SpineMessageEvidence {
+                raw_ordinal,
+                context_index,
+                item,
+                raw_items,
+            },
+        )
     }
 
     async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineSessionState>, SpineError> {
