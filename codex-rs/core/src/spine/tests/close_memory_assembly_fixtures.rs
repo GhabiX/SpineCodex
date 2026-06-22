@@ -1,4 +1,6 @@
 use super::*;
+#[path = "close_memory_assembly_child_evidence.rs"]
+mod close_memory_assembly_child_evidence;
 #[path = "close_memory_assembly_close_like_filter.rs"]
 mod close_memory_assembly_close_like_filter;
 #[path = "close_memory_assembly_exact_evidence.rs"]
