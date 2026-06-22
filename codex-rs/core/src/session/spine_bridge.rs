@@ -1179,7 +1179,7 @@ impl Session {
             raw_ordinals: output_raw_ordinals,
             context_start: output_context_start,
             already_recorded: true,
-            recorded_inside_reduce: false,
+            recorded_inside_reduce: true,
             history_before_recorded_output: None,
         }))
     }

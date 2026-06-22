@@ -11931,7 +11931,11 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
         )
         .await
         .expect("direct-memory grouped next opens sibling and keeps durable toolcall");
-    assert_ne!(commit.recording(), SpineToolOutputRecording::Skip);
+    assert_eq!(
+        commit.recording(),
+        SpineToolOutputRecording::Skip,
+        "grouped close-like reduce records raw outputs inside the commit boundary"
+    );
     assert_no_pending_spine_commit(&session, "grouped-durable-overflow-next").await;
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -15187,7 +15191,10 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
         .materialize_history(&raw_items)
         .expect("materialize conflict history");
     let persisted_items = raw_items.iter().flatten().cloned().collect::<Vec<_>>();
-    assert_eq!(materialized.len(), persisted_items.len());
+    assert_eq!(
+        materialized.len(),
+        variable_spine_items(&persisted_items).len()
+    );
     for call_id in ["multi-open", "multi-next"] {
         let persisted_output = function_output_text_by_call_id(&persisted_items, call_id);
         assert!(
@@ -15471,7 +15478,10 @@ async fn spine_tree_runs_normally_with_conflicting_spine_controls() -> anyhow::R
         .materialize_history(&raw_items)
         .expect("materialize conflict history");
     let persisted_items = raw_items.iter().flatten().cloned().collect::<Vec<_>>();
-    assert_eq!(materialized.len(), persisted_items.len());
+    assert_eq!(
+        materialized.len(),
+        variable_spine_items(&persisted_items).len()
+    );
     for call_id in ["tree-conflict-open", "tree-conflict-next"] {
         let persisted_output = function_output_text_by_call_id(&persisted_items, call_id);
         assert!(
