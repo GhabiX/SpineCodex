@@ -47,16 +47,10 @@ pub(super) fn live_context_baseline_source(
 }
 
 pub(super) fn next_event_seq_from(events: &[LoggedSpineLedgerEvent]) -> Result<u64, SpineError> {
-    events
-        .iter()
-        .map(|event| event.seq)
-        .max()
-        .map(|seq| {
-            seq.checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent("spine event seq overflow".to_string()))
-        })
-        .transpose()
-        .map(|seq| seq.unwrap_or(0))
+    next_seq_from(
+        events.iter().map(|event| event.seq),
+        "spine event seq overflow",
+    )
 }
 
 pub(super) fn next_user_anchor_from_events(
@@ -82,26 +76,27 @@ pub(super) fn next_user_anchor_from_events(
 }
 
 pub(super) fn next_pressure_seq_from(events: &[LoggedPressureEvent]) -> Result<u64, SpineError> {
-    events
-        .iter()
-        .map(|event| event.pressure_seq)
-        .max()
-        .map(|seq| {
-            seq.checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent("spine pressure seq overflow".to_string()))
-        })
-        .transpose()
-        .map(|seq| seq.unwrap_or(0))
+    next_seq_from(
+        events.iter().map(|event| event.pressure_seq),
+        "spine pressure seq overflow",
+    )
 }
 
 pub(super) fn next_trim_seq_from(events: &[LoggedTrimEvent]) -> Result<u64, SpineError> {
-    events
-        .iter()
-        .map(|event| event.trim_seq)
-        .max()
+    next_seq_from(
+        events.iter().map(|event| event.trim_seq),
+        "spine trim seq overflow",
+    )
+}
+
+fn next_seq_from(
+    seqs: impl Iterator<Item = u64>,
+    overflow_message: &str,
+) -> Result<u64, SpineError> {
+    seqs.max()
         .map(|seq| {
             seq.checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent("spine trim seq overflow".to_string()))
+                .ok_or_else(|| SpineError::InvalidEvent(overflow_message.to_string()))
         })
         .transpose()
         .map(|seq| seq.unwrap_or(0))
