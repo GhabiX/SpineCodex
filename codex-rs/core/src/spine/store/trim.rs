@@ -27,14 +27,11 @@ pub(super) fn seq_watermark_for_raw_boundary(
     events: &[LoggedTrimEvent],
     raw_boundary: u64,
 ) -> Option<u64> {
-    let mut watermark = None;
-    for event in events {
-        if trim_event_within_raw_boundary(event, raw_boundary) {
-            watermark =
-                Some(watermark.map_or(event.trim_seq, |current: u64| current.max(event.trim_seq)));
-        }
-    }
-    watermark
+    events
+        .iter()
+        .filter(|event| trim_event_within_raw_boundary(event, raw_boundary))
+        .map(|event| event.trim_seq)
+        .max()
 }
 
 fn trim_event_within_raw_boundary(event: &LoggedTrimEvent, raw_boundary: u64) -> bool {
