@@ -19,7 +19,6 @@ use super::support::tool_response_call_id;
 use crate::spine::lexer::ToolCallLexSegment;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
-use crate::spine::model::ToolCallSegment;
 use crate::spine::model::ToolCallSegmentKind;
 
 impl SpineRuntime {
@@ -257,9 +256,9 @@ impl SpineRuntime {
         if !self.jit_enabled {
             return self.observe_completed_toolcall_for_trim(toolcall, raw_items);
         }
-        let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
+        let (event, token) = self.completed_toolcall_parts(&toolcall)?;
         let toolcall_seq = self.append_cached_event(event)?;
-        self.push_completed_toolcall_token(segments)?;
+        self.push_completed_toolcall_token(token)?;
         self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
         Ok(())
@@ -287,9 +286,9 @@ impl SpineRuntime {
         {
             return Ok(false);
         }
-        let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
+        let (event, token) = self.completed_toolcall_parts(&toolcall)?;
         let mut staged_parse_stack = self.parse_stack.clone();
-        staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+        staged_parse_stack.shift(token, &self.archive())?;
         let toolcall_seq = self.append_cached_event(event)?;
         self.parse_stack = staged_parse_stack;
         self.pending = None;
@@ -314,9 +313,9 @@ impl SpineRuntime {
                 call_id, toolcall, raw_items,
             );
         }
-        let (event, segments) = self.completed_toolcall_parts(&toolcall)?;
+        let (event, token) = self.completed_toolcall_parts(&toolcall)?;
         let mut staged_parse_stack = self.parse_stack.clone();
-        staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+        staged_parse_stack.shift(token, &self.archive())?;
         let toolcall_seq = self.append_cached_event(event)?;
         self.parse_stack = staged_parse_stack;
         self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
@@ -412,7 +411,7 @@ impl SpineRuntime {
     pub(super) fn completed_toolcall_parts(
         &self,
         toolcall: &CompletedToolCall,
-    ) -> Result<(SpineLedgerEvent, Vec<ToolCallSegment>), SpineError> {
+    ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
         let lexed = crate::spine::lexer::lex_toolcall(
             toolcall.segments.iter().map(|segment| ToolCallLexSegment {
                 kind: segment.kind,
@@ -422,12 +421,12 @@ impl SpineRuntime {
             Some(toolcall.request_call_ids.len()),
         )?;
         let (event, token) = lexed.into_single("toolcall")?;
-        let SpineToken::ToolCall { segments } = token else {
+        if !matches!(token, SpineToken::ToolCall { .. }) {
             return Err(SpineError::Invariant(
                 "toolcall lexer produced non-toolcall token".to_string(),
             ));
-        };
-        Ok((event, segments))
+        }
+        Ok((event, token))
     }
 
     pub(super) fn clear_completed_toolcall_anchors(&mut self, toolcall: &CompletedToolCall) {
@@ -467,12 +466,8 @@ impl SpineRuntime {
         Ok(toolcall)
     }
 
-    fn push_completed_toolcall_token(
-        &mut self,
-        segments: Vec<ToolCallSegment>,
-    ) -> Result<(), SpineError> {
-        self.parse_stack
-            .shift(SpineToken::ToolCall { segments }, &self.archive())
+    fn push_completed_toolcall_token(&mut self, token: SpineToken) -> Result<(), SpineError> {
+        self.parse_stack.shift(token, &self.archive())
     }
 
     fn append_and_shift_msg(&mut self, msg: &PendingMsg) -> Result<(), SpineError> {

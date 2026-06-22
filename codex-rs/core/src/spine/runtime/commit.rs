@@ -29,7 +29,6 @@ use crate::spine::archive::memory_ref;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::model::SpineToken;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::parse_stack::ParseStack;
@@ -337,8 +336,8 @@ impl SpineRuntime {
         let mut staged_parse_stack = self.parse_stack.clone();
         staged_parse_stack.shift(token, &self.archive())?;
         if let Some(completed_toolcall) = completed_toolcall {
-            let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
-            staged_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+            let (toolcall_event, token) = self.completed_toolcall_parts(&completed_toolcall)?;
+            staged_parse_stack.shift(token, &self.archive())?;
             let toolcall_seq = self.ledger.next_event_seq.checked_add(1).ok_or_else(|| {
                 SpineError::InvalidEvent("spine.open toolcall seq overflow".to_string())
             })?;
@@ -446,7 +445,7 @@ impl SpineRuntime {
         };
         let completed_toolcall = self
             .remap_completed_toolcall_context_indices(completed_toolcall, toolcall_context_index)?;
-        let (toolcall_event, segments) = self.completed_toolcall_parts(&completed_toolcall)?;
+        let (toolcall_event, token) = self.completed_toolcall_parts(&completed_toolcall)?;
         events.push(toolcall_event);
         let event_count = u64::try_from(events.len())
             .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?;
@@ -478,7 +477,7 @@ impl SpineRuntime {
             )?;
             final_parse_stack.shift(token, &self.archive())?;
         }
-        final_parse_stack.shift(SpineToken::ToolCall { segments }, &self.archive())?;
+        final_parse_stack.shift(token, &self.archive())?;
         if let Err(err) = self.commit_close_family_transaction(CloseFamilyTransaction {
             mem: &prepared.mem,
             memory_body: &prepared.memory_body,
