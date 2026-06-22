@@ -23,6 +23,7 @@ use crate::spine::SpineStore;
 use crate::spine::SpineToolCallEvidence;
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
+use crate::spine::SpineToolcallCommitFailureAction;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::is_non_toolcall_msg;
@@ -1147,19 +1148,23 @@ impl Session {
                 SpineCommitAttempt::Done(output) => break output,
                 SpineCommitAttempt::RuntimeMissing => {
                     let reason = "spine runtime missing during completed toolcall commit";
-                    if commit_host_plan.fail_closed_on_commit_missing() {
-                        self.fail_closed_spine_toolcall_commit(call_id, reason)
-                            .await;
-                        return Err(SpineError::Invariant(format!(
-                            "{reason} for call_id={call_id}"
-                        )));
+                    match commit_host_plan.commit_missing_action() {
+                        SpineToolcallCommitFailureAction::FailClosed => {
+                            self.fail_closed_spine_toolcall_commit(call_id, reason)
+                                .await;
+                            return Err(SpineError::Invariant(format!(
+                                "{reason} for call_id={call_id}"
+                            )));
+                        }
+                        SpineToolcallCommitFailureAction::NoSpineCommit => {
+                            return Ok(Self::no_spine_tool_commit());
+                        }
+                        SpineToolcallCommitFailureAction::AbortPending => {
+                            return Err(SpineError::Invariant(format!(
+                                "unsupported Spine runtime-missing action for call_id={call_id}"
+                            )));
+                        }
                     }
-                    if commit_host_plan.no_spine_commit_on_commit_missing() {
-                        return Ok(Self::no_spine_tool_commit());
-                    }
-                    return Err(SpineError::Invariant(format!(
-                        "unsupported Spine runtime-missing action for call_id={call_id}"
-                    )));
                 }
                 SpineCommitAttempt::Retry if lock_retries < commit_host_plan.lock_retry_limit() => {
                     lock_retries += 1;
@@ -1167,15 +1172,19 @@ impl Session {
                 }
                 SpineCommitAttempt::Retry => {
                     let reason = "spine tool output commit lock retry limit exceeded before commit";
-                    if commit_host_plan.fail_closed_on_retry_limit() {
-                        self.fail_closed_spine_toolcall_commit(call_id, reason)
-                            .await;
-                    } else if commit_host_plan.abort_pending_on_retry_limit() {
-                        self.abort_spine_pending_tool(call_id, reason).await;
-                    } else {
-                        return Err(SpineError::Invariant(format!(
-                            "unsupported Spine retry-limit action for call_id={call_id}"
-                        )));
+                    match commit_host_plan.retry_limit_action() {
+                        SpineToolcallCommitFailureAction::FailClosed => {
+                            self.fail_closed_spine_toolcall_commit(call_id, reason)
+                                .await;
+                        }
+                        SpineToolcallCommitFailureAction::AbortPending => {
+                            self.abort_spine_pending_tool(call_id, reason).await;
+                        }
+                        SpineToolcallCommitFailureAction::NoSpineCommit => {
+                            return Err(SpineError::Invariant(format!(
+                                "unsupported Spine retry-limit action for call_id={call_id}"
+                            )));
+                        }
                     }
                     let retry_limit = commit_host_plan.lock_retry_limit();
                     return Err(SpineError::Operation(format!(

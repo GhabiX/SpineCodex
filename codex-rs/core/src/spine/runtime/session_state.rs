@@ -351,32 +351,12 @@ impl SpineToolcallCommitHostPlan {
         self.output_recording
     }
 
-    pub(crate) fn fail_closed_on_commit_missing(&self) -> bool {
-        matches!(
-            self.commit_missing_action,
-            SpineToolcallCommitFailureAction::FailClosed
-        )
+    pub(crate) fn commit_missing_action(&self) -> SpineToolcallCommitFailureAction {
+        self.commit_missing_action
     }
 
-    pub(crate) fn no_spine_commit_on_commit_missing(&self) -> bool {
-        matches!(
-            self.commit_missing_action,
-            SpineToolcallCommitFailureAction::NoSpineCommit
-        )
-    }
-
-    pub(crate) fn fail_closed_on_retry_limit(&self) -> bool {
-        matches!(
-            self.retry_limit_action,
-            SpineToolcallCommitFailureAction::FailClosed
-        )
-    }
-
-    pub(crate) fn abort_pending_on_retry_limit(&self) -> bool {
-        matches!(
-            self.retry_limit_action,
-            SpineToolcallCommitFailureAction::AbortPending
-        )
+    pub(crate) fn retry_limit_action(&self) -> SpineToolcallCommitFailureAction {
+        self.retry_limit_action
     }
 
     pub(crate) fn lock_retry_limit(&self) -> usize {

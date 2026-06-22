@@ -101,6 +101,7 @@ pub(crate) use session_state::SpineSessionState;
 pub(crate) use session_state::SpineToolCallEvidence;
 pub(crate) use session_state::SpineToolOutputRecording;
 pub(crate) use session_state::SpineToolcallCommitEvidence;
+pub(crate) use session_state::SpineToolcallCommitFailureAction;
 pub(crate) use session_state::SpineToolcallCommitInput;
 pub(crate) use session_state::SpineToolcallCommitPreparation;
 pub(crate) use support::is_non_toolcall_msg;
