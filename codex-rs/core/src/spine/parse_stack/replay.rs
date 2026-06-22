@@ -112,7 +112,7 @@ pub(in crate::spine) fn event_to_token(
                 mem.open_context_source,
                 mem.memory_output_tokens,
             );
-            crate::spine::lexer::lex_root_compact_token(
+            crate::spine::lexer::plan_root_compact().lex_compact_token(
                 memory,
                 usize::try_from(*next_open_index).map_err(|_| {
                     SpineError::InvalidEvent("root open index overflow".to_string())
