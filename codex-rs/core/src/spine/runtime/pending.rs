@@ -248,7 +248,6 @@ impl SpineRuntime {
     }
 
     fn stage(&mut self, pending: PendingTransition) -> Result<(), SpineError> {
-        self.ensure_no_pending_transition()?;
         self.pending = Some(pending);
         Ok(())
     }
