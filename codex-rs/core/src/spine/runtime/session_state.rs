@@ -662,6 +662,10 @@ impl SpineToolcallCommitEvidence {
     fn force_ordinary(&self) -> bool {
         self.control_policy == SpineToolCallControlPolicy::ForceOrdinary
     }
+
+    pub(crate) fn call_id(&self) -> &str {
+        &self.call_id
+    }
 }
 
 impl PreparedSpineToolcallCommit {

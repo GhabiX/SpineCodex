@@ -138,7 +138,6 @@ impl SpineRootCompactPublish {
 }
 
 struct SpinePreparedToolCallEvidence<'a> {
-    call_id: &'a str,
     response_item: &'a ResponseItem,
     toolcall_evidence: SpineToolcallCommitEvidence,
 }
@@ -1121,7 +1120,6 @@ impl Session {
         };
         Ok(Some(CompletedSpineToolCall {
             evidence: SpinePreparedToolCallEvidence {
-                call_id: output.call_id(),
                 response_item: output.commit_output_item(),
                 toolcall_evidence,
             },
@@ -1272,7 +1270,7 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
         };
-        let call_id = toolcall.evidence.call_id;
+        let call_id = toolcall.evidence.toolcall_evidence.call_id().to_string();
         let item = toolcall.evidence.response_item;
         let tool_resp_already_recorded = toolcall.host_recording.response_already_recorded;
         let recorded_output_inside_reduce = toolcall.host_recording.response_recorded_inside_reduce;
@@ -1335,7 +1333,7 @@ impl Session {
                     return Err(err);
                 }
             };
-            let decision = commit_host_plan.interpret_attempt(attempt, lock_retries, call_id)?;
+            let decision = commit_host_plan.interpret_attempt(attempt, lock_retries, &call_id)?;
             let decision = match decision.into_done() {
                 Ok(output) => break output,
                 Err(decision) => decision,
@@ -1350,11 +1348,11 @@ impl Session {
             }
             let host_action = decision.into_host_action()?;
             if let Some(reason) = host_action.fail_closed_reason() {
-                self.fail_closed_spine_toolcall_commit(call_id, reason)
+                self.fail_closed_spine_toolcall_commit(&call_id, reason)
                     .await;
             }
             if let Some(reason) = host_action.abort_pending_reason() {
-                self.abort_spine_pending_tool(call_id, reason).await;
+                self.abort_spine_pending_tool(&call_id, reason).await;
             }
             return Err(host_action.into_error());
         };
@@ -1364,7 +1362,7 @@ impl Session {
             .await;
         if deferred_tree_update.is_some() {
             tracing::debug!(
-                call_id,
+                call_id = %call_id,
                 "deferring Spine close-like tree update until raw output evidence is durable"
             );
         }
