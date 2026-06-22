@@ -259,6 +259,8 @@ pub(crate) struct SpineToolcallCommitPreparation {
 pub(crate) struct SpineToolcallCommitHostPlan {
     pre_compact_provider_input_tokens: Option<i64>,
     output_recording: SpineToolOutputRecording,
+    fail_closed_on_commit_missing: bool,
+    fail_closed_on_retry_limit: bool,
 }
 
 impl SpineToolcallCommitPreparation {
@@ -305,6 +307,8 @@ impl SpineToolcallCommitPreparation {
                 tool_resp_already_recorded,
                 recorded_inside_hook,
             ),
+            fail_closed_on_commit_missing: tool_resp_already_recorded,
+            fail_closed_on_retry_limit: tool_resp_already_recorded,
         }
     }
 }
@@ -316,6 +320,14 @@ impl SpineToolcallCommitHostPlan {
 
     pub(crate) fn output_recording(&self) -> SpineToolOutputRecording {
         self.output_recording
+    }
+
+    pub(crate) fn fail_closed_on_commit_missing(&self) -> bool {
+        self.fail_closed_on_commit_missing
+    }
+
+    pub(crate) fn fail_closed_on_retry_limit(&self) -> bool {
+        self.fail_closed_on_retry_limit
     }
 }
 

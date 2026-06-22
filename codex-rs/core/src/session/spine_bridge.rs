@@ -1160,7 +1160,7 @@ impl Session {
                 SpineCommitAttempt::Done(output) => break output,
                 SpineCommitAttempt::RuntimeMissing => {
                     let reason = "spine runtime missing during completed toolcall commit";
-                    if tool_resp_already_recorded {
+                    if commit_host_plan.fail_closed_on_commit_missing() {
                         self.fail_closed_spine_toolcall_commit(call_id, reason)
                             .await;
                         return Err(SpineError::Invariant(format!(
@@ -1175,7 +1175,7 @@ impl Session {
                 }
                 SpineCommitAttempt::Retry => {
                     let reason = "spine tool output commit lock retry limit exceeded before commit";
-                    if tool_resp_already_recorded {
+                    if commit_host_plan.fail_closed_on_retry_limit() {
                         self.fail_closed_spine_toolcall_commit(call_id, reason)
                             .await;
                     } else {
