@@ -60,17 +60,7 @@ pub(super) fn validate_compact_checkpoint_root_marker(
             checkpoint.raw_boundary
         )));
     }
-    let mut matching_mems = mems.iter().filter(|record| record.compact_id == *mem);
-    let Some(mem_record) = matching_mems.next() else {
-        return Err(SpineError::InvalidStore(format!(
-            "RootCompact ledger marker references missing memory {mem}"
-        )));
-    };
-    if matching_mems.next().is_some() {
-        return Err(SpineError::InvalidStore(format!(
-            "RootCompact ledger marker references ambiguous memory {mem}"
-        )));
-    }
+    let mem_record = unique_root_compact_memory(mem, mems)?;
     if !matches!(mem_record.kind, MemKind::RootEpoch) {
         return Err(SpineError::InvalidStore(format!(
             "RootCompact ledger marker references non-root memory {mem}"
@@ -128,26 +118,53 @@ pub(super) fn validate_compact_checkpoint_memory_refs(
                 memory.compact_id, checkpoint.raw_boundary
             )));
         }
-        let mut matching_mems = mems
-            .iter()
-            .filter(|record| record.compact_id == memory.compact_id);
-        let Some(mem_record) = matching_mems.next() else {
-            return Err(SpineError::InvalidStore(format!(
-                "compact checkpoint memory ref {} references missing committed memory at raw boundary {}",
-                memory.compact_id, checkpoint.raw_boundary
-            )));
-        };
-        if matching_mems.next().is_some() {
-            return Err(SpineError::InvalidStore(format!(
-                "compact checkpoint memory ref {} references ambiguous committed memory at raw boundary {}",
-                memory.compact_id, checkpoint.raw_boundary
-            )));
-        }
+        let mem_record = unique_checkpoint_memory(checkpoint, memory, mems)?;
         validate_checkpoint_memory_ref_for_committed_mem(
             store_root, checkpoint, memory, mem_record,
         )?;
     }
     Ok(())
+}
+
+fn unique_root_compact_memory<'a>(
+    compact_id: &str,
+    mems: &'a [MemRecord],
+) -> Result<&'a MemRecord, SpineError> {
+    let mut matching_mems = mems.iter().filter(|record| record.compact_id == compact_id);
+    let Some(mem_record) = matching_mems.next() else {
+        return Err(SpineError::InvalidStore(format!(
+            "RootCompact ledger marker references missing memory {compact_id}"
+        )));
+    };
+    if matching_mems.next().is_some() {
+        return Err(SpineError::InvalidStore(format!(
+            "RootCompact ledger marker references ambiguous memory {compact_id}"
+        )));
+    }
+    Ok(mem_record)
+}
+
+fn unique_checkpoint_memory<'a>(
+    checkpoint: &SpineCompactCheckpoint,
+    memory: &CheckpointMemoryRef,
+    mems: &'a [MemRecord],
+) -> Result<&'a MemRecord, SpineError> {
+    let mut matching_mems = mems
+        .iter()
+        .filter(|record| record.compact_id == memory.compact_id);
+    let Some(mem_record) = matching_mems.next() else {
+        return Err(SpineError::InvalidStore(format!(
+            "compact checkpoint memory ref {} references missing committed memory at raw boundary {}",
+            memory.compact_id, checkpoint.raw_boundary
+        )));
+    };
+    if matching_mems.next().is_some() {
+        return Err(SpineError::InvalidStore(format!(
+            "compact checkpoint memory ref {} references ambiguous committed memory at raw boundary {}",
+            memory.compact_id, checkpoint.raw_boundary
+        )));
+    }
+    Ok(mem_record)
 }
 
 fn validate_checkpoint_memory_ref_for_mem(
