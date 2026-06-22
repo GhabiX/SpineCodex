@@ -88,56 +88,25 @@ fn clone_for_rollout_into_store(
     let source_raw_live = &raw_live[..raw_ordinal_limit];
     let mask = RawMask::new(source_raw_live);
     target.ensure_trim_ledger_exists()?;
-    let source_records = SourceCloneRecords::read(source)?;
-    let source_events_by_seq = source_records
-        .events
-        .iter()
-        .map(|event| (event.seq, event))
-        .collect::<BTreeMap<_, _>>();
-    let cloned_checkpoints = checkpoints::select_cloned_checkpoints(
-        source_records.checkpoints,
-        boundary,
-        source_raw_live,
-    )?;
-    let cloned_compact_checkpoints = checkpoints::select_cloned_compact_checkpoints(
-        source_records.compact_checkpoints,
-        boundary,
-        source_raw_live,
-    )?;
-    let (cloned_commit_markers, all_marker_structural_event_seqs) =
-        events::select_cloned_commit_markers(
-            source_records.commit_markers,
-            &source_events_by_seq,
-            boundary,
-            source_raw_live,
-            mask,
-        )?;
-    drop(source_events_by_seq);
-    let cloned_events = events::select_cloned_events(
-        source_records.events,
-        &cloned_commit_markers,
-        &all_marker_structural_event_seqs,
-        boundary,
-        mask,
-    )?;
-    for event in &cloned_events {
+    let selected = SelectedCloneRecords::from_source(source, boundary, source_raw_live, mask)?;
+    for event in &selected.events {
         target.append_logged_event(event)?;
     }
     let mut required_memory_ids = memory_ids::required_memory_ids_for_cloned_events(
-        &cloned_events,
-        &source_records.mems,
+        &selected.events,
+        &selected.source_mems,
         mask,
     )?;
     memory_ids::add_required_memory_refs(
         &mut required_memory_ids,
-        &cloned_compact_checkpoints,
-        &cloned_checkpoints,
-        &cloned_commit_markers,
+        &selected.compact_checkpoints,
+        &selected.checkpoints,
+        &selected.commit_markers,
     );
     side_ledgers::copy_pressure_and_trim(
         source,
         target,
-        source_records.trim_events,
+        selected.source_trim_events,
         boundary,
         source_raw_live,
         mask,
@@ -145,7 +114,7 @@ fn clone_for_rollout_into_store(
     let cloned_memory_paths = memory_copy::copy_required_memories(
         source,
         target,
-        source_records.mems,
+        selected.source_mems,
         &required_memory_ids,
         mask,
     )?;
@@ -153,9 +122,9 @@ fn clone_for_rollout_into_store(
         target,
         target_root,
         target_rollout_path,
-        cloned_compact_checkpoints,
-        cloned_checkpoints,
-        cloned_commit_markers,
+        selected.compact_checkpoints,
+        selected.checkpoints,
+        selected.commit_markers,
         &cloned_memory_paths,
     )
 }
@@ -200,6 +169,64 @@ struct SourceCloneRecords {
     compact_checkpoints: Vec<SpineCompactCheckpoint>,
     commit_markers: Vec<SpineCommitMarker>,
     trim_events: Vec<LoggedTrimEvent>,
+}
+
+struct SelectedCloneRecords {
+    events: Vec<LoggedSpineLedgerEvent>,
+    source_mems: Vec<MemRecord>,
+    checkpoints: Vec<SpineCheckpoint>,
+    compact_checkpoints: Vec<SpineCompactCheckpoint>,
+    commit_markers: Vec<SpineCommitMarker>,
+    source_trim_events: Vec<LoggedTrimEvent>,
+}
+
+impl SelectedCloneRecords {
+    fn from_source(
+        source: &SpineStore,
+        boundary: &SpineCloneBoundary,
+        source_raw_live: &[bool],
+        mask: RawMask<'_>,
+    ) -> Result<Self, SpineError> {
+        let source_records = SourceCloneRecords::read(source)?;
+        let source_events_by_seq = source_records
+            .events
+            .iter()
+            .map(|event| (event.seq, event))
+            .collect::<BTreeMap<_, _>>();
+        let checkpoints = checkpoints::select_cloned_checkpoints(
+            source_records.checkpoints,
+            boundary,
+            source_raw_live,
+        )?;
+        let compact_checkpoints = checkpoints::select_cloned_compact_checkpoints(
+            source_records.compact_checkpoints,
+            boundary,
+            source_raw_live,
+        )?;
+        let (commit_markers, all_marker_structural_event_seqs) =
+            events::select_cloned_commit_markers(
+                source_records.commit_markers,
+                &source_events_by_seq,
+                boundary,
+                source_raw_live,
+                mask,
+            )?;
+        let events = events::select_cloned_events(
+            source_records.events,
+            &commit_markers,
+            &all_marker_structural_event_seqs,
+            boundary,
+            mask,
+        )?;
+        Ok(Self {
+            events,
+            source_mems: source_records.mems,
+            checkpoints,
+            compact_checkpoints,
+            commit_markers,
+            source_trim_events: source_records.trim_events,
+        })
+    }
 }
 
 impl SourceCloneRecords {
