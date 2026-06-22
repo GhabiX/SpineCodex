@@ -19,7 +19,6 @@ use crate::spine::model::SpineCommitKindMarker;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineCommitMemoryRef;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::render::VisibleItemSource;
 use crate::spine::render::memory_response_item;
 use crate::spine::render::read_memory_ref_body;
@@ -59,71 +58,6 @@ pub(super) fn completed_toolcall_first_segment(
     toolcall.segments.first().ok_or_else(|| {
         SpineError::InvalidEvent("completed toolcall must contain at least one segment".to_string())
     })
-}
-
-pub(super) fn validate_completed_toolcall(toolcall: &CompletedToolCall) -> Result<(), SpineError> {
-    let segments = &toolcall.segments;
-    if segments.is_empty() {
-        return Err(SpineError::InvalidEvent(
-            "completed toolcall must contain at least one segment".to_string(),
-        ));
-    }
-    let mut has_request = false;
-    let mut has_response = false;
-    let mut previous_context_index = None;
-    let mut previous_raw_ordinal = None;
-    for (index, segment) in segments.iter().enumerate() {
-        match segment.kind {
-            ToolCallSegmentKind::Request => {
-                if has_response {
-                    return Err(SpineError::InvalidEvent(format!(
-                        "completed toolcall request segment {index} appears after a response segment"
-                    )));
-                }
-                has_request = true;
-            }
-            ToolCallSegmentKind::Response => has_response = true,
-        }
-        if let Some(previous) = previous_context_index {
-            if segment.context_index <= previous {
-                return Err(SpineError::InvalidEvent(format!(
-                    "completed toolcall segment {index} context_index {} is not strictly after previous context_index {previous}",
-                    segment.context_index
-                )));
-            }
-        }
-        if let Some(previous) = previous_raw_ordinal {
-            if segment.raw_ordinal <= previous {
-                return Err(SpineError::InvalidEvent(format!(
-                    "completed toolcall segment {index} raw_ordinal {} is not strictly after previous raw_ordinal {previous}",
-                    segment.raw_ordinal
-                )));
-            }
-        }
-        previous_context_index = Some(segment.context_index);
-        previous_raw_ordinal = Some(segment.raw_ordinal);
-    }
-    if !has_request {
-        return Err(SpineError::InvalidEvent(
-            "completed toolcall must include at least one request segment".to_string(),
-        ));
-    }
-    if !has_response {
-        return Err(SpineError::InvalidEvent(
-            "completed toolcall must include at least one response segment".to_string(),
-        ));
-    }
-    let request_segment_count = segments
-        .iter()
-        .filter(|segment| segment.kind == ToolCallSegmentKind::Request)
-        .count();
-    if request_segment_count != toolcall.request_call_ids.len() {
-        return Err(SpineError::InvalidEvent(format!(
-            "completed toolcall request segment count {request_segment_count} does not match request call id count {}",
-            toolcall.request_call_ids.len()
-        )));
-    }
-    Ok(())
 }
 
 pub(super) fn raw_item_requires_spine_coverage(

@@ -8,7 +8,6 @@ use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
 use crate::spine::model::NodeId;
 use crate::spine::model::RawMask;
-use crate::spine::model::SegRef;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 use std::collections::BTreeMap;
@@ -35,34 +34,11 @@ pub(in crate::spine) fn event_to_token(
             from_user,
             user_anchor,
         } => crate::spine::lexer::lex_msg(*raw_ordinal, *context_index, *from_user, *user_anchor)
-            .and_then(|lexed| {
-                let mut tokens = lexed.tokens.into_iter();
-                let token = tokens.next().ok_or_else(|| {
-                    SpineError::Invariant("msg lexer produced no token".to_string())
-                })?;
-                if tokens.next().is_some() {
-                    return Err(SpineError::Invariant(
-                        "msg lexer produced multiple tokens".to_string(),
-                    ));
-                }
-                Ok(token)
-            }),
-        SpineLedgerEvent::ToolCall { segments } => Ok(SpineToken::ToolCall {
-            segments: segments
-                .iter()
-                .map(|segment| {
-                    Ok(crate::spine::model::ToolCallSegment {
-                        kind: segment.kind,
-                        seg: SegRef::ResponseItem {
-                            raw_ordinal: segment.raw_ordinal,
-                            context_index: usize::try_from(segment.context_index).map_err(
-                                |_| SpineError::InvalidEvent("context index overflow".to_string()),
-                            )?,
-                        },
-                    })
-                })
-                .collect::<Result<Vec<_>, SpineError>>()?,
-        }),
+            .and_then(|lexed| lexed.into_single_token("msg")),
+        SpineLedgerEvent::ToolCall { segments } => {
+            crate::spine::lexer::lex_toolcall_event(segments.iter().cloned())
+                .and_then(|lexed| lexed.into_single_token("toolcall"))
+        }
         SpineLedgerEvent::Open {
             child,
             index,

@@ -16,11 +16,9 @@ use super::support::is_real_user_message;
 use super::support::is_spine_parser_control_tool_name;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
-use super::support::validate_completed_toolcall;
-use crate::spine::model::SegRef;
+use crate::spine::lexer::ToolCallLexSegment;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
-use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegment;
 use crate::spine::model::ToolCallSegmentKind;
 
@@ -415,19 +413,20 @@ impl SpineRuntime {
         &self,
         toolcall: &CompletedToolCall,
     ) -> Result<(SpineLedgerEvent, Vec<ToolCallSegment>), SpineError> {
-        validate_completed_toolcall(toolcall)?;
-        let segments = toolcall
-            .segments
-            .iter()
-            .map(|segment| ToolCallSegment {
+        let lexed = crate::spine::lexer::lex_toolcall(
+            toolcall.segments.iter().map(|segment| ToolCallLexSegment {
                 kind: segment.kind,
-                seg: SegRef::ResponseItem {
-                    raw_ordinal: segment.raw_ordinal,
-                    context_index: segment.context_index,
-                },
-            })
-            .collect::<Vec<_>>();
-        let event = self.completed_toolcall_event(&segments)?;
+                raw_ordinal: segment.raw_ordinal,
+                context_index: segment.context_index,
+            }),
+            Some(toolcall.request_call_ids.len()),
+        )?;
+        let (event, token) = lexed.into_single("toolcall")?;
+        let SpineToken::ToolCall { segments } = token else {
+            return Err(SpineError::Invariant(
+                "toolcall lexer produced non-toolcall token".to_string(),
+            ));
+        };
         Ok((event, segments))
     }
 
@@ -451,34 +450,6 @@ impl SpineRuntime {
         }
         self.tree_call_ids.remove(&toolcall.call_id);
         self.control_call_ids.remove(&toolcall.call_id);
-    }
-
-    fn completed_toolcall_event(
-        &self,
-        segments: &[ToolCallSegment],
-    ) -> Result<SpineLedgerEvent, SpineError> {
-        let mut event_segments = Vec::with_capacity(segments.len());
-        for segment in segments {
-            let SegRef::ResponseItem {
-                raw_ordinal,
-                context_index,
-            } = &segment.seg
-            else {
-                return Err(SpineError::InvalidEvent(
-                    "toolcall segment must reference a raw ResponseItem".to_string(),
-                ));
-            };
-            event_segments.push(ToolCallEventSegment {
-                kind: segment.kind,
-                raw_ordinal: *raw_ordinal,
-                context_index: u64::try_from(*context_index).map_err(|_| {
-                    SpineError::InvalidEvent("toolcall context index overflow".to_string())
-                })?,
-            });
-        }
-        Ok(SpineLedgerEvent::ToolCall {
-            segments: event_segments,
-        })
     }
 
     pub(super) fn remap_completed_toolcall_context_indices(
