@@ -355,12 +355,15 @@ impl SpineToolcallCommitHostPlan {
         self.commit_missing_action
     }
 
-    pub(crate) fn retry_limit_action(&self) -> SpineToolcallCommitFailureAction {
-        self.retry_limit_action
-    }
-
-    pub(crate) fn lock_retry_limit(&self) -> usize {
-        self.lock_retry_limit
+    pub(crate) fn retry_limit_exceeded_action(
+        &self,
+        lock_retries: usize,
+    ) -> Option<(SpineToolcallCommitFailureAction, usize)> {
+        if lock_retries < self.lock_retry_limit {
+            None
+        } else {
+            Some((self.retry_limit_action, self.lock_retry_limit))
+        }
     }
 }
 

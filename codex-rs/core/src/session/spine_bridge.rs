@@ -1166,13 +1166,16 @@ impl Session {
                         }
                     }
                 }
-                SpineCommitAttempt::Retry if lock_retries < commit_host_plan.lock_retry_limit() => {
-                    lock_retries += 1;
-                    tokio::task::yield_now().await;
-                }
                 SpineCommitAttempt::Retry => {
+                    let Some((retry_limit_action, retry_limit)) =
+                        commit_host_plan.retry_limit_exceeded_action(lock_retries)
+                    else {
+                        lock_retries += 1;
+                        tokio::task::yield_now().await;
+                        continue;
+                    };
                     let reason = "spine tool output commit lock retry limit exceeded before commit";
-                    match commit_host_plan.retry_limit_action() {
+                    match retry_limit_action {
                         SpineToolcallCommitFailureAction::FailClosed => {
                             self.fail_closed_spine_toolcall_commit(call_id, reason)
                                 .await;
@@ -1186,7 +1189,6 @@ impl Session {
                             )));
                         }
                     }
-                    let retry_limit = commit_host_plan.lock_retry_limit();
                     return Err(SpineError::Operation(format!(
                         "spine tool output commit could not acquire session locks after {retry_limit} retries for call_id={call_id}"
                     )));
