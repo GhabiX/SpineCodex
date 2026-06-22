@@ -4,7 +4,6 @@ use crate::spine::SpineError;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
 use crate::spine::compact_checkpoint::compact_checkpoint_replacement_history_hash;
 use crate::spine::compact_checkpoint::validate_compact_checkpoint;
-use std::collections::BTreeSet;
 use std::path::Path;
 
 impl SpineStore {
@@ -69,11 +68,11 @@ fn unique_compact_checkpoint_for_boundary(
             "spine_jit replacement_history does not match sidecar h(PS) compact checkpoint at raw boundary {raw_boundary}"
         )));
     }
-    let token_seqs = checkpoints
+    let token_seq = checkpoints[0].token_seq;
+    if checkpoints
         .iter()
-        .map(|checkpoint| checkpoint.token_seq)
-        .collect::<BTreeSet<_>>();
-    if token_seqs.len() != 1 {
+        .any(|checkpoint| checkpoint.token_seq != token_seq)
+    {
         return Err(SpineError::InvalidStore(format!(
             "ambiguous spine compact checkpoint token_seq for raw boundary {raw_boundary}"
         )));
