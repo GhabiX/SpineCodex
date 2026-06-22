@@ -100,6 +100,17 @@ struct CompletedSpineToolCall<'a> {
     host_recording: SpineToolCallHostRecording,
 }
 
+struct SpineToolcallCommitAttemptInput<'a> {
+    call_id: &'a str,
+    tool_resp_item: &'a ResponseItem,
+    expected_history: Vec<ResponseItem>,
+    pre_compact_provider_input_tokens: Option<i64>,
+    current_turn_token_info: Option<&'a TokenUsageInfo>,
+    toolcall_evidence: SpineToolcallCommitEvidence,
+    tool_resp_already_recorded: bool,
+    raw_items: &'a [Option<ResponseItem>],
+}
+
 enum SpineCommitAttempt {
     Done(SpineCommitOutput),
     Retry,
@@ -1102,17 +1113,17 @@ impl Session {
         let expected_history = history.raw_items().to_vec();
         let mut lock_retries = 0;
         let commit_output = loop {
-            let attempt = self.try_commit_spine_tool_output_once(
-                spine_slot,
+            let attempt_input = SpineToolcallCommitAttemptInput {
                 call_id,
-                item,
-                expected_history.clone(),
+                tool_resp_item: item,
+                expected_history: expected_history.clone(),
                 pre_compact_provider_input_tokens,
-                current_turn_token_info.as_ref(),
-                toolcall.evidence.toolcall_evidence.clone(),
+                current_turn_token_info: current_turn_token_info.as_ref(),
+                toolcall_evidence: toolcall.evidence.toolcall_evidence.clone(),
                 tool_resp_already_recorded,
-                &raw_items,
-            );
+                raw_items: &raw_items,
+            };
+            let attempt = self.try_commit_spine_tool_output_once(spine_slot, attempt_input);
             let attempt = match attempt {
                 Ok(attempt) => attempt,
                 Err(err) => {
@@ -1191,14 +1202,7 @@ impl Session {
     fn try_commit_spine_tool_output_once(
         &self,
         spine_slot: &Mutex<SpineSessionState>,
-        call_id: &str,
-        tool_resp_item: &ResponseItem,
-        expected_history: Vec<ResponseItem>,
-        pre_compact_provider_input_tokens: Option<i64>,
-        current_turn_token_info: Option<&TokenUsageInfo>,
-        toolcall_evidence: SpineToolcallCommitEvidence,
-        tool_resp_already_recorded: bool,
-        raw_items: &[Option<ResponseItem>],
+        input: SpineToolcallCommitAttemptInput<'_>,
     ) -> Result<SpineCommitAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(SpineCommitAttempt::Retry);
@@ -1209,21 +1213,23 @@ impl Session {
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
         let Some(prepared_commit) = guard.prepare_completed_toolcall_commit(
-            toolcall_evidence,
-            tool_resp_item,
-            tool_resp_already_recorded,
-            raw_items,
+            input.toolcall_evidence,
+            input.tool_resp_item,
+            input.tool_resp_already_recorded,
+            input.raw_items,
             history.raw_items(),
-            expected_history,
+            input.expected_history,
             reference_context_item,
-            pre_compact_provider_input_tokens,
-            current_turn_token_info.and_then(provider_input_context_tokens),
+            input.pre_compact_provider_input_tokens,
+            input
+                .current_turn_token_info
+                .and_then(provider_input_context_tokens),
         )?
         else {
             return Ok(SpineCommitAttempt::RuntimeMissing);
         };
         let committed = guard.commit_prepared_toolcall_with_host_effects(
-            call_id,
+            input.call_id,
             prepared_commit,
             |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
         )?;
