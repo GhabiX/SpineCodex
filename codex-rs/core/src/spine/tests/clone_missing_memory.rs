@@ -5,12 +5,7 @@ fn clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
     assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing();
 }
 
-#[test]
-fn fork_missing_memory_artifact_fails_closed() {
-    assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing();
-}
-
-fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
+pub(super) fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source_rollout = dir.path().join("source.jsonl");
     let target_rollout = dir.path().join("target.jsonl");

@@ -42,6 +42,8 @@ mod clone_boundary_pressure;
 mod clone_boundary_pressure_alias;
 #[path = "tests/clone_missing_memory.rs"]
 mod clone_missing_memory;
+#[path = "tests/clone_missing_memory_alias.rs"]
+mod clone_missing_memory_alias;
 #[path = "tests/clone_structural_pressure.rs"]
 mod clone_structural_pressure;
 #[path = "tests/clone_structural_pressure_refs.rs"]
