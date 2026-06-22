@@ -224,6 +224,8 @@ mod rollback_checkpoint_live_append;
 mod rollback_checkpoint_live_append_cache;
 #[path = "tests/rollback_checkpoint_provider_baseline.rs"]
 mod rollback_checkpoint_provider_baseline;
+#[path = "tests/rollback_checkpoint_provider_baseline_alias.rs"]
+mod rollback_checkpoint_provider_baseline_alias;
 #[path = "tests/rollback_checkpoint_records.rs"]
 mod rollback_checkpoint_records;
 #[path = "tests/rollback_checkpoint_records_initial.rs"]

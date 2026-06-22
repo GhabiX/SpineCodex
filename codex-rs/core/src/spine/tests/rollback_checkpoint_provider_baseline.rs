@@ -5,12 +5,7 @@ fn rollback_checkpoint_replays_checkpoint_visible_provider_baseline() {
     assert_rollback_checkpoint_replays_checkpoint_visible_provider_baseline();
 }
 
-#[test]
-fn rollback_restores_checkpoint_visible_provider_baseline() {
-    assert_rollback_checkpoint_replays_checkpoint_visible_provider_baseline();
-}
-
-fn assert_rollback_checkpoint_replays_checkpoint_visible_provider_baseline() {
+pub(super) fn assert_rollback_checkpoint_replays_checkpoint_visible_provider_baseline() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let raw_after_rollback = vec![Some(text_item("kept")), None];
