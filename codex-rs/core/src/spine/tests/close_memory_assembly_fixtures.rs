@@ -11,6 +11,8 @@ mod close_memory_assembly_multimodal_evidence;
 mod close_memory_assembly_node_fixtures;
 #[path = "close_memory_assembly_node_memory.rs"]
 mod close_memory_assembly_node_memory;
+#[path = "close_memory_assembly_node_memory_controls.rs"]
+mod close_memory_assembly_node_memory_controls;
 #[path = "close_memory_assembly_source_fixtures.rs"]
 mod close_memory_assembly_source_fixtures;
 #[path = "close_memory_assembly_source_plan_fixtures.rs"]
