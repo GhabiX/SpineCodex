@@ -13,6 +13,7 @@ use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
 use crate::spine::SpineMessageEvidence;
+use crate::spine::SpineMessageHostOutcome;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
@@ -742,6 +743,7 @@ impl Session {
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
         let mut observed_user_message = false;
+        let mut publish_materialized_history_after_batch = false;
         let mut tool_items = Vec::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
@@ -749,9 +751,11 @@ impl Session {
                 continue;
             }
             if is_non_toolcall_msg(item) {
-                observed_user_message |= self
+                let outcome = self
                     .on_non_toolcall_msg(raw_ordinal, append.context_index, item, &raw_items)
                     .await?;
+                publish_materialized_history_after_batch |=
+                    outcome.requests_materialized_history_publish();
             } else {
                 tool_items.push(SpineObservedContextItem {
                     raw_ordinal,
@@ -765,6 +769,14 @@ impl Session {
             let outcome = guard.observe_toolcall_context_items(&tool_items, &raw_items)?;
             observed_user_message |= outcome.observed_user_message;
         }
+        if publish_materialized_history_after_batch {
+            let outcome = self
+                .materialized_history_host_effects_if_no_pending_tool_request(&raw_items)
+                .await?;
+            self.apply_non_toolcall_msg_host_outcome(outcome)
+                .await
+                .map_err(SpineError::Invariant)?;
+        }
         Ok(observed_user_message)
     }
 
@@ -774,9 +786,9 @@ impl Session {
         context_index: usize,
         item: &ResponseItem,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<bool, SpineError> {
+    ) -> Result<SpineMessageHostOutcome, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(false);
+            return Ok(SpineMessageHostOutcome::none());
         };
         let rollout_path = self
             .current_rollout_path()
@@ -786,7 +798,7 @@ impl Session {
                 SpineError::InvalidStore("spine_jit checkpoint requires rollout path".to_string())
             })?;
         let mut guard = spine_slot.lock().await;
-        guard.observe_non_toolcall_msg(
+        guard.observe_non_toolcall_msg_with_host_effects(
             &rollout_path,
             SpineMessageEvidence {
                 raw_ordinal,
@@ -795,6 +807,57 @@ impl Session {
                 raw_items,
             },
         )
+    }
+
+    async fn materialized_history_host_effects_if_no_pending_tool_request(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineHostEffects, SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(SpineHostEffects::none());
+        };
+        let history = self.clone_history().await;
+        let expected_history = history.raw_items().to_vec();
+        let reference_context_item = history.reference_context_item();
+        let guard = spine_slot.lock().await;
+        guard.materialized_history_host_effects_if_no_pending_tool_request(
+            raw_items,
+            expected_history,
+            reference_context_item,
+        )
+    }
+
+    async fn apply_non_toolcall_msg_host_outcome(
+        &self,
+        effects: SpineHostEffects,
+    ) -> Result<(), String> {
+        for effect in effects.into_effects() {
+            match effect {
+                SpineHostEffect::ReplaceHistory(update) => {
+                    let mut state = self.state.lock().await;
+                    Self::apply_spine_host_effect_to_locked_state(
+                        &mut state,
+                        SpineHostEffect::ReplaceHistory(update),
+                    )?;
+                }
+                SpineHostEffect::TreeUpdate { snapshot, delivery } => match delivery {
+                    SpineTreeUpdateDelivery::Immediate => {
+                        self.send_event_raw(Event {
+                            id: INITIAL_SUBMIT_ID.to_string(),
+                            msg: EventMsg::SpineTreeUpdate(snapshot),
+                        })
+                        .await;
+                    }
+                    SpineTreeUpdateDelivery::AfterRawOutputDurable => {
+                        return Err(
+                            "non-toolcall message hook cannot defer tree update delivery"
+                                .to_string(),
+                        );
+                    }
+                },
+            }
+        }
+        Ok(())
     }
 
     async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineSessionState>, SpineError> {

@@ -76,6 +76,10 @@ pub(crate) struct SpineContextObserveOutcome {
     pub(crate) observed_user_message: bool,
 }
 
+pub(crate) struct SpineMessageHostOutcome {
+    publish_materialized_history_after_batch: bool,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SpineCompletedToolCallEvidence {
     completed_toolcall: CompletedToolCall,
@@ -651,6 +655,24 @@ impl SpineCommitAttempt {
 impl SpineCommitOutput {
     pub(crate) fn into_post_commit_effects(self) -> SpineHostEffects {
         self.post_commit_effects
+    }
+}
+
+impl SpineMessageHostOutcome {
+    pub(crate) fn none() -> Self {
+        Self {
+            publish_materialized_history_after_batch: false,
+        }
+    }
+
+    fn publish_materialized_history_after_batch() -> Self {
+        Self {
+            publish_materialized_history_after_batch: true,
+        }
+    }
+
+    pub(crate) fn requests_materialized_history_publish(&self) -> bool {
+        self.publish_materialized_history_after_batch
     }
 }
 
@@ -1352,6 +1374,41 @@ impl SpineSessionState {
         }
         runtime.on_non_toolcall_msg(evidence.raw_ordinal, evidence.context_index, evidence.item)?;
         Ok(observed_user_message)
+    }
+
+    pub(crate) fn observe_non_toolcall_msg_with_host_effects(
+        &mut self,
+        rollout_path: &Path,
+        evidence: SpineMessageEvidence<'_>,
+    ) -> Result<SpineMessageHostOutcome, SpineError> {
+        let observed_user_message = self.observe_non_toolcall_msg(rollout_path, evidence)?;
+        if !observed_user_message {
+            return Ok(SpineMessageHostOutcome::none());
+        }
+        Ok(SpineMessageHostOutcome::publish_materialized_history_after_batch())
+    }
+
+    pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+        expected_history: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+    ) -> Result<SpineHostEffects, SpineError> {
+        let Some(replacement) = self.materialize_history_if_no_pending_tool_request(raw_items)?
+        else {
+            return Ok(SpineHostEffects::none());
+        };
+        if replacement == expected_history {
+            return Ok(SpineHostEffects::none());
+        }
+        Ok(SpineHostEffects::replace_history(SpineHistoryUpdate {
+            call_id: "non-toolcall-msg".to_string(),
+            operation: "publish Spine h(PS) after non-toolcall message",
+            suffix_start: 0,
+            expected_history,
+            replacement,
+            reference_context_item,
+        }))
     }
 
     pub(crate) fn trim_tool_response(

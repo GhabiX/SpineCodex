@@ -95,6 +95,7 @@ pub(crate) use replay::trim_projection_from_events_for_checkpoint;
 pub(crate) use session_state::SpineCommitAttempt;
 pub(crate) use session_state::SpineCompletedToolCallOutputEvidence;
 pub(crate) use session_state::SpineMessageEvidence;
+pub(crate) use session_state::SpineMessageHostOutcome;
 pub(crate) use session_state::SpineObservedContextItem;
 pub(crate) use session_state::SpineRootCompactHostInstall;
 pub(crate) use session_state::SpineSessionState;
