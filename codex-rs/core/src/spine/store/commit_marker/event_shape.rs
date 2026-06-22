@@ -12,21 +12,21 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
     events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
 ) -> Result<(), SpineError> {
     let shape = commit_marker_event_shape(marker.kind);
-    validate_commit_marker_width(marker, shape.width())?;
-    if shape.requires_close_prefix() {
+    validate_commit_marker_width(marker, shape.width)?;
+    if shape.requires_close_prefix {
         validate_close_prefix(marker, events_by_seq)?;
     }
-    if let Some(offset) = shape.synthetic_open_offset() {
+    if let Some(offset) = shape.synthetic_open_offset {
         validate_required_synthetic_open(marker, events_by_seq, marker_shape_seq(marker, offset)?)?;
     }
-    if let Some(offset) = shape.trailing_toolcall_offset() {
+    if let Some(offset) = shape.trailing_toolcall_offset {
         validate_required_trailing_toolcall(
             marker,
             events_by_seq,
             marker_shape_seq(marker, offset)?,
         )?;
     }
-    if shape.requires_root_compact() {
+    if shape.requires_root_compact {
         validate_root_compact_shape(marker, events_by_seq)?;
     }
     Ok(())
@@ -107,50 +107,37 @@ fn validate_root_compact_shape(
 }
 
 #[derive(Clone, Copy)]
-enum CommitMarkerEventShape {
-    Close,
-    CloseThenOpen,
-    RootCompact,
-}
-
-impl CommitMarkerEventShape {
-    fn width(self) -> u64 {
-        match self {
-            Self::Close => 2,
-            Self::CloseThenOpen => 3,
-            Self::RootCompact => 1,
-        }
-    }
-
-    fn requires_close_prefix(self) -> bool {
-        matches!(self, Self::Close | Self::CloseThenOpen)
-    }
-
-    fn synthetic_open_offset(self) -> Option<u64> {
-        match self {
-            Self::CloseThenOpen => Some(1),
-            Self::Close | Self::RootCompact => None,
-        }
-    }
-
-    fn trailing_toolcall_offset(self) -> Option<u64> {
-        match self {
-            Self::Close => Some(1),
-            Self::CloseThenOpen => Some(2),
-            Self::RootCompact => None,
-        }
-    }
-
-    fn requires_root_compact(self) -> bool {
-        matches!(self, Self::RootCompact)
-    }
+struct CommitMarkerEventShape {
+    width: u64,
+    requires_close_prefix: bool,
+    synthetic_open_offset: Option<u64>,
+    trailing_toolcall_offset: Option<u64>,
+    requires_root_compact: bool,
 }
 
 fn commit_marker_event_shape(kind: SpineCommitKindMarker) -> CommitMarkerEventShape {
     match kind {
-        SpineCommitKindMarker::Close => CommitMarkerEventShape::Close,
-        SpineCommitKindMarker::CloseThenOpen => CommitMarkerEventShape::CloseThenOpen,
-        SpineCommitKindMarker::RootCompact => CommitMarkerEventShape::RootCompact,
+        SpineCommitKindMarker::Close => CommitMarkerEventShape {
+            width: 2,
+            requires_close_prefix: true,
+            synthetic_open_offset: None,
+            trailing_toolcall_offset: Some(1),
+            requires_root_compact: false,
+        },
+        SpineCommitKindMarker::CloseThenOpen => CommitMarkerEventShape {
+            width: 3,
+            requires_close_prefix: true,
+            synthetic_open_offset: Some(1),
+            trailing_toolcall_offset: Some(2),
+            requires_root_compact: false,
+        },
+        SpineCommitKindMarker::RootCompact => CommitMarkerEventShape {
+            width: 1,
+            requires_close_prefix: false,
+            synthetic_open_offset: None,
+            trailing_toolcall_offset: None,
+            requires_root_compact: true,
+        },
     }
 }
 
