@@ -3,6 +3,7 @@ use codex_protocol::models::ResponseItem;
 use super::SpineCloseMemoryAssembly;
 use super::SpineCompactSourceEntryKind;
 use super::SpineCompactSourcePlan;
+use super::SpineCompactSourcePlanEntry;
 use super::SpineError;
 use super::SpineRuntime;
 use super::support::collect_source_plan_entries_from_visible_refs;
@@ -116,56 +117,15 @@ impl SpineRuntime {
             )));
         }
 
-        let mut previous_context_index = None;
-        for (expected_ordinal, entry) in entries.iter().enumerate() {
-            if entry.source_ordinal != expected_ordinal {
-                return Err(SpineError::Invariant(format!(
-                    "spine.close source plan ordinal {} is not contiguous at expected ordinal {expected_ordinal}",
-                    entry.source_ordinal
-                )));
-            }
-            validate_source_plan_context_index(
-                entry.source_ordinal,
-                entry.context_index,
-                suffix_start,
-                close_context_end,
-                &mut previous_context_index,
-            )?;
-            let host_item = raw_context_items.get(entry.context_index).ok_or_else(|| {
-                SpineError::CompactFailure(format!(
-                    "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
-                    entry.source_ordinal,
-                    entry.context_index,
-                    raw_context_items.len()
-                ))
-            })?;
-            let expected_item = entry.visible_response_item();
-            let host_hash = hash_response_items(std::slice::from_ref(host_item))?;
-            if host_item != &expected_item || host_hash != entry.source_hash {
-                return Err(SpineError::CompactFailure(format!(
-                    "spine.close source plan mismatch at ordinal {} context_index {} source_hash {} host_hash {host_hash}",
-                    entry.source_ordinal, entry.context_index, entry.source_hash
-                )));
-            }
-        }
+        validate_close_source_plan_entries(
+            &entries,
+            raw_context_items,
+            suffix_start,
+            close_context_end,
+        )?;
 
         let source_raw_start = self.open_raw_start(&open_meta.id)?;
-        let source_raw_end =
-            entries
-                .iter()
-                .try_fold(source_raw_start, |end, entry| -> Result<u64, SpineError> {
-                    Ok(match &entry.kind {
-                        SpineCompactSourceEntryKind::RawResponseItem { raw_ordinal, .. } => end
-                            .max(raw_ordinal.checked_add(1).ok_or_else(|| {
-                                SpineError::InvalidEvent(
-                                    "spine.close source plan raw ordinal overflow".to_string(),
-                                )
-                            })?),
-                        SpineCompactSourceEntryKind::ChildMemory {
-                            source_raw_range, ..
-                        } => end.max(source_raw_range.end),
-                    })
-                })?;
+        let source_raw_end = close_source_plan_raw_end(source_raw_start, &entries)?;
 
         Ok(SpineCompactSourcePlan {
             node_id: open_meta.id.clone(),
@@ -194,6 +154,69 @@ impl SpineRuntime {
             ))),
         }
     }
+}
+
+fn validate_close_source_plan_entries(
+    entries: &[SpineCompactSourcePlanEntry],
+    raw_context_items: &[ResponseItem],
+    suffix_start: usize,
+    close_context_end: usize,
+) -> Result<(), SpineError> {
+    let mut previous_context_index = None;
+    for (expected_ordinal, entry) in entries.iter().enumerate() {
+        if entry.source_ordinal != expected_ordinal {
+            return Err(SpineError::Invariant(format!(
+                "spine.close source plan ordinal {} is not contiguous at expected ordinal {expected_ordinal}",
+                entry.source_ordinal
+            )));
+        }
+        validate_source_plan_context_index(
+            entry.source_ordinal,
+            entry.context_index,
+            suffix_start,
+            close_context_end,
+            &mut previous_context_index,
+        )?;
+        let host_item = raw_context_items.get(entry.context_index).ok_or_else(|| {
+            SpineError::CompactFailure(format!(
+                "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
+                entry.source_ordinal,
+                entry.context_index,
+                raw_context_items.len()
+            ))
+        })?;
+        let expected_item = entry.visible_response_item();
+        let host_hash = hash_response_items(std::slice::from_ref(host_item))?;
+        if host_item != &expected_item || host_hash != entry.source_hash {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close source plan mismatch at ordinal {} context_index {} source_hash {} host_hash {host_hash}",
+                entry.source_ordinal, entry.context_index, entry.source_hash
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn close_source_plan_raw_end(
+    source_raw_start: u64,
+    entries: &[SpineCompactSourcePlanEntry],
+) -> Result<u64, SpineError> {
+    entries
+        .iter()
+        .try_fold(source_raw_start, |end, entry| -> Result<u64, SpineError> {
+            Ok(match &entry.kind {
+                SpineCompactSourceEntryKind::RawResponseItem { raw_ordinal, .. } => {
+                    end.max(raw_ordinal.checked_add(1).ok_or_else(|| {
+                        SpineError::InvalidEvent(
+                            "spine.close source plan raw ordinal overflow".to_string(),
+                        )
+                    })?)
+                }
+                SpineCompactSourceEntryKind::ChildMemory {
+                    source_raw_range, ..
+                } => end.max(source_raw_range.end),
+            })
+        })
 }
 
 fn close_memory_assembly_from_source_plan(
