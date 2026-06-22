@@ -5,6 +5,8 @@ mod close_memory_assembly_close_like_filter;
 mod close_memory_assembly_exact_evidence;
 #[path = "close_memory_assembly_message_fixtures.rs"]
 mod close_memory_assembly_message_fixtures;
+#[path = "close_memory_assembly_multimodal_evidence.rs"]
+mod close_memory_assembly_multimodal_evidence;
 #[path = "close_memory_assembly_node_fixtures.rs"]
 mod close_memory_assembly_node_fixtures;
 #[path = "close_memory_assembly_node_memory.rs"]
