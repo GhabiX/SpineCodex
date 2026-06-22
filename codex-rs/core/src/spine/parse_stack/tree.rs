@@ -249,49 +249,44 @@ fn collect_tree_render_node(
 
 #[cfg(test)]
 pub(in crate::spine) fn parse_stack_msg_leaf_count(symbols: &[Symbol]) -> usize {
-    symbols
-        .iter()
-        .map(|symbol| match symbol {
-            Symbol::SpineTreeNode(node) => spine_tree_node_msg_leaf_count(node),
-            Symbol::SpineTreeNodes(nodes) => nodes.iter().map(spine_tree_node_msg_leaf_count).sum(),
-            Symbol::Control(_) | Symbol::RootEpoches(_) => 0,
-        })
-        .sum()
-}
-
-#[cfg(test)]
-fn spine_tree_node_msg_leaf_count(node: &SpineTreeNode) -> usize {
-    match node {
-        SpineTreeNode::MsgAsLeafNode { .. } => 1,
-        SpineTreeNode::ToolCallAsLeafNode { .. } => 0,
-        SpineTreeNode::SpineTree { children, .. } => {
-            children.iter().map(spine_tree_node_msg_leaf_count).sum()
-        }
-    }
+    parse_stack_leaf_count(symbols, LeafKind::Msg)
 }
 
 #[cfg(test)]
 pub(in crate::spine) fn parse_stack_toolcall_leaf_count(symbols: &[Symbol]) -> usize {
+    parse_stack_leaf_count(symbols, LeafKind::ToolCall)
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum LeafKind {
+    Msg,
+    ToolCall,
+}
+
+#[cfg(test)]
+fn parse_stack_leaf_count(symbols: &[Symbol], kind: LeafKind) -> usize {
     symbols
         .iter()
         .map(|symbol| match symbol {
-            Symbol::SpineTreeNode(node) => spine_tree_node_toolcall_leaf_count(node),
-            Symbol::SpineTreeNodes(nodes) => {
-                nodes.iter().map(spine_tree_node_toolcall_leaf_count).sum()
-            }
+            Symbol::SpineTreeNode(node) => spine_tree_node_leaf_count(node, kind),
+            Symbol::SpineTreeNodes(nodes) => nodes
+                .iter()
+                .map(|node| spine_tree_node_leaf_count(node, kind))
+                .sum(),
             Symbol::Control(_) | Symbol::RootEpoches(_) => 0,
         })
         .sum()
 }
 
 #[cfg(test)]
-fn spine_tree_node_toolcall_leaf_count(node: &SpineTreeNode) -> usize {
+fn spine_tree_node_leaf_count(node: &SpineTreeNode, kind: LeafKind) -> usize {
     match node {
-        SpineTreeNode::MsgAsLeafNode { .. } => 0,
-        SpineTreeNode::ToolCallAsLeafNode { .. } => 1,
+        SpineTreeNode::MsgAsLeafNode { .. } => usize::from(matches!(kind, LeafKind::Msg)),
+        SpineTreeNode::ToolCallAsLeafNode { .. } => usize::from(matches!(kind, LeafKind::ToolCall)),
         SpineTreeNode::SpineTree { children, .. } => children
             .iter()
-            .map(spine_tree_node_toolcall_leaf_count)
+            .map(|child| spine_tree_node_leaf_count(child, kind))
             .sum(),
     }
 }
