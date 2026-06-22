@@ -13,9 +13,7 @@ use super::replay::replay_from_events;
 use crate::spine::archive::SpineArchive;
 use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::checkpoint::validate_checkpoint;
-use crate::spine::model::NodeId;
 use crate::spine::model::RawMask;
-use crate::spine::model::SpineLedgerEvent;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 use crate::spine::store::SpineStore;
@@ -37,16 +35,20 @@ impl SpineRuntime {
             return Self::load_trim_only(store, vec![true; raw_len_usize]);
         }
         if jit_enabled && !store.tree_path().exists() {
-            store.append_event(&SpineLedgerEvent::Init { raw_start: 0 })?;
-            store.append_event(&SpineLedgerEvent::Open {
-                child: NodeId::root_epoch(1).child(1),
-                boundary: raw_len,
-                index: raw_len,
-                summary: "root".to_string(),
-                open_input_tokens: None,
-                open_context_tokens: None,
-                open_context_source: None,
-            })?;
+            let archive = SpineArchive::new(store.root.clone());
+            let (init_event, _init_token) = crate::spine::lexer::lex_init_event_token(&archive, 0)?;
+            let (open_event, _open_token) = crate::spine::lexer::lex_open_event_token(
+                &archive,
+                crate::spine::model::NodeId::root_epoch(1).child(1),
+                raw_len,
+                raw_len,
+                "root".to_string(),
+                None,
+                None,
+                None,
+            )?;
+            store.append_event(&init_event)?;
+            store.append_event(&open_event)?;
         }
         let mut runtime = Self::load(store, raw_len)?;
         runtime.set_jit_enabled(jit_enabled);

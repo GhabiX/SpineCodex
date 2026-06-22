@@ -2,10 +2,8 @@ use super::ParseStack;
 use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::memory_ref;
-use crate::spine::archive::tree_meta;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
-use crate::spine::model::NodeId;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
@@ -19,14 +17,9 @@ pub(in crate::spine) fn event_to_token(
     raw_mask: RawMask<'_>,
 ) -> Result<SpineToken, SpineError> {
     match &event.event {
-        SpineLedgerEvent::Init { raw_start } => Ok(SpineToken::Init {
-            meta: tree_meta(
-                archive,
-                NodeId::root_epoch(1),
-                *raw_start,
-                "root".to_string(),
-            )?,
-        }),
+        SpineLedgerEvent::Init { raw_start } => {
+            crate::spine::lexer::lex_init_token(archive, *raw_start)
+        }
         SpineLedgerEvent::Msg {
             raw_ordinal,
             context_index,

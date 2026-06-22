@@ -1,5 +1,6 @@
 use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
+use crate::spine::archive::tree_meta;
 use crate::spine::archive::tree_meta_with_token_baselines;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::MemoryRef;
@@ -53,6 +54,37 @@ impl LexedTokenBatch {
     pub(in crate::spine) fn into_single_token(self, label: &str) -> Result<SpineToken, SpineError> {
         self.into_single(label).map(|(_, token)| token)
     }
+}
+
+pub(in crate::spine) fn lex_init(
+    archive: &SpineArchive,
+    raw_start: u64,
+) -> Result<LexedTokenBatch, SpineError> {
+    Ok(LexedTokenBatch::single(
+        SpineLedgerEvent::Init { raw_start },
+        SpineToken::Init {
+            meta: tree_meta(
+                archive,
+                NodeId::root_epoch(1),
+                raw_start,
+                "root".to_string(),
+            )?,
+        },
+    ))
+}
+
+pub(in crate::spine) fn lex_init_event_token(
+    archive: &SpineArchive,
+    raw_start: u64,
+) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+    lex_init(archive, raw_start)?.into_single("init")
+}
+
+pub(in crate::spine) fn lex_init_token(
+    archive: &SpineArchive,
+    raw_start: u64,
+) -> Result<SpineToken, SpineError> {
+    lex_init(archive, raw_start)?.into_single_token("init")
 }
 
 pub(in crate::spine) fn lex_msg(
@@ -434,6 +466,32 @@ mod tests {
                 },
                 from_user: true,
                 user_anchor: Some(2),
+            }]
+        );
+    }
+
+    #[test]
+    fn lex_init_produces_matching_event_and_token() {
+        let archive = SpineArchive::new(PathBuf::from("/tmp/spine-lexer-test"));
+        let lexed = lex_init(&archive, 4).expect("init lexes");
+
+        assert_eq!(lexed.events.len(), 1);
+        assert!(matches!(
+            lexed.events.first(),
+            Some(SpineLedgerEvent::Init { raw_start: 4 })
+        ));
+        assert_eq!(
+            lexed.tokens,
+            vec![SpineToken::Init {
+                meta: crate::spine::model::TreeMeta {
+                    id: NodeId::root_epoch(1),
+                    index: 4,
+                    summary: "root".to_string(),
+                    open_input_tokens: None,
+                    open_context_tokens: None,
+                    open_context_source: None,
+                    node_dir: PathBuf::from("/tmp/spine-lexer-test/nodes/1"),
+                },
             }]
         );
     }
