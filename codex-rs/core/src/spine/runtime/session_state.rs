@@ -46,7 +46,7 @@ enum SpineCommitAttemptKind {
     RuntimeMissing,
 }
 
-pub(crate) struct SpineCommitOutput {
+struct SpineCommitOutput {
     post_commit_effects: SpineHostEffects,
 }
 
@@ -343,7 +343,7 @@ struct SpineToolcallCommitLoopDecision {
 }
 
 pub(crate) enum SpineToolcallCommitLoopAction {
-    Done(SpineCommitOutput),
+    Done(SpineHostEffects),
     Retry,
     NoSpineCommit,
     HostAction(SpineToolcallCommitTerminalHostAction),
@@ -361,7 +361,7 @@ pub(crate) enum SpineToolcallCommitTerminalHostAction {
 }
 
 enum SpineToolcallCommitLoopDecisionKind {
-    Done(SpineCommitOutput),
+    Done(SpineHostEffects),
     Retry,
     NoSpineCommit,
     HostAction(SpineToolcallCommitTerminalHostAction),
@@ -526,7 +526,7 @@ impl SpineToolcallCommitHostPlan {
 impl SpineToolcallCommitLoopDecision {
     fn done(output: SpineCommitOutput) -> Self {
         Self {
-            kind: SpineToolcallCommitLoopDecisionKind::Done(output),
+            kind: SpineToolcallCommitLoopDecisionKind::Done(output.into_post_commit_effects()),
         }
     }
 
@@ -717,7 +717,7 @@ impl SpineCommitAttempt {
 }
 
 impl SpineCommitOutput {
-    pub(crate) fn into_post_commit_effects(self) -> SpineHostEffects {
+    fn into_post_commit_effects(self) -> SpineHostEffects {
         self.post_commit_effects
     }
 }

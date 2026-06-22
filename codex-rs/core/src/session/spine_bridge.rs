@@ -1264,7 +1264,7 @@ impl Session {
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
         let mut lock_retries = 0;
-        let commit_output = loop {
+        let post_commit_effects = loop {
             let attempt_input = SpineToolcallCommitAttemptInput {
                 tool_resp_item: item,
                 expected_history: expected_history.clone(),
@@ -1298,7 +1298,7 @@ impl Session {
                 }
             };
             match commit_host_plan.interpret_attempt_as_action(attempt, lock_retries, &call_id)? {
-                SpineToolcallCommitLoopAction::Done(output) => break output,
+                SpineToolcallCommitLoopAction::Done(effects) => break effects,
                 SpineToolcallCommitLoopAction::NoSpineCommit => {
                     return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
                 }
@@ -1323,7 +1323,6 @@ impl Session {
                 }
             }
         };
-        let post_commit_effects = commit_output.into_post_commit_effects();
         let deferred_tree_update = self
             .apply_spine_post_commit_effects(turn_context, post_commit_effects)
             .await;
