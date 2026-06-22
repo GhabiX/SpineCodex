@@ -40,16 +40,7 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
 ) -> Result<(), SpineError> {
     for memory in &marker.memory_refs {
         let mem = unique_committed_memory_for_ref(marker, memory, mems)?;
-        if memory.kind != mem.kind
-            || memory.node != mem.node
-            || memory.raw_start != mem.raw_start
-            || memory.raw_end != mem.raw_end
-            || memory.context_start != mem.context_start
-            || memory.context_end != mem.context_end
-            || memory.raw_live_hash != mem.raw_live_hash
-            || memory.body_path != mem.body_path
-            || memory.body_hash != mem.body_hash
-        {
+        if !commit_memory_ref_matches_record(memory, mem) {
             return Err(SpineError::InvalidStore(format!(
                 "Spine commit marker {} memory ref {} does not match committed memory record",
                 marker.op_id, memory.compact_id
@@ -102,6 +93,18 @@ fn unique_committed_memory_for_ref<'a>(
         )));
     }
     Ok(mem)
+}
+
+fn commit_memory_ref_matches_record(memory: &SpineCommitMemoryRef, mem: &MemRecord) -> bool {
+    memory.kind == mem.kind
+        && memory.node == mem.node
+        && memory.raw_start == mem.raw_start
+        && memory.raw_end == mem.raw_end
+        && memory.context_start == mem.context_start
+        && memory.context_end == mem.context_end
+        && memory.raw_live_hash == mem.raw_live_hash
+        && memory.body_path == mem.body_path
+        && memory.body_hash == mem.body_hash
 }
 
 fn commit_memory_ref_allowed_by_source_live(
