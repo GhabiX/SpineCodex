@@ -23,7 +23,6 @@ use crate::spine::SpineStore;
 use crate::spine::SpineToolCallEvidence;
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
-use crate::spine::SpineToolcallCommitFailureAction;
 use crate::spine::SpineToolcallCommitLoopDecision;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
@@ -1156,16 +1155,12 @@ impl Session {
                     continue;
                 }
                 SpineToolcallCommitLoopDecision::HostAction(host_action) => {
-                    match host_action.failure_action() {
-                        SpineToolcallCommitFailureAction::FailClosed => {
-                            self.fail_closed_spine_toolcall_commit(call_id, host_action.reason())
-                                .await;
-                        }
-                        SpineToolcallCommitFailureAction::AbortPending => {
-                            self.abort_spine_pending_tool(call_id, host_action.reason())
-                                .await;
-                        }
-                        SpineToolcallCommitFailureAction::NoSpineCommit => {}
+                    if let Some(reason) = host_action.fail_closed_reason() {
+                        self.fail_closed_spine_toolcall_commit(call_id, reason)
+                            .await;
+                    }
+                    if let Some(reason) = host_action.abort_pending_reason() {
+                        self.abort_spine_pending_tool(call_id, reason).await;
                     }
                     return Err(host_action.into_error());
                 }

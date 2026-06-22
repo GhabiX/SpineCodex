@@ -281,7 +281,7 @@ const SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON: &str =
     "spine tool output commit lock retry limit exceeded before commit";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SpineToolcallCommitFailureAction {
+enum SpineToolcallCommitFailureAction {
     FailClosed,
     AbortPending,
     NoSpineCommit,
@@ -454,12 +454,13 @@ impl SpineToolcallCommitHostAction {
         }
     }
 
-    pub(crate) fn failure_action(&self) -> SpineToolcallCommitFailureAction {
-        self.failure_action
+    pub(crate) fn fail_closed_reason(&self) -> Option<&'static str> {
+        (self.failure_action == SpineToolcallCommitFailureAction::FailClosed).then_some(self.reason)
     }
 
-    pub(crate) fn reason(&self) -> &'static str {
-        self.reason
+    pub(crate) fn abort_pending_reason(&self) -> Option<&'static str> {
+        (self.failure_action == SpineToolcallCommitFailureAction::AbortPending)
+            .then_some(self.reason)
     }
 
     pub(crate) fn into_error(self) -> SpineError {
