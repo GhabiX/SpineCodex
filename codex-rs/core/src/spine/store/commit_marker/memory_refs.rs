@@ -115,11 +115,9 @@ fn commit_memory_ref_allowed_by_source_live(
                 && end <= raw_live.len()
                 && raw_live[start..end].iter().all(|live| *live))
         }
-        MemKind::RootEpoch => memory
-            .raw_live_hash
-            .as_deref()
-            .map(|hash| raw_live_prefix_hash_matches(raw_live, memory.raw_end, hash))
-            .unwrap_or(Ok(false)),
+        MemKind::RootEpoch => memory.raw_live_hash.as_deref().map_or(Ok(false), |hash| {
+            raw_live_prefix_hash_matches(raw_live, memory.raw_end, hash)
+        }),
     }
 }
 
