@@ -229,11 +229,8 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        let Some(output) = evidence.completed_output()? else {
-            return Ok(());
-        };
         let Some(completed) = self
-            .prepare_completed_spine_toolcall_output(turn_context, spine_slot, output)
+            .prepare_completed_spine_toolcall(turn_context, spine_slot, evidence)
             .await?
         else {
             return Ok(());
@@ -1081,11 +1078,8 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit().into_tool_commit());
         };
-        let Some(output) = evidence.completed_output()? else {
-            return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit().into_tool_commit());
-        };
         let Some(completed) = self
-            .prepare_completed_spine_toolcall_output(turn_context, spine_slot, output)
+            .prepare_completed_spine_toolcall(turn_context, spine_slot, evidence)
             .await?
         else {
             return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit().into_tool_commit());
@@ -1093,6 +1087,19 @@ impl Session {
         self.commit_completed_spine_toolcall(turn_context, completed)
             .await
             .map(SpineCompletedToolCallHostOutcome::into_tool_commit)
+    }
+
+    async fn prepare_completed_spine_toolcall<'a>(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        spine_slot: &Mutex<SpineSessionState>,
+        evidence: SpineToolCallEvidence<'a>,
+    ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
+        let Some(output) = evidence.completed_output()? else {
+            return Ok(None);
+        };
+        self.prepare_completed_spine_toolcall_output(turn_context, spine_slot, output)
+            .await
     }
 
     async fn prepare_completed_spine_toolcall_output<'a>(
