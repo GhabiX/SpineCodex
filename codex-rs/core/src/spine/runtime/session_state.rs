@@ -2,6 +2,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::CompletedToolCall;
@@ -65,7 +66,7 @@ pub(crate) struct SpineToolCallEvidence<'a> {
     kind: SpineToolCallEvidenceKind<'a>,
 }
 
-pub(crate) enum SpineToolCallEvidenceKind<'a> {
+enum SpineToolCallEvidenceKind<'a> {
     Single {
         item: &'a ResponseItem,
     },
@@ -74,6 +75,25 @@ pub(crate) enum SpineToolCallEvidenceKind<'a> {
         tool_call_ids: &'a [String],
         output_items: &'a [ResponseItem],
     },
+}
+
+pub(crate) struct SpineCompletedToolCallOutputEvidence<'a> {
+    call_id: &'a str,
+    output_items: &'a [ResponseItem],
+    commit_output_item: &'a ResponseItem,
+    request_call_ids: SpineCompletedToolCallRequestIds<'a>,
+    recording: SpineToolCallOutputHostRecording,
+}
+
+enum SpineCompletedToolCallRequestIds<'a> {
+    Single(&'a str),
+    Grouped(&'a [String]),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpineToolCallOutputHostRecording {
+    MaybePreRecordSingle,
+    RecordGroupBeforeCommit,
 }
 
 impl<'a> SpineToolCallEvidence<'a> {
@@ -97,9 +117,94 @@ impl<'a> SpineToolCallEvidence<'a> {
         }
     }
 
-    pub(crate) fn kind(&self) -> &SpineToolCallEvidenceKind<'a> {
-        &self.kind
+    pub(crate) fn completed_output(
+        &self,
+    ) -> Result<Option<SpineCompletedToolCallOutputEvidence<'a>>, SpineError> {
+        match &self.kind {
+            SpineToolCallEvidenceKind::Single { item } => {
+                let Some(call_id) = tool_response_call_id(item) else {
+                    return Ok(None);
+                };
+                Ok(Some(SpineCompletedToolCallOutputEvidence {
+                    call_id,
+                    output_items: std::slice::from_ref(*item),
+                    commit_output_item: *item,
+                    request_call_ids: SpineCompletedToolCallRequestIds::Single(call_id),
+                    recording: SpineToolCallOutputHostRecording::MaybePreRecordSingle,
+                }))
+            }
+            SpineToolCallEvidenceKind::Grouped {
+                commit_call_id,
+                tool_call_ids,
+                output_items,
+            } => {
+                let commit_output_item =
+                    validate_grouped_toolcall_outputs(commit_call_id, tool_call_ids, output_items)?;
+                Ok(Some(SpineCompletedToolCallOutputEvidence {
+                    call_id: *commit_call_id,
+                    output_items: *output_items,
+                    commit_output_item,
+                    request_call_ids: SpineCompletedToolCallRequestIds::Grouped(*tool_call_ids),
+                    recording: SpineToolCallOutputHostRecording::RecordGroupBeforeCommit,
+                }))
+            }
+        }
     }
+}
+
+impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
+    pub(crate) fn call_id(&self) -> &'a str {
+        self.call_id
+    }
+
+    pub(crate) fn output_items(&self) -> &'a [ResponseItem] {
+        self.output_items
+    }
+
+    pub(crate) fn commit_output_item(&self) -> &'a ResponseItem {
+        self.commit_output_item
+    }
+
+    pub(crate) fn recording(&self) -> SpineToolCallOutputHostRecording {
+        self.recording
+    }
+}
+
+fn validate_grouped_toolcall_outputs<'a>(
+    commit_call_id: &str,
+    tool_call_ids: &[String],
+    output_items: &'a [ResponseItem],
+) -> Result<&'a ResponseItem, SpineError> {
+    let expected_call_ids = tool_call_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut output_call_ids = BTreeSet::new();
+    for item in output_items {
+        let Some(call_id) = tool_response_call_id(item) else {
+            return Err(SpineError::InvalidEvent(
+                "grouped Spine toolcall output item is not a tool response".to_string(),
+            ));
+        };
+        if !expected_call_ids.contains(call_id) {
+            return Err(SpineError::InvalidEvent(format!(
+                "grouped Spine toolcall unexpected output for call_id={call_id}"
+            )));
+        }
+        output_call_ids.insert(call_id.to_string());
+    }
+    for call_id in tool_call_ids {
+        if !output_call_ids.contains(call_id) {
+            return Err(SpineError::InvalidEvent(format!(
+                "grouped Spine toolcall missing output for call_id={call_id}"
+            )));
+        }
+    }
+    output_items
+        .iter()
+        .find(|item| tool_response_call_id(item) == Some(commit_call_id))
+        .ok_or_else(|| {
+            SpineError::InvalidEvent(format!(
+                "grouped Spine toolcall missing output for commit call_id={commit_call_id}"
+            ))
+        })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1061,6 +1166,39 @@ impl SpineSessionState {
             commit_call_id,
             completed_toolcall,
         )))
+    }
+
+    pub(crate) fn completed_toolcall_commit_evidence_from_output(
+        &self,
+        output: &SpineCompletedToolCallOutputEvidence<'_>,
+        output_raw_ordinals: &[Option<u64>],
+        output_context_start: usize,
+    ) -> Result<Option<SpineToolcallCommitEvidence>, SpineError> {
+        match &output.request_call_ids {
+            SpineCompletedToolCallRequestIds::Single(call_id) => self
+                .single_completed_toolcall_evidence(
+                    call_id,
+                    (
+                        output_raw_ordinals
+                            .first()
+                            .copied()
+                            .flatten()
+                            .ok_or_else(|| {
+                                SpineError::InvalidEvent(
+                                    "single Spine toolcall output missing raw ordinal".to_string(),
+                                )
+                            })?,
+                        output_context_start,
+                    ),
+                ),
+            SpineCompletedToolCallRequestIds::Grouped(tool_call_ids) => self
+                .grouped_completed_toolcall_evidence(
+                    output.call_id(),
+                    tool_call_ids,
+                    output_raw_ordinals,
+                    output_context_start,
+                ),
+        }
     }
 
     pub(crate) fn prepare_completed_toolcall_commit(

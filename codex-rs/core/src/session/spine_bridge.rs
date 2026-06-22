@@ -9,6 +9,7 @@ use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::PreparedSpineRootCompactApply;
 use crate::spine::SpineCloneBoundary;
+use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffect;
 use crate::spine::SpineHostEffects;
 use crate::spine::SpineObservedContextItem;
@@ -18,7 +19,7 @@ use crate::spine::SpineRootCompactTokenMetadata;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 use crate::spine::SpineToolCallEvidence;
-use crate::spine::SpineToolCallEvidenceKind;
+use crate::spine::SpineToolCallOutputHostRecording;
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineTreeUpdateDelivery;
@@ -77,6 +78,14 @@ struct SpinePreparedToolCallEvidence<'a> {
 struct SpineToolCallHostRecording {
     response_already_recorded: bool,
     response_recorded_inside_reduce: bool,
+    history_before_recorded_output: Option<crate::context_manager::ContextManager>,
+}
+
+struct SpineCompletedToolCallOutputAnchor {
+    raw_ordinals: Vec<Option<u64>>,
+    context_start: usize,
+    already_recorded: bool,
+    recorded_inside_reduce: bool,
     history_before_recorded_output: Option<crate::context_manager::ContextManager>,
 }
 
@@ -868,42 +877,109 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         evidence: SpineToolCallEvidence<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
-        let Some(completed) = (match evidence.kind() {
-            SpineToolCallEvidenceKind::Single { item } => {
-                self.single_completed_spine_toolcall_output(turn_context, item)
-                    .await?
-            }
-            SpineToolCallEvidenceKind::Grouped {
-                commit_call_id,
-                tool_call_ids,
-                output_items,
-            } => {
-                self.grouped_completed_spine_toolcall_outputs(
-                    turn_context,
-                    commit_call_id,
-                    tool_call_ids,
-                    output_items,
-                )
-                .await?
-            }
-        }) else {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(Self::no_spine_tool_commit());
+        };
+        let Some(output) = evidence.completed_output()? else {
+            return Ok(Self::no_spine_tool_commit());
+        };
+        let Some(completed) = self
+            .prepare_completed_spine_toolcall_output(turn_context, spine_slot, output)
+            .await?
+        else {
             return Ok(Self::no_spine_tool_commit());
         };
         self.commit_completed_spine_toolcall(turn_context, completed)
             .await
     }
 
-    async fn single_completed_spine_toolcall_output<'a>(
+    async fn prepare_completed_spine_toolcall_output<'a>(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        item: &'a ResponseItem,
+        spine_slot: &Mutex<SpineSessionState>,
+        output: SpineCompletedToolCallOutputEvidence<'a>,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
-        let Some(call_id) = tool_response_call_id(item) else {
+        let Some(output_anchor) = self
+            .record_completed_spine_toolcall_output_if_needed(turn_context, spine_slot, &output)
+            .await?
+        else {
             return Ok(None);
         };
-        let Some(spine_slot) = self.spine.as_ref() else {
+        let Some(toolcall_evidence) = self
+            .completed_spine_toolcall_commit_evidence(
+                spine_slot,
+                &output,
+                output_anchor.raw_ordinals.as_slice(),
+                output_anchor.context_start,
+            )
+            .await?
+        else {
             return Ok(None);
         };
+        Ok(Some(CompletedSpineToolCall {
+            evidence: SpinePreparedToolCallEvidence {
+                call_id: output.call_id(),
+                response_item: output.commit_output_item(),
+                toolcall_evidence,
+            },
+            host_recording: SpineToolCallHostRecording {
+                response_already_recorded: output_anchor.already_recorded,
+                response_recorded_inside_reduce: output_anchor.recorded_inside_reduce,
+                history_before_recorded_output: output_anchor.history_before_recorded_output,
+            },
+        }))
+    }
+
+    async fn record_completed_spine_toolcall_output_if_needed(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        spine_slot: &Mutex<SpineSessionState>,
+        output: &SpineCompletedToolCallOutputEvidence<'_>,
+    ) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError> {
+        match output.recording() {
+            SpineToolCallOutputHostRecording::MaybePreRecordSingle => {
+                self.record_single_spine_toolcall_output_if_needed(
+                    turn_context,
+                    spine_slot,
+                    output.call_id(),
+                    output.commit_output_item(),
+                )
+                .await
+            }
+            SpineToolCallOutputHostRecording::RecordGroupBeforeCommit => {
+                let (output_raw_ordinals, _) = {
+                    let raw_start = spine_slot.lock().await.raw_len();
+                    assign_spine_raw_ordinals(raw_start, output.output_items())?
+                };
+                let output_context_start = self.clone_history().await.raw_items().len();
+                self.record_conversation_items_without_spine_observe(
+                    turn_context,
+                    output.output_items(),
+                )
+                .await
+                .map_err(|err| {
+                    SpineError::Operation(format!(
+                        "failed to record grouped Spine tool outputs before commit: {err}"
+                    ))
+                })?;
+                Ok(Some(SpineCompletedToolCallOutputAnchor {
+                    raw_ordinals: output_raw_ordinals,
+                    context_start: output_context_start,
+                    already_recorded: true,
+                    recorded_inside_reduce: false,
+                    history_before_recorded_output: None,
+                }))
+            }
+        }
+    }
+
+    async fn record_single_spine_toolcall_output_if_needed(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        spine_slot: &Mutex<SpineSessionState>,
+        call_id: &str,
+        item: &ResponseItem,
+    ) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError> {
         let mut recorded_output_inside_reduce = false;
         let mut history_before_recorded_output = None;
         let mut raw_len;
@@ -963,82 +1039,29 @@ impl Session {
         } else {
             (raw_len, history_items_for_output_anchor.len())
         };
-        let toolcall_evidence = {
-            let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(toolcall_evidence) = guard.single_completed_toolcall_evidence(
-                call_id,
-                (tool_resp_raw_ordinal, tool_resp_context_index),
-            )?
-            else {
-                return Ok(None);
-            };
-            toolcall_evidence
-        };
-        Ok(Some(CompletedSpineToolCall {
-            evidence: SpinePreparedToolCallEvidence {
-                call_id,
-                response_item: item,
-                toolcall_evidence,
-            },
-            host_recording: SpineToolCallHostRecording {
-                response_already_recorded: tool_resp_already_recorded,
-                response_recorded_inside_reduce: recorded_output_inside_reduce,
-                history_before_recorded_output,
-            },
+        Ok(Some(SpineCompletedToolCallOutputAnchor {
+            raw_ordinals: vec![Some(tool_resp_raw_ordinal)],
+            context_start: tool_resp_context_index,
+            already_recorded: tool_resp_already_recorded,
+            recorded_inside_reduce: recorded_output_inside_reduce,
+            history_before_recorded_output,
         }))
     }
 
-    async fn grouped_completed_spine_toolcall_outputs<'a>(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        commit_call_id: &'a str,
-        tool_call_ids: &[String],
-        output_items: &'a [ResponseItem],
-    ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(None);
-        };
-        let commit_output =
-            validate_grouped_spine_toolcall_outputs(commit_call_id, tool_call_ids, output_items)?;
-        let (output_raw_ordinals, _) = {
-            let raw_start = spine_slot.lock().await.raw_len();
-            assign_spine_raw_ordinals(raw_start, output_items)?
-        };
-        let output_context_start = self.clone_history().await.raw_items().len();
-        self.record_conversation_items_without_spine_observe(turn_context, output_items)
-            .await
-            .map_err(|err| {
-                SpineError::Operation(format!(
-                    "failed to record grouped Spine tool outputs before commit: {err}"
-                ))
-            })?;
-        let toolcall_evidence = {
-            let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(toolcall_evidence) = guard.grouped_completed_toolcall_evidence(
-                commit_call_id,
-                tool_call_ids,
-                &output_raw_ordinals,
-                output_context_start,
-            )?
-            else {
-                return Ok(None);
-            };
-            toolcall_evidence
-        };
-        Ok(Some(CompletedSpineToolCall {
-            evidence: SpinePreparedToolCallEvidence {
-                call_id: commit_call_id,
-                response_item: commit_output,
-                toolcall_evidence,
-            },
-            host_recording: SpineToolCallHostRecording {
-                response_already_recorded: true,
-                response_recorded_inside_reduce: false,
-                history_before_recorded_output: None,
-            },
-        }))
+    async fn completed_spine_toolcall_commit_evidence(
+        &self,
+        spine_slot: &Mutex<SpineSessionState>,
+        output: &SpineCompletedToolCallOutputEvidence<'_>,
+        output_raw_ordinals: &[Option<u64>],
+        output_context_start: usize,
+    ) -> Result<Option<SpineToolcallCommitEvidence>, SpineError> {
+        let guard = spine_slot.lock().await;
+        guard.ensure_valid()?;
+        guard.completed_toolcall_commit_evidence_from_output(
+            output,
+            output_raw_ordinals,
+            output_context_start,
+        )
     }
 
     async fn commit_completed_spine_toolcall(
@@ -1989,43 +2012,6 @@ impl Session {
             || (turn_started_from_zero && last_tokens > 0);
         has_fresh_turn_usage.then_some(current)
     }
-}
-
-fn validate_grouped_spine_toolcall_outputs<'a>(
-    commit_call_id: &str,
-    tool_call_ids: &[String],
-    output_items: &'a [ResponseItem],
-) -> Result<&'a ResponseItem, SpineError> {
-    let expected_call_ids = tool_call_ids.iter().cloned().collect::<BTreeSet<_>>();
-    let mut output_call_ids = BTreeSet::new();
-    for item in output_items {
-        let Some(call_id) = tool_response_call_id(item) else {
-            return Err(SpineError::InvalidEvent(
-                "grouped Spine toolcall output item is not a tool response".to_string(),
-            ));
-        };
-        if !expected_call_ids.contains(call_id) {
-            return Err(SpineError::InvalidEvent(format!(
-                "grouped Spine toolcall unexpected output for call_id={call_id}"
-            )));
-        }
-        output_call_ids.insert(call_id.to_string());
-    }
-    for call_id in tool_call_ids {
-        if !output_call_ids.contains(call_id) {
-            return Err(SpineError::InvalidEvent(format!(
-                "grouped Spine toolcall missing output for call_id={call_id}"
-            )));
-        }
-    }
-    output_items
-        .iter()
-        .find(|item| tool_response_call_id(item) == Some(commit_call_id))
-        .ok_or_else(|| {
-            SpineError::InvalidEvent(format!(
-                "grouped Spine toolcall missing output for commit call_id={commit_call_id}"
-            ))
-        })
 }
 
 pub(super) fn assign_spine_raw_ordinals(
