@@ -77,15 +77,16 @@ impl SpineStore {
         };
         let cut = u64::try_from(cut)
             .map_err(|_| SpineError::InvalidEvent("rollback cut overflow".to_string()))?;
-        self.checkpoints()?
+        let Some(checkpoint) = self
+            .checkpoints()?
             .into_iter()
             .find(|checkpoint| checkpoint.raw_ordinal == cut)
-            .map(Some)
-            .ok_or_else(|| {
-                SpineError::InvalidStore(format!(
-                    "missing spine rollback checkpoint before raw ordinal {cut}"
-                ))
-            })
+        else {
+            return Err(SpineError::InvalidStore(format!(
+                "missing spine rollback checkpoint before raw ordinal {cut}"
+            )));
+        };
+        Ok(Some(checkpoint))
     }
 
     pub(in crate::spine) fn resume_checkpoint(
