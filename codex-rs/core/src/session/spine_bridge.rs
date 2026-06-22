@@ -24,7 +24,6 @@ use crate::spine::SpineToolCallEvidence;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
-use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
@@ -295,18 +294,11 @@ impl Session {
         turn_context: &TurnContext,
         effects: SpineHostEffects,
     ) -> Option<SpineTreeUpdateEvent> {
-        let mut deferred_tree_update = None;
-        for (snapshot, delivery) in effects.into_tree_updates() {
-            match delivery {
-                SpineTreeUpdateDelivery::Immediate => {
-                    self.send_spine_tree_update(turn_context, snapshot).await;
-                }
-                SpineTreeUpdateDelivery::AfterRawOutputDurable => {
-                    deferred_tree_update = Some(snapshot);
-                }
-            }
+        let (immediate, deferred) = effects.into_tree_host_updates().into_parts();
+        for snapshot in immediate {
+            self.send_spine_tree_update(turn_context, snapshot).await;
         }
-        deferred_tree_update
+        deferred.into_iter().last()
     }
 
     pub(crate) async fn seed_spine_tree_snapshot_if_available(&self) -> Result<(), SpineError> {
@@ -782,21 +774,16 @@ impl Session {
                 )
             })?
         };
-        for (snapshot, delivery) in effects.into_tree_updates() {
-            match delivery {
-                SpineTreeUpdateDelivery::Immediate => {
-                    self.send_event_raw(Event {
-                        id: INITIAL_SUBMIT_ID.to_string(),
-                        msg: EventMsg::SpineTreeUpdate(snapshot),
-                    })
-                    .await;
-                }
-                SpineTreeUpdateDelivery::AfterRawOutputDurable => {
-                    return Err(
-                        "non-toolcall message hook cannot defer tree update delivery".to_string(),
-                    );
-                }
-            }
+        let (immediate, deferred) = effects.into_tree_host_updates().into_parts();
+        if !deferred.is_empty() {
+            return Err("non-toolcall message hook cannot defer tree update delivery".to_string());
+        }
+        for snapshot in immediate {
+            self.send_event_raw(Event {
+                id: INITIAL_SUBMIT_ID.to_string(),
+                msg: EventMsg::SpineTreeUpdate(snapshot),
+            })
+            .await;
         }
         Ok(())
     }

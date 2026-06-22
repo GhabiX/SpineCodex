@@ -16,6 +16,11 @@ pub(crate) struct SpineHostEffects {
     effects: Vec<SpineHostEffect>,
 }
 
+pub(crate) struct SpineTreeHostUpdates {
+    immediate: Vec<SpineTreeUpdateEvent>,
+    after_raw_output_durable: Vec<SpineTreeUpdateEvent>,
+}
+
 impl SpineHostEffects {
     pub(crate) fn none() -> Self {
         Self {
@@ -71,11 +76,12 @@ impl SpineHostEffects {
         Ok(Self::many(remaining))
     }
 
-    pub(crate) fn into_tree_updates(self) -> Vec<(SpineTreeUpdateEvent, SpineTreeUpdateDelivery)> {
-        self.effects
-            .into_iter()
-            .filter_map(SpineHostEffect::into_tree_update)
-            .collect()
+    pub(crate) fn into_tree_host_updates(self) -> SpineTreeHostUpdates {
+        let mut updates = SpineTreeHostUpdates::new();
+        for effect in self.effects {
+            updates.push_effect(effect);
+        }
+        updates
     }
 }
 
@@ -150,4 +156,29 @@ impl SpineHostEffect {
 pub(crate) enum SpineTreeUpdateDelivery {
     Immediate,
     AfterRawOutputDurable,
+}
+
+impl SpineTreeHostUpdates {
+    fn new() -> Self {
+        Self {
+            immediate: Vec::new(),
+            after_raw_output_durable: Vec::new(),
+        }
+    }
+
+    fn push_effect(&mut self, effect: SpineHostEffect) {
+        let Some((snapshot, delivery)) = effect.into_tree_update() else {
+            return;
+        };
+        match delivery {
+            SpineTreeUpdateDelivery::Immediate => self.immediate.push(snapshot),
+            SpineTreeUpdateDelivery::AfterRawOutputDurable => {
+                self.after_raw_output_durable.push(snapshot);
+            }
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<SpineTreeUpdateEvent>, Vec<SpineTreeUpdateEvent>) {
+        (self.immediate, self.after_raw_output_durable)
+    }
 }
