@@ -201,42 +201,38 @@ impl SpineRuntime {
             return Ok(false);
         };
         if provider_input_tokens <= 0 {
-            self.consume_memory_context_accounting_pending(
+            return self.consume_memory_context_accounting_pending_and_skip(
                 pending,
                 None,
                 MemoryContextAccountingSkipReason::MissingProviderUsage,
-            )?;
-            return Ok(false);
+            );
         }
         if self
             .memory_context_accounting_by_id()?
             .contains_key(&pending.compact_id)
         {
-            self.consume_memory_context_accounting_pending(
+            return self.consume_memory_context_accounting_pending_and_skip(
                 pending,
                 Some(provider_input_tokens),
                 MemoryContextAccountingSkipReason::InvalidProviderUsage,
-            )?;
-            return Ok(false);
+            );
         }
         if let Some(close_input_tokens) = pending.close_input_tokens
             && provider_input_tokens >= close_input_tokens
         {
-            self.consume_memory_context_accounting_pending(
+            return self.consume_memory_context_accounting_pending_and_skip(
                 pending,
                 Some(provider_input_tokens),
                 MemoryContextAccountingSkipReason::InvalidProviderUsage,
-            )?;
-            return Ok(false);
+            );
         }
         let memory_tokens = provider_input_tokens - pending.replacement_prefix_baseline_tokens;
         if memory_tokens < 0 {
-            self.consume_memory_context_accounting_pending(
+            return self.consume_memory_context_accounting_pending_and_skip(
                 pending,
                 Some(provider_input_tokens),
                 MemoryContextAccountingSkipReason::NegativeMemoryDelta,
-            )?;
-            return Ok(false);
+            );
         }
         self.store
             .append_mem_accounting(&MemoryContextAccountingRecord {
@@ -277,6 +273,16 @@ impl SpineRuntime {
                 provider_input_tokens,
                 reason,
             })
+    }
+
+    fn consume_memory_context_accounting_pending_and_skip(
+        &self,
+        pending: PendingMemoryContextAccounting,
+        provider_input_tokens: Option<i64>,
+        reason: MemoryContextAccountingSkipReason,
+    ) -> Result<bool, SpineError> {
+        self.consume_memory_context_accounting_pending(pending, provider_input_tokens, reason)?;
+        Ok(false)
     }
 
     fn append_memory_context_accounting_pending(
