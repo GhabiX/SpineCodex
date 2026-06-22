@@ -1147,51 +1147,43 @@ impl Session {
             match attempt {
                 SpineCommitAttempt::Done(output) => break output,
                 SpineCommitAttempt::RuntimeMissing => {
-                    let reason = "spine runtime missing during completed toolcall commit";
-                    match commit_host_plan.commit_missing_action() {
+                    let Some(host_action) = commit_host_plan.commit_missing_host_action(call_id)?
+                    else {
+                        return Ok(Self::no_spine_tool_commit());
+                    };
+                    match host_action.failure_action() {
                         SpineToolcallCommitFailureAction::FailClosed => {
-                            self.fail_closed_spine_toolcall_commit(call_id, reason)
+                            self.fail_closed_spine_toolcall_commit(call_id, host_action.reason())
                                 .await;
-                            return Err(SpineError::Invariant(format!(
-                                "{reason} for call_id={call_id}"
-                            )));
-                        }
-                        SpineToolcallCommitFailureAction::NoSpineCommit => {
-                            return Ok(Self::no_spine_tool_commit());
                         }
                         SpineToolcallCommitFailureAction::AbortPending => {
-                            return Err(SpineError::Invariant(format!(
-                                "unsupported Spine runtime-missing action for call_id={call_id}"
-                            )));
+                            self.abort_spine_pending_tool(call_id, host_action.reason())
+                                .await;
                         }
+                        SpineToolcallCommitFailureAction::NoSpineCommit => {}
                     }
+                    return Err(host_action.into_error());
                 }
                 SpineCommitAttempt::Retry => {
-                    let Some((retry_limit_action, retry_limit)) =
-                        commit_host_plan.retry_limit_exceeded_action(lock_retries)
+                    let Some(host_action) =
+                        commit_host_plan.retry_limit_host_action(lock_retries, call_id)?
                     else {
                         lock_retries += 1;
                         tokio::task::yield_now().await;
                         continue;
                     };
-                    let reason = "spine tool output commit lock retry limit exceeded before commit";
-                    match retry_limit_action {
+                    match host_action.failure_action() {
                         SpineToolcallCommitFailureAction::FailClosed => {
-                            self.fail_closed_spine_toolcall_commit(call_id, reason)
+                            self.fail_closed_spine_toolcall_commit(call_id, host_action.reason())
                                 .await;
                         }
                         SpineToolcallCommitFailureAction::AbortPending => {
-                            self.abort_spine_pending_tool(call_id, reason).await;
+                            self.abort_spine_pending_tool(call_id, host_action.reason())
+                                .await;
                         }
-                        SpineToolcallCommitFailureAction::NoSpineCommit => {
-                            return Err(SpineError::Invariant(format!(
-                                "unsupported Spine retry-limit action for call_id={call_id}"
-                            )));
-                        }
+                        SpineToolcallCommitFailureAction::NoSpineCommit => {}
                     }
-                    return Err(SpineError::Operation(format!(
-                        "spine tool output commit could not acquire session locks after {retry_limit} retries for call_id={call_id}"
-                    )));
+                    return Err(host_action.into_error());
                 }
             }
         };

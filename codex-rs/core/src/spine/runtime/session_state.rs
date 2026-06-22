@@ -275,12 +275,22 @@ pub(crate) struct SpineToolcallCommitHostPlan {
 }
 
 const SPINE_TOOLCALL_COMMIT_LOCK_RETRY_LIMIT: usize = 4096;
+const SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON: &str =
+    "spine runtime missing during completed toolcall commit";
+const SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON: &str =
+    "spine tool output commit lock retry limit exceeded before commit";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpineToolcallCommitFailureAction {
     FailClosed,
     AbortPending,
     NoSpineCommit,
+}
+
+pub(crate) struct SpineToolcallCommitHostAction {
+    failure_action: SpineToolcallCommitFailureAction,
+    reason: &'static str,
+    error: SpineError,
 }
 
 impl SpineToolcallCommitPreparation {
@@ -351,22 +361,89 @@ impl SpineToolcallCommitHostPlan {
         self.output_recording
     }
 
-    pub(crate) fn commit_missing_action(&self) -> SpineToolcallCommitFailureAction {
-        self.commit_missing_action
+    pub(crate) fn commit_missing_host_action(
+        &self,
+        call_id: &str,
+    ) -> Result<Option<SpineToolcallCommitHostAction>, SpineError> {
+        match self.commit_missing_action {
+            SpineToolcallCommitFailureAction::FailClosed => {
+                Ok(Some(SpineToolcallCommitHostAction::new(
+                    SpineToolcallCommitFailureAction::FailClosed,
+                    SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON,
+                    SpineError::Invariant(format!(
+                        "{SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON} for call_id={call_id}"
+                    )),
+                )))
+            }
+            SpineToolcallCommitFailureAction::NoSpineCommit => Ok(None),
+            SpineToolcallCommitFailureAction::AbortPending => Err(SpineError::Invariant(format!(
+                "unsupported Spine runtime-missing action for call_id={call_id}"
+            ))),
+        }
     }
 
-    pub(crate) fn retry_limit_exceeded_action(
+    pub(crate) fn retry_limit_host_action(
         &self,
         lock_retries: usize,
-    ) -> Option<(SpineToolcallCommitFailureAction, usize)> {
+        call_id: &str,
+    ) -> Result<Option<SpineToolcallCommitHostAction>, SpineError> {
         if lock_retries < self.lock_retry_limit {
-            None
-        } else {
-            Some((self.retry_limit_action, self.lock_retry_limit))
+            return Ok(None);
         }
+        match self.retry_limit_action {
+            SpineToolcallCommitFailureAction::FailClosed => {
+                Ok(Some(SpineToolcallCommitHostAction::new(
+                    SpineToolcallCommitFailureAction::FailClosed,
+                    SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
+                    self.retry_limit_error(call_id),
+                )))
+            }
+            SpineToolcallCommitFailureAction::AbortPending => {
+                Ok(Some(SpineToolcallCommitHostAction::new(
+                    SpineToolcallCommitFailureAction::AbortPending,
+                    SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
+                    self.retry_limit_error(call_id),
+                )))
+            }
+            SpineToolcallCommitFailureAction::NoSpineCommit => Err(SpineError::Invariant(format!(
+                "unsupported Spine retry-limit action for call_id={call_id}"
+            ))),
+        }
+    }
+
+    fn retry_limit_error(&self, call_id: &str) -> SpineError {
+        SpineError::Operation(format!(
+            "spine tool output commit could not acquire session locks after {} retries for call_id={call_id}",
+            self.lock_retry_limit
+        ))
     }
 }
 
+impl SpineToolcallCommitHostAction {
+    fn new(
+        failure_action: SpineToolcallCommitFailureAction,
+        reason: &'static str,
+        error: SpineError,
+    ) -> Self {
+        Self {
+            failure_action,
+            reason,
+            error,
+        }
+    }
+
+    pub(crate) fn failure_action(&self) -> SpineToolcallCommitFailureAction {
+        self.failure_action
+    }
+
+    pub(crate) fn reason(&self) -> &'static str {
+        self.reason
+    }
+
+    pub(crate) fn into_error(self) -> SpineError {
+        self.error
+    }
+}
 pub(crate) struct SpineToolcallCommitInput<'a> {
     pub(crate) call_id: &'a str,
     pub(crate) completed_toolcall: CompletedToolCall,
