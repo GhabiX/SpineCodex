@@ -57,12 +57,14 @@ impl PreparedSpineReplay {
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct SpineToolCommit {
     recording: SpineToolOutputRecording,
     deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
 struct SpineCompletedToolCallCommit {
+    #[cfg(test)]
     recording: SpineToolOutputRecording,
     deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
@@ -79,6 +81,7 @@ pub(crate) enum SpineToolcallTurnError {
     },
 }
 
+#[cfg(test)]
 impl SpineToolCommit {
     pub(crate) fn recording(&self) -> SpineToolOutputRecording {
         self.recording
@@ -108,11 +111,13 @@ impl SpineToolCommit {
 impl SpineCompletedToolCallCommit {
     fn no_spine_commit() -> Self {
         Self {
+            #[cfg(test)]
             recording: SpineToolOutputRecording::Normal,
             deferred_tree_update: None,
         }
     }
 
+    #[cfg(test)]
     fn into_tool_commit(self) -> SpineToolCommit {
         SpineToolCommit {
             recording: self.recording,
@@ -1094,6 +1099,7 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
@@ -1388,9 +1394,9 @@ impl Session {
                 "deferring Spine close-like tree update until raw output evidence is durable"
             );
         }
-        let recording = commit_host_plan.output_recording();
         Ok(SpineCompletedToolCallCommit {
-            recording,
+            #[cfg(test)]
+            recording: commit_host_plan.output_recording(),
             deferred_tree_update,
         })
     }
