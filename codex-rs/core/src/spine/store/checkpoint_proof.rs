@@ -1,8 +1,8 @@
+use super::memory_body;
 use super::sidecar_store_path;
 use crate::spine::SpineError;
 use crate::spine::checkpoint::CheckpointMemoryRef;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
-use crate::spine::io::sha1_hex;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
@@ -216,13 +216,7 @@ fn validate_checkpoint_memory_ref_for_committed_mem(
             memory.compact_id, checkpoint.raw_boundary
         )));
     }
-    let body = std::fs::read_to_string(checkpoint_body_path)?;
-    if sha1_hex(body.as_bytes()) != memory.body_hash {
-        return Err(SpineError::InvalidStore(format!(
-            "memory body hash mismatch for {}",
-            memory.compact_id
-        )));
-    }
+    memory_body::read_body_with_hash(checkpoint_body_path, &memory.compact_id, &memory.body_hash)?;
     Ok(())
 }
 

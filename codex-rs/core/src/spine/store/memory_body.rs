@@ -28,11 +28,23 @@ pub(super) fn write_body(
 }
 
 pub(super) fn read_body(store_root: &Path, mem: &MemRecord) -> Result<String, SpineError> {
-    let body = std::fs::read_to_string(store_root.join(&mem.body_path))?;
-    if sha1_hex(body.as_bytes()) != mem.body_hash {
+    read_body_with_hash(
+        store_root.join(&mem.body_path),
+        &mem.compact_id,
+        &mem.body_hash,
+    )
+}
+
+pub(super) fn read_body_with_hash(
+    path: impl AsRef<Path>,
+    compact_id: &str,
+    body_hash: &str,
+) -> Result<String, SpineError> {
+    let body = std::fs::read_to_string(path)?;
+    if sha1_hex(body.as_bytes()) != body_hash {
         return Err(SpineError::InvalidStore(format!(
             "memory body hash mismatch for {}",
-            mem.compact_id
+            compact_id
         )));
     }
     Ok(body)

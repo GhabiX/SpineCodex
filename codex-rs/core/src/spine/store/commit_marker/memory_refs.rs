@@ -1,7 +1,7 @@
+use super::super::memory_body;
 use super::super::sidecar_store_path;
 use crate::spine::SpineError;
 use crate::spine::io::hash_raw_live;
-use crate::spine::io::sha1_hex;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
@@ -53,13 +53,7 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
             )));
         }
         let body_path = sidecar_store_path(store_root, &memory.body_path);
-        let body = std::fs::read_to_string(&body_path)?;
-        if sha1_hex(body.as_bytes()) != memory.body_hash {
-            return Err(SpineError::InvalidStore(format!(
-                "memory body hash mismatch for {}",
-                memory.compact_id
-            )));
-        }
+        memory_body::read_body_with_hash(&body_path, &memory.compact_id, &memory.body_hash)?;
     }
     if let Some(raw_live_hash) = marker.raw_live_hash.as_deref()
         && !raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
