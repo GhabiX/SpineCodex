@@ -88,6 +88,7 @@ pub(crate) struct SpineToolcallCommitEvidence {
 
 pub(crate) struct SpineToolCallEvidence<'a> {
     kind: SpineToolCallEvidenceKind<'a>,
+    control_policy: SpineToolCallControlPolicy,
 }
 
 enum SpineToolCallEvidenceKind<'a> {
@@ -101,12 +102,19 @@ enum SpineToolCallEvidenceKind<'a> {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpineToolCallControlPolicy {
+    Normal,
+    ForceOrdinary,
+}
+
 pub(crate) struct SpineCompletedToolCallOutputEvidence<'a> {
     call_id: &'a str,
     output_items: &'a [ResponseItem],
     commit_output_item: &'a ResponseItem,
     request_call_ids: SpineCompletedToolCallRequestIds<'a>,
     recording: SpineToolCallOutputHostRecording,
+    control_policy: SpineToolCallControlPolicy,
 }
 
 enum SpineCompletedToolCallRequestIds<'a> {
@@ -124,6 +132,7 @@ impl<'a> SpineToolCallEvidence<'a> {
     pub(crate) fn single(item: &'a ResponseItem) -> Self {
         Self {
             kind: SpineToolCallEvidenceKind::Single { item },
+            control_policy: SpineToolCallControlPolicy::Normal,
         }
     }
 
@@ -138,6 +147,22 @@ impl<'a> SpineToolCallEvidence<'a> {
                 tool_call_ids,
                 output_items,
             },
+            control_policy: SpineToolCallControlPolicy::Normal,
+        }
+    }
+
+    pub(crate) fn grouped_as_ordinary(
+        commit_call_id: &'a str,
+        tool_call_ids: &'a [String],
+        output_items: &'a [ResponseItem],
+    ) -> Self {
+        Self {
+            kind: SpineToolCallEvidenceKind::Grouped {
+                commit_call_id,
+                tool_call_ids,
+                output_items,
+            },
+            control_policy: SpineToolCallControlPolicy::ForceOrdinary,
         }
     }
 
@@ -155,6 +180,7 @@ impl<'a> SpineToolCallEvidence<'a> {
                     commit_output_item: *item,
                     request_call_ids: SpineCompletedToolCallRequestIds::Single(call_id),
                     recording: SpineToolCallOutputHostRecording::MaybePreRecordSingle,
+                    control_policy: self.control_policy,
                 }))
             }
             SpineToolCallEvidenceKind::Grouped {
@@ -170,6 +196,7 @@ impl<'a> SpineToolCallEvidence<'a> {
                     commit_output_item,
                     request_call_ids: SpineCompletedToolCallRequestIds::Grouped(*tool_call_ids),
                     recording: SpineToolCallOutputHostRecording::RecordGroupBeforeCommit,
+                    control_policy: self.control_policy,
                 }))
             }
         }
@@ -183,6 +210,10 @@ impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
 
     pub(crate) fn commit_output_item(&self) -> &'a ResponseItem {
         self.commit_output_item
+    }
+
+    pub(crate) fn commit_as_ordinary(&self) -> bool {
+        self.control_policy == SpineToolCallControlPolicy::ForceOrdinary
     }
 
     pub(crate) fn single_output_requiring_optional_prerecord(
@@ -1288,14 +1319,17 @@ impl SpineSessionState {
         current_turn_provider_input_tokens: Option<i64>,
         tool_resp_already_recorded: bool,
         recorded_inside_hook: bool,
+        force_ordinary: bool,
     ) -> Result<Option<SpineToolcallCommitHostPlan>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
             return Ok(None);
         };
-        runtime.ensure_pending_from_toolcall_request(call_id, raw_items)?;
+        if !force_ordinary {
+            runtime.ensure_pending_from_toolcall_request(call_id, raw_items)?;
+        }
         let preparation = SpineToolcallCommitPreparation::new(
-            runtime.has_close_like_control_request(call_id, raw_items)?,
+            !force_ordinary && runtime.has_close_like_control_request(call_id, raw_items)?,
         );
         Ok(Some(preparation.host_plan(
             current_turn_provider_input_tokens,

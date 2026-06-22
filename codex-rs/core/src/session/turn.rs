@@ -2287,12 +2287,11 @@ async fn drain_conflicting_spine_control_tool_group(
         response_items.push(item);
     }
 
-    sess.commit_grouped_toolcall_response_with_spine(
+    sess.record_conflicting_spine_control_group_with_spine(
         &turn_context,
         &commit_call_id,
         &tool_call_ids,
         &response_items,
-        "commit conflicting Spine toolcall",
     )
     .await
     .map_err(|err| map_spine_toolcall_turn_error(err))?;

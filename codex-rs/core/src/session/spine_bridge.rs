@@ -144,6 +144,7 @@ struct SpinePreparedToolCallEvidence<'a> {
 }
 
 struct SpineToolCallHostRecording {
+    commit_as_ordinary: bool,
     response_already_recorded: bool,
     response_recorded_inside_reduce: bool,
     history_before_recorded_output: Option<crate::context_manager::ContextManager>,
@@ -232,6 +233,28 @@ impl Session {
         .await
         .map_err(|err| SpineToolcallTurnError::Terminal {
             operation,
+            reason: err.to_string(),
+        })
+    }
+
+    pub(crate) async fn record_conflicting_spine_control_group_with_spine(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        commit_call_id: &str,
+        tool_call_ids: &[String],
+        response_items: &[ResponseItem],
+    ) -> Result<(), SpineToolcallTurnError> {
+        self.on_toolcall(
+            turn_context,
+            SpineToolCallEvidence::grouped_as_ordinary(
+                commit_call_id,
+                tool_call_ids,
+                response_items,
+            ),
+        )
+        .await
+        .map_err(|err| SpineToolcallTurnError::Terminal {
+            operation: "commit conflicting Spine toolcall",
             reason: err.to_string(),
         })
     }
@@ -1140,6 +1163,7 @@ impl Session {
                 toolcall_evidence,
             },
             host_recording: SpineToolCallHostRecording {
+                commit_as_ordinary: output.commit_as_ordinary(),
                 response_already_recorded: output_anchor.already_recorded,
                 response_recorded_inside_reduce: output_anchor.recorded_inside_reduce,
                 history_before_recorded_output: output_anchor.history_before_recorded_output,
@@ -1288,6 +1312,7 @@ impl Session {
         };
         let call_id = toolcall.evidence.call_id;
         let item = toolcall.evidence.response_item;
+        let commit_as_ordinary = toolcall.host_recording.commit_as_ordinary;
         let tool_resp_already_recorded = toolcall.host_recording.response_already_recorded;
         let recorded_output_inside_reduce = toolcall.host_recording.response_recorded_inside_reduce;
         let history_before_recorded_output = toolcall.host_recording.history_before_recorded_output;
@@ -1305,6 +1330,7 @@ impl Session {
                 current_turn_provider_input_tokens,
                 tool_resp_already_recorded,
                 recorded_output_inside_reduce,
+                commit_as_ordinary,
             )?
             else {
                 return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
