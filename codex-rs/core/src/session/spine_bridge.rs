@@ -256,41 +256,18 @@ impl Session {
     fn apply_spine_host_effect_to_locked_state(
         state: &mut crate::state::SessionState,
         effect: SpineHostEffect,
-    ) -> Result<(), String> {
-        match effect {
-            SpineHostEffect::ReplaceHistory(update) => {
-                let history = state.clone_history();
-                let current_history = history.raw_items();
-                if current_history != update.expected_history.as_slice() {
-                    Err(format!(
-                        "{} history changed before suffix replacement for call_id={}",
-                        update.operation, update.call_id
-                    ))
-                } else if update.suffix_start > current_history.len() {
-                    Err(format!(
-                        "{} suffix start {} exceeds history length {} for call_id={}",
-                        update.operation,
-                        update.suffix_start,
-                        current_history.len(),
-                        update.call_id
-                    ))
-                } else {
-                    state
-                        .replace_history_suffix(
-                            update.suffix_start..current_history.len(),
-                            update.replacement,
-                            update.reference_context_item,
-                        )
-                        .map_err(|err| {
-                            format!(
-                                "{} suffix replacement failed for call_id={}: {err}",
-                                update.operation, update.call_id
-                            )
-                        })
-                }
-            }
-            SpineHostEffect::TreeUpdate { .. } => Ok(()),
-        }
+    ) -> Result<Option<SpineHostEffect>, String> {
+        let history = state.clone_history();
+        effect
+            .apply_history_update_or_self(history.raw_items(), |range, replacement, reference| {
+                state
+                    .replace_history_suffix(range, replacement, reference)
+                    .map_err(|err| err.to_string())
+            })
+            .map(|result| match result {
+                Ok(()) => None,
+                Err(effect) => Some(effect),
+            })
     }
 
     fn apply_spine_host_effects_to_locked_state(
@@ -298,7 +275,7 @@ impl Session {
         effects: SpineHostEffects,
     ) -> Result<(), String> {
         for effect in effects.into_effects() {
-            Self::apply_spine_host_effect_to_locked_state(state, effect)?;
+            let _ = Self::apply_spine_host_effect_to_locked_state(state, effect)?;
         }
         Ok(())
     }
@@ -330,16 +307,16 @@ impl Session {
     ) -> Option<SpineTreeUpdateEvent> {
         let mut deferred_tree_update = None;
         for effect in effects.into_effects() {
-            match effect {
-                SpineHostEffect::ReplaceHistory(_) => {}
-                SpineHostEffect::TreeUpdate { snapshot, delivery } => match delivery {
-                    SpineTreeUpdateDelivery::Immediate => {
-                        self.send_spine_tree_update(turn_context, snapshot).await;
-                    }
-                    SpineTreeUpdateDelivery::AfterRawOutputDurable => {
-                        deferred_tree_update = Some(snapshot);
-                    }
-                },
+            let Some((snapshot, delivery)) = effect.into_tree_update() else {
+                continue;
+            };
+            match delivery {
+                SpineTreeUpdateDelivery::Immediate => {
+                    self.send_spine_tree_update(turn_context, snapshot).await;
+                }
+                SpineTreeUpdateDelivery::AfterRawOutputDurable => {
+                    deferred_tree_update = Some(snapshot);
+                }
             }
         }
         deferred_tree_update
@@ -805,29 +782,29 @@ impl Session {
         effects: SpineHostEffects,
     ) -> Result<(), String> {
         for effect in effects.into_effects() {
-            match effect {
-                SpineHostEffect::ReplaceHistory(update) => {
-                    let mut state = self.state.lock().await;
-                    Self::apply_spine_host_effect_to_locked_state(
-                        &mut state,
-                        SpineHostEffect::ReplaceHistory(update),
-                    )?;
+            let mut state = self.state.lock().await;
+            let effect = match Self::apply_spine_host_effect_to_locked_state(&mut state, effect) {
+                Ok(None) => continue,
+                Ok(Some(effect)) => effect,
+                Err(err) => return Err(err),
+            };
+            drop(state);
+            let Some((snapshot, delivery)) = effect.into_tree_update() else {
+                continue;
+            };
+            match delivery {
+                SpineTreeUpdateDelivery::Immediate => {
+                    self.send_event_raw(Event {
+                        id: INITIAL_SUBMIT_ID.to_string(),
+                        msg: EventMsg::SpineTreeUpdate(snapshot),
+                    })
+                    .await;
                 }
-                SpineHostEffect::TreeUpdate { snapshot, delivery } => match delivery {
-                    SpineTreeUpdateDelivery::Immediate => {
-                        self.send_event_raw(Event {
-                            id: INITIAL_SUBMIT_ID.to_string(),
-                            msg: EventMsg::SpineTreeUpdate(snapshot),
-                        })
-                        .await;
-                    }
-                    SpineTreeUpdateDelivery::AfterRawOutputDurable => {
-                        return Err(
-                            "non-toolcall message hook cannot defer tree update delivery"
-                                .to_string(),
-                        );
-                    }
-                },
+                SpineTreeUpdateDelivery::AfterRawOutputDurable => {
+                    return Err(
+                        "non-toolcall message hook cannot defer tree update delivery".to_string(),
+                    );
+                }
             }
         }
         Ok(())

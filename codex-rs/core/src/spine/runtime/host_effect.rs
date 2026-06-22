@@ -64,6 +64,66 @@ pub(crate) enum SpineHostEffect {
     },
 }
 
+impl SpineHostEffect {
+    fn into_history_update_or_self(self) -> Result<SpineHistoryUpdate, Self> {
+        match self {
+            Self::ReplaceHistory(update) => Ok(update),
+            effect => Err(effect),
+        }
+    }
+
+    pub(crate) fn apply_history_update_or_self(
+        self,
+        current_history: &[ResponseItem],
+        replace_history_suffix: impl FnOnce(
+            std::ops::Range<usize>,
+            Vec<ResponseItem>,
+            Option<TurnContextItem>,
+        ) -> Result<(), String>,
+    ) -> Result<Result<(), Self>, String> {
+        let update = match self.into_history_update_or_self() {
+            Ok(update) => update,
+            Err(effect) => return Ok(Err(effect)),
+        };
+        if current_history != update.expected_history.as_slice() {
+            Err(format!(
+                "{} history changed before suffix replacement for call_id={}",
+                update.operation, update.call_id
+            ))
+        } else if update.suffix_start > current_history.len() {
+            Err(format!(
+                "{} suffix start {} exceeds history length {} for call_id={}",
+                update.operation,
+                update.suffix_start,
+                current_history.len(),
+                update.call_id
+            ))
+        } else {
+            replace_history_suffix(
+                update.suffix_start..current_history.len(),
+                update.replacement,
+                update.reference_context_item,
+            )
+            .map_err(|err| {
+                format!(
+                    "{} suffix replacement failed for call_id={}: {err}",
+                    update.operation, update.call_id
+                )
+            })?;
+            Ok(Ok(()))
+        }
+    }
+
+    pub(crate) fn into_tree_update(
+        self,
+    ) -> Option<(SpineTreeUpdateEvent, SpineTreeUpdateDelivery)> {
+        match self {
+            Self::ReplaceHistory(_) => None,
+            Self::TreeUpdate { snapshot, delivery } => Some((snapshot, delivery)),
+        }
+    }
+}
+
 pub(crate) enum SpineTreeUpdateDelivery {
     Immediate,
     AfterRawOutputDurable,
