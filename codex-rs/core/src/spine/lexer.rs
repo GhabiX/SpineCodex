@@ -56,6 +56,46 @@ impl LexedTokenBatch {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::spine) enum ControlIntent {
+    Ordinary,
+    Open,
+    Close,
+    Next,
+}
+
+impl ControlIntent {
+    pub(in crate::spine) fn token_sequence(self) -> &'static [LexedTokenKind] {
+        match self {
+            Self::Ordinary => &[LexedTokenKind::ToolCall],
+            Self::Open => &[LexedTokenKind::Open, LexedTokenKind::ToolCall],
+            Self::Close => &[LexedTokenKind::Close, LexedTokenKind::ToolCall],
+            Self::Next => &[
+                LexedTokenKind::Close,
+                LexedTokenKind::Open,
+                LexedTokenKind::ToolCall,
+            ],
+        }
+    }
+
+    pub(in crate::spine) fn is_close_like(self) -> bool {
+        matches!(self, Self::Close | Self::Next)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::spine) enum LexedTokenKind {
+    Open,
+    Close,
+    ToolCall,
+}
+
+pub(in crate::spine) fn control_toolcall_token_sequence(
+    intent: ControlIntent,
+) -> &'static [LexedTokenKind] {
+    intent.token_sequence()
+}
+
 pub(in crate::spine) fn lex_init(
     archive: &SpineArchive,
     raw_start: u64,
@@ -442,6 +482,38 @@ fn validate_toolcall_segments(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn control_intent_token_sequences_match_formular_def() {
+        assert_eq!(
+            control_toolcall_token_sequence(ControlIntent::Ordinary),
+            &[LexedTokenKind::ToolCall]
+        );
+        assert_eq!(
+            control_toolcall_token_sequence(ControlIntent::Open),
+            &[LexedTokenKind::Open, LexedTokenKind::ToolCall]
+        );
+        assert_eq!(
+            control_toolcall_token_sequence(ControlIntent::Close),
+            &[LexedTokenKind::Close, LexedTokenKind::ToolCall]
+        );
+        assert_eq!(
+            control_toolcall_token_sequence(ControlIntent::Next),
+            &[
+                LexedTokenKind::Close,
+                LexedTokenKind::Open,
+                LexedTokenKind::ToolCall,
+            ]
+        );
+    }
+
+    #[test]
+    fn control_intent_close_like_classification_matches_close_family() {
+        assert!(!ControlIntent::Ordinary.is_close_like());
+        assert!(!ControlIntent::Open.is_close_like());
+        assert!(ControlIntent::Close.is_close_like());
+        assert!(ControlIntent::Next.is_close_like());
+    }
 
     #[test]
     fn lex_msg_produces_matching_event_and_token() {

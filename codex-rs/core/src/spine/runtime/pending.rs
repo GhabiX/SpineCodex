@@ -11,6 +11,7 @@ use super::support::is_spine_parser_control_tool_name;
 use super::support::user_anchor_refs_in_memory;
 #[cfg(test)]
 use super::support::validate_model_node_memory;
+use crate::spine::lexer::ControlIntent;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::ToolCallSegmentKind;
@@ -61,6 +62,14 @@ impl PendingTransition {
             Self::Open { call_id, .. }
             | Self::Close { call_id, .. }
             | Self::NextSugar { call_id, .. } => call_id,
+        }
+    }
+
+    pub(super) fn control_intent(&self) -> ControlIntent {
+        match self {
+            Self::Open { .. } => ControlIntent::Open,
+            Self::Close { .. } => ControlIntent::Close,
+            Self::NextSugar { .. } => ControlIntent::Next,
         }
     }
 }
@@ -445,11 +454,7 @@ impl SpineRuntime {
         raw_items: &[Option<ResponseItem>],
     ) -> Result<bool, SpineError> {
         if self.pending.as_ref().is_some_and(|pending| {
-            pending.call_id() == call_id
-                && matches!(
-                    pending,
-                    PendingTransition::Close { .. } | PendingTransition::NextSugar { .. }
-                )
+            pending.call_id() == call_id && pending.control_intent().is_close_like()
         }) {
             return Ok(true);
         }
@@ -616,11 +621,7 @@ impl SpineRuntime {
             .get(call_id)
             .is_some_and(SpineControlToolReceipt::is_close_like)
             || self.pending.as_ref().is_some_and(|pending| {
-                pending.call_id() == call_id
-                    && matches!(
-                        pending,
-                        PendingTransition::Close { .. } | PendingTransition::NextSugar { .. }
-                    )
+                pending.call_id() == call_id && pending.control_intent().is_close_like()
             })
     }
 

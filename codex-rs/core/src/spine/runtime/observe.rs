@@ -16,6 +16,8 @@ use super::support::is_real_user_message;
 use super::support::is_spine_parser_control_tool_name;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
+use crate::spine::lexer::ControlIntent;
+use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::ToolCallLexSegment;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
@@ -412,6 +414,10 @@ impl SpineRuntime {
         &self,
         toolcall: &CompletedToolCall,
     ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+        debug_assert_eq!(
+            crate::spine::lexer::control_toolcall_token_sequence(ControlIntent::Ordinary),
+            &[LexedTokenKind::ToolCall]
+        );
         let lexed = crate::spine::lexer::lex_toolcall(
             toolcall.segments.iter().map(|segment| ToolCallLexSegment {
                 kind: segment.kind,
