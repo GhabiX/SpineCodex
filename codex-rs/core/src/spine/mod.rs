@@ -54,6 +54,7 @@ pub(crate) use runtime::SpineToolcallCommitInput;
 pub(crate) use runtime::SpineToolcallCommitPreparation;
 pub(crate) use runtime::SpineTreeUpdateDelivery;
 pub(crate) use runtime::SpineTrimOutcome;
+pub(crate) use runtime::is_non_toolcall_msg;
 pub(crate) use runtime::is_real_user_message;
 #[cfg(test)]
 pub(crate) use runtime::is_spine_close_like_tool_name;

@@ -22,6 +22,7 @@ use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
+use crate::spine::is_non_toolcall_msg;
 use crate::spine::spine_root_compact_body;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -1432,16 +1433,6 @@ fn context_append_raw_item<'a>(
     Ok((raw_ordinal, item))
 }
 
-fn is_non_toolcall_msg(item: &ResponseItem) -> bool {
-    tool_request_call_id(item).is_none()
-        && tool_response_call_id(item).is_none()
-        && !matches!(
-            item,
-            ResponseItem::ToolSearchOutput { call_id: None, .. }
-                | ResponseItem::ToolSearchCall { call_id: None, .. }
-        )
-}
-
 fn validate_live_root_compacts_have_rollout_boundary_proofs(
     live_root_compacts: &[LiveRootCompact],
     replacement_history_boundaries: &[ReplacementHistoryBoundary],
@@ -1815,28 +1806,4 @@ pub(super) fn assign_spine_raw_ordinals(
         usize::try_from(count)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
     ))
-}
-
-fn tool_response_call_id(item: &ResponseItem) -> Option<&str> {
-    match item {
-        ResponseItem::FunctionCallOutput { call_id, .. }
-        | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
-        ResponseItem::ToolSearchOutput {
-            call_id: Some(call_id),
-            ..
-        } => Some(call_id.as_str()),
-        _ => None,
-    }
-}
-
-fn tool_request_call_id(item: &ResponseItem) -> Option<&str> {
-    match item {
-        ResponseItem::FunctionCall { call_id, .. }
-        | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.as_str()),
-        ResponseItem::ToolSearchCall {
-            call_id: Some(call_id),
-            ..
-        } => Some(call_id.as_str()),
-        _ => None,
-    }
 }

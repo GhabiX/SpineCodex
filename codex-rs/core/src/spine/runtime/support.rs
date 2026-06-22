@@ -186,6 +186,16 @@ pub(super) fn tool_response_call_id(item: &ResponseItem) -> Option<&str> {
     }
 }
 
+pub(crate) fn is_non_toolcall_msg(item: &ResponseItem) -> bool {
+    tool_request_call_id(item).is_none()
+        && tool_response_call_id(item).is_none()
+        && !matches!(
+            item,
+            ResponseItem::ToolSearchOutput { call_id: None, .. }
+                | ResponseItem::ToolSearchCall { call_id: None, .. }
+        )
+}
+
 impl SpineCompactSourcePlanEntry {
     pub(crate) fn visible_response_item(&self) -> ResponseItem {
         match &self.kind {
