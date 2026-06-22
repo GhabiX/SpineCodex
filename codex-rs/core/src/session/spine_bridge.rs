@@ -947,9 +947,11 @@ impl Session {
         let Some(output_items) = output.output_group_to_record_before_commit() else {
             return Ok(None);
         };
-        let (output_raw_ordinals, _) = {
-            let raw_start = spine_slot.lock().await.raw_len();
-            assign_spine_raw_ordinals(raw_start, output_items)?
+        let output_raw_ordinals = {
+            let guard = spine_slot.lock().await;
+            guard
+                .prepare_grouped_toolcall_output_recording(output_items)?
+                .into_raw_ordinals()
         };
         let output_context_start = self.clone_history().await.raw_items().len();
         self.record_conversation_items_without_spine_observe(turn_context, output_items)

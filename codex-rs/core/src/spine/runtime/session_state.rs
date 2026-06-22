@@ -1,6 +1,7 @@
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
+use codex_rollout::should_persist_response_item;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -304,6 +305,10 @@ pub(crate) struct SpineSingleToolcallOutputRecordingPlan {
     prerecord_output_before_reduce: bool,
 }
 
+pub(crate) struct SpineGroupedToolcallOutputRecordingPlan {
+    raw_ordinals: Vec<Option<u64>>,
+}
+
 struct CompletedToolCallEvidenceParts {
     call_id: String,
     request_call_ids: Vec<String>,
@@ -413,6 +418,12 @@ impl SpineSingleToolcallOutputRecordingPlan {
     }
 }
 
+impl SpineGroupedToolcallOutputRecordingPlan {
+    pub(crate) fn into_raw_ordinals(self) -> Vec<Option<u64>> {
+        self.raw_ordinals
+    }
+}
+
 pub(crate) struct PreparedSpineRootCompactCommit {
     install: SpinePreparedRootCompactInstall,
 }
@@ -497,6 +508,25 @@ fn completed_toolcall_response_segments(
             })
         })
         .collect()
+}
+
+fn assign_response_item_raw_ordinals(
+    raw_start: u64,
+    items: &[ResponseItem],
+) -> Result<Vec<Option<u64>>, SpineError> {
+    let mut next = raw_start;
+    let mut ordinals = Vec::with_capacity(items.len());
+    for item in items {
+        if should_persist_response_item(item) {
+            ordinals.push(Some(next));
+            next = next
+                .checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+        } else {
+            ordinals.push(None);
+        }
+    }
+    Ok(ordinals)
 }
 
 fn completed_toolcall_evidence_from_segments(
@@ -903,6 +933,16 @@ impl SpineSessionState {
             prerecord_output_before_reduce: runtime
                 .has_close_like_control_request(call_id, raw_items)?,
         }))
+    }
+
+    pub(crate) fn prepare_grouped_toolcall_output_recording(
+        &self,
+        output_items: &[ResponseItem],
+    ) -> Result<SpineGroupedToolcallOutputRecordingPlan, SpineError> {
+        self.ensure_valid()?;
+        Ok(SpineGroupedToolcallOutputRecordingPlan {
+            raw_ordinals: assign_response_item_raw_ordinals(self.raw_len, output_items)?,
+        })
     }
 
     pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
