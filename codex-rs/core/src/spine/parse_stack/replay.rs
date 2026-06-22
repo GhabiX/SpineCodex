@@ -57,12 +57,7 @@ pub(in crate::spine) fn event_to_token(
             let mem = mems.values().find(|mem| &mem.node == node).ok_or_else(|| {
                 SpineError::InvalidEvent(format!("missing memory for close node {node}"))
             })?;
-            if !mem.allowed_by(raw_mask)? {
-                return Err(SpineError::InvalidEvent(format!(
-                    "memory {} does not cover live raw evidence",
-                    mem.compact_id
-                )));
-            }
+            validate_replay_memory_raw_evidence(mem, raw_mask)?;
             crate::spine::lexer::lex_close_token(memory_ref(
                 archive,
                 mem.compact_id.clone(),
@@ -89,12 +84,7 @@ pub(in crate::spine) fn event_to_token(
             let mem = mems.get(mem).ok_or_else(|| {
                 SpineError::InvalidEvent("missing memory for root compact".to_string())
             })?;
-            if !mem.allowed_by(raw_mask)? {
-                return Err(SpineError::InvalidEvent(format!(
-                    "memory {} does not cover live raw evidence",
-                    mem.compact_id
-                )));
-            }
+            validate_replay_memory_raw_evidence(mem, raw_mask)?;
             let memory = memory_ref(
                 archive,
                 mem.compact_id.clone(),
@@ -125,6 +115,19 @@ pub(in crate::spine) fn event_to_token(
             "OpenContextBaseline is metadata and cannot be converted to a SpineToken".to_string(),
         )),
     }
+}
+
+fn validate_replay_memory_raw_evidence(
+    mem: &MemRecord,
+    raw_mask: RawMask<'_>,
+) -> Result<(), SpineError> {
+    if !mem.allowed_by(raw_mask)? {
+        return Err(SpineError::InvalidEvent(format!(
+            "memory {} does not cover live raw evidence",
+            mem.compact_id
+        )));
+    }
+    Ok(())
 }
 
 pub(in crate::spine) fn apply_metadata_event(
