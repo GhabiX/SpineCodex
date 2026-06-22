@@ -46,26 +46,6 @@ impl SpineRuntime {
         if !self.jit_enabled {
             return Ok(());
         }
-        if let ResponseItem::FunctionCall {
-            name,
-            namespace: Some(namespace),
-            ..
-        } = item
-            && namespace == SPINE_NAMESPACE
-            && is_spine_parser_control_tool_name(name)
-        {
-            return self.observe_toolcall_request_anchor(raw_ordinal, context_index, item);
-        }
-        if let ResponseItem::FunctionCall {
-            name,
-            namespace: Some(namespace),
-            ..
-        } = item
-            && namespace == SPINE_NAMESPACE
-            && name == SPINE_TOOL_TREE
-        {
-            return self.observe_toolcall_request_anchor(raw_ordinal, context_index, item);
-        }
         if tool_request_call_id(item).is_some() {
             return self.observe_toolcall_request_anchor(raw_ordinal, context_index, item);
         }
