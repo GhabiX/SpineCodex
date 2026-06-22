@@ -256,6 +256,11 @@ pub(crate) struct SpineToolcallCommitPreparation {
     requires_close_like_commit: bool,
 }
 
+pub(crate) struct SpineToolcallCommitHostPlan {
+    pre_compact_provider_input_tokens: Option<i64>,
+    output_recording: SpineToolOutputRecording,
+}
+
 impl SpineToolcallCommitPreparation {
     fn new(requires_close_like_commit: bool) -> Self {
         Self {
@@ -263,7 +268,7 @@ impl SpineToolcallCommitPreparation {
         }
     }
 
-    pub(crate) fn pre_compact_provider_input_tokens(
+    fn pre_compact_provider_input_tokens(
         &self,
         current_turn_provider_input_tokens: Option<i64>,
     ) -> Option<i64> {
@@ -274,7 +279,7 @@ impl SpineToolcallCommitPreparation {
         }
     }
 
-    pub(crate) fn output_recording_after_successful_commit(
+    fn output_recording_after_successful_commit(
         &self,
         tool_resp_already_recorded: bool,
         recorded_inside_hook: bool,
@@ -285,6 +290,32 @@ impl SpineToolcallCommitPreparation {
             recorded_inside_hook,
             raw_only_durable_without_emission,
         )
+    }
+
+    fn host_plan(
+        self,
+        current_turn_provider_input_tokens: Option<i64>,
+        tool_resp_already_recorded: bool,
+        recorded_inside_hook: bool,
+    ) -> SpineToolcallCommitHostPlan {
+        SpineToolcallCommitHostPlan {
+            pre_compact_provider_input_tokens: self
+                .pre_compact_provider_input_tokens(current_turn_provider_input_tokens),
+            output_recording: self.output_recording_after_successful_commit(
+                tool_resp_already_recorded,
+                recorded_inside_hook,
+            ),
+        }
+    }
+}
+
+impl SpineToolcallCommitHostPlan {
+    pub(crate) fn pre_compact_provider_input_tokens(&self) -> Option<i64> {
+        self.pre_compact_provider_input_tokens
+    }
+
+    pub(crate) fn output_recording(&self) -> SpineToolOutputRecording {
+        self.output_recording
     }
 }
 
@@ -988,16 +1019,23 @@ impl SpineSessionState {
         &mut self,
         call_id: &str,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<SpineToolcallCommitPreparation>, SpineError> {
+        current_turn_provider_input_tokens: Option<i64>,
+        tool_resp_already_recorded: bool,
+        recorded_inside_hook: bool,
+    ) -> Result<Option<SpineToolcallCommitHostPlan>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
             return Ok(None);
         };
         runtime.ensure_pending_from_toolcall_request(call_id, raw_items)?;
-        runtime
-            .has_close_like_control_request(call_id, raw_items)
-            .map(SpineToolcallCommitPreparation::new)
-            .map(Some)
+        let preparation = SpineToolcallCommitPreparation::new(
+            runtime.has_close_like_control_request(call_id, raw_items)?,
+        );
+        Ok(Some(preparation.host_plan(
+            current_turn_provider_input_tokens,
+            tool_resp_already_recorded,
+            recorded_inside_hook,
+        )))
     }
 
     pub(crate) fn observe_toolcall_context_items(

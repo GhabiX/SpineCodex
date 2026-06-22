@@ -1098,22 +1098,27 @@ impl Session {
         let recorded_output_inside_reduce = toolcall.host_recording.response_recorded_inside_reduce;
         let history_before_recorded_output = toolcall.host_recording.history_before_recorded_output;
         let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
-        let commit_preparation = {
-            let mut guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            let Some(commit_preparation) =
-                guard.prepare_completed_toolcall_for_commit(call_id, &raw_items)?
-            else {
-                return Ok(Self::no_spine_tool_commit());
-            };
-            commit_preparation
-        };
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let current_turn_provider_input_tokens = current_turn_token_info
             .as_ref()
             .and_then(provider_input_context_tokens);
-        let pre_compact_provider_input_tokens = commit_preparation
-            .pre_compact_provider_input_tokens(current_turn_provider_input_tokens);
+        let commit_host_plan = {
+            let mut guard = spine_slot.lock().await;
+            guard.ensure_valid()?;
+            let Some(commit_host_plan) = guard.prepare_completed_toolcall_for_commit(
+                call_id,
+                &raw_items,
+                current_turn_provider_input_tokens,
+                tool_resp_already_recorded,
+                recorded_output_inside_reduce,
+            )?
+            else {
+                return Ok(Self::no_spine_tool_commit());
+            };
+            commit_host_plan
+        };
+        let pre_compact_provider_input_tokens =
+            commit_host_plan.pre_compact_provider_input_tokens();
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
         let mut lock_retries = 0;
@@ -1194,10 +1199,7 @@ impl Session {
                 "deferring Spine close-like tree update until raw output evidence is durable"
             );
         }
-        let recording = commit_preparation.output_recording_after_successful_commit(
-            tool_resp_already_recorded,
-            recorded_output_inside_reduce,
-        );
+        let recording = commit_host_plan.output_recording();
         Ok(SpineToolCommit {
             recording,
             deferred_tree_update,
