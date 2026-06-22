@@ -293,6 +293,13 @@ pub(crate) struct SpineToolcallCommitHostAction {
     error: SpineError,
 }
 
+pub(crate) enum SpineToolcallCommitLoopDecision {
+    Done(SpineCommitOutput),
+    Retry,
+    NoSpineCommit,
+    HostAction(SpineToolcallCommitHostAction),
+}
+
 impl SpineToolcallCommitPreparation {
     fn new(requires_close_like_commit: bool) -> Self {
         Self {
@@ -361,50 +368,65 @@ impl SpineToolcallCommitHostPlan {
         self.output_recording
     }
 
-    pub(crate) fn commit_missing_host_action(
+    pub(crate) fn interpret_attempt(
+        &self,
+        attempt: SpineCommitAttempt,
+        lock_retries: usize,
+        call_id: &str,
+    ) -> Result<SpineToolcallCommitLoopDecision, SpineError> {
+        match attempt {
+            SpineCommitAttempt::Done(output) => Ok(SpineToolcallCommitLoopDecision::Done(output)),
+            SpineCommitAttempt::RuntimeMissing => self.commit_missing_decision(call_id),
+            SpineCommitAttempt::Retry => self.retry_decision(lock_retries, call_id),
+        }
+    }
+
+    fn commit_missing_decision(
         &self,
         call_id: &str,
-    ) -> Result<Option<SpineToolcallCommitHostAction>, SpineError> {
+    ) -> Result<SpineToolcallCommitLoopDecision, SpineError> {
         match self.commit_missing_action {
-            SpineToolcallCommitFailureAction::FailClosed => {
-                Ok(Some(SpineToolcallCommitHostAction::new(
+            SpineToolcallCommitFailureAction::FailClosed => Ok(
+                SpineToolcallCommitLoopDecision::HostAction(SpineToolcallCommitHostAction::new(
                     SpineToolcallCommitFailureAction::FailClosed,
                     SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON,
                     SpineError::Invariant(format!(
                         "{SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON} for call_id={call_id}"
                     )),
-                )))
+                )),
+            ),
+            SpineToolcallCommitFailureAction::NoSpineCommit => {
+                Ok(SpineToolcallCommitLoopDecision::NoSpineCommit)
             }
-            SpineToolcallCommitFailureAction::NoSpineCommit => Ok(None),
             SpineToolcallCommitFailureAction::AbortPending => Err(SpineError::Invariant(format!(
                 "unsupported Spine runtime-missing action for call_id={call_id}"
             ))),
         }
     }
 
-    pub(crate) fn retry_limit_host_action(
+    fn retry_decision(
         &self,
         lock_retries: usize,
         call_id: &str,
-    ) -> Result<Option<SpineToolcallCommitHostAction>, SpineError> {
+    ) -> Result<SpineToolcallCommitLoopDecision, SpineError> {
         if lock_retries < self.lock_retry_limit {
-            return Ok(None);
+            return Ok(SpineToolcallCommitLoopDecision::Retry);
         }
         match self.retry_limit_action {
-            SpineToolcallCommitFailureAction::FailClosed => {
-                Ok(Some(SpineToolcallCommitHostAction::new(
+            SpineToolcallCommitFailureAction::FailClosed => Ok(
+                SpineToolcallCommitLoopDecision::HostAction(SpineToolcallCommitHostAction::new(
                     SpineToolcallCommitFailureAction::FailClosed,
                     SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
                     self.retry_limit_error(call_id),
-                )))
-            }
-            SpineToolcallCommitFailureAction::AbortPending => {
-                Ok(Some(SpineToolcallCommitHostAction::new(
+                )),
+            ),
+            SpineToolcallCommitFailureAction::AbortPending => Ok(
+                SpineToolcallCommitLoopDecision::HostAction(SpineToolcallCommitHostAction::new(
                     SpineToolcallCommitFailureAction::AbortPending,
                     SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
                     self.retry_limit_error(call_id),
-                )))
-            }
+                )),
+            ),
             SpineToolcallCommitFailureAction::NoSpineCommit => Err(SpineError::Invariant(format!(
                 "unsupported Spine retry-limit action for call_id={call_id}"
             ))),

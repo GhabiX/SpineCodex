@@ -55,6 +55,7 @@ pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineToolcallCommitEvidence;
 pub(crate) use runtime::SpineToolcallCommitFailureAction;
 pub(crate) use runtime::SpineToolcallCommitInput;
+pub(crate) use runtime::SpineToolcallCommitLoopDecision;
 pub(crate) use runtime::SpineToolcallCommitPreparation;
 pub(crate) use runtime::SpineTreeUpdateDelivery;
 pub(crate) use runtime::SpineTrimOutcome;

@@ -24,6 +24,7 @@ use crate::spine::SpineToolCallEvidence;
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineToolcallCommitFailureAction;
+use crate::spine::SpineToolcallCommitLoopDecision;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::is_non_toolcall_msg;
@@ -1144,34 +1145,17 @@ impl Session {
                     return Err(err);
                 }
             };
-            match attempt {
-                SpineCommitAttempt::Done(output) => break output,
-                SpineCommitAttempt::RuntimeMissing => {
-                    let Some(host_action) = commit_host_plan.commit_missing_host_action(call_id)?
-                    else {
-                        return Ok(Self::no_spine_tool_commit());
-                    };
-                    match host_action.failure_action() {
-                        SpineToolcallCommitFailureAction::FailClosed => {
-                            self.fail_closed_spine_toolcall_commit(call_id, host_action.reason())
-                                .await;
-                        }
-                        SpineToolcallCommitFailureAction::AbortPending => {
-                            self.abort_spine_pending_tool(call_id, host_action.reason())
-                                .await;
-                        }
-                        SpineToolcallCommitFailureAction::NoSpineCommit => {}
-                    }
-                    return Err(host_action.into_error());
+            match commit_host_plan.interpret_attempt(attempt, lock_retries, call_id)? {
+                SpineToolcallCommitLoopDecision::Done(output) => break output,
+                SpineToolcallCommitLoopDecision::NoSpineCommit => {
+                    return Ok(Self::no_spine_tool_commit());
                 }
-                SpineCommitAttempt::Retry => {
-                    let Some(host_action) =
-                        commit_host_plan.retry_limit_host_action(lock_retries, call_id)?
-                    else {
-                        lock_retries += 1;
-                        tokio::task::yield_now().await;
-                        continue;
-                    };
+                SpineToolcallCommitLoopDecision::Retry => {
+                    lock_retries += 1;
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+                SpineToolcallCommitLoopDecision::HostAction(host_action) => {
                     match host_action.failure_action() {
                         SpineToolcallCommitFailureAction::FailClosed => {
                             self.fail_closed_spine_toolcall_commit(call_id, host_action.reason())
