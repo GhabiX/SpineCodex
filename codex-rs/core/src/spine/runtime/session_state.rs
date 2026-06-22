@@ -21,6 +21,7 @@ use super::SpineRuntime;
 use super::SpineTreeUpdateDelivery;
 use super::SpineTrimOutcome;
 use super::prepared::SpineCommitPublication;
+use super::root_compact::spine_root_compact_body;
 use super::support::is_non_toolcall_msg;
 use super::support::is_real_user_message;
 use super::support::tool_request_call_id;
@@ -620,11 +621,6 @@ impl SpineSessionState {
         self.invalid.is_none() && self.runtime.is_some()
     }
 
-    pub(crate) fn ready_for_native_root_compact(&self) -> Result<bool, SpineError> {
-        self.ensure_valid()?;
-        Ok(self.runtime().is_some())
-    }
-
     pub(crate) fn raw_len(&self) -> u64 {
         self.raw_len
     }
@@ -1211,6 +1207,32 @@ impl SpineSessionState {
             raw_items,
             token_metadata,
         )
+    }
+
+    pub(crate) fn prepare_native_root_compact_from_history_with_checkpoint(
+        &mut self,
+        rollout_path: &Path,
+        compacted_history: &[ResponseItem],
+        raw_items: &[Option<ResponseItem>],
+        close_provider_input_tokens: Option<i64>,
+    ) -> Result<Option<SpineRootCompactHostInstall>, SpineError> {
+        self.ensure_valid()?;
+        if !self.is_ready() {
+            return Ok(None);
+        }
+        let body = spine_root_compact_body(compacted_history).ok_or_else(|| {
+            SpineError::InvalidEvent(
+                "native compact replaced host context with no model-visible Spine root memory material"
+                    .to_string(),
+            )
+        })?;
+        self.prepare_native_root_compact_apply_with_checkpoint(
+            rollout_path,
+            body,
+            raw_items,
+            close_provider_input_tokens,
+        )
+        .map(Some)
     }
 
     pub(crate) fn single_completed_toolcall_evidence(

@@ -24,7 +24,6 @@ use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineTreeUpdateDelivery;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::is_non_toolcall_msg;
-use crate::spine::spine_root_compact_body;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpinePlannedNodeSnapshot;
@@ -1295,6 +1294,7 @@ impl Session {
         Ok(Some((result, snapshot)))
     }
 
+    #[cfg(test)]
     async fn prepare_spine_root_compact_impl(
         &self,
         body: String,
@@ -1328,16 +1328,15 @@ impl Session {
             .token_usage_info()
             .await
             .and_then(|info| provider_input_context_tokens(&info));
-        {
-            let mut guard = spine_slot.lock().await;
-            let prepared = guard.prepare_native_root_compact_apply_with_checkpoint(
+        let mut guard = spine_slot.lock().await;
+        guard
+            .prepare_native_root_compact_apply_with_checkpoint(
                 &rollout_path,
                 body,
                 &raw_items,
                 close_provider_input_tokens,
-            )?;
-            Ok(Some(prepared))
-        }
+            )
+            .map(Some)
     }
 
     pub(crate) async fn on_compact(
@@ -1345,40 +1344,54 @@ impl Session {
         items: &mut Vec<ResponseItem>,
         compacted_item: &mut CompactedItem,
     ) -> CodexResult<Option<SpineRootCompactHostInstall>> {
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(None);
-        };
-        {
-            let guard = spine_slot.lock().await;
-            if !guard.ready_for_native_root_compact().map_err(|err| {
-                CodexErr::SpineTerminalFailure {
-                    operation: "install Spine root compact".to_string(),
-                    reason: err.to_string(),
-                }
-            })? {
-                return Ok(None);
-            }
-        }
-        let body = spine_root_compact_body(items).ok_or_else(|| {
-            CodexErr::SpineTerminalFailure {
+        let Some(root_compact) = self
+            .prepare_spine_root_compact_from_native_history(items)
+            .await
+            .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
-                reason: "native compact replaced host context with no model-visible Spine root memory material"
-                    .to_string(),
-            }
-        })?;
-        let Some(root_compact) =
-            self.prepare_spine_root_compact_impl(body)
-                .await
-                .map_err(|err| CodexErr::SpineTerminalFailure {
-                    operation: "install Spine root compact".to_string(),
-                    reason: err.to_string(),
-                })?
+                reason: err.to_string(),
+            })?
         else {
             return Ok(None);
         };
         *items = root_compact.materialized().to_vec();
         compacted_item.replacement_history = Some(items.clone());
         Ok(Some(root_compact))
+    }
+
+    async fn prepare_spine_root_compact_from_native_history(
+        &self,
+        items: &[ResponseItem],
+    ) -> Result<Option<SpineRootCompactHostInstall>, SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(None);
+        };
+        self.ensure_rollout_materialized().await;
+        self.flush_rollout()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+            .ok_or_else(|| {
+                SpineError::InvalidStore("spine_jit root compact requires rollout path".to_string())
+            })?;
+        let history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        let raw_items = spine_raw_items_after_rollback(&history.get_rollout_items());
+        let close_provider_input_tokens = self
+            .token_usage_info()
+            .await
+            .and_then(|info| provider_input_context_tokens(&info));
+        let mut guard = spine_slot.lock().await;
+        guard.prepare_native_root_compact_from_history_with_checkpoint(
+            &rollout_path,
+            items,
+            &raw_items,
+            close_provider_input_tokens,
+        )
     }
 
     pub(crate) async fn finalize_spine_root_compact_after_history_publish(
