@@ -13,7 +13,9 @@ use super::replay::replay_from_events;
 use crate::spine::archive::SpineArchive;
 use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::checkpoint::validate_checkpoint;
+use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
+use crate::spine::model::SpineCommitMarker;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 use crate::spine::store::SpineStore;
@@ -230,39 +232,9 @@ impl SpineRuntime {
             Some(checkpoint.token_seq),
         )?;
         let archive = SpineArchive::new(store.root.clone());
-        let raw_ordinal = usize::try_from(checkpoint.raw_ordinal)
-            .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
-        let prefix_live = &raw_live[..raw_ordinal.min(raw_live.len())];
-        let prefix_mask = RawMask::new(prefix_live);
-        let prefix_events = ledger
-            .events
-            .iter()
-            .filter(|event| event.seq < checkpoint.token_seq)
-            .cloned()
-            .collect::<Vec<_>>();
-        let prefix_replay_event_seqs = replay_event_seqs_from_markers(
-            &ledger.events,
-            &markers,
-            &mems,
-            prefix_mask,
-            None,
-            Some(checkpoint.token_seq),
-            true,
+        validate_checkpoint_prefix_parse_stack(
+            &ledger, &archive, &mems, &markers, raw_live, checkpoint,
         )?;
-        let prefix_ps = parse_stack_from_events_with_forced_events(
-            &prefix_events,
-            &archive,
-            &mems,
-            prefix_mask,
-            &prefix_replay_event_seqs.forced,
-            &prefix_replay_event_seqs.marker_structural,
-        )?;
-        if prefix_ps != checkpoint.parse_stack {
-            return Err(SpineError::Invariant(format!(
-                "spine checkpoint ParseStack mismatch for {} at raw_ordinal={} token_seq={}",
-                checkpoint.checkpoint_id, checkpoint.raw_ordinal, checkpoint.token_seq
-            )));
-        }
         Ok(())
     }
 
@@ -371,39 +343,9 @@ impl SpineRuntime {
             false,
         )?;
         let archive = SpineArchive::new(store.root.clone());
-        let raw_ordinal = usize::try_from(checkpoint.raw_ordinal)
-            .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
-        let prefix_live = &raw_live[..raw_ordinal.min(raw_live.len())];
-        let prefix_mask = RawMask::new(prefix_live);
-        let prefix_events = ledger
-            .events
-            .iter()
-            .filter(|event| event.seq < checkpoint.token_seq)
-            .cloned()
-            .collect::<Vec<_>>();
-        let prefix_replay_event_seqs = replay_event_seqs_from_markers(
-            &ledger.events,
-            &markers,
-            &mems,
-            prefix_mask,
-            None,
-            Some(checkpoint.token_seq),
-            true,
+        validate_checkpoint_prefix_parse_stack(
+            &ledger, &archive, &mems, &markers, &raw_live, checkpoint,
         )?;
-        let prefix_ps = parse_stack_from_events_with_forced_events(
-            &prefix_events,
-            &archive,
-            &mems,
-            prefix_mask,
-            &prefix_replay_event_seqs.forced,
-            &prefix_replay_event_seqs.marker_structural,
-        )?;
-        if prefix_ps != checkpoint.parse_stack {
-            return Err(SpineError::Invariant(format!(
-                "spine checkpoint ParseStack mismatch for {} at raw_ordinal={} token_seq={}",
-                checkpoint.checkpoint_id, checkpoint.raw_ordinal, checkpoint.token_seq
-            )));
-        }
 
         let parse_stack = replay_from_events(
             &archive,
@@ -438,4 +380,48 @@ impl SpineRuntime {
             next_user_anchor,
         })
     }
+}
+
+fn validate_checkpoint_prefix_parse_stack(
+    ledger: &SpineLedgerCache,
+    archive: &SpineArchive,
+    mems: &[MemRecord],
+    markers: &[SpineCommitMarker],
+    raw_live: &[bool],
+    checkpoint: &SpineCheckpoint,
+) -> Result<(), SpineError> {
+    let raw_ordinal = usize::try_from(checkpoint.raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
+    let prefix_live = &raw_live[..raw_ordinal.min(raw_live.len())];
+    let prefix_mask = RawMask::new(prefix_live);
+    let prefix_events = ledger
+        .events
+        .iter()
+        .filter(|event| event.seq < checkpoint.token_seq)
+        .cloned()
+        .collect::<Vec<_>>();
+    let prefix_replay_event_seqs = replay_event_seqs_from_markers(
+        &ledger.events,
+        markers,
+        mems,
+        prefix_mask,
+        None,
+        Some(checkpoint.token_seq),
+        true,
+    )?;
+    let prefix_ps = parse_stack_from_events_with_forced_events(
+        &prefix_events,
+        archive,
+        mems,
+        prefix_mask,
+        &prefix_replay_event_seqs.forced,
+        &prefix_replay_event_seqs.marker_structural,
+    )?;
+    if prefix_ps != checkpoint.parse_stack {
+        return Err(SpineError::Invariant(format!(
+            "spine checkpoint ParseStack mismatch for {} at raw_ordinal={} token_seq={}",
+            checkpoint.checkpoint_id, checkpoint.raw_ordinal, checkpoint.token_seq
+        )));
+    }
+    Ok(())
 }
