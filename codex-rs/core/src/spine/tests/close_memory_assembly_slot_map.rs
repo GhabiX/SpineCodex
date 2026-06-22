@@ -1,11 +1,8 @@
 use super::*;
 use crate::spine::NodeId;
-use crate::spine::SPINE_TOOL_CLOSE;
-use crate::spine::SPINE_TOOL_NEXT;
-use crate::spine::SPINE_TOOL_OPEN;
-use crate::spine::SPINE_TOOL_TREE;
-use crate::spine::is_spine_close_like_tool_name;
 
+#[path = "close_memory_assembly_close_like_filter.rs"]
+mod close_memory_assembly_close_like_filter;
 #[path = "close_memory_assembly_exact_evidence.rs"]
 mod close_memory_assembly_exact_evidence;
 #[path = "close_memory_assembly_node_memory.rs"]
@@ -115,12 +112,4 @@ pub(super) fn source_plan_with_context_range(
         source_context_range,
         entries,
     }
-}
-
-#[test]
-fn close_like_tool_name_filters_only_close_and_next() {
-    assert!(is_spine_close_like_tool_name(SPINE_TOOL_CLOSE));
-    assert!(is_spine_close_like_tool_name(SPINE_TOOL_NEXT));
-    assert!(!is_spine_close_like_tool_name(SPINE_TOOL_OPEN));
-    assert!(!is_spine_close_like_tool_name(SPINE_TOOL_TREE));
 }
