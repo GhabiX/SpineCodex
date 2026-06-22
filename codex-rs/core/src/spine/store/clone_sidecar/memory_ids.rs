@@ -21,7 +21,7 @@ pub(in crate::spine::store::clone_sidecar) fn required_memory_ids_for_cloned_eve
                 ids.insert(mem.compact_id.clone());
             }
             SpineLedgerEvent::RootCompact { mem, .. } => {
-                let mem_record = required_root_compact_memory(mem, mems, raw_mask)?;
+                validate_required_root_compact_memory(mem, mems, raw_mask)?;
                 ids.insert(mem.clone());
             }
             SpineLedgerEvent::Init { .. }
@@ -54,11 +54,11 @@ fn required_close_memory<'a>(
     )))
 }
 
-fn required_root_compact_memory<'a>(
+fn validate_required_root_compact_memory(
     compact_id: &str,
-    mems: &'a [MemRecord],
+    mems: &[MemRecord],
     raw_mask: RawMask<'_>,
-) -> Result<&'a MemRecord, SpineError> {
+) -> Result<(), SpineError> {
     let mem_record = mems
         .iter()
         .find(|record| record.compact_id == compact_id)
@@ -69,7 +69,7 @@ fn required_root_compact_memory<'a>(
             mem_record.compact_id
         )));
     }
-    Ok(mem_record)
+    Ok(())
 }
 
 pub(in crate::spine::store::clone_sidecar) fn add_required_memory_refs(
