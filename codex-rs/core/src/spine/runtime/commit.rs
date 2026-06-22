@@ -239,6 +239,8 @@ impl SpineRuntime {
         completed_toolcall: Option<CompletedToolCall>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpinePreparedCommit>, SpineError> {
+        #[cfg(test)]
+        self.ensure_pending_from_receipt(call_id)?;
         self.ensure_pending_from_toolcall_request(call_id, raw_items)?;
         let Some(pending) = self.pending.as_ref() else {
             return Ok(None);

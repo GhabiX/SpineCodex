@@ -209,6 +209,7 @@ impl SpineRuntime {
         self.append_and_shift_msg(lexed.batch)
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_completed_toolcall(
         &mut self,
         toolcall: CompletedToolCall,
@@ -232,6 +233,7 @@ impl SpineRuntime {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn abort_pending_and_observe_completed_toolcall(
         &mut self,
         call_id: &str,
@@ -240,6 +242,7 @@ impl SpineRuntime {
         self.abort_pending_and_observe_completed_toolcall_with_raw_items(call_id, toolcall, &[])
     }
 
+    #[cfg(test)]
     pub(crate) fn abort_pending_and_observe_completed_toolcall_with_raw_items(
         &mut self,
         call_id: &str,
@@ -265,6 +268,7 @@ impl SpineRuntime {
         Ok(true)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_completed_toolcall_as_ordinary_with_raw_items(
         &mut self,
         call_id: &str,
@@ -291,6 +295,7 @@ impl SpineRuntime {
         Ok(false)
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
         &mut self,
         tool_responses: &[(String, u64, usize)],
