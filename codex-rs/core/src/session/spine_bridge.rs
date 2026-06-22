@@ -67,6 +67,7 @@ pub(crate) struct SpineToolCommit {
 struct SpineCompletedToolCallHostOutcome {
     #[cfg(test)]
     recording: SpineToolOutputRecording,
+    post_commit_effects: SpineHostEffects,
     deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
@@ -114,6 +115,7 @@ impl SpineCompletedToolCallHostOutcome {
         Self {
             #[cfg(test)]
             recording: SpineToolOutputRecording::Normal,
+            post_commit_effects: SpineHostEffects::none(),
             deferred_tree_update: None,
         }
     }
@@ -248,9 +250,23 @@ impl Session {
         turn_context: &TurnContext,
         outcome: &mut SpineCompletedToolCallHostOutcome,
     ) {
+        self.apply_completed_spine_toolcall_post_commit_effects(turn_context, outcome)
+            .await;
         if let Some(snapshot) = outcome.deferred_tree_update.take() {
             self.send_spine_tree_update(turn_context, snapshot).await;
         }
+    }
+
+    async fn apply_completed_spine_toolcall_post_commit_effects(
+        &self,
+        turn_context: &TurnContext,
+        outcome: &mut SpineCompletedToolCallHostOutcome,
+    ) {
+        let post_commit_effects =
+            std::mem::replace(&mut outcome.post_commit_effects, SpineHostEffects::none());
+        outcome.deferred_tree_update = self
+            .apply_spine_post_commit_effects(turn_context, post_commit_effects)
+            .await;
     }
 
     fn apply_spine_host_effects_to_locked_state(
@@ -1041,9 +1057,15 @@ impl Session {
         else {
             return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit().into_tool_commit());
         };
-        self.commit_completed_spine_toolcall(turn_context, completed)
-            .await
-            .map(SpineCompletedToolCallHostOutcome::into_tool_commit)
+        let mut outcome = self
+            .commit_completed_spine_toolcall(turn_context, completed)
+            .await?;
+        self.apply_completed_spine_toolcall_post_commit_effects(
+            turn_context.as_ref(),
+            &mut outcome,
+        )
+        .await;
+        Ok(outcome.into_tool_commit())
     }
 
     async fn prepare_completed_spine_toolcall<'a>(
@@ -1323,19 +1345,11 @@ impl Session {
                 }
             }
         };
-        let deferred_tree_update = self
-            .apply_spine_post_commit_effects(turn_context, post_commit_effects)
-            .await;
-        if deferred_tree_update.is_some() {
-            tracing::debug!(
-                call_id = %call_id,
-                "deferring Spine close-like tree update until raw output evidence is durable"
-            );
-        }
         Ok(SpineCompletedToolCallHostOutcome {
             #[cfg(test)]
             recording: commit_host_plan.output_recording(),
-            deferred_tree_update,
+            post_commit_effects,
+            deferred_tree_update: None,
         })
     }
 
