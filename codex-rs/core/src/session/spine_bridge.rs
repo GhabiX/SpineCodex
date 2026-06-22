@@ -1064,31 +1064,14 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         toolcall: CompletedSpineToolCall<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
-        self.commit_spine_completed_toolcall(
-            turn_context,
-            toolcall.evidence.call_id,
-            toolcall.evidence.response_item,
-            toolcall.evidence.toolcall_evidence,
-            toolcall.host_recording.response_already_recorded,
-            toolcall.host_recording.response_recorded_inside_reduce,
-            toolcall.host_recording.history_before_recorded_output,
-        )
-        .await
-    }
-
-    async fn commit_spine_completed_toolcall(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        call_id: &str,
-        item: &ResponseItem,
-        toolcall_evidence: SpineToolcallCommitEvidence,
-        tool_resp_already_recorded: bool,
-        recorded_output_inside_reduce: bool,
-        history_before_recorded_output: Option<crate::context_manager::ContextManager>,
-    ) -> Result<SpineToolCommit, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(Self::no_spine_tool_commit());
         };
+        let call_id = toolcall.evidence.call_id;
+        let item = toolcall.evidence.response_item;
+        let tool_resp_already_recorded = toolcall.host_recording.response_already_recorded;
+        let recorded_output_inside_reduce = toolcall.host_recording.response_recorded_inside_reduce;
+        let history_before_recorded_output = toolcall.host_recording.history_before_recorded_output;
         let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
         let commit_preparation = {
             let mut guard = spine_slot.lock().await;
@@ -1117,7 +1100,7 @@ impl Session {
                 expected_history.clone(),
                 pre_compact_provider_input_tokens,
                 current_turn_token_info.as_ref(),
-                toolcall_evidence.clone(),
+                toolcall.evidence.toolcall_evidence.clone(),
                 tool_resp_already_recorded,
                 &raw_items,
             );
