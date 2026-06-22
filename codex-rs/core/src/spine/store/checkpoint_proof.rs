@@ -194,22 +194,7 @@ fn validate_checkpoint_memory_ref_for_committed_mem(
 ) -> Result<(), SpineError> {
     let mem_body_path = sidecar_store_path(store_root, &mem.body_path);
     let checkpoint_body_path = sidecar_store_path(store_root, &memory.body_path);
-    if memory.node_id != mem.node.to_string()
-        || memory.body_hash != mem.body_hash
-        || memory.source_raw_start != mem.raw_start
-        || memory.source_raw_end != mem.raw_end
-        || memory.source_context_start != mem.context_start
-        || memory.source_context_end != mem.context_end
-        || memory.open_input_tokens != mem.open_input_tokens
-        || memory.close_input_tokens != mem.close_input_tokens
-        || memory.open_context_tokens != mem.open_context_tokens
-        || memory.close_context_tokens != mem.close_context_tokens
-        || memory.closed_source_suffix_tokens != mem.closed_source_suffix_tokens
-        || memory.closed_memory_context_tokens != mem.closed_memory_context_tokens
-        || memory.open_context_source != mem.open_context_source
-        || memory.memory_output_tokens != mem.memory_output_tokens
-        || checkpoint_body_path != mem_body_path
-    {
+    if !checkpoint_memory_ref_matches_record(memory, mem, &checkpoint_body_path, &mem_body_path) {
         return Err(SpineError::InvalidStore(format!(
             "compact checkpoint memory ref {} does not match committed memory record at raw boundary {}",
             memory.compact_id, checkpoint.raw_boundary
@@ -223,4 +208,27 @@ fn validate_checkpoint_memory_ref_for_committed_mem(
         )));
     }
     Ok(())
+}
+
+fn checkpoint_memory_ref_matches_record(
+    memory: &CheckpointMemoryRef,
+    mem: &MemRecord,
+    checkpoint_body_path: &Path,
+    mem_body_path: &Path,
+) -> bool {
+    memory.node_id == mem.node.to_string()
+        && memory.body_hash == mem.body_hash
+        && memory.source_raw_start == mem.raw_start
+        && memory.source_raw_end == mem.raw_end
+        && memory.source_context_start == mem.context_start
+        && memory.source_context_end == mem.context_end
+        && memory.open_input_tokens == mem.open_input_tokens
+        && memory.close_input_tokens == mem.close_input_tokens
+        && memory.open_context_tokens == mem.open_context_tokens
+        && memory.close_context_tokens == mem.close_context_tokens
+        && memory.closed_source_suffix_tokens == mem.closed_source_suffix_tokens
+        && memory.closed_memory_context_tokens == mem.closed_memory_context_tokens
+        && memory.open_context_source == mem.open_context_source
+        && memory.memory_output_tokens == mem.memory_output_tokens
+        && checkpoint_body_path == mem_body_path
 }
