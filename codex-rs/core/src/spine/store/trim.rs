@@ -60,7 +60,7 @@ pub(super) fn toolcall_seq_limit_from_events(
     events: &[LoggedTrimEvent],
     trim_seq_watermark: Option<u64>,
 ) -> Result<u64, SpineError> {
-    Ok(events
+    events
         .iter()
         .filter(|event| trim_seq_watermark.is_none_or(|watermark| event.trim_seq <= watermark))
         .filter_map(|event| match &event.event {
@@ -68,11 +68,9 @@ pub(super) fn toolcall_seq_limit_from_events(
             _ => None,
         })
         .max()
-        .map(|toolcall_seq| {
+        .map_or(Ok(0), |toolcall_seq| {
             toolcall_seq.checked_add(1).ok_or_else(|| {
                 SpineError::InvalidEvent("spine trim toolcall seq overflow".to_string())
             })
         })
-        .transpose()?
-        .unwrap_or(0))
 }
