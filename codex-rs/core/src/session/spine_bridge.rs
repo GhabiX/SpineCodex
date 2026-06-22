@@ -209,12 +209,12 @@ impl Session {
         .await
         .map_err(SpineToolcallTurnError::Codex)?;
 
-        self.on_toolcall(
-            turn_context,
-            SpineToolCallEvidence::single(response_item),
-            "commit Spine tool output",
-        )
-        .await
+        self.on_toolcall(turn_context, SpineToolCallEvidence::single(response_item))
+            .await
+            .map_err(|err| SpineToolcallTurnError::Terminal {
+                operation: "commit Spine tool output",
+                reason: err.to_string(),
+            })
     }
 
     pub(crate) async fn commit_grouped_toolcall_response_with_spine(
@@ -228,47 +228,34 @@ impl Session {
         self.on_toolcall(
             turn_context,
             SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items),
-            operation,
         )
         .await
+        .map_err(|err| SpineToolcallTurnError::Terminal {
+            operation,
+            reason: err.to_string(),
+        })
     }
 
     async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         evidence: SpineToolCallEvidence<'_>,
-        operation: &'static str,
-    ) -> Result<(), SpineToolcallTurnError> {
+    ) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        let Some(output) =
-            evidence
-                .completed_output()
-                .map_err(|err| SpineToolcallTurnError::Terminal {
-                    operation,
-                    reason: err.to_string(),
-                })?
-        else {
+        let Some(output) = evidence.completed_output()? else {
             return Ok(());
         };
         let Some(completed) = self
             .prepare_completed_spine_toolcall_output(turn_context, spine_slot, output)
-            .await
-            .map_err(|err| SpineToolcallTurnError::Terminal {
-                operation,
-                reason: err.to_string(),
-            })?
+            .await?
         else {
             return Ok(());
         };
         let mut outcome = self
             .commit_completed_spine_toolcall(turn_context, completed)
-            .await
-            .map_err(|err| SpineToolcallTurnError::Terminal {
-                operation,
-                reason: err.to_string(),
-            })?;
+            .await?;
         self.apply_completed_spine_toolcall_host_outcome(turn_context.as_ref(), &mut outcome)
             .await;
         Ok(())
