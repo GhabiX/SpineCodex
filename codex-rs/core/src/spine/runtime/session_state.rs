@@ -423,16 +423,10 @@ impl SpineToolcallCommitHostPlan {
             return Ok(SpineToolcallCommitLoopDecision::retry());
         }
         match self.retry_limit_action {
-            SpineToolcallCommitFailureAction::FailClosed => Ok(
+            action @ (SpineToolcallCommitFailureAction::FailClosed
+            | SpineToolcallCommitFailureAction::AbortPending) => Ok(
                 SpineToolcallCommitLoopDecision::host_action(SpineToolcallCommitHostAction::new(
-                    SpineToolcallCommitFailureAction::FailClosed,
-                    SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
-                    self.retry_limit_error(call_id),
-                )),
-            ),
-            SpineToolcallCommitFailureAction::AbortPending => Ok(
-                SpineToolcallCommitLoopDecision::host_action(SpineToolcallCommitHostAction::new(
-                    SpineToolcallCommitFailureAction::AbortPending,
+                    action,
                     SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
                     self.retry_limit_error(call_id),
                 )),
