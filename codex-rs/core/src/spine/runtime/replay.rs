@@ -15,8 +15,7 @@ use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::TrimProjection;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use crate::spine::parse_stack::ParseStack;
-use crate::spine::parse_stack::apply_metadata_event;
-use crate::spine::parse_stack::event_to_token;
+use crate::spine::parse_stack::apply_replay_event_to_parse_stack;
 use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 use crate::spine::trimmer::trim_projection_from_events;
 
@@ -156,9 +155,13 @@ pub(super) fn replay_from_events(
             continue;
         }
         if replay_event_seqs.forced.contains(&event.seq) {
-            if !apply_metadata_event(&mut parse_stack, event)? {
-                parse_stack.shift(event_to_token(event, archive, &mem_map, raw_mask)?, archive)?;
-            }
+            apply_replay_event_to_parse_stack(
+                &mut parse_stack,
+                event,
+                archive,
+                &mem_map,
+                raw_mask,
+            )?;
             continue;
         }
         if replay_event_seqs.marker_structural.contains(&event.seq)
@@ -166,9 +169,7 @@ pub(super) fn replay_from_events(
         {
             continue;
         }
-        if !apply_metadata_event(&mut parse_stack, event)? {
-            parse_stack.shift(event_to_token(event, archive, &mem_map, raw_mask)?, archive)?;
-        }
+        apply_replay_event_to_parse_stack(&mut parse_stack, event, archive, &mem_map, raw_mask)?;
     }
     Ok(parse_stack)
 }
