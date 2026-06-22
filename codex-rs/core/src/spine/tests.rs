@@ -38,6 +38,8 @@ mod checkpoint_failures;
 mod checkpoint_failures_hash;
 #[path = "tests/clone_boundary_pressure.rs"]
 mod clone_boundary_pressure;
+#[path = "tests/clone_boundary_pressure_alias.rs"]
+mod clone_boundary_pressure_alias;
 #[path = "tests/clone_missing_memory.rs"]
 mod clone_missing_memory;
 #[path = "tests/clone_structural_pressure.rs"]

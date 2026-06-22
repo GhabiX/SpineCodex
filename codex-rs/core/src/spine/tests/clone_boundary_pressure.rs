@@ -5,12 +5,7 @@ fn clone_boundary_excludes_future_structural_and_pressure_records() {
     assert_clone_boundary_excludes_future_structural_and_pressure_records();
 }
 
-#[test]
-fn fork_preserves_context_pressure_metadata() {
-    assert_clone_boundary_excludes_future_structural_and_pressure_records();
-}
-
-fn assert_clone_boundary_excludes_future_structural_and_pressure_records() {
+pub(super) fn assert_clone_boundary_excludes_future_structural_and_pressure_records() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source_rollout = dir.path().join("source.jsonl");
     let target_rollout = dir.path().join("target.jsonl");
