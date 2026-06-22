@@ -24,6 +24,7 @@ use crate::spine::SpineToolCallEvidence;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
+use crate::spine::SpineToolcallCommitLoopAction;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
@@ -1295,28 +1296,27 @@ impl Session {
                     return Err(err);
                 }
             };
-            let decision = commit_host_plan.interpret_attempt(attempt, lock_retries, &call_id)?;
-            let decision = match decision.into_done() {
-                Ok(output) => break output,
-                Err(decision) => decision,
-            };
-            if decision.is_no_spine_commit() {
-                return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
+            match commit_host_plan.interpret_attempt_as_action(attempt, lock_retries, &call_id)? {
+                SpineToolcallCommitLoopAction::Done(output) => break output,
+                SpineToolcallCommitLoopAction::NoSpineCommit => {
+                    return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
+                }
+                SpineToolcallCommitLoopAction::Retry => {
+                    lock_retries += 1;
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+                SpineToolcallCommitLoopAction::HostAction(host_action) => {
+                    if let Some(reason) = host_action.fail_closed_reason() {
+                        self.fail_closed_spine_toolcall_commit(&call_id, reason)
+                            .await;
+                    }
+                    if let Some(reason) = host_action.abort_pending_reason() {
+                        self.abort_spine_pending_tool(&call_id, reason).await;
+                    }
+                    return Err(host_action.into_error());
+                }
             }
-            if decision.should_retry() {
-                lock_retries += 1;
-                tokio::task::yield_now().await;
-                continue;
-            }
-            let host_action = decision.into_host_action()?;
-            if let Some(reason) = host_action.fail_closed_reason() {
-                self.fail_closed_spine_toolcall_commit(&call_id, reason)
-                    .await;
-            }
-            if let Some(reason) = host_action.abort_pending_reason() {
-                self.abort_spine_pending_tool(&call_id, reason).await;
-            }
-            return Err(host_action.into_error());
         };
         let post_commit_effects = commit_output.into_post_commit_effects();
         let deferred_tree_update = self

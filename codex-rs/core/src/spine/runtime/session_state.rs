@@ -344,8 +344,15 @@ pub(crate) struct SpineToolcallCommitHostAction {
     error: SpineError,
 }
 
-pub(crate) struct SpineToolcallCommitLoopDecision {
+struct SpineToolcallCommitLoopDecision {
     kind: SpineToolcallCommitLoopDecisionKind,
+}
+
+pub(crate) enum SpineToolcallCommitLoopAction {
+    Done(SpineCommitOutput),
+    Retry,
+    NoSpineCommit,
+    HostAction(SpineToolcallCommitHostAction),
 }
 
 enum SpineToolcallCommitLoopDecisionKind {
@@ -428,7 +435,7 @@ impl SpineToolcallCommitHostPlan {
         self.output_recording
     }
 
-    pub(crate) fn interpret_attempt(
+    fn interpret_attempt(
         &self,
         attempt: SpineCommitAttempt,
         lock_retries: usize,
@@ -441,6 +448,17 @@ impl SpineToolcallCommitHostPlan {
             SpineCommitAttemptKind::RuntimeMissing => self.commit_missing_decision(call_id),
             SpineCommitAttemptKind::Retry => self.retry_decision(lock_retries, call_id),
         }
+    }
+
+    pub(crate) fn interpret_attempt_as_action(
+        &self,
+        attempt: SpineCommitAttempt,
+        lock_retries: usize,
+        call_id: &str,
+    ) -> Result<SpineToolcallCommitLoopAction, SpineError> {
+        Ok(self
+            .interpret_attempt(attempt, lock_retries, call_id)?
+            .into_action())
     }
 
     fn commit_missing_decision(
@@ -522,39 +540,18 @@ impl SpineToolcallCommitLoopDecision {
         }
     }
 
-    pub(crate) fn into_done(self) -> Result<SpineCommitOutput, Self> {
+    fn into_action(self) -> SpineToolcallCommitLoopAction {
         match self.kind {
-            SpineToolcallCommitLoopDecisionKind::Done(output) => Ok(output),
-            kind => Err(Self { kind }),
-        }
-    }
-
-    pub(crate) fn is_no_spine_commit(&self) -> bool {
-        matches!(
-            self.kind,
-            SpineToolcallCommitLoopDecisionKind::NoSpineCommit
-        )
-    }
-
-    pub(crate) fn should_retry(&self) -> bool {
-        matches!(self.kind, SpineToolcallCommitLoopDecisionKind::Retry)
-    }
-
-    pub(crate) fn into_host_action(self) -> Result<SpineToolcallCommitHostAction, SpineError> {
-        match self.kind {
-            SpineToolcallCommitLoopDecisionKind::HostAction(host_action) => Ok(host_action),
-            SpineToolcallCommitLoopDecisionKind::Done(_) => Err(SpineError::Invariant(
-                "unexpected completed Spine toolcall commit done decision after loop handling"
-                    .to_string(),
-            )),
-            SpineToolcallCommitLoopDecisionKind::Retry => Err(SpineError::Invariant(
-                "unexpected completed Spine toolcall commit retry decision after loop handling"
-                    .to_string(),
-            )),
-            SpineToolcallCommitLoopDecisionKind::NoSpineCommit => Err(SpineError::Invariant(
-                "unexpected completed Spine toolcall no-commit decision after loop handling"
-                    .to_string(),
-            )),
+            SpineToolcallCommitLoopDecisionKind::Done(output) => {
+                SpineToolcallCommitLoopAction::Done(output)
+            }
+            SpineToolcallCommitLoopDecisionKind::Retry => SpineToolcallCommitLoopAction::Retry,
+            SpineToolcallCommitLoopDecisionKind::NoSpineCommit => {
+                SpineToolcallCommitLoopAction::NoSpineCommit
+            }
+            SpineToolcallCommitLoopDecisionKind::HostAction(host_action) => {
+                SpineToolcallCommitLoopAction::HostAction(host_action)
+            }
         }
     }
 }
