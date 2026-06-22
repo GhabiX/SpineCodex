@@ -808,13 +808,6 @@ impl SpineRuntime {
             )));
         }
         let suffix_start = open_meta.index;
-        let close_event = SpineLedgerEvent::Close {
-            node,
-            boundary: self.raw_len,
-            summary: open_meta.summary.clone(),
-            close_input_tokens: token_baselines.provider_input_tokens,
-            close_context_tokens: token_baselines.provider_input_tokens,
-        };
         let seq = self.ledger.next_event_seq;
         if memory_assembly.source_context_range.start != suffix_start {
             return Err(SpineError::CompactFailure(format!(
@@ -854,6 +847,14 @@ impl SpineRuntime {
             mem.open_context_source,
             mem.memory_output_tokens,
         );
+        let (close_event, _token) = crate::spine::lexer::lex_close_event_token(
+            node,
+            self.raw_len,
+            open_meta.summary.clone(),
+            token_baselines.provider_input_tokens,
+            token_baselines.provider_input_tokens,
+            memory.clone(),
+        )?;
         let staged_archive = SpineArchive::staged_with_memory_body(
             self.store.root.clone(),
             mem.compact_id.clone(),

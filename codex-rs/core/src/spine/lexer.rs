@@ -165,6 +165,49 @@ pub(in crate::spine) fn lex_open_token(
     .into_single_token("open")
 }
 
+pub(in crate::spine) fn lex_close(
+    node: NodeId,
+    boundary: u64,
+    summary: String,
+    close_input_tokens: Option<i64>,
+    close_context_tokens: Option<i64>,
+    memory: MemoryRef,
+) -> Result<LexedTokenBatch, SpineError> {
+    Ok(LexedTokenBatch::single(
+        SpineLedgerEvent::Close {
+            node,
+            boundary,
+            summary,
+            close_input_tokens,
+            close_context_tokens,
+        },
+        lex_close_token(memory)?,
+    ))
+}
+
+pub(in crate::spine) fn lex_close_event_token(
+    node: NodeId,
+    boundary: u64,
+    summary: String,
+    close_input_tokens: Option<i64>,
+    close_context_tokens: Option<i64>,
+    memory: MemoryRef,
+) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+    lex_close(
+        node,
+        boundary,
+        summary,
+        close_input_tokens,
+        close_context_tokens,
+        memory,
+    )?
+    .into_single("close")
+}
+
+pub(in crate::spine) fn lex_close_token(memory: MemoryRef) -> Result<SpineToken, SpineError> {
+    Ok(SpineToken::Close { memory })
+}
+
 pub(in crate::spine) fn lex_root_compact(
     node: NodeId,
     boundary: u64,
@@ -472,6 +515,51 @@ mod tests {
             SpineError::InvalidEvent(message)
                 if message.contains("mismatched provider input baseline encoding")
         ));
+    }
+
+    #[test]
+    fn lex_close_produces_matching_event_and_token() {
+        let node = NodeId::root_epoch(1).child(2);
+        let memory = MemoryRef {
+            compact_id: "close-1-2".to_string(),
+            node_id: node.clone(),
+            body_path: PathBuf::from("/tmp/spine-lexer-test/body/close-1-2.md"),
+            body_hash: "closehash".to_string(),
+            source_raw_range: 2..8,
+            source_context_range: 3..5,
+            source_token_seq: 11..12,
+            open_input_tokens: Some(100),
+            close_input_tokens: Some(150),
+            open_context_tokens: Some(100),
+            close_context_tokens: Some(150),
+            closed_source_suffix_tokens: None,
+            closed_memory_context_tokens: None,
+            open_context_source: Some(ContextBaselineSource::ProviderAtOpen),
+            memory_output_tokens: None,
+        };
+
+        let lexed = lex_close(
+            node.clone(),
+            8,
+            "closed node".to_string(),
+            Some(150),
+            Some(150),
+            memory.clone(),
+        )
+        .expect("close lexes");
+
+        assert_eq!(lexed.events.len(), 1);
+        assert!(matches!(
+            lexed.events.first(),
+            Some(SpineLedgerEvent::Close {
+                node: event_node,
+                boundary: 8,
+                summary,
+                close_input_tokens: Some(150),
+                close_context_tokens: Some(150),
+            }) if event_node == &node && summary == "closed node"
+        ));
+        assert_eq!(lexed.tokens, vec![SpineToken::Close { memory }]);
     }
 
     #[test]

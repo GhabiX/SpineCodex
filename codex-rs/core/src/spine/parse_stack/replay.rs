@@ -67,25 +67,23 @@ pub(in crate::spine) fn event_to_token(
                     mem.compact_id
                 )));
             }
-            Ok(SpineToken::Close {
-                memory: memory_ref(
-                    archive,
-                    mem.compact_id.clone(),
-                    mem.node.clone(),
-                    mem.body_hash.clone(),
-                    mem.raw_start..mem.raw_end,
-                    mem.context_start..mem.context_end,
-                    event.seq..event.seq + 1,
-                    mem.open_input_tokens,
-                    mem.close_input_tokens,
-                    mem.open_context_tokens,
-                    mem.close_context_tokens,
-                    mem.closed_source_suffix_tokens,
-                    mem.closed_memory_context_tokens,
-                    mem.open_context_source,
-                    mem.memory_output_tokens,
-                ),
-            })
+            crate::spine::lexer::lex_close_token(memory_ref(
+                archive,
+                mem.compact_id.clone(),
+                mem.node.clone(),
+                mem.body_hash.clone(),
+                mem.raw_start..mem.raw_end,
+                mem.context_start..mem.context_end,
+                event.seq..event.seq + 1,
+                mem.open_input_tokens,
+                mem.close_input_tokens,
+                mem.open_context_tokens,
+                mem.close_context_tokens,
+                mem.closed_source_suffix_tokens,
+                mem.closed_memory_context_tokens,
+                mem.open_context_source,
+                mem.memory_output_tokens,
+            ))
         }
         SpineLedgerEvent::RootCompact {
             mem,
