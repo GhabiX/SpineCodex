@@ -7,22 +7,7 @@ fn fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
     assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent();
 }
 
-#[test]
-fn fork_child_initial_h_ps_matches_parent() {
-    assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent();
-}
-
-#[test]
-fn fork_child_mutation_does_not_change_parent() {
-    assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent();
-}
-
-#[test]
-fn fork_rewrites_node_dir_to_child_sidecar() {
-    assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent();
-}
-
-fn assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
+pub(super) fn assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates_parent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let parent_rollout = dir.path().join("parent.jsonl");
     let child_rollout = dir.path().join("child.jsonl");

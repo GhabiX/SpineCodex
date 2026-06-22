@@ -126,6 +126,8 @@ mod error_classification;
 mod error_classification_runtime;
 #[path = "tests/fork_isolation.rs"]
 mod fork_isolation;
+#[path = "tests/fork_isolation_aliases.rs"]
+mod fork_isolation_aliases;
 #[path = "tests/m0_trace.rs"]
 mod m0_trace;
 #[path = "tests/materialize_history.rs"]
