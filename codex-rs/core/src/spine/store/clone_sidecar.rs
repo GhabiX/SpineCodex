@@ -149,25 +149,45 @@ fn clone_for_rollout_into_store(
         &required_memory_ids,
         mask,
     )?;
-    for checkpoint in cloned_compact_checkpoints {
+    install_cloned_proof_artifacts(
+        target,
+        target_root,
+        target_rollout_path,
+        cloned_compact_checkpoints,
+        cloned_checkpoints,
+        cloned_commit_markers,
+        &cloned_memory_paths,
+    )
+}
+
+fn install_cloned_proof_artifacts(
+    target: &SpineStore,
+    target_root: &Path,
+    target_rollout_path: &Path,
+    compact_checkpoints: Vec<SpineCompactCheckpoint>,
+    checkpoints: Vec<SpineCheckpoint>,
+    commit_markers: Vec<SpineCommitMarker>,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<(), SpineError> {
+    for checkpoint in compact_checkpoints {
         let checkpoint = clone_rewrite::clone_compact_checkpoint_for_target(
             checkpoint,
             target_rollout_path,
-            &cloned_memory_paths,
+            cloned_memory_paths,
         )?;
         target.append_compact_checkpoint(&checkpoint)?;
     }
-    for checkpoint in cloned_checkpoints {
+    for checkpoint in checkpoints {
         let checkpoint = clone_rewrite::clone_checkpoint_for_target(
             checkpoint,
             target_rollout_path,
             target_root,
-            &cloned_memory_paths,
+            cloned_memory_paths,
         )?;
         target.write_checkpoint(&checkpoint)?;
     }
-    for marker in cloned_commit_markers {
-        let marker = clone_rewrite::clone_commit_marker_for_target(marker, &cloned_memory_paths)?;
+    for marker in commit_markers {
+        let marker = clone_rewrite::clone_commit_marker_for_target(marker, cloned_memory_paths)?;
         target.append_commit_marker(&marker)?;
     }
     Ok(())
