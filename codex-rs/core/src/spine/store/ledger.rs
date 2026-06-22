@@ -118,50 +118,29 @@ impl SpineStore {
         if !self.tree_path().exists() {
             return Ok(0);
         }
-        Ok(self
-            .events()?
-            .into_iter()
-            .map(|event| event.seq)
-            .max()
-            .map(|seq| {
-                seq.checked_add(1)
-                    .ok_or_else(|| SpineError::InvalidEvent("spine event seq overflow".to_string()))
-            })
-            .transpose()?
-            .unwrap_or(0))
+        next_ledger_seq(
+            self.events()?.into_iter().map(|event| event.seq),
+            "spine event seq overflow",
+        )
     }
 
     pub(in crate::spine) fn next_pressure_seq(&self) -> Result<u64, SpineError> {
         if !self.pressure_path().exists() {
             return Ok(0);
         }
-        Ok(self
-            .pressure_events()?
-            .into_iter()
-            .map(|event| event.pressure_seq)
-            .max()
-            .map(|pressure_seq| {
-                pressure_seq.checked_add(1).ok_or_else(|| {
-                    SpineError::InvalidEvent("spine pressure seq overflow".to_string())
-                })
-            })
-            .transpose()?
-            .unwrap_or(0))
+        next_ledger_seq(
+            self.pressure_events()?
+                .into_iter()
+                .map(|event| event.pressure_seq),
+            "spine pressure seq overflow",
+        )
     }
 
     pub(in crate::spine) fn next_trim_seq(&self) -> Result<u64, SpineError> {
-        Ok(self
-            .trim_events()?
-            .into_iter()
-            .map(|event| event.trim_seq)
-            .max()
-            .map(|trim_seq| {
-                trim_seq
-                    .checked_add(1)
-                    .ok_or_else(|| SpineError::InvalidEvent("spine trim seq overflow".to_string()))
-            })
-            .transpose()?
-            .unwrap_or(0))
+        next_ledger_seq(
+            self.trim_events()?.into_iter().map(|event| event.trim_seq),
+            "spine trim seq overflow",
+        )
     }
 
     pub(in crate::spine) fn mems(&self) -> Result<Vec<MemRecord>, SpineError> {
@@ -204,4 +183,17 @@ impl SpineStore {
         }
         read_json_lines(&self.compact_checkpoint_path())
     }
+}
+
+fn next_ledger_seq(
+    seqs: impl Iterator<Item = u64>,
+    overflow_message: &str,
+) -> Result<u64, SpineError> {
+    seqs.max()
+        .map(|seq| {
+            seq.checked_add(1)
+                .ok_or_else(|| SpineError::InvalidEvent(overflow_message.to_string()))
+        })
+        .transpose()
+        .map(|seq| seq.unwrap_or(0))
 }
