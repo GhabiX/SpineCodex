@@ -31,21 +31,11 @@ use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
-use crate::spine::model::SpineLedgerEvent;
-use crate::spine::model::SpineToken;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::render::memory_response_item;
 
 impl SpineRuntime {
-    fn completed_toolcall_parts(
-        &self,
-        toolcall: &CompletedToolCall,
-    ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
-        self.completed_toolcall_batch(toolcall)?
-            .into_single("toolcall")
-    }
-
     #[cfg(test)]
     pub(crate) fn maybe_commit_output(
         &mut self,
@@ -353,7 +343,7 @@ impl SpineRuntime {
         let open_context_source = token_baselines
             .provider_input_tokens
             .map(|_| ContextBaselineSource::ProviderAtOpen);
-        let (event, token) = crate::spine::lexer::lex_open_event_token(
+        let open_lexed = crate::spine::lexer::lex_open(
             &self.archive(),
             child,
             boundary,
@@ -363,16 +353,18 @@ impl SpineRuntime {
             token_baselines.provider_input_tokens,
             open_context_source,
         )?;
-        let open_token = token;
         if let Some(completed_toolcall) = completed_toolcall {
-            let (toolcall_event, token) = self.completed_toolcall_parts(&completed_toolcall)?;
-            let staged_parse_stack =
-                self.parser
-                    .open_staged_parse_stack(open_token, Some(token), &self.archive())?;
+            let toolcall_lexed = self.completed_toolcall_batch(&completed_toolcall)?;
+            let staged_parse_stack = self.parser.open_staged_parse_stack(
+                &open_lexed,
+                Some(&toolcall_lexed),
+                &self.archive(),
+            )?;
             let toolcall_seq = self.ledger.next_event_seq.checked_add(1).ok_or_else(|| {
                 SpineError::InvalidEvent("spine.open toolcall seq overflow".to_string())
             })?;
-            let events = vec![event, toolcall_event];
+            let mut events = open_lexed.into_events();
+            events.extend(toolcall_lexed.into_events());
             self.append_committed_events_no_marker(events)?;
             self.parser.install_staged(staged_parse_stack);
             self.append_trim_candidates_for_completed_toolcall(
@@ -397,8 +389,8 @@ impl SpineRuntime {
         }
         let staged_parse_stack =
             self.parser
-                .open_staged_parse_stack(open_token, None, &self.archive())?;
-        let events = vec![event];
+                .open_staged_parse_stack(&open_lexed, None, &self.archive())?;
+        let events = open_lexed.into_events();
         self.append_committed_events_no_marker(events)?;
         self.parser.install_staged(staged_parse_stack);
         Ok(SpinePreparedCommit {
@@ -461,7 +453,7 @@ impl SpineRuntime {
         let plan = self.close_family_plan(&prepared, after_close)?;
         let mut events = vec![prepared.close_event.clone()];
         if let Some(open) = plan.open.as_ref() {
-            events.push(open.event.clone());
+            events.extend(open.lexed.events().iter().cloned());
         }
         let completed_toolcall = completed_toolcall
             .ok_or_else(|| SpineError::InvalidEvent(plan.missing_toolcall_error.to_string()))?;
@@ -479,8 +471,8 @@ impl SpineRuntime {
         };
         let completed_toolcall = self
             .remap_completed_toolcall_context_indices(completed_toolcall, toolcall_context_index)?;
-        let (toolcall_event, token) = self.completed_toolcall_parts(&completed_toolcall)?;
-        events.push(toolcall_event);
+        let toolcall_lexed = self.completed_toolcall_batch(&completed_toolcall)?;
+        events.extend(toolcall_lexed.events().iter().cloned());
         let event_count = u64::try_from(events.len())
             .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?;
         let toolcall_seq = self
@@ -492,26 +484,12 @@ impl SpineRuntime {
             .ok_or_else(|| {
                 SpineError::InvalidEvent(plan.toolcall_seq_overflow_error.to_string())
             })?;
-        let open_token = if let Some(open) = plan.open.as_ref() {
-            Some(crate::spine::lexer::lex_open_token(
-                &self.archive(),
-                open.child.clone(),
-                self.raw_len,
-                open.open_index_u64,
-                open.summary.clone(),
-                None,
-                None,
-                None,
-            )?)
-        } else {
-            None
-        };
         let (pending_close_parse_stack, final_parse_stack) =
             self.parser.close_family_staged_parse_stacks(
                 prepared.memory.clone(),
                 prepared.task_tree_reduction,
-                open_token,
-                token,
+                plan.open.as_ref().map(|open| &open.lexed),
+                &toolcall_lexed,
                 &self.archive(),
             )?;
         if let Err(err) = self.commit_close_family_transaction(CloseFamilyTransaction {
@@ -582,7 +560,7 @@ impl SpineRuntime {
                 let open_index_u64 = u64::try_from(open_index).map_err(|_| {
                     SpineError::InvalidEvent("spine.next synthetic open index overflow".to_string())
                 })?;
-                let (event, _token) = crate::spine::lexer::lex_open_event_token(
+                let lexed = crate::spine::lexer::lex_open(
                     &self.archive(),
                     child.clone(),
                     self.raw_len,
@@ -600,12 +578,7 @@ impl SpineRuntime {
                     marker_kind: SpineCommitKindMarker::CloseThenOpen,
                     kind: SpineCommitKind::CloseThenOpen { open_index },
                     toolcall_context_index: Some(open_index),
-                    open: Some(CloseFamilyOpenPlan {
-                        child,
-                        open_index_u64,
-                        summary,
-                        event,
-                    }),
+                    open: Some(CloseFamilyOpenPlan { lexed }),
                 })
             }
         }
@@ -884,14 +857,24 @@ impl SpineRuntime {
             mem.open_context_source,
             mem.memory_output_tokens,
         );
-        let (close_event, _token) = crate::spine::lexer::lex_close_event_token(
+        let mut close_events = crate::spine::lexer::lex_close(
             node,
             self.raw_len,
             open_meta.summary.clone(),
             token_baselines.provider_input_tokens,
             token_baselines.provider_input_tokens,
             memory.clone(),
-        )?;
+        )?
+        .into_events()
+        .into_iter();
+        let close_event = close_events
+            .next()
+            .ok_or_else(|| SpineError::Invariant("close lexer produced no event".to_string()))?;
+        if close_events.next().is_some() {
+            return Err(SpineError::Invariant(
+                "close lexer produced multiple events".to_string(),
+            ));
+        }
         let staged_archive = SpineArchive::staged_with_memory_body(
             self.store.root.clone(),
             mem.compact_id.clone(),

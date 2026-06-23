@@ -178,16 +178,32 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
         "runtime/commit.rs must not query open child ids through the raw parser handle"
     );
     assert!(
+        !commit.contains("use crate::spine::model::SpineToken"),
+        "runtime/commit.rs must not import raw SpineToken"
+    );
+    assert!(
+        !commit.contains("completed_toolcall_parts("),
+        "runtime/commit.rs must not unwrap completed toolcalls into raw event/token pairs"
+    );
+    assert!(
+        !commit.contains("lex_open_token("),
+        "runtime/commit.rs must not request raw open tokens from lexer"
+    );
+    assert!(
+        !commit.contains("lex_close_event_token("),
+        "runtime/commit.rs must not request raw close event/token pairs from lexer"
+    );
+    assert!(
         !commit.contains("staged_parse_stack.shift("),
         "runtime/commit.rs open staging must not directly shift parser tokens"
     );
     assert!(
         commit.contains("self.parser.next_child_id()")
-            && commit.contains(".open_staged_parse_stack(open_token"),
+            && commit.contains(".open_staged_parse_stack(&open_lexed"),
         "runtime open commit should route child id and token staging through ParserState"
     );
     let open_with_toolcall_install = commit
-        .split(".open_staged_parse_stack(open_token, Some(token)")
+        .split(".open_staged_parse_stack(\n                &open_lexed,\n                Some(&toolcall_lexed)")
         .nth(1)
         .and_then(|tail| {
             tail.split("self.append_trim_candidates_for_completed_toolcall")
@@ -200,7 +216,7 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
         "runtime open-with-toolcall should install staged parser state through ParserState"
     );
     let open_without_toolcall_install = commit
-        .split(".open_staged_parse_stack(open_token, None")
+        .split(".open_staged_parse_stack(&open_lexed, None")
         .nth(1)
         .and_then(|tail| tail.split("Ok(SpinePreparedCommit").next())
         .expect("open-without-toolcall install section");

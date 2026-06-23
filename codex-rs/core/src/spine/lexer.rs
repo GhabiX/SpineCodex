@@ -30,6 +30,14 @@ impl LexedTokenBatch {
         }
     }
 
+    pub(in crate::spine) fn events(&self) -> &[SpineLedgerEvent] {
+        &self.events
+    }
+
+    pub(in crate::spine) fn into_events(self) -> Vec<SpineLedgerEvent> {
+        self.events
+    }
+
     pub(in crate::spine) fn into_single(
         self,
         label: &str,

@@ -280,13 +280,15 @@ impl ParserState {
 
     pub(super) fn open_staged_parse_stack(
         &self,
-        open_token: SpineToken,
-        toolcall_token: Option<SpineToken>,
+        open_lexed: &LexedTokenBatch,
+        toolcall_lexed: Option<&LexedTokenBatch>,
         archive: &SpineArchive,
     ) -> Result<ParserPreparedState, SpineError> {
         let mut staged = self.parse_stack.clone();
+        let open_token = single_lexed_token(open_lexed, "open")?;
         staged.shift(open_token, archive)?;
-        if let Some(toolcall_token) = toolcall_token {
+        if let Some(toolcall_lexed) = toolcall_lexed {
+            let toolcall_token = single_lexed_token(toolcall_lexed, "toolcall")?;
             staged.shift(toolcall_token, archive)?;
         }
         Ok(ParserPreparedState::new(staged))
@@ -308,16 +310,18 @@ impl ParserState {
         &self,
         memory: MemoryRef,
         reduction: PreparedTaskTreeReduction,
-        open_token: Option<SpineToken>,
-        toolcall_token: SpineToken,
+        open_lexed: Option<&LexedTokenBatch>,
+        toolcall_lexed: &LexedTokenBatch,
         archive: &SpineArchive,
     ) -> Result<(ParserPreparedState, ParserPreparedState), SpineError> {
         let mut pending = self.parse_stack.clone();
         pending.shift_pending_close(memory, archive)?;
         let mut final_parse_stack = pending.task_tree_reduced(reduction)?;
-        if let Some(open_token) = open_token {
+        if let Some(open_lexed) = open_lexed {
+            let open_token = single_lexed_token(open_lexed, "open")?;
             final_parse_stack.shift(open_token, archive)?;
         }
+        let toolcall_token = single_lexed_token(toolcall_lexed, "toolcall")?;
         final_parse_stack.shift(toolcall_token, archive)?;
         Ok((
             ParserPreparedState::new(pending),
@@ -462,4 +466,17 @@ impl ParserState {
     pub(super) fn toolcall_leaf_count_for_test(&self) -> usize {
         parse_stack_toolcall_leaf_count(&self.parse_stack.symbols)
     }
+}
+
+fn single_lexed_token(lexed: &LexedTokenBatch, label: &str) -> Result<SpineToken, SpineError> {
+    let mut tokens = lexed.tokens.iter().cloned();
+    let token = tokens
+        .next()
+        .ok_or_else(|| SpineError::Invariant(format!("{label} lexer produced no token")))?;
+    if tokens.next().is_some() {
+        return Err(SpineError::Invariant(format!(
+            "{label} lexer produced multiple tokens"
+        )));
+    }
+    Ok(token)
 }

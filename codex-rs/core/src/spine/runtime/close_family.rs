@@ -3,9 +3,9 @@ use codex_protocol::models::ResponseItem;
 use super::SpineCommitKind;
 use super::SpineError;
 use crate::spine::archive::StagedArchiveWrite;
+use crate::spine::lexer::LexedTokenBatch;
 use crate::spine::model::MemRecord;
 use crate::spine::model::MemoryRef;
-use crate::spine::model::NodeId;
 use crate::spine::model::SpineCommitKindMarker;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::parse_stack::PreparedTaskTreeReduction;
@@ -27,10 +27,7 @@ pub(super) enum CloseFamilyAfterClose {
 }
 
 pub(super) struct CloseFamilyOpenPlan {
-    pub(super) child: NodeId,
-    pub(super) open_index_u64: u64,
-    pub(super) summary: String,
-    pub(super) event: SpineLedgerEvent,
+    pub(super) lexed: LexedTokenBatch,
 }
 
 pub(super) struct CloseFamilyPlan {
