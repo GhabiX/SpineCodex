@@ -6,6 +6,8 @@ use super::runtime::SpineMessageEvidence;
 use super::runtime::SpineMessageHostOutcome;
 use super::runtime::SpineRootCompactHostPublish;
 use super::runtime::SpineSessionState;
+use super::runtime::SpineToolcallCommitEvidence;
+use super::runtime::SpineToolcallCommitHostLoop;
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
 
@@ -37,4 +39,23 @@ pub(crate) fn on_compact(
         raw_items,
         close_provider_input_tokens,
     )
+}
+
+pub(crate) fn on_toolcall(
+    state: &mut SpineSessionState,
+    evidence: &SpineToolcallCommitEvidence,
+    raw_items: &[Option<ResponseItem>],
+    current_turn_provider_input_tokens: Option<i64>,
+    tool_resp_already_recorded: bool,
+    recorded_inside_reduce: bool,
+) -> Result<Option<SpineToolcallCommitHostLoop>, SpineError> {
+    state
+        .prepare_completed_toolcall_for_commit(
+            evidence,
+            raw_items,
+            current_turn_provider_input_tokens,
+            tool_resp_already_recorded,
+            recorded_inside_reduce,
+        )
+        .map(|plan| plan.map(|plan| plan.into_host_loop()))
 }

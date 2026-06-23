@@ -1278,7 +1278,8 @@ impl Session {
         let mut commit_host_loop = {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let Some(commit_host_plan) = guard.prepare_completed_toolcall_for_commit(
+            let Some(commit_host_loop) = hooks::on_toolcall(
+                &mut guard,
                 &toolcall.evidence.toolcall_evidence,
                 &raw_items,
                 current_turn_provider_input_tokens,
@@ -1288,7 +1289,7 @@ impl Session {
             else {
                 return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
             };
-            commit_host_plan.into_host_loop()
+            commit_host_loop
         };
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
