@@ -42,7 +42,6 @@ use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineError;
-use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineSessionState;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -3029,77 +3028,19 @@ impl Session {
     pub(crate) async fn replace_compacted_history(
         &self,
         turn_context: &TurnContext,
-        mut items: Vec<ResponseItem>,
+        items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
-        mut compacted_item: CompactedItem,
+        compacted_item: CompactedItem,
         spine_root_compact_source: Option<Vec<ResponseItem>>,
     ) -> CodexResult<ReplaceCompactedHistoryOutcome> {
-        let fallback_spine_root_compact_source;
-        let spine_root_compact_source = match spine_root_compact_source.as_deref() {
-            Some(source) => source,
-            None => {
-                fallback_spine_root_compact_source = items.clone();
-                fallback_spine_root_compact_source.as_slice()
-            }
-        };
-        let prepared_spine_root_compact = self
-            .on_compact(SpineNativeCompactEvidence {
-                compacted_history: spine_root_compact_source,
-                native_items: &items,
-            })
-            .await?;
-        if let Some(prepared) = prepared_spine_root_compact.as_ref() {
-            items = prepared.published_history().to_vec();
-            compacted_item.replacement_history = Some(items.clone());
-        }
-        let installed_spine_root_compact = prepared_spine_root_compact.is_some();
-        let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
-        if let Some(turn_context_item) = reference_context_item.clone() {
-            rollout_items.push(RolloutItem::TurnContext(turn_context_item));
-        }
-        if let Err(err) = self.try_persist_rollout_items(&rollout_items).await {
-            let reason = err.to_string();
-            self.invalidate_spine_runtime(format!(
-                "failed to persist native compact rollout boundary after sidecar commit: {reason}"
-            ))
-            .await;
-            return Err(CodexErr::SpineCompactCommitFailure {
-                operation: "persist native compact rollout boundary".to_string(),
-                reason,
-            });
-        }
-        self.replace_history(items, reference_context_item.clone())
-            .await;
-        let spine_tree_snapshot =
-            if let Some(prepared_spine_root_compact) = prepared_spine_root_compact {
-                match self
-                    .finalize_spine_root_compact_after_history_publish(prepared_spine_root_compact)
-                    .await
-                {
-                    Ok(spine_tree_snapshot) => spine_tree_snapshot,
-                    Err(err) => {
-                        self.invalidate_spine_runtime(format!(
-                        "failed to install Spine root compact after host history publication: {err}"
-                    ))
-                    .await;
-                        return Err(err);
-                    }
-                }
-            } else {
-                None
-            };
-        if installed_spine_root_compact && reference_context_item.is_some() {
-            let environment_context = Self::cwd_only_environment_context_item(turn_context);
-            self.record_conversation_items(
-                turn_context,
-                std::slice::from_ref(&environment_context),
-            )
-            .await?;
-        }
-        self.services.model_client.advance_window_generation();
-        Ok(ReplaceCompactedHistoryOutcome {
-            spine_tree_snapshot,
-        })
+        self.replace_compacted_history_with_spine_hooks(
+            turn_context,
+            items,
+            reference_context_item,
+            compacted_item,
+            spine_root_compact_source,
+        )
+        .await
     }
 
     fn cwd_only_environment_context_item(turn_context: &TurnContext) -> ResponseItem {
