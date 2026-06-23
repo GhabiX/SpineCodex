@@ -976,10 +976,6 @@ pub(crate) struct SpineRootCompactHostInstall {
     commit: PreparedSpineRootCompactCommit,
 }
 
-pub(crate) struct SpineRootCompactHostOutcome {
-    spine_tree_snapshot: Option<SpineTreeUpdateEvent>,
-}
-
 impl PreparedSpineRootCompactCommit {
     pub(crate) fn from_install(install: SpinePreparedRootCompactInstall) -> Self {
         Self { install }
@@ -1007,18 +1003,6 @@ impl SpineRootCompactHostInstall {
     #[cfg(test)]
     pub(crate) fn result(&self) -> SpineRootCompactResult {
         self.commit.result()
-    }
-}
-
-impl SpineRootCompactHostOutcome {
-    fn with_spine_tree_snapshot(spine_tree_snapshot: SpineTreeUpdateEvent) -> Self {
-        Self {
-            spine_tree_snapshot: Some(spine_tree_snapshot),
-        }
-    }
-
-    pub(crate) fn into_spine_tree_snapshot(self) -> Option<SpineTreeUpdateEvent> {
-        self.spine_tree_snapshot
     }
 }
 
@@ -1507,17 +1491,6 @@ impl SpineSessionState {
             )
         })?;
         self.apply_root_compact_after_history_publish(prepared, published_history_len)
-    }
-
-    pub(crate) fn take_pending_root_compact_host_outcome_after_history_publish(
-        &mut self,
-        published_history_len: usize,
-    ) -> Result<SpineRootCompactHostOutcome, SpineError> {
-        let snapshot =
-            self.take_pending_root_compact_after_history_publish(published_history_len)?;
-        Ok(SpineRootCompactHostOutcome::with_spine_tree_snapshot(
-            snapshot,
-        ))
     }
 
     pub(crate) fn prepare_single_toolcall_output_recording(

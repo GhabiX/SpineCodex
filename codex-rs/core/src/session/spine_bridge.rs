@@ -19,7 +19,6 @@ use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
-use crate::spine::SpineRootCompactHostOutcome;
 use crate::spine::SpineRootCompactPublishedHistory;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
@@ -1528,7 +1527,7 @@ impl Session {
     pub(crate) async fn finalize_spine_root_compact_after_history_publish(
         &self,
         published_history: SpineRootCompactPublishedHistory,
-    ) -> CodexResult<SpineRootCompactHostOutcome> {
+    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Err(CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
@@ -1538,9 +1537,8 @@ impl Session {
         let mut guard = spine_slot.lock().await;
         let published_variable_history_len = published_history.materialized_len();
         guard
-            .take_pending_root_compact_host_outcome_after_history_publish(
-                published_variable_history_len,
-            )
+            .take_pending_root_compact_after_history_publish(published_variable_history_len)
+            .map(Some)
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),

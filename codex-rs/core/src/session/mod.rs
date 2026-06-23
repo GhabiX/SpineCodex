@@ -3076,7 +3076,7 @@ impl Session {
                     .finalize_spine_root_compact_after_history_publish(prepared_spine_root_compact)
                     .await
                 {
-                    Ok(outcome) => outcome.into_spine_tree_snapshot(),
+                    Ok(spine_tree_snapshot) => spine_tree_snapshot,
                     Err(err) => {
                         self.invalidate_spine_runtime(format!(
                         "failed to install Spine root compact after host history publication: {err}"
