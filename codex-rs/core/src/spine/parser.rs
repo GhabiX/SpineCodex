@@ -58,6 +58,42 @@ pub(super) struct ParserRootCompactPreparedReduction {
     pub(super) current_open_index: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ParserPublicationPlan {
+    pub(super) operation: &'static str,
+    pub(super) suffix_start: usize,
+    pub(super) replacement_prefix: Vec<ResponseItem>,
+    pub(super) preserve_host_history_from: usize,
+    pub(super) append_current_tool_response_if_missing: bool,
+}
+
+impl ParserPublicationPlan {
+    #[cfg(test)]
+    pub(crate) fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    #[cfg(test)]
+    pub(crate) fn suffix_start(&self) -> usize {
+        self.suffix_start
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replacement_prefix(&self) -> &[ResponseItem] {
+        &self.replacement_prefix
+    }
+
+    #[cfg(test)]
+    pub(crate) fn preserve_host_history_from(&self) -> usize {
+        self.preserve_host_history_from
+    }
+
+    #[cfg(test)]
+    pub(crate) fn append_current_tool_response_if_missing(&self) -> bool {
+        self.append_current_tool_response_if_missing
+    }
+}
+
 impl ParserRootCompactPreparedReduction {
     pub(super) fn build_compact_checkpoint(
         &self,

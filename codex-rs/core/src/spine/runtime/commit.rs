@@ -12,7 +12,6 @@ use super::pending::CompletedToolCall;
 #[cfg(test)]
 use super::pending::CompletedToolCallSegment;
 use super::pending::PendingTransition;
-use super::prepared::HistoryPublicationPlan;
 use super::prepared::SpineCommitKind;
 use super::prepared::SpineCommitPublication;
 use super::prepared::SpinePreparedCommit;
@@ -33,6 +32,7 @@ use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
+use crate::spine::parser::ParserPublicationPlan;
 use crate::spine::render::memory_response_item;
 
 impl SpineRuntime {
@@ -512,7 +512,7 @@ impl SpineRuntime {
         }
         Ok(SpinePreparedCommit {
             kind: plan.kind,
-            publication_plan: Some(HistoryPublicationPlan {
+            publication_plan: Some(ParserPublicationPlan {
                 operation: plan.operation,
                 suffix_start: prepared.suffix_start,
                 replacement_prefix: prepared.replacement,

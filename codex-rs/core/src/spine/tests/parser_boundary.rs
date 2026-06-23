@@ -303,6 +303,15 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && prepared.contains("final_parse_stack: ParserPreparedState"),
         "runtime prepared final parser states should be typed as ParserPreparedState"
     );
+    assert!(
+        !prepared.contains("struct HistoryPublicationPlan"),
+        "runtime prepared carriers must not define parser publication plans"
+    );
+    assert!(
+        prepared.contains("use crate::spine::parser::ParserPublicationPlan")
+            && prepared.contains("publication_plan: Option<ParserPublicationPlan>"),
+        "runtime prepared carriers should hold parser-owned publication plans"
+    );
 }
 
 #[test]

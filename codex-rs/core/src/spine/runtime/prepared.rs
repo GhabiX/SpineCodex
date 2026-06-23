@@ -4,6 +4,7 @@ use super::CompletedToolCall;
 use super::SpineRootCompactResult;
 use crate::spine::model::MemRecord;
 use crate::spine::parser::ParserPreparedState;
+use crate::spine::parser::ParserPublicationPlan;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
@@ -12,46 +13,10 @@ pub(crate) enum SpineCommitKind {
     CloseThenOpen { open_index: usize },
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct HistoryPublicationPlan {
-    pub(super) operation: &'static str,
-    pub(super) suffix_start: usize,
-    pub(super) replacement_prefix: Vec<ResponseItem>,
-    pub(super) preserve_host_history_from: usize,
-    pub(super) append_current_tool_response_if_missing: bool,
-}
-
-impl HistoryPublicationPlan {
-    #[cfg(test)]
-    pub(crate) fn operation(&self) -> &'static str {
-        self.operation
-    }
-
-    #[cfg(test)]
-    pub(crate) fn suffix_start(&self) -> usize {
-        self.suffix_start
-    }
-
-    #[cfg(test)]
-    pub(crate) fn replacement_prefix(&self) -> &[ResponseItem] {
-        &self.replacement_prefix
-    }
-
-    #[cfg(test)]
-    pub(crate) fn preserve_host_history_from(&self) -> usize {
-        self.preserve_host_history_from
-    }
-
-    #[cfg(test)]
-    pub(crate) fn append_current_tool_response_if_missing(&self) -> bool {
-        self.append_current_tool_response_if_missing
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct SpinePreparedCommit {
     pub(super) kind: SpineCommitKind,
-    pub(super) publication_plan: Option<HistoryPublicationPlan>,
+    pub(super) publication_plan: Option<ParserPublicationPlan>,
     pub(super) final_parse_stack: Option<ParserPreparedState>,
     pub(super) completed_toolcall: Option<CompletedToolCall>,
     pub(super) toolcall_seq: Option<u64>,
@@ -126,7 +91,7 @@ impl SpinePreparedCommit {
     }
 
     #[cfg(test)]
-    pub(crate) fn publication_plan(&self) -> Option<&HistoryPublicationPlan> {
+    pub(crate) fn publication_plan(&self) -> Option<&ParserPublicationPlan> {
         self.publication_plan.as_ref()
     }
 }
