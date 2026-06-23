@@ -58,7 +58,7 @@ impl SpineRuntime {
         &self,
     ) -> Result<ParseStack, SpineError> {
         let accounting = self.memory_context_accounting_by_id()?;
-        let mut parse_stack = self.parse_stack.clone();
+        let mut parse_stack = self.parser.parse_stack().clone();
         parse_stack.apply_memory_context_accounting(&accounting);
         Ok(parse_stack)
     }
@@ -101,7 +101,8 @@ impl SpineRuntime {
 
     #[cfg(test)]
     pub(super) fn current_open_context_baseline(&self) -> Option<OpenContextBaseline> {
-        self.parse_stack
+        self.parser
+            .parse_stack()
             .current_open_meta_opt()
             .and_then(|meta| self.open_context_baseline_for(meta).ok().flatten())
     }
@@ -110,7 +111,8 @@ impl SpineRuntime {
         if !self.jit_enabled {
             return Vec::new();
         }
-        self.parse_stack
+        self.parser
+            .parse_stack()
             .live_open_metas()
             .into_iter()
             .map(|meta| {
@@ -164,7 +166,7 @@ impl SpineRuntime {
         if !self.jit_enabled || input_tokens <= 0 {
             return Ok(false);
         }
-        let open_meta = match self.parse_stack.current_open_meta_opt() {
+        let open_meta = match self.parser.parse_stack().current_open_meta_opt() {
             Some(meta) => meta.clone(),
             None => return Ok(false),
         };
@@ -183,11 +185,13 @@ impl SpineRuntime {
             open_context_source: ContextBaselineSource::ProviderAtOpen,
         };
         self.append_cached_event(event)?;
-        self.parse_stack.set_live_open_context_baseline(
-            &open_meta.id,
-            input_tokens,
-            ContextBaselineSource::ProviderAtOpen,
-        )
+        self.parser
+            .parse_stack_mut_for_runtime_transition()
+            .set_live_open_context_baseline(
+                &open_meta.id,
+                input_tokens,
+                ContextBaselineSource::ProviderAtOpen,
+            )
     }
 
     pub(crate) fn capture_closed_memory_context_accounting(

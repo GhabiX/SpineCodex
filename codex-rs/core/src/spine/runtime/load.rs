@@ -18,6 +18,7 @@ use crate::spine::model::RawMask;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
+use crate::spine::parser::ParserState;
 use crate::spine::store::SpineStore;
 
 impl SpineRuntime {
@@ -63,7 +64,7 @@ impl SpineRuntime {
         Ok(Self {
             store,
             ledger,
-            parse_stack: ParseStack::new(),
+            parser: ParserState::new(),
             raw_len: u64::try_from(raw_live.len())
                 .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
             raw_live,
@@ -367,7 +368,7 @@ fn build_jit_runtime(
     Ok(SpineRuntime {
         store,
         ledger,
-        parse_stack,
+        parser: ParserState::from_parse_stack(parse_stack),
         raw_len: u64::try_from(raw_live.len())
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
         raw_live,

@@ -46,7 +46,7 @@ impl SpineRuntime {
             self.pressure_seq_watermark()?,
             self.trim_seq_watermark()?,
             &self.raw_live,
-            &self.parse_stack,
+            self.parser.parse_stack(),
             &context,
         )
     }

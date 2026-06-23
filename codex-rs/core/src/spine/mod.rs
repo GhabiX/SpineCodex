@@ -7,6 +7,7 @@ mod io;
 mod lexer;
 mod model;
 mod parse_stack;
+mod parser;
 mod render;
 mod runtime;
 mod store;

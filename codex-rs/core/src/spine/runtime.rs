@@ -33,14 +33,11 @@ use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
 #[cfg(test)]
 use crate::spine::model::TrimEvent;
+use crate::spine::parser::ParserState;
+#[cfg(test)]
 use crate::spine::parse_stack::ParseStack;
 #[cfg(test)]
-use crate::spine::parse_stack::parse_stack_msg_leaf_count;
-#[cfg(test)]
-use crate::spine::parse_stack::parse_stack_toolcall_leaf_count;
-#[cfg(test)]
 use crate::spine::render::render_parse_stack_to_context;
-use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
 use crate::spine::store::SpineStore;
 
 mod accounting;
@@ -141,7 +138,7 @@ pub(crate) const SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX: &str =
 pub(crate) struct SpineRuntime {
     store: SpineStore,
     ledger: SpineLedgerCache,
-    parse_stack: ParseStack,
+    parser: ParserState,
     raw_len: u64,
     raw_live: Vec<bool>,
     jit_enabled: bool,
@@ -217,19 +214,20 @@ impl IntoSpineNodeMemory for String {
 impl SpineRuntime {
     pub(crate) fn current_open_index(&self) -> Result<usize, SpineError> {
         self.ensure_jit_enabled("Spine current open index")?;
-        Ok(self.parse_stack.current_open_meta()?.index)
+        Ok(self.parser.parse_stack().current_open_meta()?.index)
     }
 
     #[cfg(test)]
     pub(crate) fn current_open_input_tokens(&self) -> Option<i64> {
-        self.parse_stack
+        self.parser
+            .parse_stack()
             .current_open_meta_opt()
             .and_then(|meta| meta.open_input_tokens)
     }
 
     fn current_close_open_meta(&self) -> Result<&TreeMeta, SpineError> {
-        let Some(open_meta) = self.parse_stack.current_open_meta_opt() else {
-            let cursor = self.parse_stack.current_cursor_id()?;
+        let Some(open_meta) = self.parser.parse_stack().current_open_meta_opt() else {
+            let cursor = self.parser.parse_stack().current_cursor_id()?;
             if cursor.is_root_epoch() {
                 return Err(SpineError::Operation(format!(
                     "cannot close root epoch cursor {cursor}"
@@ -247,22 +245,27 @@ impl SpineRuntime {
 
     #[cfg(test)]
     fn parse_stack(&self) -> &ParseStack {
-        &self.parse_stack
+        self.parser.parse_stack()
+    }
+
+    #[cfg(test)]
+    fn parse_stack_mut_for_test(&mut self) -> &mut ParseStack {
+        self.parser.parse_stack_mut_for_runtime_transition()
     }
 
     #[cfg(test)]
     pub(crate) fn parse_stack_msg_leaf_count_for_test(&self) -> usize {
-        parse_stack_msg_leaf_count(&self.parse_stack.symbols)
+        self.parser.msg_leaf_count_for_test()
     }
 
     #[cfg(test)]
     pub(crate) fn parse_stack_toolcall_leaf_count_for_test(&self) -> usize {
-        parse_stack_toolcall_leaf_count(&self.parse_stack.symbols)
+        self.parser.toolcall_leaf_count_for_test()
     }
 
     #[cfg(test)]
     pub(crate) fn parse_stack_debug_for_test(&self) -> String {
-        format!("{:?}", self.parse_stack)
+        format!("{:?}", self.parser.parse_stack())
     }
 
     fn archive(&self) -> SpineArchive {
@@ -388,11 +391,8 @@ impl SpineRuntime {
     ) -> Result<Vec<ResponseItem>, SpineError> {
         self.ensure_jit_enabled("Spine history materialization")?;
         let trim_projection = self.current_trim_projection()?;
-        render_parse_stack_to_context_with_trim_projection(
-            &self.parse_stack,
-            raw_items,
-            &trim_projection,
-        )
+        self.parser
+            .materialize_variable_context(raw_items, &trim_projection)
     }
 }
 

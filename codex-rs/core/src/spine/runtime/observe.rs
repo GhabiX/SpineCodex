@@ -425,7 +425,9 @@ impl SpineRuntime {
     }
 
     fn push_completed_toolcall_token(&mut self, token: SpineToken) -> Result<(), SpineError> {
-        self.parse_stack.shift(token, &self.archive())
+        let staged = self.parser.staged_after_token(token, &self.archive())?;
+        self.parser.install_staged(staged);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -434,10 +436,10 @@ impl SpineRuntime {
         event: SpineLedgerEvent,
         token: SpineToken,
     ) -> Result<u64, SpineError> {
-        let mut staged_parse_stack = self.parse_stack.clone();
-        staged_parse_stack.shift(token, &self.archive())?;
+        let staged_parse_stack = self.parser.staged_after_token(token, &self.archive())?;
         let event_seq = self.append_cached_event(event)?;
-        self.parse_stack = staged_parse_stack;
+        self.parser
+            .replace_parse_stack_for_runtime_transition(staged_parse_stack);
         Ok(event_seq)
     }
 
@@ -445,12 +447,13 @@ impl SpineRuntime {
         &mut self,
         lexed: crate::spine::lexer::LexedTokenBatch,
     ) -> Result<(), SpineError> {
+        let staged = self
+            .parser
+            .staged_after_lexed_batch_for_observe(&lexed, &self.archive())?;
         for event in lexed.events {
             self.append_cached_event(event)?;
         }
-        for token in lexed.tokens {
-            self.parse_stack.shift(token, &self.archive())?;
-        }
+        self.parser.install_staged(staged);
         Ok(())
     }
 }

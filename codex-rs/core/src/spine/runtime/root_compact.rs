@@ -329,7 +329,7 @@ impl SpineRuntime {
             token_metadata,
             checkpoint_rollout_path,
         )?;
-        let mut pending_compact_parse_stack = self.parse_stack.clone();
+        let mut pending_compact_parse_stack = self.parser.parse_stack().clone();
         pending_compact_parse_stack.shift_pending_compact(
             prepared.memory.clone(),
             prepared.next_open_index,
@@ -346,7 +346,8 @@ impl SpineRuntime {
             &prepared.memory_body,
             prepared.compact_checkpoint.as_ref(),
         ) {
-            self.parse_stack = pending_compact_parse_stack;
+            self.parser
+                .replace_parse_stack_for_runtime_transition(pending_compact_parse_stack);
             return Err(err);
         }
         let marker =
@@ -368,7 +369,8 @@ impl SpineRuntime {
     }
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
-        self.parse_stack = prepared.final_parse_stack;
+        self.parser
+            .replace_parse_stack_for_runtime_transition(prepared.final_parse_stack);
     }
 
     pub(crate) fn install_prepared_root_compact_install(
@@ -407,7 +409,7 @@ impl SpineRuntime {
             ));
         }
         let source_context_end = self.materialize_history(raw_items)?.len();
-        let node = self.parse_stack.current_root_epoch_id()?;
+        let node = self.parser.parse_stack().current_root_epoch_id()?;
         let compact_id = format!("root-{}-{}", node.as_path().replace('.', "-"), self.raw_len);
         let raw_live_hash = hash_raw_live(&self.raw_live);
         let body_hash = sha1_hex(body.as_bytes());
@@ -452,34 +454,35 @@ impl SpineRuntime {
 
         let staged_memory_body = Some((compact_id.as_str(), body.as_str()));
         let trim_projection = self.current_trim_projection()?;
-        let next_open_index_usize = match self.parse_stack.pending_compact_next_open_index(
-            &memory,
-            token_metadata.next_open_input_tokens,
-            token_metadata.next_open_context_tokens,
-        )? {
-            Some(next_open_index) => next_open_index,
-            None => {
-                // Probe first because source_context_range records the pre-compact source
-                // span, while next_open_index is the post-compact h(PS) materialized len.
-                let mut probe_parse_stack = self.parse_stack.clone();
-                let token = crate::spine::lexer::plan_root_compact().lex_compact_token(
-                    memory.clone(),
-                    0,
-                    token_metadata.next_open_input_tokens,
-                    token_metadata.next_open_context_tokens,
-                )?;
-                probe_parse_stack.shift(token, &self.archive())?;
-                render_parse_stack_to_context_with_memory_body_and_trim_projection(
-                    &probe_parse_stack,
-                    raw_items,
-                    staged_memory_body,
-                    &trim_projection,
-                )?
-                .len()
-            }
-        };
+        let next_open_index_usize =
+            match self.parser.parse_stack().pending_compact_next_open_index(
+                &memory,
+                token_metadata.next_open_input_tokens,
+                token_metadata.next_open_context_tokens,
+            )? {
+                Some(next_open_index) => next_open_index,
+                None => {
+                    // Probe first because source_context_range records the pre-compact source
+                    // span, while next_open_index is the post-compact h(PS) materialized len.
+                    let mut probe_parse_stack = self.parser.parse_stack().clone();
+                    let token = crate::spine::lexer::plan_root_compact().lex_compact_token(
+                        memory.clone(),
+                        0,
+                        token_metadata.next_open_input_tokens,
+                        token_metadata.next_open_context_tokens,
+                    )?;
+                    probe_parse_stack.shift(token, &self.archive())?;
+                    render_parse_stack_to_context_with_memory_body_and_trim_projection(
+                        &probe_parse_stack,
+                        raw_items,
+                        staged_memory_body,
+                        &trim_projection,
+                    )?
+                    .len()
+                }
+            };
 
-        let mut staged_parse_stack = self.parse_stack.clone();
+        let mut staged_parse_stack = self.parser.parse_stack().clone();
         staged_parse_stack.shift_pending_compact(
             memory.clone(),
             next_open_index_usize,

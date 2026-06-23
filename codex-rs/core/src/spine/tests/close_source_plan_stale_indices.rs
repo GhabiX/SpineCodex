@@ -11,7 +11,8 @@ fn close_source_plan_ignores_stale_persisted_leaf_context_indices() {
     append_msg(&mut runtime, &mut raw, "first live item");
     append_msg(&mut runtime, &mut raw, "second live item");
 
-    let Some(Symbol::SpineTreeNodes(nodes)) = runtime.parse_stack.symbols.last_mut() else {
+    let Some(Symbol::SpineTreeNodes(nodes)) = runtime.parse_stack_mut_for_test().symbols.last_mut()
+    else {
         panic!("open task should have live suffix nodes");
     };
     let [

@@ -31,9 +31,10 @@ fn close_retry_reduces_existing_pending_close_token() {
             SpineTokenBaselines::default(),
         )
         .expect("prepare close commit");
+    let archive = runtime.archive();
     runtime
-        .parse_stack
-        .shift_pending_close(prepared_memory, &runtime.archive())
+        .parse_stack_mut_for_test()
+        .shift_pending_close(prepared_memory, &archive)
         .expect("simulate retryable pending Close token");
     assert!(matches!(
         runtime.parse_stack().symbols.as_slice(),

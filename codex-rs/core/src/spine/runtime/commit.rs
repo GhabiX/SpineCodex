@@ -349,7 +349,7 @@ impl SpineRuntime {
                 )
             })?;
         }
-        let child = self.parse_stack.next_child_id()?;
+        let child = self.parser.parse_stack().next_child_id()?;
         let open_context_source = token_baselines
             .provider_input_tokens
             .map(|_| ContextBaselineSource::ProviderAtOpen);
@@ -363,7 +363,7 @@ impl SpineRuntime {
             token_baselines.provider_input_tokens,
             open_context_source,
         )?;
-        let mut staged_parse_stack = self.parse_stack.clone();
+        let mut staged_parse_stack = self.parser.parse_stack().clone();
         staged_parse_stack.shift(token, &self.archive())?;
         if let Some(completed_toolcall) = completed_toolcall {
             let (toolcall_event, token) = self.completed_toolcall_parts(&completed_toolcall)?;
@@ -373,7 +373,8 @@ impl SpineRuntime {
             })?;
             let events = vec![event, toolcall_event];
             self.append_committed_events_no_marker(events)?;
-            self.parse_stack = staged_parse_stack;
+            self.parser
+                .replace_parse_stack_for_runtime_transition(staged_parse_stack);
             self.append_trim_candidates_for_completed_toolcall(
                 &completed_toolcall,
                 toolcall_seq,
@@ -396,7 +397,8 @@ impl SpineRuntime {
         }
         let events = vec![event];
         self.append_committed_events_no_marker(events)?;
-        self.parse_stack = staged_parse_stack;
+        self.parser
+            .replace_parse_stack_for_runtime_transition(staged_parse_stack);
         Ok(SpinePreparedCommit {
             kind: SpineCommitKind::Open {
                 open_request_index: usize::try_from(index).map_err(|_| {
@@ -488,7 +490,7 @@ impl SpineRuntime {
             .ok_or_else(|| {
                 SpineError::InvalidEvent(plan.toolcall_seq_overflow_error.to_string())
             })?;
-        let mut pending_close_parse_stack = self.parse_stack.clone();
+        let mut pending_close_parse_stack = self.parser.parse_stack().clone();
         pending_close_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
         let mut final_parse_stack = self.task_tree_reduced_from(
             pending_close_parse_stack.clone(),
@@ -519,7 +521,8 @@ impl SpineRuntime {
         }) {
             match err {
                 CloseFamilyTransactionError::PreparedSideEffect(err) => {
-                    self.parse_stack = pending_close_parse_stack;
+                    self.parser
+                        .replace_parse_stack_for_runtime_transition(pending_close_parse_stack);
                     return Err(err);
                 }
                 CloseFamilyTransactionError::CommitProof(err) => return Err(err),
@@ -559,7 +562,7 @@ impl SpineRuntime {
                 open: None,
             }),
             CloseFamilyAfterClose::Open { summary } => {
-                let mut close_reduced_parse_stack = self.parse_stack.clone();
+                let mut close_reduced_parse_stack = self.parser.parse_stack().clone();
                 close_reduced_parse_stack
                     .shift_pending_close(prepared.memory.clone(), &self.archive())?;
                 close_reduced_parse_stack
@@ -665,7 +668,8 @@ impl SpineRuntime {
 
     pub(crate) fn install_prepared_commit(&mut self, prepared: SpinePreparedCommit) {
         if let Some(final_parse_stack) = prepared.final_parse_stack {
-            self.parse_stack = final_parse_stack;
+            self.parser
+                .replace_parse_stack_for_runtime_transition(final_parse_stack);
         }
         if let Some(completed_toolcall) = prepared.completed_toolcall.as_ref() {
             self.clear_completed_toolcall_anchors(completed_toolcall);
@@ -832,7 +836,7 @@ impl SpineRuntime {
         })?;
         let open_meta = self.current_close_open_meta()?.clone();
         let node = open_meta.id.clone();
-        if !self.parse_stack.current_open_has_nodes()? {
+        if !self.parser.parse_stack().current_open_has_nodes()? {
             return Err(SpineError::Operation(format!(
                 "spine.close requires non-empty live suffix for node {node}"
             )));
@@ -891,7 +895,8 @@ impl SpineRuntime {
             body.clone(),
         );
         let task_tree_reduction = self
-            .parse_stack
+            .parser
+            .parse_stack()
             .prepare_current_task_tree_reduction(&staged_archive, memory.clone())?;
         let archive_writes = staged_archive.staged_writes();
         let replacement = vec![memory_response_item(&body)];

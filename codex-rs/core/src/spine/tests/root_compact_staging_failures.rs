@@ -37,7 +37,7 @@ fn root_compact_staging_failure_does_not_write_memory_body() {
         None,
         None,
     );
-    runtime.parse_stack.symbols = vec![
+    runtime.parse_stack_mut_for_test().symbols = vec![
         crate::spine::model::Symbol::Control(crate::spine::model::ControlSymbol::Init(init_meta)),
         crate::spine::model::Symbol::Control(crate::spine::model::ControlSymbol::Open(open_meta)),
         crate::spine::model::Symbol::Control(crate::spine::model::ControlSymbol::Close(

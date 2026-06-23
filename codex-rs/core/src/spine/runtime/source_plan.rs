@@ -111,12 +111,13 @@ impl SpineRuntime {
 
     fn current_open_suffix_nodes(&self) -> Result<&[SpineTreeNode], SpineError> {
         let open_idx = self
-            .parse_stack
+            .parser
+            .parse_stack()
             .symbols
             .iter()
             .rposition(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Open(_))))
             .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))?;
-        let suffix = &self.parse_stack.symbols[open_idx + 1..];
+        let suffix = &self.parser.parse_stack().symbols[open_idx + 1..];
         match suffix {
             [Symbol::SpineTreeNodes(nodes)]
             | [
@@ -150,7 +151,7 @@ impl SpineRuntime {
                 "spine.close source plan suffix start {suffix_start} does not match h(PS) open index {open_index} for node {node}",
             )));
         }
-        if !self.parse_stack.current_open_has_nodes()? {
+        if !self.parser.parse_stack().current_open_has_nodes()? {
             return Err(SpineError::Operation(format!(
                 "spine.close requires non-empty live suffix for node {node}"
             )));
