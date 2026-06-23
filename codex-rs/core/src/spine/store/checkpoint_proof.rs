@@ -82,43 +82,37 @@ fn unique_root_compact_event<'a>(
             checkpoint.raw_boundary
         )));
     };
-    let mut matching_events = events.iter().filter(|event| event.seq == root_event_seq);
-    let Some(root_event) = matching_events.next() else {
-        return Err(SpineError::InvalidStore(format!(
+    unique_one(
+        events.iter().filter(|event| event.seq == root_event_seq),
+        SpineError::InvalidStore(format!(
             "missing RootCompact ledger marker for compact checkpoint at raw boundary {} token_seq {}",
             checkpoint.raw_boundary, checkpoint.token_seq
-        )));
-    };
-    if matching_events.next().is_some() {
-        return Err(SpineError::InvalidStore(format!(
+        )),
+        SpineError::InvalidStore(format!(
             "ambiguous RootCompact ledger marker for compact checkpoint at raw boundary {} token_seq {}",
             checkpoint.raw_boundary, checkpoint.token_seq
-        )));
-    }
-    Ok(root_event)
+        )),
+    )
 }
 
 fn unique_root_compact_checkpoint_memory_ref<'a>(
     checkpoint: &'a SpineCompactCheckpoint,
     compact_id: &str,
 ) -> Result<&'a CheckpointMemoryRef, SpineError> {
-    let mut matching_memory_refs = checkpoint
-        .memory_refs
-        .iter()
-        .filter(|memory| memory.compact_id == compact_id);
-    let Some(memory_ref) = matching_memory_refs.next() else {
-        return Err(SpineError::InvalidStore(format!(
+    unique_one(
+        checkpoint
+            .memory_refs
+            .iter()
+            .filter(|memory| memory.compact_id == compact_id),
+        SpineError::InvalidStore(format!(
             "compact checkpoint at raw boundary {} is missing RootCompact memory ref {compact_id}",
             checkpoint.raw_boundary
-        )));
-    };
-    if matching_memory_refs.next().is_some() {
-        return Err(SpineError::InvalidStore(format!(
+        )),
+        SpineError::InvalidStore(format!(
             "compact checkpoint at raw boundary {} has ambiguous RootCompact memory ref {compact_id}",
             checkpoint.raw_boundary
-        )));
-    }
-    Ok(memory_ref)
+        )),
+    )
 }
 
 pub(super) fn validate_compact_checkpoint_memory_refs(
@@ -183,14 +177,25 @@ fn unique_memory_by_compact_id<'a>(
     missing_message: impl FnOnce() -> String,
     ambiguous_message: impl FnOnce() -> String,
 ) -> Result<&'a MemRecord, SpineError> {
-    let mut matching_mems = mems.iter().filter(|record| record.compact_id == compact_id);
-    let Some(mem_record) = matching_mems.next() else {
-        return Err(SpineError::InvalidStore(missing_message()));
+    unique_one(
+        mems.iter().filter(|record| record.compact_id == compact_id),
+        SpineError::InvalidStore(missing_message()),
+        SpineError::InvalidStore(ambiguous_message()),
+    )
+}
+
+fn unique_one<T>(
+    mut items: impl Iterator<Item = T>,
+    missing_error: SpineError,
+    ambiguous_error: SpineError,
+) -> Result<T, SpineError> {
+    let Some(item) = items.next() else {
+        return Err(missing_error);
     };
-    if matching_mems.next().is_some() {
-        return Err(SpineError::InvalidStore(ambiguous_message()));
+    if items.next().is_some() {
+        return Err(ambiguous_error);
     }
-    Ok(mem_record)
+    Ok(item)
 }
 
 fn validate_checkpoint_memory_ref_for_mem(
