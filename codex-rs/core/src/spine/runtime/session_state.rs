@@ -343,7 +343,7 @@ pub(crate) struct SpineToolcallCommitHostLoop {
     lock_retries: usize,
 }
 
-pub(crate) enum SpineToolcallCommitHostStep {
+enum SpineToolcallCommitHostStep {
     Done(SpineHostEffects),
     Retry,
     NoSpineCommit,
@@ -500,7 +500,7 @@ impl SpineToolcallCommitHostPlan {
         }
     }
 
-    pub(crate) fn interpret_attempt_for_host(
+    fn interpret_attempt_for_host(
         &self,
         attempt: SpineCommitAttempt,
         lock_retries: usize,
@@ -583,7 +583,7 @@ impl SpineToolcallCommitHostLoop {
             .provider_input_tokens(current_turn_provider_input_tokens)
     }
 
-    pub(crate) fn interpret_attempt_for_host(
+    fn interpret_attempt_for_host(
         &mut self,
         attempt: SpineCommitAttempt,
         call_id: &str,
@@ -597,11 +597,59 @@ impl SpineToolcallCommitHostLoop {
         Ok(step)
     }
 
-    pub(crate) fn host_lock_busy_step(
+    pub(crate) fn interpret_attempt_for_host_control<T>(
+        &mut self,
+        attempt: SpineCommitAttempt,
+        call_id: &str,
+        done: impl FnOnce(SpineHostEffects) -> T,
+        retry: impl FnOnce() -> T,
+        no_spine_commit: impl FnOnce() -> T,
+        fail_closed: impl FnOnce(&'static str, SpineError) -> T,
+        abort_pending: impl FnOnce(&'static str, SpineError) -> T,
+    ) -> Result<T, SpineError> {
+        let step = self.interpret_attempt_for_host(attempt, call_id)?;
+        Ok(step.fold(done, retry, no_spine_commit, fail_closed, abort_pending))
+    }
+
+    fn host_lock_busy_step(
         &mut self,
         call_id: &str,
     ) -> Result<SpineToolcallCommitHostStep, SpineError> {
         self.interpret_attempt_for_host(SpineCommitAttempt::host_lock_busy(), call_id)
+    }
+
+    pub(crate) fn host_lock_busy_control<T>(
+        &mut self,
+        call_id: &str,
+        done: impl FnOnce(SpineHostEffects) -> T,
+        retry: impl FnOnce() -> T,
+        no_spine_commit: impl FnOnce() -> T,
+        fail_closed: impl FnOnce(&'static str, SpineError) -> T,
+        abort_pending: impl FnOnce(&'static str, SpineError) -> T,
+    ) -> Result<T, SpineError> {
+        let step = self.host_lock_busy_step(call_id)?;
+        Ok(step.fold(done, retry, no_spine_commit, fail_closed, abort_pending))
+    }
+}
+
+impl SpineToolcallCommitHostStep {
+    fn fold<T>(
+        self,
+        done: impl FnOnce(SpineHostEffects) -> T,
+        retry: impl FnOnce() -> T,
+        no_spine_commit: impl FnOnce() -> T,
+        fail_closed: impl FnOnce(&'static str, SpineError) -> T,
+        abort_pending: impl FnOnce(&'static str, SpineError) -> T,
+    ) -> T {
+        match self {
+            SpineToolcallCommitHostStep::Done(effects) => done(effects),
+            SpineToolcallCommitHostStep::Retry => retry(),
+            SpineToolcallCommitHostStep::NoSpineCommit => no_spine_commit(),
+            SpineToolcallCommitHostStep::FailClosed { reason, error } => fail_closed(reason, error),
+            SpineToolcallCommitHostStep::AbortPending { reason, error } => {
+                abort_pending(reason, error)
+            }
+        }
     }
 }
 
