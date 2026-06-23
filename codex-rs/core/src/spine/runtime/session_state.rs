@@ -70,6 +70,7 @@ pub(crate) struct SpineInitEvidence<'a> {
 
 pub(crate) struct SpineNativeCompactEvidence<'a> {
     pub(crate) compacted_history: &'a [ResponseItem],
+    pub(crate) native_items: &'a [ResponseItem],
 }
 
 pub(crate) struct SpineCompactEvidence<'a> {

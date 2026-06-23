@@ -32,6 +32,11 @@ pub(crate) struct SpineRootCompactHostPublish {
     publication: SpineRootCompactHistoryPublication,
 }
 
+pub(crate) struct SpineRootCompactPublishedHistory {
+    published_history: Vec<ResponseItem>,
+    materialized_len: usize,
+}
+
 struct SpineRootCompactHistoryPublication {
     materialized: Vec<ResponseItem>,
 }
@@ -169,6 +174,21 @@ impl SpineHostEffects {
             return Err("compact hook returned unsupported host effects".to_string());
         }
         Ok(publication)
+    }
+
+    pub(crate) fn into_only_root_compact_published_history(
+        self,
+        native_items: &[ResponseItem],
+        is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
+    ) -> Result<Option<SpineRootCompactPublishedHistory>, String> {
+        let Some(host_publish) = self.into_only_root_compact_host_publish()? else {
+            return Ok(None);
+        };
+        Ok(Some(SpineRootCompactPublishedHistory::new(
+            host_publish,
+            native_items,
+            is_fixed_prefix_item,
+        )))
     }
 
     pub(crate) fn into_toolcall_host_commit(
@@ -365,6 +385,30 @@ impl SpineRootCompactHostPublish {
             .collect::<Vec<_>>();
         published.extend_from_slice(&self.publication.materialized);
         published
+    }
+}
+
+impl SpineRootCompactPublishedHistory {
+    fn new(
+        host_publish: SpineRootCompactHostPublish,
+        native_items: &[ResponseItem],
+        is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
+    ) -> Self {
+        let materialized_len = host_publish.materialized_len();
+        let published_history =
+            host_publish.published_history_from_native_items(native_items, is_fixed_prefix_item);
+        Self {
+            published_history,
+            materialized_len,
+        }
+    }
+
+    pub(crate) fn materialized_len(&self) -> usize {
+        self.materialized_len
+    }
+
+    pub(crate) fn published_history(&self) -> &[ResponseItem] {
+        &self.published_history
     }
 }
 

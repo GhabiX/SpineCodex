@@ -3045,10 +3045,11 @@ impl Session {
         let prepared_spine_root_compact = self
             .on_compact(SpineNativeCompactEvidence {
                 compacted_history: spine_root_compact_source,
+                native_items: &items,
             })
             .await?;
         if let Some(prepared) = prepared_spine_root_compact.as_ref() {
-            items = prepared.published_history_from_native_items(&items);
+            items = prepared.published_history().to_vec();
             compacted_item.replacement_history = Some(items.clone());
         }
         let installed_spine_root_compact = prepared_spine_root_compact.is_some();
