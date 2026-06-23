@@ -15,10 +15,10 @@ use crate::spine::SpineHostEffects;
 use crate::spine::SpineInitEvidence;
 use crate::spine::SpineMessageEvidence;
 use crate::spine::SpineObservedContextItem;
+use crate::spine::SpineRootCompactHistoryPublication;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
 use crate::spine::SpineRootCompactHostOutcome;
-use crate::spine::SpineRootCompactHostPublish;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
@@ -69,7 +69,7 @@ pub(crate) struct SpineToolCommit {
 }
 
 pub(crate) struct SpineRootCompactPublish {
-    prepared: SpineRootCompactHostPublish,
+    publication: SpineRootCompactHistoryPublication,
 }
 
 pub(crate) enum SpineToolcallTurnError {
@@ -105,19 +105,19 @@ impl SpineToolCommit {
 }
 
 impl SpineRootCompactPublish {
-    fn new(prepared: SpineRootCompactHostPublish) -> Self {
-        Self { prepared }
+    fn new(publication: SpineRootCompactHistoryPublication) -> Self {
+        Self { publication }
     }
 
     pub(crate) fn materialized_len(&self) -> usize {
-        self.prepared.materialized_len()
+        self.publication.materialized_len()
     }
 
     pub(crate) fn published_history_from_native_items(
         &self,
         native_items: &[ResponseItem],
     ) -> Vec<ResponseItem> {
-        self.prepared
+        self.publication
             .published_history_from_native_items(native_items, Session::is_spine_fixed_prefix_item)
     }
 }
@@ -1549,25 +1549,38 @@ impl Session {
         &self,
         evidence: SpineCompactEvidence<'_>,
     ) -> CodexResult<Option<SpineRootCompactPublish>> {
-        let Some(prepared) = self
+        let effects = self
             .prepare_spine_root_compact_from_native_history(evidence)
             .await
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),
-            })?
-        else {
+            })?;
+        let (effects, publication) =
+            effects
+                .into_root_compact_history_publication()
+                .map_err(|reason| CodexErr::SpineTerminalFailure {
+                    operation: "install Spine root compact".to_string(),
+                    reason,
+                })?;
+        if !effects.is_empty() {
+            return Err(CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason: "compact hook returned unsupported host effects".to_string(),
+            });
+        }
+        let Some(publication) = publication else {
             return Ok(None);
         };
-        Ok(Some(SpineRootCompactPublish::new(prepared)))
+        Ok(Some(SpineRootCompactPublish::new(publication)))
     }
 
     async fn prepare_spine_root_compact_from_native_history(
         &self,
         evidence: SpineCompactEvidence<'_>,
-    ) -> Result<Option<SpineRootCompactHostPublish>, SpineError> {
+    ) -> Result<SpineHostEffects, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(None);
+            return Ok(SpineHostEffects::none());
         };
         self.ensure_rollout_materialized().await;
         self.flush_rollout()

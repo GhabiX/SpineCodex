@@ -3,7 +3,6 @@ use super::runtime::SpineError;
 use super::runtime::SpineHostEffects;
 use super::runtime::SpineInitEvidence;
 use super::runtime::SpineMessageEvidence;
-use super::runtime::SpineRootCompactHostPublish;
 use super::runtime::SpineSessionState;
 use super::runtime::SpineToolcallCommitEvidence;
 use super::runtime::SpineToolcallCommitHostLoop;
@@ -31,7 +30,7 @@ pub(crate) fn on_compact(
     raw_items: &[Option<ResponseItem>],
     close_provider_input_tokens: Option<i64>,
     evidence: SpineCompactEvidence<'_>,
-) -> Result<Option<SpineRootCompactHostPublish>, SpineError> {
+) -> Result<SpineHostEffects, SpineError> {
     state.prepare_native_root_compact_from_history_with_checkpoint(
         rollout_path,
         evidence.compacted_history,

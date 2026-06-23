@@ -966,10 +966,6 @@ pub(crate) struct SpineRootCompactHostInstall {
     commit: PreparedSpineRootCompactCommit,
 }
 
-pub(crate) struct SpineRootCompactHostPublish {
-    materialized: Vec<ResponseItem>,
-}
-
 pub(crate) struct SpineRootCompactHostOutcome {
     spine_tree_snapshot: Option<SpineTreeUpdateEvent>,
 }
@@ -1001,30 +997,6 @@ impl SpineRootCompactHostInstall {
     #[cfg(test)]
     pub(crate) fn result(&self) -> SpineRootCompactResult {
         self.commit.result()
-    }
-}
-
-impl SpineRootCompactHostPublish {
-    fn new(materialized: Vec<ResponseItem>) -> Self {
-        Self { materialized }
-    }
-
-    pub(crate) fn materialized_len(&self) -> usize {
-        self.materialized.len()
-    }
-
-    pub(crate) fn published_history_from_native_items(
-        &self,
-        native_items: &[ResponseItem],
-        is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
-    ) -> Vec<ResponseItem> {
-        let mut published = native_items
-            .iter()
-            .filter(|item| is_fixed_prefix_item(item))
-            .cloned()
-            .collect::<Vec<_>>();
-        published.extend_from_slice(&self.materialized);
-        published
     }
 }
 
@@ -1884,10 +1856,10 @@ impl SpineSessionState {
         compacted_history: &[ResponseItem],
         raw_items: &[Option<ResponseItem>],
         close_provider_input_tokens: Option<i64>,
-    ) -> Result<Option<SpineRootCompactHostPublish>, SpineError> {
+    ) -> Result<SpineHostEffects, SpineError> {
         self.ensure_valid()?;
         if !self.is_ready() {
-            return Ok(None);
+            return Ok(SpineHostEffects::none());
         }
         let body = spine_root_compact_body(compacted_history).ok_or_else(|| {
             SpineError::InvalidEvent(
@@ -1903,7 +1875,9 @@ impl SpineSessionState {
         )?;
         let materialized = install.materialized().to_vec();
         self.pending_root_compact_install = Some(install);
-        Ok(Some(SpineRootCompactHostPublish::new(materialized)))
+        Ok(SpineHostEffects::root_compact_history_publication(
+            materialized,
+        ))
     }
 
     pub(crate) fn single_completed_toolcall_evidence(

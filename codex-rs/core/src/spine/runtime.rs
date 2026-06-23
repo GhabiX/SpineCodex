@@ -66,6 +66,7 @@ mod types;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use host_effect::SpineHistoryUpdate;
 pub(crate) use host_effect::SpineHostEffects;
+pub(crate) use host_effect::SpineRootCompactHistoryPublication;
 pub(crate) use host_effect::SpineTreeUpdateDelivery;
 pub(crate) use pending::CompletedToolCall;
 pub(crate) use pending::CompletedToolCallSegment;
@@ -99,7 +100,6 @@ pub(crate) use session_state::SpineMessageEvidence;
 pub(crate) use session_state::SpineObservedContextItem;
 pub(crate) use session_state::SpineRootCompactHostInstall;
 pub(crate) use session_state::SpineRootCompactHostOutcome;
-pub(crate) use session_state::SpineRootCompactHostPublish;
 pub(crate) use session_state::SpineSessionState;
 pub(crate) use session_state::SpineToolCallEvidence;
 #[cfg(test)]

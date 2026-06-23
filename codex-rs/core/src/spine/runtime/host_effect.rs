@@ -21,6 +21,10 @@ pub(crate) struct SpineTreeHostUpdates {
     after_raw_output_durable: Vec<SpineTreeUpdateEvent>,
 }
 
+pub(crate) struct SpineRootCompactHistoryPublication {
+    materialized: Vec<ResponseItem>,
+}
+
 impl SpineHostEffects {
     pub(crate) fn none() -> Self {
         Self {
@@ -64,8 +68,18 @@ impl SpineHostEffects {
         Self::one(SpineHostEffect::PublishMaterializedHistoryAfterBatch)
     }
 
+    pub(crate) fn root_compact_history_publication(materialized: Vec<ResponseItem>) -> Self {
+        Self::one(SpineHostEffect::RootCompactHistoryPublication(
+            SpineRootCompactHistoryPublication::new(materialized),
+        ))
+    }
+
     pub(crate) fn extend(&mut self, effects: Self) {
         self.effects.extend(effects.effects);
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.effects.is_empty()
     }
 
     pub(crate) fn into_after_batch_materialized_history_request(self) -> (Self, bool) {
@@ -82,6 +96,28 @@ impl SpineHostEffects {
             }
         }
         (Self::many(remaining), requested)
+    }
+
+    pub(crate) fn into_root_compact_history_publication(
+        self,
+    ) -> Result<(Self, Option<SpineRootCompactHistoryPublication>), String> {
+        let mut remaining = Vec::new();
+        let mut publication = None;
+        for effect in self.effects {
+            match effect {
+                SpineHostEffect::RootCompactHistoryPublication(next) => {
+                    if publication.is_some() {
+                        return Err(
+                            "multiple Spine root compact history publications in one hook"
+                                .to_string(),
+                        );
+                    }
+                    publication = Some(next);
+                }
+                effect => remaining.push(effect),
+            }
+        }
+        Ok((Self::many(remaining), publication))
     }
 
     pub(crate) fn apply_history_updates_or_keep(
@@ -116,6 +152,7 @@ pub(crate) enum SpineHostEffect {
         delivery: SpineTreeUpdateDelivery,
     },
     PublishMaterializedHistoryAfterBatch,
+    RootCompactHistoryPublication(SpineRootCompactHistoryPublication),
 }
 
 impl SpineHostEffect {
@@ -175,7 +212,32 @@ impl SpineHostEffect {
             Self::ReplaceHistory(_) => None,
             Self::TreeUpdate { snapshot, delivery } => Some((snapshot, delivery)),
             Self::PublishMaterializedHistoryAfterBatch => None,
+            Self::RootCompactHistoryPublication(_) => None,
         }
+    }
+}
+
+impl SpineRootCompactHistoryPublication {
+    fn new(materialized: Vec<ResponseItem>) -> Self {
+        Self { materialized }
+    }
+
+    pub(crate) fn materialized_len(&self) -> usize {
+        self.materialized.len()
+    }
+
+    pub(crate) fn published_history_from_native_items(
+        &self,
+        native_items: &[ResponseItem],
+        is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
+    ) -> Vec<ResponseItem> {
+        let mut published = native_items
+            .iter()
+            .filter(|item| is_fixed_prefix_item(item))
+            .cloned()
+            .collect::<Vec<_>>();
+        published.extend_from_slice(&self.materialized);
+        published
     }
 }
 
