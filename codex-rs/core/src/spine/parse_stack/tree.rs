@@ -74,8 +74,7 @@ pub(super) fn tree_snapshot_nodes(
     Ok(rows
         .into_iter()
         .filter(|(id, _)| projected_ids.contains(id))
-        .map(|row| {
-            let (_, row) = row;
+        .map(|(_, row)| {
             let status = row.snapshot_status();
             let summary = visible_summary(&row).map(str::to_string);
             // Snapshot parents describe this projected forest, not hidden
@@ -379,7 +378,7 @@ fn visible_tree_row_ids(
         }
         if let Some(parent) = node_id.parent() {
             for sibling in rows.keys() {
-                if sibling.parent() == Some(parent.clone()) && sibling < node_id {
+                if sibling.parent().as_ref() == Some(&parent) && sibling < node_id {
                     visible.insert(sibling.clone());
                 }
             }
