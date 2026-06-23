@@ -22,7 +22,6 @@ use crate::spine::model::NodeId;
 use crate::spine::model::SpineCommitKindMarker;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::TreeMeta;
-use crate::spine::parse_stack::ParseStack;
 use crate::spine::store::SpineStore;
 
 impl SpineRuntime {
@@ -56,11 +55,11 @@ impl SpineRuntime {
 
     pub(super) fn parse_stack_with_memory_context_accounting(
         &self,
-    ) -> Result<ParseStack, SpineError> {
+    ) -> Result<crate::spine::parse_stack::ParseStack, SpineError> {
         let accounting = self.memory_context_accounting_by_id()?;
-        let mut parse_stack = self.parser.parse_stack().clone();
-        parse_stack.apply_memory_context_accounting(&accounting);
-        Ok(parse_stack)
+        Ok(self
+            .parser
+            .parse_stack_with_memory_context_accounting(&accounting))
     }
 
     pub(super) fn memory_context_accounting_by_id(
@@ -102,8 +101,8 @@ impl SpineRuntime {
     #[cfg(test)]
     pub(super) fn current_open_context_baseline(&self) -> Option<OpenContextBaseline> {
         self.parser
-            .parse_stack()
-            .current_open_meta_opt()
+            .current_open_meta_cloned()
+            .as_ref()
             .and_then(|meta| self.open_context_baseline_for(meta).ok().flatten())
     }
 
@@ -112,11 +111,10 @@ impl SpineRuntime {
             return Vec::new();
         }
         self.parser
-            .parse_stack()
-            .live_open_metas()
+            .live_open_metas_cloned()
             .into_iter()
             .map(|meta| {
-                let (baseline, problem) = match self.open_context_baseline_for(meta) {
+                let (baseline, problem) = match self.open_context_baseline_for(&meta) {
                     Ok(baseline) => (baseline, None),
                     Err(problem) => (None, Some(problem)),
                 };
@@ -166,8 +164,8 @@ impl SpineRuntime {
         if !self.jit_enabled || input_tokens <= 0 {
             return Ok(false);
         }
-        let open_meta = match self.parser.parse_stack().current_open_meta_opt() {
-            Some(meta) => meta.clone(),
+        let open_meta = match self.parser.current_open_meta_cloned() {
+            Some(meta) => meta,
             None => return Ok(false),
         };
         if open_meta.open_context_tokens.is_some() {

@@ -77,6 +77,10 @@ fn runtime_accounting_routes_open_baseline_mutation_through_parser_state() {
         "runtime/accounting.rs must not take a mutable ParseStack handle"
     );
     assert!(
+        !accounting.contains(".parse_stack()"),
+        "runtime/accounting.rs must not read ParseStack through the raw parser handle"
+    );
+    assert!(
         accounting.contains("self.parser")
             && accounting.contains(".set_live_open_context_baseline("),
         "runtime accounting should route live open baseline updates through ParserState"

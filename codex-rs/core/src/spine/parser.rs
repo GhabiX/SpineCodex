@@ -23,6 +23,7 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::NodeId;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineToken;
+use crate::spine::model::TreeMeta;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::apply_replay_event_to_parse_stack;
@@ -70,6 +71,27 @@ impl ParserState {
 
     pub(super) fn parse_stack(&self) -> &ParseStack {
         &self.parse_stack
+    }
+
+    pub(super) fn parse_stack_with_memory_context_accounting(
+        &self,
+        accounting: &BTreeMap<String, i64>,
+    ) -> ParseStack {
+        let mut parse_stack = self.parse_stack.clone();
+        parse_stack.apply_memory_context_accounting(accounting);
+        parse_stack
+    }
+
+    pub(super) fn current_open_meta_cloned(&self) -> Option<TreeMeta> {
+        self.parse_stack.current_open_meta_opt().cloned()
+    }
+
+    pub(super) fn live_open_metas_cloned(&self) -> Vec<TreeMeta> {
+        self.parse_stack
+            .live_open_metas()
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     pub(super) fn into_parse_stack(self) -> ParseStack {
