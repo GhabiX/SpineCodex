@@ -86,3 +86,36 @@ fn runtime_accounting_routes_open_baseline_mutation_through_parser_state() {
         "runtime accounting should route live open baseline updates through ParserState"
     );
 }
+
+#[test]
+fn runtime_source_plan_routes_parse_stack_reads_through_parser_state() {
+    let source_plan = fs::read_to_string(spine_src("runtime/source_plan.rs"))
+        .expect("read runtime source_plan source");
+    assert!(
+        !source_plan.contains(".parse_stack()"),
+        "runtime/source_plan.rs must not read ParseStack through the raw parser handle"
+    );
+    assert!(
+        !source_plan.contains("use crate::spine::model::Symbol"),
+        "runtime/source_plan.rs must not inspect parser symbols directly"
+    );
+    assert!(
+        source_plan.contains(".current_open_suffix_nodes_cloned()")
+            && source_plan.contains(".current_open_has_nodes()"),
+        "runtime source-plan construction should route current-open queries through ParserState"
+    );
+}
+
+#[test]
+fn runtime_commit_routes_current_open_queries_through_parser_state() {
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    assert!(
+        !commit.contains(".parse_stack().current_open_has_nodes()"),
+        "runtime/commit.rs must not query current-open node state through the raw parser handle"
+    );
+    assert!(
+        commit.contains(".current_open_has_nodes()"),
+        "runtime commit should route current-open node queries through ParserState"
+    );
+}

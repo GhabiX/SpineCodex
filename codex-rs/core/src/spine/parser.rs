@@ -18,11 +18,14 @@ use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
 use crate::spine::lexer::LexedTokenBatch;
 use crate::spine::model::ContextBaselineSource;
+use crate::spine::model::ControlSymbol;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
 use crate::spine::model::NodeId;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineToken;
+use crate::spine::model::SpineTreeNode;
+use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
@@ -92,6 +95,32 @@ impl ParserState {
             .into_iter()
             .cloned()
             .collect()
+    }
+
+    pub(super) fn current_open_suffix_nodes_cloned(
+        &self,
+    ) -> Result<Vec<SpineTreeNode>, SpineError> {
+        let open_idx = self
+            .parse_stack
+            .symbols
+            .iter()
+            .rposition(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Open(_))))
+            .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))?;
+        let suffix = &self.parse_stack.symbols[open_idx + 1..];
+        match suffix {
+            [Symbol::SpineTreeNodes(nodes)]
+            | [
+                Symbol::SpineTreeNodes(nodes),
+                Symbol::Control(ControlSymbol::Close(_)),
+            ] => Ok(nodes.clone()),
+            _ => Err(SpineError::InvalidEvent(format!(
+                "spine.close source plan expected live node list after current Open, found {suffix:?}"
+            ))),
+        }
+    }
+
+    pub(super) fn current_open_has_nodes(&self) -> Result<bool, SpineError> {
+        self.parse_stack.current_open_has_nodes()
     }
 
     pub(super) fn into_parse_stack(self) -> ParseStack {

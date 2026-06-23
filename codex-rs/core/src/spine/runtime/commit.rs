@@ -836,7 +836,7 @@ impl SpineRuntime {
         })?;
         let open_meta = self.current_close_open_meta()?.clone();
         let node = open_meta.id.clone();
-        if !self.parser.parse_stack().current_open_has_nodes()? {
+        if !self.parser.current_open_has_nodes()? {
             return Err(SpineError::Operation(format!(
                 "spine.close requires non-empty live suffix for node {node}"
             )));

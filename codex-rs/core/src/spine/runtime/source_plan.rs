@@ -10,10 +10,7 @@ use super::support::collect_source_plan_entries_from_visible_refs;
 use super::support::is_real_user_message;
 use super::support::validate_source_plan_context_index;
 use crate::spine::io::hash_response_items;
-use crate::spine::model::ControlSymbol;
 use crate::spine::model::NodeId;
-use crate::spine::model::SpineTreeNode;
-use crate::spine::model::Symbol;
 use crate::spine::render::project_spine_tree_nodes_visible_items;
 use crate::spine::user_message_projection::user_message_memory_body;
 
@@ -66,8 +63,8 @@ impl SpineRuntime {
             &open_meta.id,
         )?;
 
-        let suffix_nodes = self.current_open_suffix_nodes()?;
-        let visible_refs = project_spine_tree_nodes_visible_items(suffix_nodes, suffix_start)?;
+        let suffix_nodes = self.parser.current_open_suffix_nodes_cloned()?;
+        let visible_refs = project_spine_tree_nodes_visible_items(&suffix_nodes, suffix_start)?;
         let projected_context_end =
             suffix_start
                 .checked_add(visible_refs.len())
@@ -109,27 +106,6 @@ impl SpineRuntime {
         })
     }
 
-    fn current_open_suffix_nodes(&self) -> Result<&[SpineTreeNode], SpineError> {
-        let open_idx = self
-            .parser
-            .parse_stack()
-            .symbols
-            .iter()
-            .rposition(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Open(_))))
-            .ok_or_else(|| SpineError::InvalidEvent("ParseStack has no live Open".to_string()))?;
-        let suffix = &self.parser.parse_stack().symbols[open_idx + 1..];
-        match suffix {
-            [Symbol::SpineTreeNodes(nodes)]
-            | [
-                Symbol::SpineTreeNodes(nodes),
-                Symbol::Control(ControlSymbol::Close(_)),
-            ] => Ok(nodes),
-            _ => Err(SpineError::InvalidEvent(format!(
-                "spine.close source plan expected live node list after current Open, found {suffix:?}"
-            ))),
-        }
-    }
-
     fn validate_close_source_plan_request(
         &self,
         raw_context_items: &[ResponseItem],
@@ -151,7 +127,7 @@ impl SpineRuntime {
                 "spine.close source plan suffix start {suffix_start} does not match h(PS) open index {open_index} for node {node}",
             )));
         }
-        if !self.parser.parse_stack().current_open_has_nodes()? {
+        if !self.parser.current_open_has_nodes()? {
             return Err(SpineError::Operation(format!(
                 "spine.close requires non-empty live suffix for node {node}"
             )));
