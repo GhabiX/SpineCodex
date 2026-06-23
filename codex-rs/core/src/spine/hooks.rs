@@ -5,7 +5,6 @@ use super::runtime::SpineInitEvidence;
 use super::runtime::SpineMessageEvidence;
 use super::runtime::SpineSessionState;
 use super::runtime::SpineToolcallCommitEvidence;
-use super::runtime::SpineToolcallCommitHostLoop;
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
 
@@ -46,7 +45,7 @@ pub(crate) fn on_toolcall(
     current_turn_provider_input_tokens: Option<i64>,
     tool_resp_already_recorded: bool,
     recorded_inside_reduce: bool,
-) -> Result<Option<SpineToolcallCommitHostLoop>, SpineError> {
+) -> Result<SpineHostEffects, SpineError> {
     state
         .prepare_completed_toolcall_for_commit(
             evidence,
@@ -55,5 +54,8 @@ pub(crate) fn on_toolcall(
             tool_resp_already_recorded,
             recorded_inside_reduce,
         )
-        .map(|plan| plan.map(|plan| plan.into_host_loop()))
+        .map(|plan| {
+            plan.map(|plan| SpineHostEffects::toolcall_commit_loop(plan.into_host_loop()))
+                .unwrap_or_else(SpineHostEffects::none)
+        })
 }

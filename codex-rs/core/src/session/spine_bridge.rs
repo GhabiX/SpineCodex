@@ -1281,15 +1281,23 @@ impl Session {
         let mut commit_host_loop = {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let Some(commit_host_loop) = hooks::on_toolcall(
+            let effects = hooks::on_toolcall(
                 &mut guard,
                 &toolcall.evidence.toolcall_evidence,
                 &raw_items,
                 current_turn_provider_input_tokens,
                 tool_resp_already_recorded,
                 recorded_output_inside_reduce,
-            )?
-            else {
+            )?;
+            let (effects, commit_host_loop) = effects
+                .into_toolcall_commit_loop()
+                .map_err(SpineError::Invariant)?;
+            if !effects.is_empty() {
+                return Err(SpineError::Invariant(
+                    "toolcall hook returned unsupported host effects".to_string(),
+                ));
+            }
+            let Some(commit_host_loop) = commit_host_loop else {
                 return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
             };
             commit_host_loop

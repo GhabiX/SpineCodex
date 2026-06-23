@@ -2,6 +2,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 
+use super::session_state::SpineToolcallCommitHostLoop;
+
 #[derive(Debug)]
 pub(crate) struct SpineHistoryUpdate {
     pub(crate) call_id: String,
@@ -74,6 +76,10 @@ impl SpineHostEffects {
         ))
     }
 
+    pub(crate) fn toolcall_commit_loop(commit_loop: SpineToolcallCommitHostLoop) -> Self {
+        Self::one(SpineHostEffect::ToolcallCommitLoop(commit_loop))
+    }
+
     pub(crate) fn extend(&mut self, effects: Self) {
         self.effects.extend(effects.effects);
     }
@@ -120,6 +126,25 @@ impl SpineHostEffects {
         Ok((Self::many(remaining), publication))
     }
 
+    pub(crate) fn into_toolcall_commit_loop(
+        self,
+    ) -> Result<(Self, Option<SpineToolcallCommitHostLoop>), String> {
+        let mut remaining = Vec::new();
+        let mut commit_loop = None;
+        for effect in self.effects {
+            match effect {
+                SpineHostEffect::ToolcallCommitLoop(next) => {
+                    if commit_loop.is_some() {
+                        return Err("multiple Spine toolcall commit loops in one hook".to_string());
+                    }
+                    commit_loop = Some(next);
+                }
+                effect => remaining.push(effect),
+            }
+        }
+        Ok((Self::many(remaining), commit_loop))
+    }
+
     pub(crate) fn apply_history_updates_or_keep(
         self,
         mut apply_history_update: impl FnMut(
@@ -153,6 +178,7 @@ pub(crate) enum SpineHostEffect {
     },
     PublishMaterializedHistoryAfterBatch,
     RootCompactHistoryPublication(SpineRootCompactHistoryPublication),
+    ToolcallCommitLoop(SpineToolcallCommitHostLoop),
 }
 
 impl SpineHostEffect {
@@ -213,6 +239,7 @@ impl SpineHostEffect {
             Self::TreeUpdate { snapshot, delivery } => Some((snapshot, delivery)),
             Self::PublishMaterializedHistoryAfterBatch => None,
             Self::RootCompactHistoryPublication(_) => None,
+            Self::ToolcallCommitLoop(_) => None,
         }
     }
 }
