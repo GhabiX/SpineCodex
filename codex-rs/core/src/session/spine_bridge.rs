@@ -70,10 +70,6 @@ pub(crate) struct SpineToolCommit {
     deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
-pub(crate) struct SpineRootCompactPublish {
-    published_history: SpineRootCompactPublishedHistory,
-}
-
 pub(crate) enum SpineToolcallTurnError {
     Codex(CodexErr),
     Terminal(String),
@@ -103,20 +99,6 @@ impl SpineToolCommit {
 
     pub(crate) fn has_deferred_tree_update(&self) -> bool {
         self.deferred_tree_update.is_some()
-    }
-}
-
-impl SpineRootCompactPublish {
-    fn new(published_history: SpineRootCompactPublishedHistory) -> Self {
-        Self { published_history }
-    }
-
-    pub(crate) fn materialized_len(&self) -> usize {
-        self.published_history.materialized_len()
-    }
-
-    pub(crate) fn published_history(&self) -> &[ResponseItem] {
-        self.published_history.published_history()
     }
 }
 
@@ -1481,7 +1463,7 @@ impl Session {
     pub(crate) async fn on_compact(
         &self,
         evidence: SpineNativeCompactEvidence<'_>,
-    ) -> CodexResult<Option<SpineRootCompactPublish>> {
+    ) -> CodexResult<Option<SpineRootCompactPublishedHistory>> {
         let native_items = evidence.native_items;
         let effects = self
             .prepare_spine_root_compact_from_native_history(evidence)
@@ -1502,7 +1484,7 @@ impl Session {
         let Some(published_history) = published_history else {
             return Ok(None);
         };
-        Ok(Some(SpineRootCompactPublish::new(published_history)))
+        Ok(Some(published_history))
     }
 
     async fn prepare_spine_root_compact_from_native_history(
@@ -1545,8 +1527,7 @@ impl Session {
 
     pub(crate) async fn finalize_spine_root_compact_after_history_publish(
         &self,
-        prepared: SpineRootCompactPublish,
-        published_history_len: usize,
+        published_history: SpineRootCompactPublishedHistory,
     ) -> CodexResult<SpineRootCompactHostOutcome> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Err(CodexErr::SpineTerminalFailure {
@@ -1555,17 +1536,11 @@ impl Session {
             });
         };
         let mut guard = spine_slot.lock().await;
-        if prepared.materialized_len() != published_history_len {
-            return Err(CodexErr::SpineTerminalFailure {
-                operation: "install Spine root compact".to_string(),
-                reason: format!(
-                    "published history length {published_history_len} does not match prepared Spine root compact materialized length {}",
-                    prepared.materialized_len()
-                ),
-            });
-        }
+        let published_variable_history_len = published_history.materialized_len();
         guard
-            .take_pending_root_compact_host_outcome_after_history_publish(published_history_len)
+            .take_pending_root_compact_host_outcome_after_history_publish(
+                published_variable_history_len,
+            )
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),

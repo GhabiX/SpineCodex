@@ -3072,12 +3072,8 @@ impl Session {
             .await;
         let spine_tree_snapshot =
             if let Some(prepared_spine_root_compact) = prepared_spine_root_compact {
-                let published_variable_history_len = prepared_spine_root_compact.materialized_len();
                 match self
-                    .finalize_spine_root_compact_after_history_publish(
-                        prepared_spine_root_compact,
-                        published_variable_history_len,
-                    )
+                    .finalize_spine_root_compact_after_history_publish(prepared_spine_root_compact)
                     .await
                 {
                     Ok(outcome) => outcome.into_spine_tree_snapshot(),
