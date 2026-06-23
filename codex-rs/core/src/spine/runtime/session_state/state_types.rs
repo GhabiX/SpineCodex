@@ -142,10 +142,6 @@ impl SpineRootCompactHostInstall {
         Self { commit }
     }
 
-    pub(crate) fn materialized(&self) -> &[ResponseItem] {
-        self.commit.materialized()
-    }
-
     #[cfg(test)]
     pub(crate) fn result(&self) -> SpineRootCompactResult {
         self.commit.result()
