@@ -106,10 +106,10 @@ pub(crate) use session_state::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use session_state::SpineToolOutputRecording;
 pub(crate) use session_state::SpineToolcallCommitEvidence;
-pub(crate) use session_state::SpineToolcallCommitHostLoop;
 pub(crate) use session_state::SpineToolcallCommitHostStep;
 pub(crate) use session_state::SpineToolcallCommitProviderInputTokens;
 pub(crate) use session_state::SpineToolcallHookEvidence;
+pub(crate) use session_state::SpineToolcallHostCommit;
 pub(crate) use support::is_non_toolcall_msg;
 pub(crate) use support::is_real_user_message;
 #[cfg(test)]

@@ -28,10 +28,10 @@ use crate::spine::SpineToolCallEvidence;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
-use crate::spine::SpineToolcallCommitHostLoop;
 use crate::spine::SpineToolcallCommitHostStep;
 use crate::spine::SpineToolcallCommitProviderInputTokens;
 use crate::spine::SpineToolcallHookEvidence;
+use crate::spine::SpineToolcallHostCommit;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
 use crate::spine::is_non_toolcall_msg;
@@ -1291,7 +1291,7 @@ impl Session {
                 },
             )?;
             let (effects, commit_host_loop) = effects
-                .into_toolcall_commit_loop()
+                .into_toolcall_host_commit()
                 .map_err(SpineError::Invariant)?;
             if !effects.is_empty() {
                 return Err(SpineError::Invariant(
@@ -1392,7 +1392,7 @@ impl Session {
     fn try_commit_spine_tool_output_once(
         &self,
         spine_slot: &Mutex<SpineSessionState>,
-        commit_host_loop: &mut SpineToolcallCommitHostLoop,
+        commit_host_loop: &mut SpineToolcallHostCommit,
         call_id: &str,
         input: SpineToolcallCommitAttemptInput<'_>,
     ) -> Result<SpineToolcallCommitHostStep, SpineError> {

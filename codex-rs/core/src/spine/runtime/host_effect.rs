@@ -3,7 +3,7 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
 
-use super::session_state::SpineToolcallCommitHostLoop;
+use super::session_state::SpineToolcallHostCommit;
 
 #[derive(Debug)]
 pub(crate) struct SpineHistoryUpdate {
@@ -81,8 +81,8 @@ impl SpineHostEffects {
         ))
     }
 
-    pub(crate) fn toolcall_commit_loop(commit_loop: SpineToolcallCommitHostLoop) -> Self {
-        Self::one(SpineHostEffect::ToolcallCommitLoop(commit_loop))
+    pub(crate) fn toolcall_host_commit(host_commit: SpineToolcallHostCommit) -> Self {
+        Self::one(SpineHostEffect::ToolcallHostCommit(host_commit))
     }
 
     pub(crate) fn extend(&mut self, effects: Self) {
@@ -157,23 +157,23 @@ impl SpineHostEffects {
         Ok((Self::many(remaining), publication))
     }
 
-    pub(crate) fn into_toolcall_commit_loop(
+    pub(crate) fn into_toolcall_host_commit(
         self,
-    ) -> Result<(Self, Option<SpineToolcallCommitHostLoop>), String> {
+    ) -> Result<(Self, Option<SpineToolcallHostCommit>), String> {
         let mut remaining = Vec::new();
-        let mut commit_loop = None;
+        let mut host_commit = None;
         for effect in self.effects {
             match effect {
-                SpineHostEffect::ToolcallCommitLoop(next) => {
-                    if commit_loop.is_some() {
-                        return Err("multiple Spine toolcall commit loops in one hook".to_string());
+                SpineHostEffect::ToolcallHostCommit(next) => {
+                    if host_commit.is_some() {
+                        return Err("multiple Spine toolcall host commits in one hook".to_string());
                     }
-                    commit_loop = Some(next);
+                    host_commit = Some(next);
                 }
                 effect => remaining.push(effect),
             }
         }
-        Ok((Self::many(remaining), commit_loop))
+        Ok((Self::many(remaining), host_commit))
     }
 
     pub(crate) fn apply_history_updates_or_keep(
@@ -209,7 +209,7 @@ pub(crate) enum SpineHostEffect {
     },
     PublishMaterializedHistoryAfterBatch,
     RootCompactHistoryPublication(SpineRootCompactHostPublish),
-    ToolcallCommitLoop(SpineToolcallCommitHostLoop),
+    ToolcallHostCommit(SpineToolcallHostCommit),
 }
 
 impl SpineHostEffect {
@@ -270,7 +270,7 @@ impl SpineHostEffect {
             Self::TreeUpdate { snapshot, delivery } => Some((snapshot, delivery)),
             Self::PublishMaterializedHistoryAfterBatch => None,
             Self::RootCompactHistoryPublication(_) => None,
-            Self::ToolcallCommitLoop(_) => None,
+            Self::ToolcallHostCommit(_) => None,
         }
     }
 }

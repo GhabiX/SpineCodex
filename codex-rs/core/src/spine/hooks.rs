@@ -34,7 +34,7 @@ pub(crate) fn on_toolcall(
     state
         .prepare_completed_toolcall_for_commit(evidence)
         .map(|plan| {
-            plan.map(|plan| SpineHostEffects::toolcall_commit_loop(plan.into_host_loop()))
+            plan.map(|plan| SpineHostEffects::toolcall_host_commit(plan.into_host_commit()))
                 .unwrap_or_else(SpineHostEffects::none)
         })
 }

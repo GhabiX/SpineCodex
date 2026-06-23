@@ -358,7 +358,7 @@ pub(crate) struct SpineToolcallCommitProviderInputTokens {
     current_turn: Option<i64>,
 }
 
-pub(crate) struct SpineToolcallCommitHostLoop {
+pub(crate) struct SpineToolcallHostCommit {
     plan: SpineToolcallCommitHostPlan,
     lock_retries: usize,
 }
@@ -476,8 +476,8 @@ impl SpineToolcallCommitPreparation {
 }
 
 impl SpineToolcallCommitHostPlan {
-    pub(crate) fn into_host_loop(self) -> SpineToolcallCommitHostLoop {
-        SpineToolcallCommitHostLoop {
+    pub(crate) fn into_host_commit(self) -> SpineToolcallHostCommit {
+        SpineToolcallHostCommit {
             plan: self,
             lock_retries: 0,
         }
@@ -587,7 +587,7 @@ impl SpineToolcallCommitHostPlan {
     }
 }
 
-impl SpineToolcallCommitHostLoop {
+impl SpineToolcallHostCommit {
     pub(crate) fn host_outcome(
         &self,
         post_commit_effects: SpineHostEffects,

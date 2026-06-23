@@ -46,9 +46,9 @@ pub(crate) use runtime::SpineOpenNodeContextProjection;
 pub(crate) use runtime::SpinePendingCommit;
 pub(crate) use runtime::SpinePreparedCommit;
 pub(crate) use runtime::SpinePreparedRootCompact;
-pub(crate) use runtime::SpineRootCompactHostPublish;
 pub(crate) use runtime::SpineRootCompactHostInstall;
 pub(crate) use runtime::SpineRootCompactHostOutcome;
+pub(crate) use runtime::SpineRootCompactHostPublish;
 #[cfg(test)]
 pub(crate) use runtime::SpineRootCompactResult;
 pub(crate) use runtime::SpineRootCompactTokenMetadata;
@@ -59,10 +59,10 @@ pub(crate) use runtime::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineToolcallCommitEvidence;
-pub(crate) use runtime::SpineToolcallCommitHostLoop;
 pub(crate) use runtime::SpineToolcallCommitHostStep;
 pub(crate) use runtime::SpineToolcallCommitProviderInputTokens;
 pub(crate) use runtime::SpineToolcallHookEvidence;
+pub(crate) use runtime::SpineToolcallHostCommit;
 pub(crate) use runtime::SpineTrimOutcome;
 pub(crate) use runtime::is_non_toolcall_msg;
 pub(crate) use runtime::is_real_user_message;
