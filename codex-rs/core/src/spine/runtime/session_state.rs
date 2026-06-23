@@ -67,8 +67,15 @@ pub(crate) struct SpineInitEvidence<'a> {
     pub(crate) rollout_path: &'a Path,
 }
 
-pub(crate) struct SpineCompactEvidence<'a> {
+pub(crate) struct SpineNativeCompactEvidence<'a> {
     pub(crate) compacted_history: &'a [ResponseItem],
+}
+
+pub(crate) struct SpineCompactEvidence<'a> {
+    pub(crate) rollout_path: &'a Path,
+    pub(crate) compacted_history: &'a [ResponseItem],
+    pub(crate) raw_items: &'a [Option<ResponseItem>],
+    pub(crate) close_provider_input_tokens: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -1851,26 +1858,23 @@ impl SpineSessionState {
 
     pub(crate) fn prepare_native_root_compact_from_history_with_checkpoint(
         &mut self,
-        rollout_path: &Path,
-        compacted_history: &[ResponseItem],
-        raw_items: &[Option<ResponseItem>],
-        close_provider_input_tokens: Option<i64>,
+        evidence: SpineCompactEvidence<'_>,
     ) -> Result<SpineHostEffects, SpineError> {
         self.ensure_valid()?;
         if !self.is_ready() {
             return Ok(SpineHostEffects::none());
         }
-        let body = spine_root_compact_body(compacted_history).ok_or_else(|| {
+        let body = spine_root_compact_body(evidence.compacted_history).ok_or_else(|| {
             SpineError::InvalidEvent(
                 "native compact replaced host context with no model-visible Spine root memory material"
                     .to_string(),
             )
         })?;
         let install = self.prepare_native_root_compact_apply_with_checkpoint(
-            rollout_path,
+            evidence.rollout_path,
             body,
-            raw_items,
-            close_provider_input_tokens,
+            evidence.raw_items,
+            evidence.close_provider_input_tokens,
         )?;
         let materialized = install.materialized().to_vec();
         self.pending_root_compact_install = Some(install);

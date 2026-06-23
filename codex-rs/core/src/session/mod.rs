@@ -41,8 +41,8 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineCompactEvidence;
 use crate::spine::SpineError;
+use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineSessionState;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -3043,7 +3043,7 @@ impl Session {
             }
         };
         let prepared_spine_root_compact = self
-            .on_compact(SpineCompactEvidence {
+            .on_compact(SpineNativeCompactEvidence {
                 compacted_history: spine_root_compact_source,
             })
             .await?;

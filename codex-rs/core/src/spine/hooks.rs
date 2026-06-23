@@ -6,7 +6,6 @@ use super::runtime::SpineMessageEvidence;
 use super::runtime::SpineSessionState;
 use super::runtime::SpineToolcallCommitEvidence;
 use codex_protocol::models::ResponseItem;
-use std::path::Path;
 
 pub(crate) fn on_init(
     state: &mut SpineSessionState,
@@ -24,17 +23,9 @@ pub(crate) fn on_non_toolcall_msg(
 
 pub(crate) fn on_compact(
     state: &mut SpineSessionState,
-    rollout_path: &Path,
-    raw_items: &[Option<ResponseItem>],
-    close_provider_input_tokens: Option<i64>,
     evidence: SpineCompactEvidence<'_>,
 ) -> Result<SpineHostEffects, SpineError> {
-    state.prepare_native_root_compact_from_history_with_checkpoint(
-        rollout_path,
-        evidence.compacted_history,
-        raw_items,
-        close_provider_input_tokens,
-    )
+    state.prepare_native_root_compact_from_history_with_checkpoint(evidence)
 }
 
 pub(crate) fn on_toolcall(

@@ -14,6 +14,7 @@ use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffects;
 use crate::spine::SpineInitEvidence;
 use crate::spine::SpineMessageEvidence;
+use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineObservedContextItem;
 use crate::spine::SpineRootCompactHistoryPublication;
 #[cfg(test)]
@@ -1549,7 +1550,7 @@ impl Session {
 
     pub(crate) async fn on_compact(
         &self,
-        evidence: SpineCompactEvidence<'_>,
+        evidence: SpineNativeCompactEvidence<'_>,
     ) -> CodexResult<Option<SpineRootCompactPublish>> {
         let effects = self
             .prepare_spine_root_compact_from_native_history(evidence)
@@ -1579,7 +1580,7 @@ impl Session {
 
     async fn prepare_spine_root_compact_from_native_history(
         &self,
-        evidence: SpineCompactEvidence<'_>,
+        evidence: SpineNativeCompactEvidence<'_>,
     ) -> Result<SpineHostEffects, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(SpineHostEffects::none());
@@ -1606,10 +1607,12 @@ impl Session {
         let mut guard = spine_slot.lock().await;
         hooks::on_compact(
             &mut guard,
-            &rollout_path,
-            &raw_items,
-            close_provider_input_tokens,
-            evidence,
+            SpineCompactEvidence {
+                rollout_path: &rollout_path,
+                compacted_history: evidence.compacted_history,
+                raw_items: &raw_items,
+                close_provider_input_tokens,
+            },
         )
     }
 

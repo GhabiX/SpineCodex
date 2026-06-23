@@ -97,6 +97,7 @@ pub(crate) use session_state::SpineCompletedToolCallHostOutcome;
 pub(crate) use session_state::SpineCompletedToolCallOutputEvidence;
 pub(crate) use session_state::SpineInitEvidence;
 pub(crate) use session_state::SpineMessageEvidence;
+pub(crate) use session_state::SpineNativeCompactEvidence;
 pub(crate) use session_state::SpineObservedContextItem;
 pub(crate) use session_state::SpineRootCompactHostInstall;
 pub(crate) use session_state::SpineRootCompactHostOutcome;
