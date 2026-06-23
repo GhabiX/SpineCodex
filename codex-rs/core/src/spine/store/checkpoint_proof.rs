@@ -128,7 +128,7 @@ pub(super) fn validate_compact_checkpoint_memory_refs(
 ) -> Result<(), SpineError> {
     let mut compact_ids = BTreeSet::new();
     for memory in &checkpoint.memory_refs {
-        if !compact_ids.insert(memory.compact_id.clone()) {
+        if !compact_ids.insert(memory.compact_id.as_str()) {
             return Err(SpineError::InvalidStore(format!(
                 "duplicate compact checkpoint memory ref {} at raw boundary {}",
                 memory.compact_id, checkpoint.raw_boundary

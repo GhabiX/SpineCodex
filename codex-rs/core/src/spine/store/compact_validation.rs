@@ -54,12 +54,12 @@ fn unique_compact_checkpoint_for_boundary(
         replacement_history_hash,
     )?;
     validate_unique_compact_checkpoint_token_seq(&checkpoints, raw_boundary)?;
-    match checkpoints.as_slice() {
-        [checkpoint] => Ok(checkpoint.clone()),
-        _ => Err(SpineError::InvalidStore(format!(
+    let [checkpoint] = checkpoints.try_into().map_err(|_| {
+        SpineError::InvalidStore(format!(
             "ambiguous spine compact checkpoint proof for raw boundary {raw_boundary}"
-        ))),
-    }
+        ))
+    })?;
+    Ok(checkpoint)
 }
 
 fn compact_checkpoints_at_boundary(
