@@ -3,7 +3,6 @@ use super::runtime::SpineError;
 use super::runtime::SpineHostEffects;
 use super::runtime::SpineInitEvidence;
 use super::runtime::SpineMessageEvidence;
-use super::runtime::SpineMessageHostOutcome;
 use super::runtime::SpineRootCompactHostPublish;
 use super::runtime::SpineSessionState;
 use super::runtime::SpineToolcallCommitEvidence;
@@ -22,7 +21,7 @@ pub(crate) fn on_non_toolcall_msg(
     state: &mut SpineSessionState,
     rollout_path: &Path,
     evidence: SpineMessageEvidence<'_>,
-) -> Result<SpineMessageHostOutcome, SpineError> {
+) -> Result<SpineHostEffects, SpineError> {
     state.observe_non_toolcall_msg_with_host_effects(rollout_path, evidence)
 }
 

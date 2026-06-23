@@ -60,6 +60,30 @@ impl SpineHostEffects {
         snapshot.map_or_else(Self::none, |snapshot| Self::tree_update(snapshot, delivery))
     }
 
+    pub(crate) fn publish_materialized_history_after_batch() -> Self {
+        Self::one(SpineHostEffect::PublishMaterializedHistoryAfterBatch)
+    }
+
+    pub(crate) fn extend(&mut self, effects: Self) {
+        self.effects.extend(effects.effects);
+    }
+
+    pub(crate) fn into_after_batch_materialized_history_request(self) -> (Self, bool) {
+        let mut remaining = Vec::new();
+        let mut requested = false;
+        for effect in self.effects {
+            if matches!(
+                effect,
+                SpineHostEffect::PublishMaterializedHistoryAfterBatch
+            ) {
+                requested = true;
+            } else {
+                remaining.push(effect);
+            }
+        }
+        (Self::many(remaining), requested)
+    }
+
     pub(crate) fn apply_history_updates_or_keep(
         self,
         mut apply_history_update: impl FnMut(
@@ -91,6 +115,7 @@ pub(crate) enum SpineHostEffect {
         snapshot: SpineTreeUpdateEvent,
         delivery: SpineTreeUpdateDelivery,
     },
+    PublishMaterializedHistoryAfterBatch,
 }
 
 impl SpineHostEffect {
@@ -149,6 +174,7 @@ impl SpineHostEffect {
         match self {
             Self::ReplaceHistory(_) => None,
             Self::TreeUpdate { snapshot, delivery } => Some((snapshot, delivery)),
+            Self::PublishMaterializedHistoryAfterBatch => None,
         }
     }
 }

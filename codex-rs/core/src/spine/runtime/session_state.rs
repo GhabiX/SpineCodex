@@ -86,10 +86,6 @@ pub(crate) struct SpineMessageEvidence<'a> {
     pub(crate) raw_items: &'a [Option<ResponseItem>],
 }
 
-pub(crate) struct SpineMessageHostOutcome {
-    publish_materialized_history_after_batch: bool,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct SpineCompletedToolCallEvidence {
     completed_toolcall: CompletedToolCall,
@@ -914,24 +910,6 @@ impl SpineCommitOutput {
     }
 }
 
-impl SpineMessageHostOutcome {
-    pub(crate) fn none() -> Self {
-        Self {
-            publish_materialized_history_after_batch: false,
-        }
-    }
-
-    fn publish_materialized_history_after_batch() -> Self {
-        Self {
-            publish_materialized_history_after_batch: true,
-        }
-    }
-
-    pub(crate) fn requests_materialized_history_publish(&self) -> bool {
-        self.publish_materialized_history_after_batch
-    }
-}
-
 impl PreparedSpineReplayRuntime {
     fn new(
         runtime: Option<SpineRuntime>,
@@ -1699,12 +1677,12 @@ impl SpineSessionState {
         &mut self,
         rollout_path: &Path,
         evidence: SpineMessageEvidence<'_>,
-    ) -> Result<SpineMessageHostOutcome, SpineError> {
+    ) -> Result<SpineHostEffects, SpineError> {
         let observed_user_message = self.observe_non_toolcall_msg(rollout_path, evidence)?;
         if !observed_user_message {
-            return Ok(SpineMessageHostOutcome::none());
+            return Ok(SpineHostEffects::none());
         }
-        Ok(SpineMessageHostOutcome::publish_materialized_history_after_batch())
+        Ok(SpineHostEffects::publish_materialized_history_after_batch())
     }
 
     pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request(

@@ -14,7 +14,6 @@ use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffects;
 use crate::spine::SpineInitEvidence;
 use crate::spine::SpineMessageEvidence;
-use crate::spine::SpineMessageHostOutcome;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
@@ -702,7 +701,7 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
-        let mut publish_materialized_history_after_batch = false;
+        let mut non_toolcall_msg_effects = SpineHostEffects::none();
         let mut tool_items = Vec::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
@@ -718,8 +717,7 @@ impl Session {
                         raw_items: &raw_items,
                     })
                     .await?;
-                publish_materialized_history_after_batch |=
-                    outcome.requests_materialized_history_publish();
+                non_toolcall_msg_effects.extend(outcome);
             } else {
                 tool_items.push(SpineObservedContextItem {
                     raw_ordinal,
@@ -732,6 +730,11 @@ impl Session {
             let mut guard = spine_slot.lock().await;
             guard.observe_toolcall_context_items(&tool_items, &raw_items)?;
         }
+        let (non_toolcall_msg_effects, publish_materialized_history_after_batch) =
+            non_toolcall_msg_effects.into_after_batch_materialized_history_request();
+        self.apply_non_toolcall_msg_host_outcome(non_toolcall_msg_effects)
+            .await
+            .map_err(SpineError::Invariant)?;
         if publish_materialized_history_after_batch {
             let outcome = self
                 .materialized_history_host_effects_if_no_pending_tool_request(&raw_items)
@@ -746,9 +749,9 @@ impl Session {
     pub(crate) async fn on_non_toolcall_msg(
         &self,
         evidence: SpineMessageEvidence<'_>,
-    ) -> Result<SpineMessageHostOutcome, SpineError> {
+    ) -> Result<SpineHostEffects, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(SpineMessageHostOutcome::none());
+            return Ok(SpineHostEffects::none());
         };
         let rollout_path = self
             .current_rollout_path()
