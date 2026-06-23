@@ -19,6 +19,8 @@ use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
 use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::checkpoint::build_checkpoint;
+use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
+use crate::spine::compact_checkpoint::build_compact_checkpoint;
 use crate::spine::lexer::LexedTokenBatch;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::ControlSymbol;
@@ -54,6 +56,29 @@ pub(super) struct ParserRootCompactPreparedReduction {
     pub(super) root_epoch_reduction: PreparedRootEpochReduction,
     pub(super) materialized: Vec<ResponseItem>,
     pub(super) current_open_index: usize,
+}
+
+impl ParserRootCompactPreparedReduction {
+    pub(super) fn build_compact_checkpoint(
+        &self,
+        rollout_path: &Path,
+        raw_boundary: u64,
+        token_seq: u64,
+        raw_live: &[bool],
+        raw_items: &[Option<ResponseItem>],
+        replacement_history: &[ResponseItem],
+    ) -> Result<SpineCompactCheckpoint, SpineError> {
+        build_compact_checkpoint(
+            rollout_path,
+            raw_boundary,
+            token_seq,
+            raw_live,
+            raw_items,
+            self.final_parse_stack.parse_stack(),
+            &self.materialized,
+            replacement_history,
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

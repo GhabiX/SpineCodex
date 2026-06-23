@@ -348,6 +348,14 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && root_compact.contains(".root_compact_staged_parse_stacks("),
         "runtime root compact should route staged parser reductions through ParserState"
     );
+    assert!(
+        !root_compact.contains("final_parse_stack.parse_stack()"),
+        "runtime root compact must not read prepared parser state for compact checkpoint construction"
+    );
+    assert!(
+        root_compact.contains(".build_compact_checkpoint("),
+        "runtime root compact checkpoint construction should route through parser prepared reduction"
+    );
 }
 
 #[test]

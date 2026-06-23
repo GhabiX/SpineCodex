@@ -13,7 +13,6 @@ use super::SpineRootCompactTokenMetadata;
 use super::SpineRuntime;
 use super::session_state::PreparedSpineRootCompactCommit;
 use crate::spine::archive::memory_ref;
-use crate::spine::compact_checkpoint::build_compact_checkpoint;
 use crate::spine::io::hash_raw_live;
 use crate::spine::io::sha1_hex;
 use crate::spine::model::MemKind;
@@ -473,25 +472,23 @@ impl SpineRuntime {
         let token_seq_after = seq.checked_add(1).ok_or_else(|| {
             SpineError::InvalidEvent("root compact token seq overflow".to_string())
         })?;
+        let compact_checkpoint = checkpoint_rollout_path
+            .map(|rollout_path| {
+                prepared_reduction.build_compact_checkpoint(
+                    rollout_path,
+                    self.raw_len,
+                    token_seq_after,
+                    &self.raw_live,
+                    raw_items,
+                    &prepared_reduction.materialized,
+                )
+            })
+            .transpose()?;
         let result = SpineRootCompactResult {
             materialized: prepared_reduction.materialized,
             raw_boundary: self.raw_len,
             token_seq_after,
         };
-        let compact_checkpoint = checkpoint_rollout_path
-            .map(|rollout_path| {
-                build_compact_checkpoint(
-                    rollout_path,
-                    result.raw_boundary,
-                    result.token_seq_after,
-                    &self.raw_live,
-                    raw_items,
-                    prepared_reduction.final_parse_stack.parse_stack(),
-                    &result.materialized,
-                    &result.materialized,
-                )
-            })
-            .transpose()?;
         let (root_compact_event, _token) = crate::spine::lexer::plan_root_compact()
             .lex_event_token(
                 node,
