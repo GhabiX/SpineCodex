@@ -51,58 +51,52 @@ impl SpineSessionState {
     pub(crate) fn trim_projection_needs_rollout_raw_items(
         &self,
     ) -> Result<Option<bool>, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        Ok(Some(runtime.jit_enabled()))
+        self.with_runtime(|runtime| Ok(runtime.jit_enabled()))
     }
 
     pub(crate) fn current_trim_targets_for_prompt(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<Vec<SpineCurrentTrimTarget>>, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        Ok(Some(runtime.current_trim_targets_for_prompt(raw_items)?))
+        self.with_runtime(|runtime| runtime.current_trim_targets_for_prompt(raw_items))
     }
 
     pub(crate) fn materialize_trim_projection_from_raw_items(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        Ok(Some(runtime.materialize_history(raw_items)?))
+        self.with_runtime(|runtime| runtime.materialize_history(raw_items))
     }
 
     pub(crate) fn materialize_history_if_no_pending_tool_request(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        if runtime.has_pending_tool_request() {
-            return Ok(None);
-        }
-        Ok(Some(runtime.materialize_history(raw_items)?))
+        self.with_runtime(|runtime| {
+            if runtime.has_pending_tool_request() {
+                return Ok(None);
+            }
+            runtime.materialize_history(raw_items).map(Some)
+        })
+        .map(Option::flatten)
     }
 
     pub(crate) fn project_trim_projection_from_history(
         &self,
         history_items: &[ResponseItem],
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+        self.with_runtime(|runtime| runtime.project_raw_history_with_trim(history_items))
+    }
+
+    fn with_runtime<T>(
+        &self,
+        f: impl FnOnce(&SpineRuntime) -> Result<T, SpineError>,
+    ) -> Result<Option<T>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime() else {
             return Ok(None);
         };
-        Ok(Some(runtime.project_raw_history_with_trim(history_items)?))
+        f(runtime).map(Some)
     }
 
     pub(crate) fn prepare_trim_replay_from_history(
