@@ -258,10 +258,7 @@ impl SpineRuntime {
             return Ok(false);
         }
         let (event, token) = self.completed_toolcall_parts(&toolcall)?;
-        let mut staged_parse_stack = self.parse_stack.clone();
-        staged_parse_stack.shift(token, &self.archive())?;
-        let toolcall_seq = self.append_cached_event(event)?;
-        self.parse_stack = staged_parse_stack;
+        let toolcall_seq = self.append_event_after_staged_toolcall_shift(event, token)?;
         self.pending = None;
         self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
@@ -286,10 +283,7 @@ impl SpineRuntime {
             );
         }
         let (event, token) = self.completed_toolcall_parts(&toolcall)?;
-        let mut staged_parse_stack = self.parse_stack.clone();
-        staged_parse_stack.shift(token, &self.archive())?;
-        let toolcall_seq = self.append_cached_event(event)?;
-        self.parse_stack = staged_parse_stack;
+        let toolcall_seq = self.append_event_after_staged_toolcall_shift(event, token)?;
         self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
         Ok(false)
@@ -432,6 +426,19 @@ impl SpineRuntime {
 
     fn push_completed_toolcall_token(&mut self, token: SpineToken) -> Result<(), SpineError> {
         self.parse_stack.shift(token, &self.archive())
+    }
+
+    #[cfg(test)]
+    fn append_event_after_staged_toolcall_shift(
+        &mut self,
+        event: SpineLedgerEvent,
+        token: SpineToken,
+    ) -> Result<u64, SpineError> {
+        let mut staged_parse_stack = self.parse_stack.clone();
+        staged_parse_stack.shift(token, &self.archive())?;
+        let event_seq = self.append_cached_event(event)?;
+        self.parse_stack = staged_parse_stack;
+        Ok(event_seq)
     }
 
     fn append_and_shift_msg(
