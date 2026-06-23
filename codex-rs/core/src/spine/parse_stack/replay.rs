@@ -170,14 +170,11 @@ pub(in crate::spine) fn parse_stack_from_events_with_forced_events(
         .collect::<BTreeMap<_, _>>();
     let mut ps = ParseStack::new();
     for event in events {
-        if forced_event_seqs.contains(&event.seq) {
+        if forced_event_seqs.contains(&event.seq)
+            || (!marker_structural_event_seqs.contains(&event.seq) && event.allowed_by(raw_mask)?)
+        {
             apply_replay_event_to_parse_stack(&mut ps, event, archive, &mems, raw_mask)?;
-            continue;
         }
-        if marker_structural_event_seqs.contains(&event.seq) || !event.allowed_by(raw_mask)? {
-            continue;
-        }
-        apply_replay_event_to_parse_stack(&mut ps, event, archive, &mems, raw_mask)?;
     }
     Ok(ps)
 }

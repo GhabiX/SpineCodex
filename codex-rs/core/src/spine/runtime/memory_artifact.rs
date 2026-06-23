@@ -28,20 +28,19 @@ impl SpineRuntime {
         body: &str,
     ) -> Result<(), SpineError> {
         let existing_mems = self.store.mems()?;
-        let matching_mems = existing_mems
+        let mut matching_mems = existing_mems
             .iter()
-            .filter(|existing| existing.compact_id == mem.compact_id)
-            .collect::<Vec<_>>();
-        match matching_mems.as_slice() {
-            [] => self.store.append_mem(mem),
-            [existing] if mem_record_matches(existing, mem) => {
+            .filter(|existing| existing.compact_id == mem.compact_id);
+        match (matching_mems.next(), matching_mems.next()) {
+            (None, _) => self.store.append_mem(mem),
+            (Some(existing), None) if mem_record_matches(existing, mem) => {
                 self.validate_existing_prepared_memory_body(existing, mem, body)
             }
-            [_] => Err(SpineError::InvalidStore(format!(
+            (Some(_), None) => Err(SpineError::InvalidStore(format!(
                 "existing prepared memory record mismatch for {}",
                 mem.compact_id
             ))),
-            _ => Err(SpineError::InvalidStore(format!(
+            (Some(_), Some(_)) => Err(SpineError::InvalidStore(format!(
                 "ambiguous existing prepared memory record for {}",
                 mem.compact_id
             ))),
