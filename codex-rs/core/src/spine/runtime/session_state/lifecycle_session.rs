@@ -120,7 +120,7 @@ impl SpineSessionState {
         target_rollout_path: &Path,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
+        let raw_live = raw_live_from_items(raw_items);
         SpineStore::clone_for_rollout_with_raw_live(boundary, target_rollout_path, &raw_live)?;
         let raw_ordinal_limit = usize::try_from(boundary.raw_ordinal_limit()).map_err(|_| {
             SpineError::InvalidEvent("clone raw ordinal boundary overflow".to_string())
@@ -137,11 +137,7 @@ impl SpineSessionState {
                 &[],
                 self.jit_enabled,
             )?;
-            return self.set_replayed(
-                u64::try_from(raw_items.len())
-                    .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
-                runtime,
-            );
+            return self.set_replayed(raw_item_count(raw_items)?, runtime);
         }
 
         let prefix_runtime = SpineRuntime::load_for_rollout_items_for_writer_with_jit(
@@ -182,11 +178,7 @@ impl SpineSessionState {
             &recorded_tool_outputs,
             raw_items,
         )?;
-        self.set_replayed(
-            u64::try_from(raw_items.len())
-                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
-            Some(runtime),
-        )
+        self.set_replayed(raw_item_count(raw_items)?, Some(runtime))
     }
 
     pub(crate) fn abort_pending_tool(&mut self, call_id: &str) -> bool {
@@ -259,4 +251,13 @@ impl SpineSessionState {
         }
         Ok(SpineHostEffects::none())
     }
+}
+
+fn raw_live_from_items(raw_items: &[Option<ResponseItem>]) -> Vec<bool> {
+    raw_items.iter().map(Option::is_some).collect()
+}
+
+fn raw_item_count(raw_items: &[Option<ResponseItem>]) -> Result<u64, SpineError> {
+    u64::try_from(raw_items.len())
+        .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))
 }
