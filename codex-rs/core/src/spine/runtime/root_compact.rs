@@ -21,7 +21,6 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::PreparedRootEpochReduction;
-use crate::spine::render::render_parse_stack_to_context_with_memory_body_and_trim_projection;
 use crate::spine::store::BODY_DIR;
 
 struct PreparedRootCompactCommit {
@@ -409,7 +408,7 @@ impl SpineRuntime {
             ));
         }
         let source_context_end = self.materialize_history(raw_items)?.len();
-        let node = self.parser.parse_stack().current_root_epoch_id()?;
+        let node = self.parser.current_root_epoch_id()?;
         let compact_id = format!("root-{}-{}", node.as_path().replace('.', "-"), self.raw_len);
         let raw_live_hash = hash_raw_live(&self.raw_live);
         let body_hash = sha1_hex(body.as_bytes());
@@ -454,33 +453,15 @@ impl SpineRuntime {
 
         let staged_memory_body = Some((compact_id.as_str(), body.as_str()));
         let trim_projection = self.current_trim_projection()?;
-        let next_open_index_usize =
-            match self.parser.parse_stack().pending_compact_next_open_index(
-                &memory,
-                token_metadata.next_open_input_tokens,
-                token_metadata.next_open_context_tokens,
-            )? {
-                Some(next_open_index) => next_open_index,
-                None => {
-                    // Probe first because source_context_range records the pre-compact source
-                    // span, while next_open_index is the post-compact h(PS) materialized len.
-                    let mut probe_parse_stack = self.parser.parse_stack().clone();
-                    let token = crate::spine::lexer::plan_root_compact().lex_compact_token(
-                        memory.clone(),
-                        0,
-                        token_metadata.next_open_input_tokens,
-                        token_metadata.next_open_context_tokens,
-                    )?;
-                    probe_parse_stack.shift(token, &self.archive())?;
-                    render_parse_stack_to_context_with_memory_body_and_trim_projection(
-                        &probe_parse_stack,
-                        raw_items,
-                        staged_memory_body,
-                        &trim_projection,
-                    )?
-                    .len()
-                }
-            };
+        let next_open_index_usize = self.parser.root_compact_next_open_index_or_probe(
+            &memory,
+            token_metadata.next_open_input_tokens,
+            token_metadata.next_open_context_tokens,
+            raw_items,
+            staged_memory_body,
+            &trim_projection,
+            &self.archive(),
+        )?;
 
         let mut staged_parse_stack = self.parser.parse_stack().clone();
         staged_parse_stack.shift_pending_compact(
@@ -498,7 +479,7 @@ impl SpineRuntime {
             token_metadata.next_open_context_tokens,
         )?;
         staged_parse_stack.apply_prevalidated_root_epoch_reduction(root_epoch_reduction.clone());
-        let materialized = render_parse_stack_to_context_with_memory_body_and_trim_projection(
+        let materialized = crate::spine::render::render_parse_stack_to_context_with_memory_body_and_trim_projection(
             &staged_parse_stack,
             raw_items,
             staged_memory_body,

@@ -24,6 +24,7 @@ use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
+use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineToken;
@@ -38,6 +39,7 @@ use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 use crate::spine::parse_stack::parse_stack_msg_leaf_count;
 #[cfg(test)]
 use crate::spine::parse_stack::parse_stack_toolcall_leaf_count;
+use crate::spine::render::render_parse_stack_to_context_with_memory_body_and_trim_projection;
 use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,6 +130,49 @@ impl ParserState {
 
     pub(super) fn next_child_id(&self) -> Result<NodeId, SpineError> {
         self.parse_stack.next_child_id()
+    }
+
+    pub(super) fn current_root_epoch_id(&self) -> Result<NodeId, SpineError> {
+        self.parse_stack.current_root_epoch_id()
+    }
+
+    pub(super) fn root_compact_next_open_index_or_probe(
+        &self,
+        memory: &MemoryRef,
+        next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
+        raw_items: &[Option<ResponseItem>],
+        staged_memory_body: Option<(&str, &str)>,
+        trim_projection: &TrimProjection,
+        archive: &SpineArchive,
+    ) -> Result<usize, SpineError> {
+        if let Some(next_open_index) = self.parse_stack.pending_compact_next_open_index(
+            memory,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        )? {
+            return Ok(next_open_index);
+        }
+
+        // Probe first because source_context_range records the pre-compact source
+        // span, while next_open_index is the post-compact h(PS) materialized len.
+        let mut probe_parse_stack = self.parse_stack.clone();
+        let token = crate::spine::lexer::plan_root_compact().lex_compact_token(
+            memory.clone(),
+            0,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        )?;
+        probe_parse_stack.shift(token, archive)?;
+        Ok(
+            render_parse_stack_to_context_with_memory_body_and_trim_projection(
+                &probe_parse_stack,
+                raw_items,
+                staged_memory_body,
+                trim_projection,
+            )?
+            .len(),
+        )
     }
 
     pub(super) fn into_parse_stack(self) -> ParseStack {

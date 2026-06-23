@@ -156,3 +156,26 @@ fn runtime_checkpoint_routes_parser_reads_through_parser_state() {
         "runtime checkpoint construction should route PS and h(PS) reads through ParserState"
     );
 }
+
+#[test]
+fn runtime_root_compact_routes_probe_reads_through_parser_state() {
+    let root_compact = fs::read_to_string(spine_src("runtime/root_compact.rs"))
+        .expect("read runtime root_compact source");
+    assert!(
+        !root_compact.contains(".parse_stack().current_root_epoch_id()"),
+        "runtime/root_compact.rs must not query root epoch ids through the raw parser handle"
+    );
+    assert!(
+        !root_compact.contains(".pending_compact_next_open_index("),
+        "runtime/root_compact.rs must not compute compact next-open probe state outside ParserState"
+    );
+    assert!(
+        !root_compact.contains("probe_parse_stack"),
+        "runtime/root_compact.rs must not clone ParseStack for compact probe materialization"
+    );
+    assert!(
+        root_compact.contains(".current_root_epoch_id()")
+            && root_compact.contains(".root_compact_next_open_index_or_probe("),
+        "runtime root compact should route root id and next-open probe reads through ParserState"
+    );
+}
