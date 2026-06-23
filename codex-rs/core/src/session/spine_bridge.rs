@@ -115,8 +115,12 @@ impl SpineRootCompactPublish {
         self.prepared.materialized_len()
     }
 
-    fn materialized(&self) -> &[ResponseItem] {
-        self.prepared.materialized()
+    fn published_history_from_native_items(
+        &self,
+        native_items: &[ResponseItem],
+    ) -> Vec<ResponseItem> {
+        self.prepared
+            .published_history_from_native_items(native_items, Session::is_spine_fixed_prefix_item)
     }
 }
 
@@ -1496,13 +1500,7 @@ impl Session {
             return Ok(None);
         };
         let publish = SpineRootCompactPublish::new(prepared);
-        let fixed_prefix: Vec<ResponseItem> = items
-            .iter()
-            .filter(|item| Self::is_spine_fixed_prefix_item(item))
-            .cloned()
-            .collect();
-        *items = fixed_prefix;
-        items.extend_from_slice(publish.materialized());
+        *items = publish.published_history_from_native_items(items);
         compacted_item.replacement_history = Some(items.clone());
         Ok(Some(publish))
     }

@@ -925,12 +925,22 @@ impl SpineRootCompactHostPublish {
         Self { materialized }
     }
 
-    pub(crate) fn materialized(&self) -> &[ResponseItem] {
-        &self.materialized
-    }
-
     pub(crate) fn materialized_len(&self) -> usize {
         self.materialized.len()
+    }
+
+    pub(crate) fn published_history_from_native_items(
+        &self,
+        native_items: &[ResponseItem],
+        is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
+    ) -> Vec<ResponseItem> {
+        let mut published = native_items
+            .iter()
+            .filter(|item| is_fixed_prefix_item(item))
+            .cloned()
+            .collect::<Vec<_>>();
+        published.extend_from_slice(&self.materialized);
+        published
     }
 }
 
