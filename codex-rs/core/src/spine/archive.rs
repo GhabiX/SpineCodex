@@ -1,4 +1,5 @@
 use crate::spine::SpineError;
+use crate::spine::io::create_parent_dir;
 use crate::spine::io::sha1_hex;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
@@ -160,9 +161,7 @@ pub(super) fn next_root_open_symbol(
 }
 
 fn write_archive_file(path: &Path, content: &str) -> Result<(), SpineError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    create_parent_dir(path)?;
     if path.exists() {
         let existing = std::fs::read_to_string(path)?;
         if existing == content {
