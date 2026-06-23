@@ -266,7 +266,7 @@ fn pressure_prompt_signal(
     let cursor_node_context_tokens =
         active_open_node.and_then(|node| node.current_node_context_tokens);
     let boundary_hint_band = (mode_allows_spine_close && active_open_node_allows_close)
-        .then(|| cursor_node_context_tokens.and_then(pressure_band))
+        .then_some(cursor_node_context_tokens.and_then(pressure_band))
         .flatten();
     let context_tokens = inside_view
         .context_window
@@ -281,12 +281,10 @@ fn pressure_prompt_signal(
         .as_ref()
         .and_then(|context| context.model_context_window)
         .or(token_info.model_context_window);
-    let emit_context_warning_80 = match (context_tokens, model_context_window) {
-        (Some(context_tokens), Some(window)) => {
-            context_window_at_or_above_80(context_tokens, window)
-        }
-        (Some(_), None) | (None, Some(_)) | (None, None) => false,
-    };
+    let emit_context_warning_80 = context_tokens.is_some_and(|context_tokens| {
+        model_context_window
+            .is_some_and(|window| context_window_at_or_above_80(context_tokens, window))
+    });
 
     SpinePressurePromptSignal {
         node_id: inside_view.active_node_id.clone(),
