@@ -94,10 +94,9 @@ fn is_spine_runtime_contextual_user_fragment(content_item: &ContentItem) -> bool
     let ContentItem::InputText { text } = content_item else {
         return false;
     };
-    TurnAborted::matches_text(text) || is_cwd_only_environment_context_text(text)
-}
-
-fn is_cwd_only_environment_context_text(text: &str) -> bool {
+    if TurnAborted::matches_text(text) {
+        return true;
+    }
     let lines = text.trim().lines().map(str::trim).collect::<Vec<_>>();
     let [open, cwd, close] = lines.as_slice() else {
         return false;
