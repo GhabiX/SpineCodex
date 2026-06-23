@@ -267,25 +267,24 @@ fn joined_spine_instructions(
 }
 
 fn extract_section(contents: &str, tag: &str) -> Option<String> {
-    let start_marker = format!("<{tag}>");
-    let end_marker = format!("</{tag}>");
-    let start = contents.find(&start_marker)?;
-    let body_start = start.checked_add(start_marker.len())?;
-    let relative_end = contents.get(body_start..)?.find(&end_marker)?;
-    let end = body_start
-        .checked_add(relative_end)?
-        .checked_add(end_marker.len())?;
+    let (start, _, _, end) = extract_section_bounds(contents, tag)?;
     Some(contents.get(start..end)?.trim().to_string())
 }
 
 fn extract_section_body(contents: &str, tag: &str) -> Option<String> {
+    let (_, body_start, body_end, _) = extract_section_bounds(contents, tag)?;
+    Some(contents.get(body_start..body_end)?.trim().to_string())
+}
+
+fn extract_section_bounds(contents: &str, tag: &str) -> Option<(usize, usize, usize, usize)> {
     let start_marker = format!("<{tag}>");
     let end_marker = format!("</{tag}>");
     let start = contents.find(&start_marker)?;
     let body_start = start.checked_add(start_marker.len())?;
     let relative_end = contents.get(body_start..)?.find(&end_marker)?;
     let body_end = body_start.checked_add(relative_end)?;
-    Some(contents.get(body_start..body_end)?.trim().to_string())
+    let end = body_end.checked_add(end_marker.len())?;
+    Some((start, body_start, body_end, end))
 }
 
 #[cfg(test)]
