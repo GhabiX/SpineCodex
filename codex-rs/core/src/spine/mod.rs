@@ -28,8 +28,10 @@ pub(crate) use runtime::SPINE_TOOL_NEXT;
 pub(crate) use runtime::SPINE_TOOL_OPEN;
 pub(crate) use runtime::SPINE_TOOL_TREE;
 pub(crate) use runtime::SPINE_TOOL_TRIM;
+#[cfg(test)]
 pub(crate) use runtime::SpineCloseMemoryAssembly;
 pub(crate) use runtime::SpineCommitAttempt;
+#[cfg(test)]
 pub(crate) use runtime::SpineCommitKind;
 pub(crate) use runtime::SpineCompactEvidence;
 pub(crate) use runtime::SpineCompactSourceEntryKind;
@@ -45,15 +47,21 @@ pub(crate) use runtime::SpineMessageEvidence;
 pub(crate) use runtime::SpineNativeCompactEvidence;
 pub(crate) use runtime::SpineObservedContextItem;
 pub(crate) use runtime::SpineOpenNodeContextProjection;
+#[cfg(test)]
 pub(crate) use runtime::SpinePendingCommit;
+#[cfg(test)]
 pub(crate) use runtime::SpinePreparedCommit;
+#[cfg(test)]
 pub(crate) use runtime::SpinePreparedRootCompact;
+#[cfg(test)]
 pub(crate) use runtime::SpineRootCompactHostInstall;
 #[cfg(test)]
 pub(crate) use runtime::SpineRootCompactResult;
+#[cfg(test)]
 pub(crate) use runtime::SpineRootCompactTokenMetadata;
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
+#[cfg(test)]
 pub(crate) use runtime::SpineTokenBaselines;
 pub(crate) use runtime::SpineToolCallEvidence;
 #[cfg(test)]
