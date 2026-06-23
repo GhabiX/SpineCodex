@@ -27,9 +27,7 @@ pub(super) fn rollout_stem(path: &Path) -> Result<String, SpineError> {
 }
 
 pub(super) fn append_json_line<T: Serialize>(path: &Path, value: &T) -> Result<(), SpineError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    create_parent_dir(path)?;
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     serde_json::to_writer(&mut file, value)?;
     file.write_all(b"\n")?;
@@ -59,9 +57,7 @@ pub(super) fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Resul
 
 #[cfg(test)]
 pub(super) fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<(), SpineError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    create_parent_dir(path)?;
     std::fs::write(path, serde_json::to_string_pretty(value)? + "\n")?;
     Ok(())
 }
@@ -71,9 +67,7 @@ pub(super) fn write_json_file_if_unchanged<T: Serialize>(
     value: &T,
 ) -> Result<(), SpineError> {
     let content = serde_json::to_string_pretty(value)? + "\n";
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    create_parent_dir(path)?;
     if path.exists() {
         let existing = std::fs::read_to_string(path)?;
         if existing == content {
@@ -85,6 +79,13 @@ pub(super) fn write_json_file_if_unchanged<T: Serialize>(
         )));
     }
     std::fs::write(path, content)?;
+    Ok(())
+}
+
+fn create_parent_dir(path: &Path) -> Result<(), SpineError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     Ok(())
 }
 
