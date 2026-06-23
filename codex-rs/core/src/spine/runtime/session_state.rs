@@ -80,6 +80,7 @@ pub(crate) struct SpineObservedContextItem<'a> {
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineMessageEvidence<'a> {
+    pub(crate) rollout_path: &'a Path,
     pub(crate) raw_ordinal: u64,
     pub(crate) context_index: usize,
     pub(crate) item: &'a ResponseItem,
@@ -1621,7 +1622,6 @@ impl SpineSessionState {
 
     pub(crate) fn observe_non_toolcall_msg(
         &mut self,
-        rollout_path: &Path,
         evidence: SpineMessageEvidence<'_>,
     ) -> Result<bool, SpineError> {
         self.ensure_valid()?;
@@ -1636,7 +1636,7 @@ impl SpineSessionState {
         let observed_user_message = is_real_user_message(evidence.item);
         if runtime.jit_enabled() && observed_user_message {
             runtime.checkpoint_before_user_msg(
-                rollout_path,
+                evidence.rollout_path,
                 evidence.raw_ordinal,
                 evidence.raw_items,
             )?;
@@ -1647,10 +1647,9 @@ impl SpineSessionState {
 
     pub(crate) fn observe_non_toolcall_msg_with_host_effects(
         &mut self,
-        rollout_path: &Path,
         evidence: SpineMessageEvidence<'_>,
     ) -> Result<SpineHostEffects, SpineError> {
-        let observed_user_message = self.observe_non_toolcall_msg(rollout_path, evidence)?;
+        let observed_user_message = self.observe_non_toolcall_msg(evidence)?;
         if !observed_user_message {
             return Ok(SpineHostEffects::none());
         }

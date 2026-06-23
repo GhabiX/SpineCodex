@@ -17,10 +17,9 @@ pub(crate) fn on_init(
 
 pub(crate) fn on_non_toolcall_msg(
     state: &mut SpineSessionState,
-    rollout_path: &Path,
     evidence: SpineMessageEvidence<'_>,
 ) -> Result<SpineHostEffects, SpineError> {
-    state.observe_non_toolcall_msg_with_host_effects(rollout_path, evidence)
+    state.observe_non_toolcall_msg_with_host_effects(evidence)
 }
 
 pub(crate) fn on_compact(

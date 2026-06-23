@@ -711,6 +711,7 @@ impl Session {
             if is_non_toolcall_msg(item) {
                 let outcome = self
                     .on_non_toolcall_msg(SpineMessageEvidence {
+                        rollout_path: &rollout_path,
                         raw_ordinal,
                         context_index: append.context_index,
                         item,
@@ -753,15 +754,8 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(SpineHostEffects::none());
         };
-        let rollout_path = self
-            .current_rollout_path()
-            .await
-            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
-            .ok_or_else(|| {
-                SpineError::InvalidStore("spine_jit checkpoint requires rollout path".to_string())
-            })?;
         let mut guard = spine_slot.lock().await;
-        hooks::on_non_toolcall_msg(&mut guard, &rollout_path, evidence)
+        hooks::on_non_toolcall_msg(&mut guard, evidence)
     }
 
     async fn materialized_history_host_effects_if_no_pending_tool_request(
