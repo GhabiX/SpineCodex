@@ -59,6 +59,20 @@ fn single_output_raw_ordinal(output_raw_ordinals: &[Option<u64>]) -> Result<u64,
         })
 }
 
+fn prepare_toolcall_commit_preparation(
+    runtime: &mut SpineRuntime,
+    call_id: &str,
+    raw_items: &[Option<ResponseItem>],
+    force_ordinary: bool,
+) -> Result<SpineToolcallCommitPreparation, SpineError> {
+    if !force_ordinary {
+        runtime.ensure_pending_from_toolcall_request(call_id, raw_items)?;
+    }
+    Ok(SpineToolcallCommitPreparation::new(
+        !force_ordinary && runtime.has_close_like_control_request(call_id, raw_items)?,
+    ))
+}
+
 impl SpineSessionState {
     pub(crate) fn prepare_single_toolcall_output_recording(
         &self,
@@ -103,13 +117,12 @@ impl SpineSessionState {
         };
         let call_id = evidence.commit_evidence.call_id.as_str();
         let force_ordinary = evidence.commit_evidence.force_ordinary();
-        if !force_ordinary {
-            runtime.ensure_pending_from_toolcall_request(call_id, evidence.raw_items)?;
-        }
-        let preparation = SpineToolcallCommitPreparation::new(
-            !force_ordinary
-                && runtime.has_close_like_control_request(call_id, evidence.raw_items)?,
-        );
+        let preparation = prepare_toolcall_commit_preparation(
+            runtime,
+            call_id,
+            evidence.raw_items,
+            force_ordinary,
+        )?;
         let plan = preparation.host_plan(
             evidence.current_turn_provider_input_tokens,
             evidence.tool_resp_already_recorded,
