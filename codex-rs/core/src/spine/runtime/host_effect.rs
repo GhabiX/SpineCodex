@@ -139,7 +139,7 @@ impl SpineHostEffects {
         Ok(())
     }
 
-    pub(crate) fn into_root_compact_host_publish(
+    fn into_root_compact_host_publish(
         self,
     ) -> Result<(Self, Option<SpineRootCompactHostPublish>), String> {
         let mut remaining = Vec::new();
@@ -159,6 +159,16 @@ impl SpineHostEffects {
             }
         }
         Ok((Self::many(remaining), publication))
+    }
+
+    pub(crate) fn into_only_root_compact_host_publish(
+        self,
+    ) -> Result<Option<SpineRootCompactHostPublish>, String> {
+        let (effects, publication) = self.into_root_compact_host_publish()?;
+        if !effects.is_empty() {
+            return Err("compact hook returned unsupported host effects".to_string());
+        }
+        Ok(publication)
     }
 
     pub(crate) fn into_toolcall_host_commit(

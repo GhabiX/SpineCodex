@@ -1493,19 +1493,12 @@ impl Session {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),
             })?;
-        let (effects, publication) =
-            effects.into_root_compact_host_publish().map_err(|reason| {
-                CodexErr::SpineTerminalFailure {
-                    operation: "install Spine root compact".to_string(),
-                    reason,
-                }
-            })?;
-        if !effects.is_empty() {
-            return Err(CodexErr::SpineTerminalFailure {
+        let publication = effects
+            .into_only_root_compact_host_publish()
+            .map_err(|reason| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
-                reason: "compact hook returned unsupported host effects".to_string(),
-            });
-        }
+                reason,
+            })?;
         let Some(publication) = publication else {
             return Ok(None);
         };
