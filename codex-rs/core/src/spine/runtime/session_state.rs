@@ -6,14 +6,10 @@ use std::path::Path;
 
 use super::CompletedToolCall;
 use super::CompletedToolCallSegment;
-use super::LiveRootCompact;
 use super::SpineError;
 use super::SpineHistoryUpdate;
 use super::SpineHostEffects;
 use super::SpineOpenNodeContextProjection;
-use super::SpinePreparedRootCompactInstall;
-#[cfg(test)]
-use super::SpineRootCompactResult;
 use super::SpineRootCompactTokenMetadata;
 use super::SpineRuntime;
 use super::SpineTreeUpdateDelivery;
@@ -30,6 +26,7 @@ use crate::spine::store::SpineCloneBoundary;
 use crate::spine::store::SpineStore;
 
 mod completed_toolcall_evidence;
+mod state_types;
 mod toolcall_host_commit;
 
 pub(crate) use completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence;
@@ -44,6 +41,18 @@ use completed_toolcall_evidence::completed_toolcall_request_segment;
 use completed_toolcall_evidence::completed_toolcall_request_segments;
 use completed_toolcall_evidence::completed_toolcall_response_segment;
 use completed_toolcall_evidence::completed_toolcall_response_segments;
+use state_types::CommittedSpineToolcall;
+use state_types::PreparedSpineReplayRuntime;
+pub(crate) use state_types::PreparedSpineRootCompactCommit;
+pub(crate) use state_types::SpineCompactEvidence;
+pub(crate) use state_types::SpineGroupedToolcallOutputRecordingPlan;
+pub(crate) use state_types::SpineInitEvidence;
+pub(crate) use state_types::SpineMessageEvidence;
+pub(crate) use state_types::SpineNativeCompactEvidence;
+pub(crate) use state_types::SpineObservedContextItem;
+use state_types::SpinePostApplyEffectPolicy;
+pub(crate) use state_types::SpineRootCompactHostInstall;
+pub(crate) use state_types::SpineSingleToolcallOutputRecordingPlan;
 pub(crate) use toolcall_host_commit::SpineCompletedToolCallHostOutcome;
 #[cfg(test)]
 pub(crate) use toolcall_host_commit::SpineToolOutputRecording;
@@ -66,44 +75,6 @@ pub(super) enum SpineCommitAttemptKind {
     RuntimeMissing,
 }
 
-pub(crate) struct PreparedSpineReplayRuntime {
-    pub(crate) runtime: Option<SpineRuntime>,
-    pub(crate) materialized: Option<Vec<ResponseItem>>,
-    pub(crate) live_root_compacts: Vec<LiveRootCompact>,
-}
-
-pub(crate) struct SpineInitEvidence<'a> {
-    pub(crate) rollout_path: &'a Path,
-}
-
-pub(crate) struct SpineNativeCompactEvidence<'a> {
-    pub(crate) compacted_history: &'a [ResponseItem],
-    pub(crate) native_items: &'a [ResponseItem],
-}
-
-pub(crate) struct SpineCompactEvidence<'a> {
-    pub(crate) rollout_path: &'a Path,
-    pub(crate) compacted_history: &'a [ResponseItem],
-    pub(crate) raw_items: &'a [Option<ResponseItem>],
-    pub(crate) close_provider_input_tokens: Option<i64>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct SpineObservedContextItem<'a> {
-    pub(crate) raw_ordinal: u64,
-    pub(crate) context_index: usize,
-    pub(crate) item: &'a ResponseItem,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct SpineMessageEvidence<'a> {
-    pub(crate) rollout_path: &'a Path,
-    pub(crate) raw_ordinal: u64,
-    pub(crate) context_index: usize,
-    pub(crate) item: &'a ResponseItem,
-    pub(crate) raw_items: &'a [Option<ResponseItem>],
-}
-
 struct SpineToolcallCommitInput<'a> {
     call_id: &'a str,
     completed_toolcall: CompletedToolCall,
@@ -115,24 +86,6 @@ struct SpineToolcallCommitInput<'a> {
     reference_context_item: Option<TurnContextItem>,
     pre_compact_provider_input_tokens: Option<i64>,
     current_turn_provider_input_tokens: Option<i64>,
-}
-
-pub(crate) struct SpineSingleToolcallOutputRecordingPlan {
-    raw_len: u64,
-    prerecord_output_before_reduce: bool,
-}
-
-pub(crate) struct SpineGroupedToolcallOutputRecordingPlan {
-    raw_ordinals: Vec<Option<u64>>,
-}
-
-pub(crate) struct SpinePostApplyEffectPolicy {
-    delivery: SpineTreeUpdateDelivery,
-}
-
-pub(crate) struct CommittedSpineToolcall {
-    installed_commit: bool,
-    post_apply_effect_policy: SpinePostApplyEffectPolicy,
 }
 
 impl PreparedSpineToolcallCommit {
@@ -151,92 +104,6 @@ impl PreparedSpineToolcallCommit {
             SpineTreeUpdateDelivery::Immediate
         };
         SpinePostApplyEffectPolicy { delivery }
-    }
-}
-
-impl PreparedSpineReplayRuntime {
-    fn new(
-        runtime: Option<SpineRuntime>,
-        materialized: Option<Vec<ResponseItem>>,
-        live_root_compacts: Vec<LiveRootCompact>,
-    ) -> Self {
-        Self {
-            runtime,
-            materialized,
-            live_root_compacts,
-        }
-    }
-}
-
-impl SpinePostApplyEffectPolicy {
-    pub(crate) fn host_effects(self, snapshot: Option<SpineTreeUpdateEvent>) -> SpineHostEffects {
-        SpineHostEffects::from_optional_tree_update(snapshot, self.delivery)
-    }
-}
-
-impl CommittedSpineToolcall {
-    fn installed_commit(&self) -> bool {
-        self.installed_commit
-    }
-
-    fn post_apply_host_effects(self, snapshot: Option<SpineTreeUpdateEvent>) -> SpineHostEffects {
-        self.post_apply_effect_policy.host_effects(snapshot)
-    }
-}
-
-impl SpineSingleToolcallOutputRecordingPlan {
-    pub(crate) fn raw_len(&self) -> u64 {
-        self.raw_len
-    }
-
-    pub(crate) fn prerecord_output_before_reduce(&self) -> bool {
-        self.prerecord_output_before_reduce
-    }
-}
-
-impl SpineGroupedToolcallOutputRecordingPlan {
-    pub(crate) fn into_raw_ordinals(self) -> Vec<Option<u64>> {
-        self.raw_ordinals
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct PreparedSpineRootCompactCommit {
-    install: SpinePreparedRootCompactInstall,
-}
-
-#[derive(Debug)]
-pub(crate) struct SpineRootCompactHostInstall {
-    commit: PreparedSpineRootCompactCommit,
-}
-
-impl PreparedSpineRootCompactCommit {
-    pub(crate) fn from_install(install: SpinePreparedRootCompactInstall) -> Self {
-        Self { install }
-    }
-
-    pub(crate) fn materialized(&self) -> &[ResponseItem] {
-        &self.install.result().materialized
-    }
-
-    #[cfg(test)]
-    pub(crate) fn result(&self) -> SpineRootCompactResult {
-        self.install.result().clone()
-    }
-}
-
-impl SpineRootCompactHostInstall {
-    fn new(commit: PreparedSpineRootCompactCommit) -> Self {
-        Self { commit }
-    }
-
-    pub(crate) fn materialized(&self) -> &[ResponseItem] {
-        self.commit.materialized()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn result(&self) -> SpineRootCompactResult {
-        self.commit.result()
     }
 }
 
