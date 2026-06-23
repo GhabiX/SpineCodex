@@ -219,15 +219,13 @@ impl SpineSessionState {
 
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
         self.ensure_valid()?;
-        let count = u64::try_from(count)
+        let raw_count = u64::try_from(count)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
         self.raw_len = self
             .raw_len
-            .checked_add(count)
+            .checked_add(raw_count)
             .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
         if let Some(runtime) = self.runtime.as_mut() {
-            let count = usize::try_from(count)
-                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
             runtime.observe_raw_items(count)?;
         }
         Ok(())
