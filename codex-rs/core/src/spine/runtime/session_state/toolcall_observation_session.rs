@@ -1,6 +1,7 @@
 use codex_protocol::models::ResponseItem;
 
 use super::super::SpineError;
+use super::super::SpineRuntime;
 use super::super::support::tool_request_call_id;
 use super::super::support::tool_response_call_id;
 use super::SpineSessionState;
@@ -19,6 +20,34 @@ use super::state_types::SpineObservedContextItem;
 use super::state_types::SpineSingleToolcallOutputRecordingPlan;
 use super::toolcall_host_commit::SpineToolcallCommitHostPlan;
 use super::toolcall_host_commit::SpineToolcallCommitPreparation;
+
+fn observe_toolcall_context_item(
+    runtime: &mut SpineRuntime,
+    item: &SpineObservedContextItem<'_>,
+    recorded_tool_outputs: &mut Vec<(String, u64, usize)>,
+) -> Result<(), SpineError> {
+    if tool_request_call_id(item.item).is_some() {
+        runtime.observe_toolcall_request_anchor(item.raw_ordinal, item.context_index, item.item)?;
+    } else if let Some(call_id) = tool_response_call_id(item.item) {
+        recorded_tool_outputs.push((call_id.to_string(), item.raw_ordinal, item.context_index));
+        runtime.observe_toolcall_response_anchor(
+            item.raw_ordinal,
+            item.context_index,
+            item.item,
+        )?;
+    } else if matches!(
+        item.item,
+        ResponseItem::ToolSearchOutput { call_id: None, .. }
+            | ResponseItem::ToolSearchCall { call_id: None, .. }
+    ) {
+        return Ok(());
+    } else {
+        return Err(SpineError::InvalidEvent(
+            "toolcall context observer received non-toolcall item".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 impl SpineSessionState {
     pub(crate) fn prepare_single_toolcall_output_recording(
@@ -89,34 +118,7 @@ impl SpineSessionState {
         };
         let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
         for item in items {
-            if tool_request_call_id(item.item).is_some() {
-                runtime.observe_toolcall_request_anchor(
-                    item.raw_ordinal,
-                    item.context_index,
-                    item.item,
-                )?;
-            } else if let Some(call_id) = tool_response_call_id(item.item) {
-                recorded_tool_outputs.push((
-                    call_id.to_string(),
-                    item.raw_ordinal,
-                    item.context_index,
-                ));
-                runtime.observe_toolcall_response_anchor(
-                    item.raw_ordinal,
-                    item.context_index,
-                    item.item,
-                )?;
-            } else if matches!(
-                item.item,
-                ResponseItem::ToolSearchOutput { call_id: None, .. }
-                    | ResponseItem::ToolSearchCall { call_id: None, .. }
-            ) {
-                continue;
-            } else {
-                return Err(SpineError::InvalidEvent(
-                    "toolcall context observer received non-toolcall item".to_string(),
-                ));
-            }
+            observe_toolcall_context_item(runtime, item, &mut recorded_tool_outputs)?;
         }
         if !recorded_tool_outputs.is_empty() {
             runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
