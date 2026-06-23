@@ -136,35 +136,45 @@ impl SpineRuntime {
             )));
         };
         if parent.is_root_epoch() && node_id.0.last() == Some(&1) {
-            let root_epoch =
-                parent.0.first().copied().ok_or_else(|| {
-                    SpineError::InvalidEvent("root epoch id is empty".to_string())
-                })?;
-            let Some(previous_root_epoch) = root_epoch.checked_sub(1) else {
-                return Err(SpineError::SidecarCorruption(format!(
-                    "missing open event for {node_id}; root epoch {root_epoch} has no previous compact boundary"
-                )));
-            };
-            let compacted_parent = NodeId::root_epoch(previous_root_epoch);
-            return events
-                .iter()
-                .rev()
-                .find_map(|event| match &event.event {
-                    SpineLedgerEvent::RootCompact { node, boundary, .. }
-                        if *node == compacted_parent && parent.child(1) == *node_id =>
-                    {
-                        Some(*boundary)
-                    }
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    SpineError::SidecarCorruption(format!(
-                        "missing open event for {node_id}; no root compact boundary for parent {parent}"
-                    ))
-                });
+            return self.open_raw_start_from_root_compact(node_id, &parent);
         }
         Err(SpineError::SidecarCorruption(format!(
             "missing open event for {node_id}; no matching open/root compact event in sidecar"
         )))
+    }
+
+    fn open_raw_start_from_root_compact(
+        &self,
+        node_id: &NodeId,
+        parent: &NodeId,
+    ) -> Result<u64, SpineError> {
+        let root_epoch = parent
+            .0
+            .first()
+            .copied()
+            .ok_or_else(|| SpineError::InvalidEvent("root epoch id is empty".to_string()))?;
+        let Some(previous_root_epoch) = root_epoch.checked_sub(1) else {
+            return Err(SpineError::SidecarCorruption(format!(
+                "missing open event for {node_id}; root epoch {root_epoch} has no previous compact boundary"
+            )));
+        };
+        let compacted_parent = NodeId::root_epoch(previous_root_epoch);
+        self.ledger
+            .events
+            .iter()
+            .rev()
+            .find_map(|event| match &event.event {
+                SpineLedgerEvent::RootCompact { node, boundary, .. }
+                    if *node == compacted_parent && parent.child(1) == *node_id =>
+                {
+                    Some(*boundary)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                SpineError::SidecarCorruption(format!(
+                    "missing open event for {node_id}; no root compact boundary for parent {parent}"
+                ))
+            })
     }
 }
