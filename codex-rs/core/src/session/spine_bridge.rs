@@ -68,7 +68,6 @@ pub(crate) struct SpineToolCommit {
 }
 
 pub(crate) enum SpineToolcallTurnError {
-    Codex(CodexErr),
     Terminal(String),
 }
 
@@ -172,14 +171,6 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         evidence: SpineToolCallEvidence<'_>,
     ) -> Result<(), SpineToolcallTurnError> {
-        let host_items = evidence
-            .host_items_to_record_before_hook()
-            .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))?;
-        if let Some(items) = host_items {
-            self.record_conversation_items_without_spine_observe(turn_context, items)
-                .await
-                .map_err(SpineToolcallTurnError::Codex)?;
-        }
         self.commit_toolcall_evidence(turn_context, evidence)
             .await
             .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))
@@ -1157,9 +1148,6 @@ impl Session {
             if tool_resp_already_recorded || recorded_output_inside_reduce {
                 break;
             }
-            if !recording_plan.prerecord_output_before_reduce() {
-                break;
-            }
             history_before_recorded_output = Some(history_for_output_anchor.clone());
             self.record_conversation_items_without_spine_observe(
                 turn_context,
@@ -1167,8 +1155,13 @@ impl Session {
             )
             .await
             .map_err(|err| {
+                let kind = if recording_plan.prerecord_output_before_reduce() {
+                    "close-like raw output"
+                } else {
+                    "tool output"
+                };
                 SpineError::Operation(format!(
-                    "failed to record Spine close-like raw output before reduce for call_id={call_id}: {err}"
+                    "failed to record Spine {kind} before commit for call_id={call_id}: {err}"
                 ))
             })?;
             recorded_output_inside_reduce = true;

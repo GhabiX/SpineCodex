@@ -155,15 +155,6 @@ impl<'a> SpineToolCallEvidence<'a> {
             }
         }
     }
-
-    pub(crate) fn host_items_to_record_before_hook(
-        &self,
-    ) -> Result<Option<&'a [ResponseItem]>, SpineError> {
-        let Some(output) = self.completed_output()? else {
-            return Ok(None);
-        };
-        Ok(output.single_output_item().map(std::slice::from_ref))
-    }
 }
 
 impl<'a> SpineCompletedToolCallOutputEvidence<'a> {

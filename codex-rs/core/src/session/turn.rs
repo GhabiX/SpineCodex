@@ -195,7 +195,6 @@ fn map_spine_toolcall_turn_error(
     operation: &'static str,
 ) -> SamplingRequestError {
     match err {
-        SpineToolcallTurnError::Codex(err) => SamplingRequestError::Codex(err),
         SpineToolcallTurnError::Terminal(reason) => {
             SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
                 operation: operation.to_string(),
