@@ -268,6 +268,25 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
 }
 
 #[test]
+fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() {
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    let publication_parts = commit
+        .split("fn commit_publication_history_update_parts")
+        .nth(1)
+        .and_then(|tail| tail.split("fn prepare_close_commit").next())
+        .expect("commit publication history update function");
+    assert!(
+        !publication_parts.contains("self.materialize_history("),
+        "runtime/commit.rs must not materialize h(PS) directly while preparing toolcall projection publication"
+    );
+    assert!(
+        publication_parts.contains(".full_variable_context_publication_update_parts("),
+        "toolcall projection publication should route h(PS) materialization through ParserState"
+    );
+}
+
+#[test]
 fn runtime_prepared_carriers_hold_parser_prepared_state() {
     let prepared =
         fs::read_to_string(spine_src("runtime/prepared.rs")).expect("read runtime prepared source");

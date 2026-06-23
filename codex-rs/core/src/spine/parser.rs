@@ -458,6 +458,21 @@ impl ParserState {
         )
     }
 
+    pub(super) fn full_variable_context_publication_update_parts(
+        &self,
+        operation: &'static str,
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+        history_items: &[ResponseItem],
+    ) -> Result<Option<(&'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>)>, SpineError>
+    {
+        let materialized = self.materialize_variable_context(raw_items, trim_projection)?;
+        if materialized.as_slice() == history_items {
+            return Ok(None);
+        }
+        Ok(Some((operation, 0, history_items.to_vec(), materialized)))
+    }
+
     pub(super) fn build_checkpoint(
         &self,
         rollout_path: &Path,

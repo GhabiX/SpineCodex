@@ -788,16 +788,13 @@ impl SpineRuntime {
         if !tool_resp_already_recorded {
             return Ok(None);
         }
-        let materialized = self.materialize_history(raw_items)?;
-        if materialized.as_slice() == history_items {
-            return Ok(None);
-        }
-        Ok(Some((
+        let trim_projection = self.current_trim_projection()?;
+        self.parser.full_variable_context_publication_update_parts(
             "spine toolcall projection",
-            0,
-            history_items.to_vec(),
-            materialized,
-        )))
+            raw_items,
+            &trim_projection,
+            history_items,
+        )
     }
 
     fn prepare_close_commit(
