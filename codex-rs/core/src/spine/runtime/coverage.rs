@@ -98,14 +98,18 @@ fn mark_raw_covered_by_event(
 }
 
 fn completed_raw_tool_call_ids(raw_items: &[Option<ResponseItem>]) -> BTreeSet<String> {
-    let mut request = BTreeSet::new();
-    let mut response = BTreeSet::new();
+    let request_call_ids = raw_items
+        .iter()
+        .filter_map(Option::as_ref)
+        .filter_map(tool_request_call_id)
+        .collect::<BTreeSet<_>>();
+    let mut completed = BTreeSet::new();
     for item in raw_items.iter().filter_map(Option::as_ref) {
-        if let Some(call_id) = tool_request_call_id(item) {
-            request.insert(call_id.to_string());
-        } else if let Some(call_id) = tool_response_call_id(item) {
-            response.insert(call_id.to_string());
+        if let Some(call_id) = tool_response_call_id(item)
+            && request_call_ids.contains(call_id)
+        {
+            completed.insert(call_id.to_string());
         }
     }
-    request.intersection(&response).cloned().collect()
+    completed
 }
