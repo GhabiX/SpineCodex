@@ -20,8 +20,7 @@ impl LoggedPressureEvent {
                 }
                 observed_raw_live_hash
                     .as_deref()
-                    .map(|hash| hash_raw_live(&raw_live[..end]) == hash)
-                    .unwrap_or(true)
+                    .is_none_or(|hash| hash_raw_live(&raw_live[..end]) == hash)
             }
         }
     }
