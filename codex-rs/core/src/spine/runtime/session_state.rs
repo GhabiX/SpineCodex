@@ -31,7 +31,6 @@ pub(crate) use toolcall_host_commit::SpineCompletedToolCallHostOutcome;
 #[cfg(test)]
 pub(crate) use toolcall_host_commit::SpineToolOutputRecording;
 pub(crate) use toolcall_host_commit::SpineToolcallCommitHostPlan;
-pub(crate) use toolcall_host_commit::SpineToolcallCommitProviderInputTokens;
 pub(crate) use toolcall_host_commit::SpineToolcallHostCommit;
 
 #[derive(Debug)]

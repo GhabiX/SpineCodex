@@ -27,7 +27,6 @@ use crate::spine::SpineToolCallEvidence;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
-use crate::spine::SpineToolcallCommitProviderInputTokens;
 use crate::spine::SpineToolcallHookEvidence;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
@@ -136,7 +135,8 @@ struct CompletedSpineToolCall<'a> {
 struct SpineToolcallCommitAttemptInput<'a> {
     tool_resp_item: &'a ResponseItem,
     expected_history: Vec<ResponseItem>,
-    provider_input_tokens: SpineToolcallCommitProviderInputTokens,
+    pre_compact_provider_input_tokens: Option<i64>,
+    current_turn_provider_input_tokens: Option<i64>,
     toolcall_evidence: SpineToolcallCommitEvidence,
     tool_resp_already_recorded: bool,
     raw_items: &'a [Option<ResponseItem>],
@@ -1255,7 +1255,7 @@ impl Session {
             .apply_toolcall_host_commit(
                 &call_id,
                 current_turn_provider_input_tokens,
-                |provider_input_tokens| {
+                |pre_compact_provider_input_tokens, current_turn_provider_input_tokens| {
                     let expected_history = expected_history.clone();
                     let toolcall_evidence = toolcall.evidence.toolcall_evidence.clone();
                     let raw_items = raw_items_ref;
@@ -1263,7 +1263,8 @@ impl Session {
                         let attempt_input = SpineToolcallCommitAttemptInput {
                             tool_resp_item: item,
                             expected_history,
-                            provider_input_tokens,
+                            pre_compact_provider_input_tokens,
+                            current_turn_provider_input_tokens,
                             toolcall_evidence,
                             tool_resp_already_recorded,
                             raw_items,
@@ -1336,8 +1337,8 @@ impl Session {
             history.raw_items(),
             input.expected_history,
             reference_context_item,
-            input.provider_input_tokens.pre_compact(),
-            input.provider_input_tokens.current_turn(),
+            input.pre_compact_provider_input_tokens,
+            input.current_turn_provider_input_tokens,
             |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
             |projection| {
                 if let Some(projection) = projection {

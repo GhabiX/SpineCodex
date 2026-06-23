@@ -6,7 +6,6 @@ use std::future::Future;
 use super::SpineCommitAttempt;
 use super::SpineCompletedToolCallHostOutcome;
 use super::SpineError;
-use super::session_state::SpineToolcallCommitProviderInputTokens;
 use super::session_state::SpineToolcallHostCommit;
 
 #[derive(Debug)]
@@ -256,7 +255,7 @@ impl SpineHostEffects {
         abort_pending: AbortPending,
     ) -> Result<Option<SpineCompletedToolCallHostOutcome>, SpineError>
     where
-        AttemptOnce: FnMut(SpineToolcallCommitProviderInputTokens) -> AttemptOnceFuture,
+        AttemptOnce: FnMut(Option<i64>, Option<i64>) -> AttemptOnceFuture,
         AttemptOnceFuture: Future<Output = Result<SpineCommitAttempt, SpineError>>,
         YieldRetry: FnMut() -> YieldRetryFuture,
         YieldRetryFuture: Future<Output = ()>,
@@ -278,10 +277,17 @@ impl SpineHostEffects {
         };
         let provider_input_tokens =
             host_commit.provider_input_tokens(current_turn_provider_input_tokens);
+        let pre_compact_provider_input_tokens = provider_input_tokens.pre_compact();
+        let current_turn_provider_input_tokens = provider_input_tokens.current_turn();
         let post_commit_effects = host_commit
             .run_host_commit_loop(
                 call_id,
-                || attempt_once(provider_input_tokens),
+                || {
+                    attempt_once(
+                        pre_compact_provider_input_tokens,
+                        current_turn_provider_input_tokens,
+                    )
+                },
                 yield_retry,
                 fail_closed,
                 abort_pending,
