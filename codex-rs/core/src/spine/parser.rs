@@ -17,8 +17,10 @@ use std::collections::BTreeSet;
 use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
 use crate::spine::lexer::LexedTokenBatch;
+use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::LoggedSpineLedgerEvent;
 use crate::spine::model::MemRecord;
+use crate::spine::model::NodeId;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineToken;
 use crate::spine::model::TrimProjection;
@@ -76,6 +78,16 @@ impl ParserState {
 
     pub(super) fn parse_stack_mut_for_runtime_transition(&mut self) -> &mut ParseStack {
         &mut self.parse_stack
+    }
+
+    pub(super) fn set_live_open_context_baseline(
+        &mut self,
+        node: &NodeId,
+        input_tokens: i64,
+        source: ContextBaselineSource,
+    ) -> Result<bool, SpineError> {
+        self.parse_stack
+            .set_live_open_context_baseline(node, input_tokens, source)
     }
 
     pub(super) fn replace_parse_stack_for_runtime_transition(&mut self, parse_stack: ParseStack) {

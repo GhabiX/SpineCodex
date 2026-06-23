@@ -185,13 +185,11 @@ impl SpineRuntime {
             open_context_source: ContextBaselineSource::ProviderAtOpen,
         };
         self.append_cached_event(event)?;
-        self.parser
-            .parse_stack_mut_for_runtime_transition()
-            .set_live_open_context_baseline(
-                &open_meta.id,
-                input_tokens,
-                ContextBaselineSource::ProviderAtOpen,
-            )
+        self.parser.set_live_open_context_baseline(
+            &open_meta.id,
+            input_tokens,
+            ContextBaselineSource::ProviderAtOpen,
+        )
     }
 
     pub(crate) fn capture_closed_memory_context_accounting(

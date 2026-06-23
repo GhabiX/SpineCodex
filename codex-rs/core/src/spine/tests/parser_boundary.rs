@@ -67,3 +67,18 @@ fn runtime_load_checkpoint_replay_routes_through_parser_state() {
         "checkpoint prefix replay should route through ParserState"
     );
 }
+
+#[test]
+fn runtime_accounting_routes_open_baseline_mutation_through_parser_state() {
+    let accounting = fs::read_to_string(spine_src("runtime/accounting.rs"))
+        .expect("read runtime accounting source");
+    assert!(
+        !accounting.contains("parse_stack_mut_for_runtime_transition"),
+        "runtime/accounting.rs must not take a mutable ParseStack handle"
+    );
+    assert!(
+        accounting.contains("self.parser")
+            && accounting.contains(".set_live_open_context_baseline("),
+        "runtime accounting should route live open baseline updates through ParserState"
+    );
+}
