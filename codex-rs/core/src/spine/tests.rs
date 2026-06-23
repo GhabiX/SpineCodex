@@ -189,6 +189,8 @@ mod pending_control_receipt_abort;
 mod pending_control_receipt_duplicates;
 #[path = "tests/pending_control_receipts.rs"]
 mod pending_control_receipts;
+#[path = "tests/parser_boundary.rs"]
+mod parser_boundary;
 #[path = "tests/prepared_commit.rs"]
 mod prepared_commit;
 #[path = "tests/prepared_commit_side_effect_failures.rs"]
