@@ -26,7 +26,7 @@ pub(super) fn sidecar_store_path(store_root: &Path, path: &str) -> PathBuf {
 
 impl SpineStore {
     pub(crate) fn tree_path(&self) -> PathBuf {
-        self.root.join(TREE_FILE)
+        self.root_path(TREE_FILE)
     }
 
     #[cfg(test)]
@@ -35,19 +35,19 @@ impl SpineStore {
     }
 
     pub(crate) fn mem_path(&self) -> PathBuf {
-        self.root.join(MEM_FILE)
+        self.root_path(MEM_FILE)
     }
 
     pub(super) fn mem_accounting_path(&self) -> PathBuf {
-        self.root.join(MEM_ACCOUNTING_FILE)
+        self.root_path(MEM_ACCOUNTING_FILE)
     }
 
     pub(super) fn mem_accounting_witness_path(&self) -> PathBuf {
-        self.root.join(MEM_ACCOUNTING_WITNESS_FILE)
+        self.root_path(MEM_ACCOUNTING_WITNESS_FILE)
     }
 
     pub(super) fn commit_path(&self) -> PathBuf {
-        self.root.join(COMMIT_FILE)
+        self.root_path(COMMIT_FILE)
     }
 
     #[cfg(test)]
@@ -56,7 +56,7 @@ impl SpineStore {
     }
 
     pub(super) fn pressure_path(&self) -> PathBuf {
-        self.root.join(PRESSURE_FILE)
+        self.root_path(PRESSURE_FILE)
     }
 
     #[cfg(test)]
@@ -65,7 +65,7 @@ impl SpineStore {
     }
 
     pub(super) fn trim_path(&self) -> PathBuf {
-        self.root.join(TRIM_FILE)
+        self.root_path(TRIM_FILE)
     }
 
     #[cfg(test)]
@@ -74,7 +74,7 @@ impl SpineStore {
     }
 
     pub(super) fn compact_checkpoint_path(&self) -> PathBuf {
-        self.root.join(COMPACT_CHECKPOINT_FILE)
+        self.root_path(COMPACT_CHECKPOINT_FILE)
     }
 
     #[cfg(test)]
@@ -83,7 +83,7 @@ impl SpineStore {
     }
 
     pub(super) fn checkpoint_dir(&self) -> PathBuf {
-        self.root.join(CHECKPOINT_DIR)
+        self.root_path(CHECKPOINT_DIR)
     }
 
     pub(crate) fn checkpoint_path(&self, raw_ordinal: u64) -> PathBuf {
@@ -98,5 +98,9 @@ impl SpineStore {
     #[cfg(test)]
     pub(crate) fn initial_checkpoint_path_for_test(&self) -> PathBuf {
         self.initial_checkpoint_path()
+    }
+
+    fn root_path(&self, leaf: &str) -> PathBuf {
+        self.root.join(leaf)
     }
 }
