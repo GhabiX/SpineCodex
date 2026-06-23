@@ -3,6 +3,10 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
 
+use super::SpineCommitAttempt;
+use super::SpineCompletedToolCallHostOutcome;
+use super::SpineError;
+use super::session_state::SpineToolcallCommitProviderInputTokens;
 use super::session_state::SpineToolcallHostCommit;
 
 #[derive(Debug)]
@@ -174,6 +178,59 @@ impl SpineHostEffects {
             }
         }
         Ok((Self::many(remaining), host_commit))
+    }
+
+    pub(crate) async fn apply_toolcall_host_commit<
+        AttemptOnce,
+        AttemptOnceFuture,
+        YieldRetry,
+        YieldRetryFuture,
+        FailClosed,
+        FailClosedFuture,
+        AbortPending,
+        AbortPendingFuture,
+    >(
+        self,
+        call_id: &str,
+        current_turn_provider_input_tokens: Option<i64>,
+        mut attempt_once: AttemptOnce,
+        yield_retry: YieldRetry,
+        fail_closed: FailClosed,
+        abort_pending: AbortPending,
+    ) -> Result<Option<SpineCompletedToolCallHostOutcome>, SpineError>
+    where
+        AttemptOnce: FnMut(SpineToolcallCommitProviderInputTokens) -> AttemptOnceFuture,
+        AttemptOnceFuture: Future<Output = Result<SpineCommitAttempt, SpineError>>,
+        YieldRetry: FnMut() -> YieldRetryFuture,
+        YieldRetryFuture: Future<Output = ()>,
+        FailClosed: FnMut(&'static str) -> FailClosedFuture,
+        FailClosedFuture: Future<Output = ()>,
+        AbortPending: FnMut(&'static str) -> AbortPendingFuture,
+        AbortPendingFuture: Future<Output = ()>,
+    {
+        let (effects, host_commit) = self
+            .into_toolcall_host_commit()
+            .map_err(SpineError::Invariant)?;
+        if !effects.is_empty() {
+            return Err(SpineError::Invariant(
+                "toolcall hook returned unsupported host effects".to_string(),
+            ));
+        }
+        let Some(mut host_commit) = host_commit else {
+            return Ok(None);
+        };
+        let provider_input_tokens =
+            host_commit.provider_input_tokens(current_turn_provider_input_tokens);
+        let post_commit_effects = host_commit
+            .run_host_commit_loop(
+                call_id,
+                || attempt_once(provider_input_tokens),
+                yield_retry,
+                fail_closed,
+                abort_pending,
+            )
+            .await?;
+        Ok(post_commit_effects.map(|effects| host_commit.host_outcome(effects)))
     }
 
     pub(crate) fn apply_history_updates_or_keep(

@@ -1258,10 +1258,10 @@ impl Session {
         let current_turn_provider_input_tokens = current_turn_token_info
             .as_ref()
             .and_then(provider_input_context_tokens);
-        let mut commit_host_loop = {
+        let toolcall_host_effects = {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            let effects = hooks::on_toolcall(
+            hooks::on_toolcall(
                 &mut guard,
                 SpineToolcallHookEvidence {
                     commit_evidence: &toolcall.evidence.toolcall_evidence,
@@ -1270,37 +1270,30 @@ impl Session {
                     tool_resp_already_recorded,
                     recorded_inside_reduce: recorded_output_inside_reduce,
                 },
-            )?;
-            let (effects, commit_host_loop) = effects
-                .into_toolcall_host_commit()
-                .map_err(SpineError::Invariant)?;
-            if !effects.is_empty() {
-                return Err(SpineError::Invariant(
-                    "toolcall hook returned unsupported host effects".to_string(),
-                ));
-            }
-            let Some(commit_host_loop) = commit_host_loop else {
-                return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
-            };
-            commit_host_loop
+            )?
         };
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
-        let provider_input_tokens =
-            commit_host_loop.provider_input_tokens(current_turn_provider_input_tokens);
-        let post_commit_effects = commit_host_loop
-            .run_host_commit_loop(
+        let raw_items_ref = raw_items.as_slice();
+        let outcome = toolcall_host_effects
+            .apply_toolcall_host_commit(
                 &call_id,
-                || async {
-                    let attempt_input = SpineToolcallCommitAttemptInput {
-                        tool_resp_item: item,
-                        expected_history: expected_history.clone(),
-                        provider_input_tokens,
-                        toolcall_evidence: toolcall.evidence.toolcall_evidence.clone(),
-                        tool_resp_already_recorded,
-                        raw_items: &raw_items,
-                    };
-                    self.try_commit_spine_tool_output_once(spine_slot, attempt_input)
+                current_turn_provider_input_tokens,
+                |provider_input_tokens| {
+                    let expected_history = expected_history.clone();
+                    let toolcall_evidence = toolcall.evidence.toolcall_evidence.clone();
+                    let raw_items = raw_items_ref;
+                    async move {
+                        let attempt_input = SpineToolcallCommitAttemptInput {
+                            tool_resp_item: item,
+                            expected_history,
+                            provider_input_tokens,
+                            toolcall_evidence,
+                            tool_resp_already_recorded,
+                            raw_items,
+                        };
+                        self.try_commit_spine_tool_output_once(spine_slot, attempt_input)
+                    }
                 },
                 || async {
                     tokio::task::yield_now().await;
@@ -1320,8 +1313,8 @@ impl Session {
                 },
             )
             .await;
-        let post_commit_effects = match post_commit_effects {
-            Ok(Some(effects)) => effects,
+        match outcome {
+            Ok(Some(outcome)) => Ok(outcome),
             Ok(None) => return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit()),
             Err(err) => {
                 if recorded_output_inside_reduce {
@@ -1342,8 +1335,7 @@ impl Session {
                 }
                 return Err(err);
             }
-        };
-        Ok(commit_host_loop.host_outcome(post_commit_effects))
+        }
     }
 
     fn try_commit_spine_tool_output_once(
