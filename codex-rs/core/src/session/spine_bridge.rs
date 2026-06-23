@@ -8,6 +8,7 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
+use crate::spine::SpineCompactEvidence;
 use crate::spine::SpineCompletedToolCallHostOutcome;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffects;
@@ -1547,10 +1548,10 @@ impl Session {
 
     pub(crate) async fn on_compact(
         &self,
-        spine_root_compact_source: &[ResponseItem],
+        evidence: SpineCompactEvidence<'_>,
     ) -> CodexResult<Option<SpineRootCompactPublish>> {
         let Some(prepared) = self
-            .prepare_spine_root_compact_from_native_history(spine_root_compact_source)
+            .prepare_spine_root_compact_from_native_history(evidence)
             .await
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
@@ -1564,7 +1565,7 @@ impl Session {
 
     async fn prepare_spine_root_compact_from_native_history(
         &self,
-        spine_root_compact_source: &[ResponseItem],
+        evidence: SpineCompactEvidence<'_>,
     ) -> Result<Option<SpineRootCompactHostPublish>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
@@ -1591,7 +1592,7 @@ impl Session {
         let mut guard = spine_slot.lock().await;
         guard.prepare_native_root_compact_from_history_with_checkpoint(
             &rollout_path,
-            spine_root_compact_source,
+            evidence.compacted_history,
             &raw_items,
             close_provider_input_tokens,
         )

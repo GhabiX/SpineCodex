@@ -67,6 +67,10 @@ pub(crate) struct SpineInitEvidence<'a> {
     pub(crate) rollout_path: &'a Path,
 }
 
+pub(crate) struct SpineCompactEvidence<'a> {
+    pub(crate) compacted_history: &'a [ResponseItem],
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SpineObservedContextItem<'a> {
     pub(crate) raw_ordinal: u64,

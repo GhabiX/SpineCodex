@@ -41,6 +41,7 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
+use crate::spine::SpineCompactEvidence;
 use crate::spine::SpineError;
 use crate::spine::SpineSessionState;
 use crate::turn_metadata::TurnMetadataState;
@@ -3041,7 +3042,11 @@ impl Session {
                 fallback_spine_root_compact_source.as_slice()
             }
         };
-        let prepared_spine_root_compact = self.on_compact(spine_root_compact_source).await?;
+        let prepared_spine_root_compact = self
+            .on_compact(SpineCompactEvidence {
+                compacted_history: spine_root_compact_source,
+            })
+            .await?;
         if let Some(prepared) = prepared_spine_root_compact.as_ref() {
             items = prepared.published_history_from_native_items(&items);
             compacted_item.replacement_history = Some(items.clone());
