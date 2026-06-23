@@ -30,6 +30,7 @@ use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineToolcallCommitHostLoop;
 use crate::spine::SpineToolcallCommitProviderInputTokens;
+use crate::spine::SpineToolcallHookEvidence;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
 use crate::spine::is_non_toolcall_msg;
@@ -1278,11 +1279,13 @@ impl Session {
             guard.ensure_valid()?;
             let effects = hooks::on_toolcall(
                 &mut guard,
-                &toolcall.evidence.toolcall_evidence,
-                &raw_items,
-                current_turn_provider_input_tokens,
-                tool_resp_already_recorded,
-                recorded_output_inside_reduce,
+                SpineToolcallHookEvidence {
+                    commit_evidence: &toolcall.evidence.toolcall_evidence,
+                    raw_items: &raw_items,
+                    current_turn_provider_input_tokens,
+                    tool_resp_already_recorded,
+                    recorded_inside_reduce: recorded_output_inside_reduce,
+                },
             )?;
             let (effects, commit_host_loop) = effects
                 .into_toolcall_commit_loop()

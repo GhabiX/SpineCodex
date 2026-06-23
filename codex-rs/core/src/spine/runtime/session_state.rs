@@ -111,6 +111,14 @@ pub(crate) struct SpineToolCallEvidence<'a> {
     control_policy: SpineToolCallControlPolicy,
 }
 
+pub(crate) struct SpineToolcallHookEvidence<'a> {
+    pub(crate) commit_evidence: &'a SpineToolcallCommitEvidence,
+    pub(crate) raw_items: &'a [Option<ResponseItem>],
+    pub(crate) current_turn_provider_input_tokens: Option<i64>,
+    pub(crate) tool_resp_already_recorded: bool,
+    pub(crate) recorded_inside_reduce: bool,
+}
+
 enum SpineToolCallEvidenceKind<'a> {
     Single {
         item: &'a ResponseItem,
@@ -1553,28 +1561,25 @@ impl SpineSessionState {
 
     pub(crate) fn prepare_completed_toolcall_for_commit(
         &mut self,
-        evidence: &SpineToolcallCommitEvidence,
-        raw_items: &[Option<ResponseItem>],
-        current_turn_provider_input_tokens: Option<i64>,
-        tool_resp_already_recorded: bool,
-        recorded_inside_hook: bool,
+        evidence: SpineToolcallHookEvidence<'_>,
     ) -> Result<Option<SpineToolcallCommitHostPlan>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
             return Ok(None);
         };
-        let call_id = evidence.call_id.as_str();
-        let force_ordinary = evidence.force_ordinary();
+        let call_id = evidence.commit_evidence.call_id.as_str();
+        let force_ordinary = evidence.commit_evidence.force_ordinary();
         if !force_ordinary {
-            runtime.ensure_pending_from_toolcall_request(call_id, raw_items)?;
+            runtime.ensure_pending_from_toolcall_request(call_id, evidence.raw_items)?;
         }
         let preparation = SpineToolcallCommitPreparation::new(
-            !force_ordinary && runtime.has_close_like_control_request(call_id, raw_items)?,
+            !force_ordinary
+                && runtime.has_close_like_control_request(call_id, evidence.raw_items)?,
         );
         Ok(Some(preparation.host_plan(
-            current_turn_provider_input_tokens,
-            tool_resp_already_recorded,
-            recorded_inside_hook,
+            evidence.current_turn_provider_input_tokens,
+            evidence.tool_resp_already_recorded,
+            evidence.recorded_inside_reduce,
         )))
     }
 

@@ -4,8 +4,7 @@ use super::runtime::SpineHostEffects;
 use super::runtime::SpineInitEvidence;
 use super::runtime::SpineMessageEvidence;
 use super::runtime::SpineSessionState;
-use super::runtime::SpineToolcallCommitEvidence;
-use codex_protocol::models::ResponseItem;
+use super::runtime::SpineToolcallHookEvidence;
 
 pub(crate) fn on_init(
     state: &mut SpineSessionState,
@@ -30,20 +29,10 @@ pub(crate) fn on_compact(
 
 pub(crate) fn on_toolcall(
     state: &mut SpineSessionState,
-    evidence: &SpineToolcallCommitEvidence,
-    raw_items: &[Option<ResponseItem>],
-    current_turn_provider_input_tokens: Option<i64>,
-    tool_resp_already_recorded: bool,
-    recorded_inside_reduce: bool,
+    evidence: SpineToolcallHookEvidence<'_>,
 ) -> Result<SpineHostEffects, SpineError> {
     state
-        .prepare_completed_toolcall_for_commit(
-            evidence,
-            raw_items,
-            current_turn_provider_input_tokens,
-            tool_resp_already_recorded,
-            recorded_inside_reduce,
-        )
+        .prepare_completed_toolcall_for_commit(evidence)
         .map(|plan| {
             plan.map(|plan| SpineHostEffects::toolcall_commit_loop(plan.into_host_loop()))
                 .unwrap_or_else(SpineHostEffects::none)
