@@ -88,6 +88,19 @@ impl PreparedSpineToolcallCommit {
 }
 
 impl SpineSessionState {
+    fn handle_close_precommit_failure(
+        &mut self,
+        call_id: &str,
+        tool_resp_already_recorded: bool,
+        reason: &'static str,
+    ) {
+        if tool_resp_already_recorded {
+            self.invalidate(format!("{reason} for call_id={call_id}"));
+        } else if let Some(runtime) = self.runtime_mut() {
+            runtime.abort_pending(call_id);
+        }
+    }
+
     fn prepare_completed_toolcall_commit(
         &mut self,
         evidence: SpineToolcallCommitEvidence,
@@ -139,12 +152,11 @@ impl SpineSessionState {
                 )),
                 Ok(None) => None,
                 Err(err) => {
-                    let reason = "spine close memory assembly failed before commit";
-                    if input.tool_resp_already_recorded {
-                        self.invalidate(format!("{reason} for call_id={}", input.call_id));
-                    } else if let Some(runtime) = self.runtime_mut() {
-                        runtime.abort_pending(input.call_id);
-                    }
+                    self.handle_close_precommit_failure(
+                        input.call_id,
+                        input.tool_resp_already_recorded,
+                        "spine close memory assembly failed before commit",
+                    );
                     return Err(err);
                 }
             }
@@ -152,12 +164,11 @@ impl SpineSessionState {
         if let Some(prepared_memory) = memory.as_ref()
             && input.history_items != prepared_memory.expected_history()
         {
-            let reason = "spine close history changed before commit";
-            if input.tool_resp_already_recorded {
-                self.invalidate(format!("{reason} for call_id={}", input.call_id));
-            } else if let Some(runtime) = self.runtime_mut() {
-                runtime.abort_pending(input.call_id);
-            }
+            self.handle_close_precommit_failure(
+                input.call_id,
+                input.tool_resp_already_recorded,
+                "spine close history changed before commit",
+            );
             return Err(SpineError::Operation(format!(
                 "spine.close history changed while compacting suffix for call_id={}",
                 input.call_id
