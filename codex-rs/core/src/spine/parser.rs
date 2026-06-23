@@ -188,6 +188,7 @@ impl ParserState {
         self.parse_stack
     }
 
+    #[cfg(test)]
     pub(super) fn parse_stack_mut_for_runtime_transition(&mut self) -> &mut ParseStack {
         &mut self.parse_stack
     }
