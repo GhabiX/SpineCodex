@@ -120,22 +120,14 @@ impl SpineRuntime {
     ) -> Result<(), SpineError> {
         match receipt {
             SpineControlToolReceipt::Open { summary } => {
-                if summary.trim().is_empty() {
-                    return Err(SpineError::ToolUse(
-                        "spine.open summary must not be empty".to_string(),
-                    ));
-                }
+                validated_summary(summary, "spine.open")?;
             }
             SpineControlToolReceipt::Close { memory } => {
                 validate_model_node_memory(memory)?;
                 self.validate_memory_user_anchor_refs(memory)?;
             }
             SpineControlToolReceipt::Next { summary, memory } => {
-                if summary.trim().is_empty() {
-                    return Err(SpineError::ToolUse(
-                        "spine.next summary must not be empty".to_string(),
-                    ));
-                }
+                validated_summary(summary, "spine.next")?;
                 validate_model_node_memory(memory)?;
                 self.validate_memory_user_anchor_refs(memory)?;
             }
@@ -149,12 +141,7 @@ impl SpineRuntime {
         summary: String,
     ) -> Result<(), SpineError> {
         self.ensure_no_pending_transition()?;
-        let summary = summary.trim().to_string();
-        if summary.is_empty() {
-            return Err(SpineError::ToolUse(
-                "spine.open summary must not be empty".to_string(),
-            ));
-        }
+        let summary = validated_summary(&summary, "spine.open")?;
         let anchor = self.open_requests.remove(&call_id).ok_or_else(|| {
             SpineError::Operation(format!(
                 "missing spine.open request anchor for call_id={call_id}"
@@ -192,12 +179,7 @@ impl SpineRuntime {
         memory: M,
     ) -> Result<(), SpineError> {
         self.ensure_no_pending_transition()?;
-        let summary = summary.trim().to_string();
-        if summary.is_empty() {
-            return Err(SpineError::ToolUse(
-                "spine.next summary must not be empty".to_string(),
-            ));
-        }
+        let summary = validated_summary(&summary, "spine.next")?;
         let memory = memory.into_spine_node_memory()?;
         self.validate_memory_user_anchor_refs(&memory)?;
         if !self.control_call_ids.contains(&call_id) {
@@ -618,4 +600,14 @@ impl SpineRuntime {
     pub(crate) fn has_pending_tool_request(&self) -> bool {
         !self.ordinary_tool_requests.is_empty()
     }
+}
+
+fn validated_summary(summary: &str, tool_name: &str) -> Result<String, SpineError> {
+    let summary = summary.trim().to_string();
+    if summary.is_empty() {
+        return Err(SpineError::ToolUse(format!(
+            "{tool_name} summary must not be empty"
+        )));
+    }
+    Ok(summary)
 }
