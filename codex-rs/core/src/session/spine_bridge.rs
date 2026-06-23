@@ -8,7 +8,6 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineCommitAttempt;
 use crate::spine::SpineCompletedToolCallHostOutcome;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffects;
@@ -27,6 +26,7 @@ use crate::spine::SpineToolCallEvidence;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
+use crate::spine::SpineToolcallCommitHostLoop;
 use crate::spine::SpineToolcallCommitHostStep;
 use crate::spine::SpineToolcallCommitProviderInputTokens;
 use crate::spine::SpineTrimOutcome;
@@ -1291,9 +1291,14 @@ impl Session {
                 tool_resp_already_recorded,
                 raw_items: &raw_items,
             };
-            let attempt = self.try_commit_spine_tool_output_once(spine_slot, attempt_input);
-            let attempt = match attempt {
-                Ok(attempt) => attempt,
+            let step = self.try_commit_spine_tool_output_once(
+                spine_slot,
+                &mut commit_host_loop,
+                &call_id,
+                attempt_input,
+            );
+            let step = match step {
+                Ok(step) => step,
                 Err(err) => {
                     if recorded_output_inside_reduce {
                         if let Some(history) = history_before_recorded_output.as_ref() {
@@ -1314,7 +1319,7 @@ impl Session {
                     return Err(err);
                 }
             };
-            match commit_host_loop.interpret_attempt_for_host(attempt, &call_id)? {
+            match step {
                 SpineToolcallCommitHostStep::Done(effects) => break effects,
                 SpineToolcallCommitHostStep::NoSpineCommit => {
                     return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
@@ -1340,13 +1345,15 @@ impl Session {
     fn try_commit_spine_tool_output_once(
         &self,
         spine_slot: &Mutex<SpineSessionState>,
+        commit_host_loop: &mut SpineToolcallCommitHostLoop,
+        call_id: &str,
         input: SpineToolcallCommitAttemptInput<'_>,
-    ) -> Result<SpineCommitAttempt, SpineError> {
+    ) -> Result<SpineToolcallCommitHostStep, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
-            return Ok(SpineCommitAttempt::host_lock_busy());
+            return commit_host_loop.host_lock_busy_step(call_id);
         };
         let Ok(mut state) = self.state.try_lock() else {
-            return Ok(SpineCommitAttempt::host_lock_busy());
+            return commit_host_loop.host_lock_busy_step(call_id);
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
@@ -1373,7 +1380,7 @@ impl Session {
                 }
             },
         )?;
-        Ok(attempt)
+        commit_host_loop.interpret_attempt_for_host(attempt, call_id)
     }
 
     async fn spine_raw_items_from_rollout_for_commit(

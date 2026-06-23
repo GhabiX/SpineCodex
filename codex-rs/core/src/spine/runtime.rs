@@ -91,7 +91,6 @@ use replay::next_event_seq_from;
 use replay::next_pressure_seq_from;
 use replay::next_trim_seq_from;
 pub(crate) use replay::trim_projection_from_events_for_checkpoint;
-pub(crate) use session_state::SpineCommitAttempt;
 pub(crate) use session_state::SpineCompletedToolCallHostOutcome;
 pub(crate) use session_state::SpineCompletedToolCallOutputEvidence;
 pub(crate) use session_state::SpineMessageEvidence;
@@ -105,6 +104,7 @@ pub(crate) use session_state::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use session_state::SpineToolOutputRecording;
 pub(crate) use session_state::SpineToolcallCommitEvidence;
+pub(crate) use session_state::SpineToolcallCommitHostLoop;
 pub(crate) use session_state::SpineToolcallCommitHostStep;
 pub(crate) use session_state::SpineToolcallCommitProviderInputTokens;
 pub(crate) use support::is_non_toolcall_msg;

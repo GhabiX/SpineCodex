@@ -596,6 +596,13 @@ impl SpineToolcallCommitHostLoop {
         }
         Ok(step)
     }
+
+    pub(crate) fn host_lock_busy_step(
+        &mut self,
+        call_id: &str,
+    ) -> Result<SpineToolcallCommitHostStep, SpineError> {
+        self.interpret_attempt_for_host(SpineCommitAttempt::host_lock_busy(), call_id)
+    }
 }
 
 impl SpineToolcallCommitProviderInputTokens {
