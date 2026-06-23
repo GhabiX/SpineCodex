@@ -15,12 +15,12 @@ impl LoggedPressureEvent {
                 let Ok(end) = usize::try_from(*observed_raw_ordinal) else {
                     return false;
                 };
-                if end > raw_live.len() {
+                let Some(raw_live_prefix) = raw_live.get(..end) else {
                     return false;
-                }
+                };
                 observed_raw_live_hash
                     .as_deref()
-                    .is_none_or(|hash| hash_raw_live(&raw_live[..end]) == hash)
+                    .is_none_or(|hash| hash_raw_live(raw_live_prefix) == hash)
             }
         }
     }

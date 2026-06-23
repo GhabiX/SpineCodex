@@ -360,8 +360,15 @@ fn trim_raw_ordinal_usize(raw_ordinal: u64) -> Result<usize, SpineError> {
 
 fn apply_slice(text: &str, slice: &TrimSliceSpec) -> Option<String> {
     match slice {
-        TrimSliceSpec::Head { head } => Some(prefix_chars(text, *head)),
-        TrimSliceSpec::Tail { tail } => Some(suffix_chars(text, *tail)),
+        TrimSliceSpec::Head { head } => Some(text[..prefix_byte_index(text, *head)].to_string()),
+        TrimSliceSpec::Tail { tail } => {
+            if *tail == 0 {
+                Some(String::new())
+            } else {
+                let keep_from = text.chars().count().saturating_sub(*tail);
+                Some(text[prefix_byte_index(text, keep_from)..].to_string())
+            }
+        }
         TrimSliceSpec::Anchor {
             anchor,
             preceding,
@@ -377,19 +384,6 @@ fn apply_slice(text: &str, slice: &TrimSliceSpec) -> Option<String> {
             Some(text[start..end].to_string())
         }
     }
-}
-
-fn prefix_chars(text: &str, count: usize) -> String {
-    text[..prefix_byte_index(text, count)].to_string()
-}
-
-fn suffix_chars(text: &str, count: usize) -> String {
-    if count == 0 {
-        return String::new();
-    }
-    let total = text.chars().count();
-    let keep_from = total.saturating_sub(count);
-    text[prefix_byte_index(text, keep_from)..].to_string()
 }
 
 fn prefix_byte_index(text: &str, count: usize) -> usize {
