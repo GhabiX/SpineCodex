@@ -49,6 +49,16 @@ fn observe_toolcall_context_item(
     Ok(())
 }
 
+fn single_output_raw_ordinal(output_raw_ordinals: &[Option<u64>]) -> Result<u64, SpineError> {
+    output_raw_ordinals
+        .first()
+        .copied()
+        .flatten()
+        .ok_or_else(|| {
+            SpineError::InvalidEvent("single Spine toolcall output missing raw ordinal".to_string())
+        })
+}
+
 impl SpineSessionState {
     pub(crate) fn prepare_single_toolcall_output_recording(
         &self,
@@ -203,15 +213,7 @@ impl SpineSessionState {
                 .single_completed_toolcall_evidence(
                     call_id,
                     (
-                        output_raw_ordinals
-                            .first()
-                            .copied()
-                            .flatten()
-                            .ok_or_else(|| {
-                                SpineError::InvalidEvent(
-                                    "single Spine toolcall output missing raw ordinal".to_string(),
-                                )
-                            })?,
+                        single_output_raw_ordinal(output_raw_ordinals)?,
                         output_context_start,
                     ),
                 ),
