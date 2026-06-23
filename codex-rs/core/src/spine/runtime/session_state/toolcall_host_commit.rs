@@ -3,10 +3,8 @@ use std::future::Future;
 
 use super::super::SpineError;
 use super::super::SpineHostEffects;
-use super::CommittedSpineToolcall;
 use super::SpineCommitAttempt;
 use super::SpineCommitAttemptKind;
-use super::SpineSessionState;
 
 pub(crate) struct SpineCompletedToolCallHostOutcome {
     #[cfg(test)]
@@ -374,32 +372,6 @@ impl SpineCompletedToolCallHostOutcome {
         self,
     ) -> (SpineToolOutputRecording, Option<SpineTreeUpdateEvent>) {
         (self.recording, self.deferred_tree_update)
-    }
-}
-
-impl SpineCommitAttempt {
-    pub(crate) fn host_lock_busy() -> Self {
-        Self {
-            kind: SpineCommitAttemptKind::Retry,
-        }
-    }
-
-    pub(super) fn runtime_missing() -> Self {
-        Self {
-            kind: SpineCommitAttemptKind::RuntimeMissing,
-        }
-    }
-
-    pub(crate) fn done(
-        state: &mut SpineSessionState,
-        committed: CommittedSpineToolcall,
-        snapshot: Option<SpineTreeUpdateEvent>,
-    ) -> Self {
-        Self {
-            kind: SpineCommitAttemptKind::Done(
-                state.committed_toolcall_post_apply_host_effects(committed, snapshot),
-            ),
-        }
     }
 }
 
