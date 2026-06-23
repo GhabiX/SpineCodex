@@ -336,34 +336,51 @@ pub(super) fn close_commit_marker(
             "root compact marker requested from close marker builder".to_string(),
         ));
     }
-    Ok(SpineCommitMarker {
-        version: COMMIT_MARKER_VERSION,
-        op_id: format!("{}:{}", commit_marker_kind_label(kind), mem.compact_id),
+    commit_marker(
+        format!("{}:{}", commit_marker_kind_label(kind), mem.compact_id),
         kind,
-        token_seq_start: seq,
-        token_seq_end: seq.checked_add(width).ok_or_else(|| {
-            SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
-        })?,
+        seq,
+        width,
         raw_boundary,
-        raw_live_hash: None,
-        memory_refs: vec![commit_memory_ref(mem)],
-    })
+        None,
+        mem,
+    )
 }
 
 pub(super) fn root_compact_commit_marker(
     seq: u64,
     mem: &MemRecord,
 ) -> Result<SpineCommitMarker, SpineError> {
+    commit_marker(
+        format!("root_compact:{}", mem.compact_id),
+        SpineCommitKindMarker::RootCompact,
+        seq,
+        1,
+        mem.raw_end,
+        mem.raw_live_hash.clone(),
+        mem,
+    )
+}
+
+fn commit_marker(
+    op_id: String,
+    kind: SpineCommitKindMarker,
+    token_seq_start: u64,
+    width: u64,
+    raw_boundary: u64,
+    raw_live_hash: Option<String>,
+    mem: &MemRecord,
+) -> Result<SpineCommitMarker, SpineError> {
     Ok(SpineCommitMarker {
         version: COMMIT_MARKER_VERSION,
-        op_id: format!("root_compact:{}", mem.compact_id),
-        kind: SpineCommitKindMarker::RootCompact,
-        token_seq_start: seq,
-        token_seq_end: seq.checked_add(1).ok_or_else(|| {
+        op_id,
+        kind,
+        token_seq_start,
+        token_seq_end: token_seq_start.checked_add(width).ok_or_else(|| {
             SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
         })?,
-        raw_boundary: mem.raw_end,
-        raw_live_hash: mem.raw_live_hash.clone(),
+        raw_boundary,
+        raw_live_hash,
         memory_refs: vec![commit_memory_ref(mem)],
     })
 }
