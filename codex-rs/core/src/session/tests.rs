@@ -16077,6 +16077,94 @@ async fn spine_trim_rewrites_visible_history_and_preserves_raw_tool_output() {
 }
 
 #[tokio::test]
+async fn spine_trim_tail_guidance_overlay_lists_current_targets_without_persisting() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config
+                .features
+                .enable(Feature::SpineTrim)
+                .expect("enable spine trim");
+            config
+                .features
+                .enable(Feature::SpineTrimTailGuidance)
+                .expect("enable spine trim tail guidance");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let request = function_call("shell_command", "tail-guidance-long-tool");
+    let long_text = format!(
+        "Exit code: 0\n{}",
+        "tail guidance raw output with useful head ".repeat(30)
+    );
+    let output = function_output_with_text("tail-guidance-long-tool", &long_text);
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&request))
+        .await
+        .expect("record ordinary request");
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, output.clone())
+        .await
+        .expect("commit ordinary output");
+
+    let history_before = session.clone_history().await.raw_items().to_vec();
+    assert!(
+        function_output_text(&history_before[1]).starts_with("[TRIM_ID: trim_0]\n"),
+        "legacy visible tag remains unchanged: {:?}",
+        history_before[1]
+    );
+
+    let overlay = session
+        .spine_trim_targets_prompt_overlay()
+        .await
+        .expect("trim target overlay should be present");
+    let ResponseItem::Message { content, role, .. } = overlay.item else {
+        panic!("expected developer message overlay");
+    };
+    assert_eq!(role, "developer");
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected single input text overlay item: {content:?}");
+    };
+    assert!(text.starts_with("<current_trim_targets>\n"), "{text}");
+    assert!(text.contains(r#"0 id="trim_0" bytes="#), "{text}");
+    assert!(
+        text.contains(r#"head="Exit code: 0 tail guidance raw output"#),
+        "{text}"
+    );
+    assert!(text.ends_with("\n</current_trim_targets>"), "{text}");
+    assert!(!text.contains("valid_for"), "{text}");
+    assert!(!text.contains("rule"), "{text}");
+
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        history_before,
+        "prompt-only trim target overlay must not mutate conversation history"
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let rollout_text = format!("{:?}", resumed.history);
+    assert!(
+        !rollout_text.contains("<current_trim_targets>"),
+        "prompt-only overlay must not be durable rollout history: {rollout_text}"
+    );
+}
+
+#[tokio::test]
 async fn spine_trim_slice_rewrites_visible_history_and_preserves_raw_tool_output() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),

@@ -115,6 +115,7 @@ pub(crate) use types::SpineCloseMemoryAssembly;
 pub(crate) use types::SpineCompactSourceEntryKind;
 pub(crate) use types::SpineCompactSourcePlan;
 pub(crate) use types::SpineCompactSourcePlanEntry;
+pub(crate) use types::SpineCurrentTrimTarget;
 pub(crate) use types::SpineOpenNodeContextProjection;
 pub(crate) use types::SpinePendingCloseAction;
 pub(crate) use types::SpinePendingCommit;

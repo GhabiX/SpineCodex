@@ -1360,7 +1360,9 @@ impl Session {
         self.spine_raw_items_from_rollout().await
     }
 
-    async fn spine_raw_items_from_rollout(&self) -> Result<Vec<Option<ResponseItem>>, SpineError> {
+    pub(crate) async fn spine_raw_items_from_rollout(
+        &self,
+    ) -> Result<Vec<Option<ResponseItem>>, SpineError> {
         self.ensure_rollout_materialized().await;
         self.flush_rollout()
             .await

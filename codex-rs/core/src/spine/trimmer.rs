@@ -289,7 +289,7 @@ pub(super) fn trimmable_text_tool_response(
     }
 }
 
-fn current_visible_body(
+pub(super) fn current_visible_body(
     target: &TrimTarget,
     raw_items: &[Option<ResponseItem>],
 ) -> Result<String, SpineError> {

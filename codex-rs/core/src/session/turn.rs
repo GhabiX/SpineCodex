@@ -1208,6 +1208,10 @@ async fn run_sampling_request(
         if let Some(overlay) = spine_pressure_overlay.as_ref() {
             prompt_input.push(overlay.item.clone());
         }
+        let spine_trim_targets_overlay = sess.spine_trim_targets_prompt_overlay().await;
+        if let Some(overlay) = spine_trim_targets_overlay.as_ref() {
+            prompt_input.push(overlay.item.clone());
+        }
         prompt_input.extend(spine_control_overlay_items.clone());
         let prompt = build_prompt(
             prompt_input,

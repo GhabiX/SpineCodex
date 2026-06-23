@@ -109,6 +109,13 @@ pub(crate) struct SpineOpenNodeContextProjection {
     pub(crate) problem: Option<codex_protocol::spine_tree::SpineNodeContextProblem>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpineCurrentTrimTarget {
+    pub(crate) trim_id: String,
+    pub(crate) original_visible_size: i64,
+    pub(crate) visible_body: String,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SpineRootCompactResult {
     pub(crate) materialized: Vec<ResponseItem>,

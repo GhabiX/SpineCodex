@@ -1,11 +1,12 @@
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
 
+use super::super::SpineCurrentTrimTarget;
 use super::super::SpineError;
 use super::super::SpineRuntime;
 use super::super::SpineTrimOutcome;
-use super::super::store::SpineStore;
 use super::SpineSessionState;
+use crate::spine::store::SpineStore;
 
 impl SpineSessionState {
     pub(crate) fn trim_tool_response(
@@ -55,6 +56,17 @@ impl SpineSessionState {
             return Ok(None);
         };
         Ok(Some(runtime.jit_enabled()))
+    }
+
+    pub(crate) fn current_trim_targets_for_prompt(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<Vec<SpineCurrentTrimTarget>>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        Ok(Some(runtime.current_trim_targets_for_prompt(raw_items)?))
     }
 
     pub(crate) fn materialize_trim_projection_from_raw_items(

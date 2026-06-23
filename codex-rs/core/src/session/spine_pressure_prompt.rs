@@ -3,6 +3,7 @@ use super::spine_tree_inside::SpineTreePressureView;
 use super::spine_tree_inside::build_spine_tree_pressure_view_from_projection;
 use super::spine_tree_inside::node_context_tokens;
 use super::turn_context::TurnContext;
+use crate::spine::SpineCurrentTrimTarget;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
@@ -16,6 +17,8 @@ const SPINE_BOUNDARY_HINT_STEP_TOKENS: i64 = 25_000;
 const SPINE_CONTEXT_WARNING_RATIO_NUM: i64 = 80;
 const SPINE_CONTEXT_WARNING_RATIO_DEN: i64 = 100;
 const SPINE_PRESSURE_PROMPT_OVERLAY_ENABLED: bool = false;
+const SPINE_TRIM_TARGET_HEAD_CHARS: usize = 80;
+const SPINE_TRIM_TARGET_LIMIT: usize = 8;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SpinePressurePromptState {
@@ -37,6 +40,11 @@ pub(crate) struct SpinePressurePromptOverlay {
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineStatusPromptOverlay {
+    pub(crate) item: ResponseItem,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SpineTrimTargetsPromptOverlay {
     pub(crate) item: ResponseItem,
 }
 
@@ -142,6 +150,40 @@ impl Session {
     ) {
         let mut pressure_prompt_state = self.spine_pressure_prompt_state.lock().await;
         pressure_prompt_state.mark_sent(overlay.emission);
+    }
+
+    pub(crate) async fn spine_trim_targets_prompt_overlay(
+        &self,
+    ) -> Option<SpineTrimTargetsPromptOverlay> {
+        if !self.features.enabled(Feature::SpineTrim)
+            || !self.features.enabled(Feature::SpineTrimTailGuidance)
+        {
+            return None;
+        }
+        let spine_slot = self.spine.as_ref()?;
+        let raw_items = match self.spine_raw_items_from_rollout().await {
+            Ok(raw_items) => raw_items,
+            Err(err) => {
+                tracing::debug!("skipping Spine trim target prompt overlay: {err}");
+                return None;
+            }
+        };
+        let targets = {
+            let guard = spine_slot.lock().await;
+            match guard.current_trim_targets_for_prompt(&raw_items) {
+                Ok(Some(targets)) => targets,
+                Ok(None) => return None,
+                Err(err) => {
+                    tracing::debug!("failed to build Spine trim target prompt overlay: {err}");
+                    return None;
+                }
+            }
+        };
+        format_spine_trim_targets_prompt_overlay(&targets).map(|text| {
+            SpineTrimTargetsPromptOverlay {
+                item: spine_pressure_overlay_message(text),
+            }
+        })
     }
 }
 
@@ -406,6 +448,37 @@ fn escape_xml_attribute(input: &str) -> String {
         .replace('"', "&quot;")
 }
 
+fn format_spine_trim_targets_prompt_overlay(targets: &[SpineCurrentTrimTarget]) -> Option<String> {
+    if targets.is_empty() {
+        return None;
+    }
+    let mut text = String::from("<current_trim_targets>");
+    for (index, target) in targets.iter().take(SPINE_TRIM_TARGET_LIMIT).enumerate() {
+        text.push('\n');
+        text.push_str(&format!(
+            r#"{} id="{}" bytes="{}" head="{}""#,
+            index,
+            escape_xml_attribute(&target.trim_id),
+            target.original_visible_size,
+            escape_xml_attribute(&trim_target_head(&target.visible_body)),
+        ));
+    }
+    text.push_str("\n</current_trim_targets>");
+    Some(text)
+}
+
+fn trim_target_head(text: &str) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut head = compact
+        .chars()
+        .take(SPINE_TRIM_TARGET_HEAD_CHARS)
+        .collect::<String>();
+    if compact.chars().count() > SPINE_TRIM_TARGET_HEAD_CHARS {
+        head.push_str("...");
+    }
+    head
+}
+
 fn spine_pressure_overlay_message(text: String) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -443,6 +516,29 @@ mod tests {
             Some("158K")
         );
         assert_eq!(format_context_left_status(None), None);
+    }
+
+    #[test]
+    fn trim_targets_overlay_is_minimal_escaped_list() {
+        let targets = vec![
+            SpineCurrentTrimTarget {
+                trim_id: "trim_104".to_string(),
+                original_visible_size: 24_404,
+                visible_body: "Exit code: 0\nOutput with <xml> & \"quotes\"".to_string(),
+            },
+            SpineCurrentTrimTarget {
+                trim_id: "trim_105".to_string(),
+                original_visible_size: 5_278,
+                visible_body: "/home/ghabi/.codex path".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            format_spine_trim_targets_prompt_overlay(&targets).as_deref(),
+            Some(
+                "<current_trim_targets>\n0 id=\"trim_104\" bytes=\"24404\" head=\"Exit code: 0 Output with &lt;xml&gt; &amp; &quot;quotes&quot;\"\n1 id=\"trim_105\" bytes=\"5278\" head=\"/home/ghabi/.codex path\"\n</current_trim_targets>"
+            )
+        );
     }
 
     #[test]

@@ -39,6 +39,7 @@ pub(crate) use runtime::SpineCompactSourcePlan;
 pub(crate) use runtime::SpineCompactSourcePlanEntry;
 pub(crate) use runtime::SpineCompletedToolCallHostOutcome;
 pub(crate) use runtime::SpineCompletedToolCallOutputEvidence;
+pub(crate) use runtime::SpineCurrentTrimTarget;
 pub(crate) use runtime::SpineError;
 pub(crate) use runtime::SpineHostEffects;
 pub(crate) use runtime::SpineInitEvidence;

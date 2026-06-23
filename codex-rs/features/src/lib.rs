@@ -134,6 +134,8 @@ pub enum Feature {
     /// SpineTrim tags large previous tool responses with TRIM_ID values and
     /// exposes the model-visible spine.trim cleanup tool.
     SpineTrim,
+    /// Inject a tail-only prompt overlay listing currently trimmable targets.
+    SpineTrimTailGuidance,
     /// Convenience feature that enables both Spine JIT and Spine trim.
     Spine,
     /// Enable CSV-backed agent job tools.
@@ -941,6 +943,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SpineTrim,
         key: "spine_trim",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpineTrimTailGuidance,
+        key: "spine_trim_tail_guidance",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

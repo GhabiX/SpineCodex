@@ -94,6 +94,7 @@ fn spine_enables_jit_and_trim_without_coupling_specific_flags() {
     assert!(combined.enabled(Feature::Spine));
     assert!(combined.enabled(Feature::SpineJit));
     assert!(combined.enabled(Feature::SpineTrim));
+    assert!(!combined.enabled(Feature::SpineTrimTailGuidance));
 
     let mut jit_only = Features::with_defaults();
     jit_only.enable(Feature::SpineJit);
@@ -110,6 +111,10 @@ fn spine_enables_jit_and_trim_without_coupling_specific_flags() {
     assert_eq!(feature_for_key("spine"), Some(Feature::Spine));
     assert_eq!(feature_for_key("spine_jit"), Some(Feature::SpineJit));
     assert_eq!(feature_for_key("spine_trim"), Some(Feature::SpineTrim));
+    assert_eq!(
+        feature_for_key("spine_trim_tail_guidance"),
+        Some(Feature::SpineTrimTailGuidance)
+    );
 }
 
 #[test]

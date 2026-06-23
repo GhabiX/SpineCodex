@@ -2,6 +2,7 @@ use codex_protocol::models::ResponseItem;
 
 use super::CompletedToolCall;
 use super::CompletedToolCallSegment;
+use super::SpineCurrentTrimTarget;
 use super::SpineError;
 use super::SpineRuntime;
 use super::SpineTrimOutcome;
@@ -11,8 +12,10 @@ use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimEvent;
 use crate::spine::model::TrimProjection;
 use crate::spine::model::TrimSliceSpec;
+use crate::spine::model::TrimTargetState;
 use crate::spine::render::project_raw_history_with_trim_projection;
 use crate::spine::trimmer::Trimmer;
+use crate::spine::trimmer::current_visible_body;
 use crate::spine::trimmer::trim_projection_from_events;
 
 impl SpineRuntime {
@@ -101,6 +104,37 @@ impl SpineRuntime {
             self.current_trim_structural_seq(),
             None,
         )
+    }
+
+    pub(crate) fn current_trim_targets_for_prompt(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Vec<SpineCurrentTrimTarget>, SpineError> {
+        if !self.trim_enabled {
+            return Ok(Vec::new());
+        }
+        let Some(latest) = self.latest_live_completed_toolcall_seq()? else {
+            return Ok(Vec::new());
+        };
+        let projection = self.current_trim_projection()?;
+        let mut targets = projection
+            .targets_by_id
+            .values()
+            .filter(|target| {
+                target.toolcall_seq == latest && matches!(target.state, TrimTargetState::Tagged)
+            })
+            .collect::<Vec<_>>();
+        targets.sort_by_key(|target| (target.context_index, target.raw_ordinal));
+        targets
+            .into_iter()
+            .map(|target| {
+                Ok(SpineCurrentTrimTarget {
+                    trim_id: target.trim_id.clone(),
+                    original_visible_size: target.original_visible_size,
+                    visible_body: current_visible_body(target, raw_items)?,
+                })
+            })
+            .collect()
     }
 
     fn latest_live_completed_toolcall_seq(&self) -> Result<Option<u64>, SpineError> {
