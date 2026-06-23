@@ -21,11 +21,8 @@ pub(in crate::spine::store::clone_sidecar) fn required_memory_ids_for_cloned_eve
                 ids.insert(mem.compact_id.clone());
             }
             SpineLedgerEvent::RootCompact { mem, .. } => {
-                ids.insert(
-                    required_root_compact_memory(mem, mems, raw_mask)?
-                        .compact_id
-                        .clone(),
-                );
+                let mem = required_root_compact_memory(mem, mems, raw_mask)?;
+                ids.insert(mem.compact_id.clone());
             }
             SpineLedgerEvent::Init { .. }
             | SpineLedgerEvent::Msg { .. }
