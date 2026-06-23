@@ -1889,8 +1889,8 @@ fn validate_planned_nodes(
     Ok(planned_nodes)
 }
 
-fn planned_parent_contains<'a>(
-    parsed_planned: &BTreeMap<&'a str, Vec<u32>>,
+fn planned_parent_contains<K: Ord>(
+    parsed_planned: &BTreeMap<K, Vec<u32>>,
     parent: Option<&[u32]>,
 ) -> bool {
     let Some(parent) = parent else {
