@@ -1000,8 +1000,9 @@ impl Session {
     pub(crate) async fn test_on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        evidence: hooks::ToolCallEvidence<'_>,
+        evidence: impl Into<hooks::ToolCallEvidence<'_>>,
     ) -> Result<SpineToolCommit, SpineError> {
+        let evidence = evidence.into();
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(tool_commit_from_host_outcome(
                 SpineCompletedToolCallHostOutcome::no_spine_commit(),
