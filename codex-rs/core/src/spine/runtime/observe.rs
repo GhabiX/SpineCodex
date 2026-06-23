@@ -25,14 +25,12 @@ use crate::spine::model::ToolCallSegmentKind;
 
 impl SpineRuntime {
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
-        let count = u64::try_from(count)
+        let raw_count = u64::try_from(count)
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
         self.raw_len = self
             .raw_len
-            .checked_add(count)
+            .checked_add(raw_count)
             .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-        let count = usize::try_from(count)
-            .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
         self.raw_live.extend(std::iter::repeat_n(true, count));
         Ok(())
     }
