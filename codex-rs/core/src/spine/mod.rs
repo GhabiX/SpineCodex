@@ -68,6 +68,7 @@ pub(crate) use runtime::SpineToolCallEvidence;
 pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineToolcallCommitEvidence;
 pub(crate) use runtime::SpineToolcallHookEvidence;
+pub(crate) use runtime::SpineToolcallHostCommitAttempt;
 pub(crate) use runtime::SpineToolcallHostAttempt;
 pub(crate) use runtime::SpineTrimOutcome;
 pub(crate) use runtime::is_non_toolcall_msg;
@@ -80,6 +81,8 @@ pub use store::SpineCloneBoundary;
 pub(crate) use store::SpineStore;
 pub(crate) use user_message_projection::user_message_memory_body;
 
+pub use instructions::SpineScalingLevel;
+pub(crate) use instructions::append_spine_scaling_instructions;
 pub(crate) use instructions::append_spine_view_instructions;
 
 const CHECKPOINT_VERSION: u32 = 1;

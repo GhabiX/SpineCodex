@@ -33,9 +33,9 @@ use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
 #[cfg(test)]
 use crate::spine::model::TrimEvent;
-use crate::spine::parser::ParserState;
 #[cfg(test)]
 use crate::spine::parse_stack::ParseStack;
+use crate::spine::parser::ParserState;
 #[cfg(test)]
 use crate::spine::render::render_parse_stack_to_context;
 use crate::spine::store::SpineStore;
@@ -102,6 +102,7 @@ pub(crate) use session_state::SpineToolCallEvidence;
 pub(crate) use session_state::SpineToolOutputRecording;
 pub(crate) use session_state::SpineToolcallCommitEvidence;
 pub(crate) use session_state::SpineToolcallHookEvidence;
+pub(crate) use session_state::SpineToolcallHostCommitAttempt;
 pub(crate) use session_state::SpineToolcallHostAttempt;
 pub(crate) use support::is_non_toolcall_msg;
 pub(crate) use support::is_real_user_message;

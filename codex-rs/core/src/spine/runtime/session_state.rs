@@ -28,6 +28,7 @@ pub(crate) use state_types::SpineRootCompactHostInstall;
 pub(crate) use toolcall_host_commit::SpineCompletedToolCallHostOutcome;
 #[cfg(test)]
 pub(crate) use toolcall_host_commit::SpineToolOutputRecording;
+pub(crate) use toolcall_host_commit::SpineToolcallHostCommitAttempt;
 pub(crate) use toolcall_host_commit::SpineToolcallHostAttempt;
 pub(crate) use toolcall_host_commit::SpineToolcallHostCommit;
 

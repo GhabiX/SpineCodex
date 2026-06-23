@@ -65,6 +65,12 @@ pub(crate) struct SpineToolcallHostCommit {
     lock_retries: usize,
 }
 
+pub(crate) struct SpineToolcallHostCommitAttempt {
+    evidence: SpineToolcallCommitEvidence,
+    pre_compact_provider_input_tokens: Option<i64>,
+    current_turn_provider_input_tokens: Option<i64>,
+}
+
 pub(crate) struct SpineToolcallHostAttempt {
     kind: SpineCommitAttemptKind,
 }
@@ -249,10 +255,6 @@ impl SpineToolcallHostAttempt {
 }
 
 impl SpineToolcallHostCommit {
-    pub(crate) fn evidence(&self) -> &SpineToolcallCommitEvidence {
-        &self.evidence
-    }
-
     pub(crate) fn host_outcome(
         &self,
         post_commit_effects: SpineHostEffects,
@@ -266,6 +268,18 @@ impl SpineToolcallHostCommit {
     ) -> SpineToolcallCommitProviderInputTokens {
         self.plan
             .provider_input_tokens(current_turn_provider_input_tokens)
+    }
+
+    fn attempt_input(
+        &self,
+        current_turn_provider_input_tokens: Option<i64>,
+    ) -> SpineToolcallHostCommitAttempt {
+        let tokens = self.provider_input_tokens(current_turn_provider_input_tokens);
+        SpineToolcallHostCommitAttempt {
+            evidence: self.evidence.clone(),
+            pre_compact_provider_input_tokens: tokens.pre_compact(),
+            current_turn_provider_input_tokens: tokens.current_turn(),
+        }
     }
 
     pub(crate) fn interpret_attempt_for_host(
@@ -294,13 +308,14 @@ impl SpineToolcallHostCommit {
     >(
         &mut self,
         call_id: &str,
+        current_turn_provider_input_tokens: Option<i64>,
         mut attempt_once: AttemptOnce,
         mut yield_retry: YieldRetry,
         mut fail_closed: FailClosed,
         mut abort_pending: AbortPending,
     ) -> Result<Option<SpineHostEffects>, SpineError>
     where
-        AttemptOnce: FnMut() -> AttemptOnceFuture,
+        AttemptOnce: FnMut(SpineToolcallHostCommitAttempt) -> AttemptOnceFuture,
         AttemptOnceFuture: Future<Output = Result<SpineToolcallHostAttempt, SpineError>>,
         YieldRetry: FnMut() -> YieldRetryFuture,
         YieldRetryFuture: Future<Output = ()>,
@@ -310,7 +325,8 @@ impl SpineToolcallHostCommit {
         AbortPendingFuture: Future<Output = ()>,
     {
         loop {
-            let attempt = attempt_once().await?;
+            let attempt_input = self.attempt_input(current_turn_provider_input_tokens);
+            let attempt = attempt_once(attempt_input).await?;
             match self.interpret_attempt_for_host(attempt, call_id)? {
                 SpineToolcallCommitHostStep::Done(effects) => return Ok(Some(effects)),
                 SpineToolcallCommitHostStep::Retry => {
@@ -327,6 +343,20 @@ impl SpineToolcallHostCommit {
                 }
             }
         }
+    }
+}
+
+impl SpineToolcallHostCommitAttempt {
+    pub(crate) fn into_commit_evidence(self) -> SpineToolcallCommitEvidence {
+        self.evidence
+    }
+
+    pub(crate) fn pre_compact_provider_input_tokens(&self) -> Option<i64> {
+        self.pre_compact_provider_input_tokens
+    }
+
+    pub(crate) fn current_turn_provider_input_tokens(&self) -> Option<i64> {
+        self.current_turn_provider_input_tokens
     }
 }
 
