@@ -36,6 +36,13 @@ pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
 }
 
+pub(crate) struct SpineCompletedToolCallHostOutcome {
+    #[cfg(test)]
+    recording: SpineToolOutputRecording,
+    post_commit_effects: SpineHostEffects,
+    deferred_tree_update: Option<SpineTreeUpdateEvent>,
+}
+
 pub(crate) struct SpineCommitAttempt {
     kind: SpineCommitAttemptKind,
 }
@@ -444,9 +451,16 @@ impl SpineToolcallCommitPreparation {
 }
 
 impl SpineToolcallCommitHostPlan {
-    #[cfg(test)]
-    pub(crate) fn output_recording(&self) -> SpineToolOutputRecording {
-        self.output_recording
+    pub(crate) fn host_outcome(
+        &self,
+        post_commit_effects: SpineHostEffects,
+    ) -> SpineCompletedToolCallHostOutcome {
+        SpineCompletedToolCallHostOutcome {
+            #[cfg(test)]
+            recording: self.output_recording,
+            post_commit_effects,
+            deferred_tree_update: None,
+        }
     }
 
     pub(crate) fn provider_input_tokens(
@@ -548,6 +562,39 @@ impl SpineToolcallCommitProviderInputTokens {
 
     pub(crate) fn current_turn(&self) -> Option<i64> {
         self.current_turn
+    }
+}
+
+impl SpineCompletedToolCallHostOutcome {
+    pub(crate) fn no_spine_commit() -> Self {
+        Self {
+            #[cfg(test)]
+            recording: SpineToolOutputRecording::Normal,
+            post_commit_effects: SpineHostEffects::none(),
+            deferred_tree_update: None,
+        }
+    }
+
+    pub(crate) fn take_post_commit_effects(&mut self) -> SpineHostEffects {
+        std::mem::replace(&mut self.post_commit_effects, SpineHostEffects::none())
+    }
+
+    pub(crate) fn set_deferred_tree_update(
+        &mut self,
+        deferred_tree_update: Option<SpineTreeUpdateEvent>,
+    ) {
+        self.deferred_tree_update = deferred_tree_update;
+    }
+
+    pub(crate) fn take_deferred_tree_update(&mut self) -> Option<SpineTreeUpdateEvent> {
+        self.deferred_tree_update.take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_test_parts(
+        self,
+    ) -> (SpineToolOutputRecording, Option<SpineTreeUpdateEvent>) {
+        (self.recording, self.deferred_tree_update)
     }
 }
 

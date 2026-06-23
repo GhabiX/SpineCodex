@@ -33,6 +33,7 @@ pub(crate) use runtime::SpineCompactSourceEntryKind;
 pub(crate) use runtime::SpineCompactSourcePlan;
 #[cfg(test)]
 pub(crate) use runtime::SpineCompactSourcePlanEntry;
+pub(crate) use runtime::SpineCompletedToolCallHostOutcome;
 pub(crate) use runtime::SpineCompletedToolCallOutputEvidence;
 pub(crate) use runtime::SpineError;
 pub(crate) use runtime::SpineHostEffects;
