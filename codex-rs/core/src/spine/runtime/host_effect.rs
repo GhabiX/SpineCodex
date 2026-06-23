@@ -5,8 +5,8 @@ use std::future::Future;
 
 use super::SpineCompletedToolCallHostOutcome;
 use super::SpineError;
-use super::SpineToolcallHostCommitAttempt;
 use super::SpineToolcallHostAttempt;
+use super::SpineToolcallHostCommitAttempt;
 use super::session_state::SpineToolcallHostCommit;
 
 #[derive(Debug)]
@@ -147,23 +147,13 @@ impl SpineHostEffects {
     fn into_root_compact_host_publish(
         self,
     ) -> Result<(Self, Option<SpineRootCompactHostPublish>), String> {
-        let mut remaining = Vec::new();
-        let mut publication = None;
-        for effect in self.effects {
-            match effect {
-                SpineHostEffect::RootCompactHistoryPublication(next) => {
-                    if publication.is_some() {
-                        return Err(
-                            "multiple Spine root compact history publications in one hook"
-                                .to_string(),
-                        );
-                    }
-                    publication = Some(next);
-                }
-                effect => remaining.push(effect),
-            }
-        }
-        Ok((Self::many(remaining), publication))
+        self.take_unique_effect(
+            "multiple Spine root compact history publications in one hook",
+            |effect| match effect {
+                SpineHostEffect::RootCompactHistoryPublication(next) => Ok(next),
+                effect => Err(effect),
+            },
+        )
     }
 
     fn into_only_root_compact_host_publish(
@@ -221,20 +211,13 @@ impl SpineHostEffects {
     }
 
     fn into_toolcall_host_commit(self) -> Result<(Self, Option<SpineToolcallHostCommit>), String> {
-        let mut remaining = Vec::new();
-        let mut host_commit = None;
-        for effect in self.effects {
-            match effect {
-                SpineHostEffect::ToolcallHostCommit(next) => {
-                    if host_commit.is_some() {
-                        return Err("multiple Spine toolcall host commits in one hook".to_string());
-                    }
-                    host_commit = Some(next);
-                }
-                effect => remaining.push(effect),
-            }
-        }
-        Ok((Self::many(remaining), host_commit))
+        self.take_unique_effect(
+            "multiple Spine toolcall host commits in one hook",
+            |effect| match effect {
+                SpineHostEffect::ToolcallHostCommit(next) => Ok(next),
+                effect => Err(effect),
+            },
+        )
     }
 
     pub(crate) async fn apply_toolcall_host_commit<
@@ -303,6 +286,27 @@ impl SpineHostEffects {
             }
         }
         Ok(Self::many(remaining))
+    }
+
+    fn take_unique_effect<T>(
+        self,
+        duplicate_error: &'static str,
+        mut take: impl FnMut(SpineHostEffect) -> Result<T, SpineHostEffect>,
+    ) -> Result<(Self, Option<T>), String> {
+        let mut remaining = Vec::new();
+        let mut found = None;
+        for effect in self.effects {
+            match take(effect) {
+                Ok(next) => {
+                    if found.is_some() {
+                        return Err(duplicate_error.to_string());
+                    }
+                    found = Some(next);
+                }
+                Err(effect) => remaining.push(effect),
+            }
+        }
+        Ok((Self::many(remaining), found))
     }
 
     pub(crate) fn into_tree_host_updates(self) -> SpineTreeHostUpdates {
