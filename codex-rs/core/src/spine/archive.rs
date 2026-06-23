@@ -213,30 +213,32 @@ fn render_memory_archive(
         "source_token_seq: [{}..{})\n",
         memory.source_token_seq.start, memory.source_token_seq.end
     ));
-    if let Some(tokens) = memory.open_input_tokens {
-        out.push_str(&format!("open_input_tokens: {tokens}\n"));
-    }
-    if let Some(tokens) = memory.close_input_tokens {
-        out.push_str(&format!("close_input_tokens: {tokens}\n"));
-    }
-    if let Some(tokens) = memory.open_context_tokens {
-        out.push_str(&format!("open_context_tokens: {tokens}\n"));
-    }
-    if let Some(tokens) = memory.close_context_tokens {
-        out.push_str(&format!("close_context_tokens: {tokens}\n"));
-    }
-    if let Some(tokens) = memory.closed_source_suffix_tokens {
-        out.push_str(&format!("closed_source_suffix_tokens: {tokens}\n"));
-    }
-    if let Some(tokens) = memory.closed_memory_context_tokens {
-        out.push_str(&format!("closed_memory_context_tokens: {tokens}\n"));
-    }
+    push_optional_i64_field(&mut out, "open_input_tokens", memory.open_input_tokens);
+    push_optional_i64_field(&mut out, "close_input_tokens", memory.close_input_tokens);
+    push_optional_i64_field(&mut out, "open_context_tokens", memory.open_context_tokens);
+    push_optional_i64_field(
+        &mut out,
+        "close_context_tokens",
+        memory.close_context_tokens,
+    );
+    push_optional_i64_field(
+        &mut out,
+        "closed_source_suffix_tokens",
+        memory.closed_source_suffix_tokens,
+    );
+    push_optional_i64_field(
+        &mut out,
+        "closed_memory_context_tokens",
+        memory.closed_memory_context_tokens,
+    );
     if let Some(source) = memory.open_context_source {
         out.push_str(&format!("open_context_source: {source:?}\n"));
     }
-    if let Some(tokens) = memory.memory_output_tokens {
-        out.push_str(&format!("memory_output_tokens: {tokens}\n"));
-    }
+    push_optional_i64_field(
+        &mut out,
+        "memory_output_tokens",
+        memory.memory_output_tokens,
+    );
     if memory.open_input_tokens.is_some()
         || memory.close_input_tokens.is_some()
         || memory.open_context_tokens.is_some()
@@ -254,6 +256,12 @@ fn render_memory_archive(
         out.push('\n');
     }
     Ok(out)
+}
+
+fn push_optional_i64_field(out: &mut String, field: &str, value: Option<i64>) {
+    if let Some(value) = value {
+        out.push_str(&format!("{field}: {value}\n"));
+    }
 }
 
 fn render_trajs_archive(children: &[SpineTreeNode]) -> Result<String, SpineError> {
