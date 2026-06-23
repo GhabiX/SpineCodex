@@ -82,7 +82,7 @@ pub(super) fn write_json_file_if_unchanged<T: Serialize>(
     Ok(())
 }
 
-fn create_parent_dir(path: &Path) -> Result<(), SpineError> {
+pub(super) fn create_parent_dir(path: &Path) -> Result<(), SpineError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

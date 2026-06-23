@@ -1,4 +1,5 @@
 use crate::spine::SpineError;
+use crate::spine::io::create_parent_dir;
 use crate::spine::model::LoggedPressureEvent;
 use serde::Serialize;
 use std::fs::File;
@@ -11,9 +12,7 @@ use std::io::Write;
 use std::path::Path;
 
 pub(super) fn append_json_line<T: Serialize>(path: &Path, value: &T) -> Result<(), SpineError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    create_parent_dir(path)?;
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     if file.metadata()?.len() > 0 && last_byte(path)? != Some(b'\n') {
         file.write_all(b"\n")?;

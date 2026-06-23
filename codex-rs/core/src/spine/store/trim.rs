@@ -1,13 +1,12 @@
 use crate::spine::SpineError;
+use crate::spine::io::create_parent_dir;
 use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::TrimEvent;
 use std::fs::OpenOptions;
 use std::path::Path;
 
 pub(super) fn ensure_ledger_exists(path: &Path) -> Result<(), SpineError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    create_parent_dir(path)?;
     OpenOptions::new().create(true).append(true).open(path)?;
     Ok(())
 }
