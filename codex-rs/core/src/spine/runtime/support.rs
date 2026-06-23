@@ -62,15 +62,9 @@ pub(super) fn raw_item_requires_spine_coverage(
     match item {
         ResponseItem::Other | ResponseItem::CompactionTrigger => false,
         item if is_spine_context_observation_fixed_prefix_item(item) => false,
-        item => {
-            if let Some(call_id) = tool_response_call_id(item) {
-                return completed_tool_call_ids.contains(call_id);
-            }
-            if let Some(call_id) = tool_request_call_id(item) {
-                return completed_tool_call_ids.contains(call_id);
-            }
-            true
-        }
+        item => tool_response_call_id(item)
+            .or_else(|| tool_request_call_id(item))
+            .map_or(true, |call_id| completed_tool_call_ids.contains(call_id)),
     }
 }
 
