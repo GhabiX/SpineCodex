@@ -261,21 +261,7 @@ fn render_visible_ref_to_context(
     match source {
         VisibleItemSource::RawResponseItem { raw_ordinal, .. }
         | VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
-            let raw_index = usize::try_from(*raw_ordinal)
-                .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-            let item = raw_items
-                .get(raw_index)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| {
-                    let missing_label = match source {
-                        VisibleItemSource::RawResponseItem { .. } => "visible Msg",
-                        VisibleItemSource::ToolCallSegment { .. } => "visible toolcall segment",
-                        _ => unreachable!("raw source label requested for non-raw source"),
-                    };
-                    SpineError::InvalidEvent(format!(
-                        "missing raw item for {missing_label} raw ordinal {raw_ordinal}"
-                    ))
-                })?;
+            let item = visible_raw_item(source, *raw_ordinal, raw_items)?;
             let mut item = item.clone();
             if let VisibleItemSource::ToolCallSegment {
                 kind: ToolCallSegmentKind::Response,
@@ -319,6 +305,28 @@ fn render_visible_ref_to_context(
             Ok(())
         }
     }
+}
+
+fn visible_raw_item<'a>(
+    source: &VisibleItemSource,
+    raw_ordinal: u64,
+    raw_items: &'a [Option<ResponseItem>],
+) -> Result<&'a ResponseItem, SpineError> {
+    let raw_index = usize::try_from(raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+    raw_items
+        .get(raw_index)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| {
+            let missing_label = match source {
+                VisibleItemSource::RawResponseItem { .. } => "visible Msg",
+                VisibleItemSource::ToolCallSegment { .. } => "visible toolcall segment",
+                _ => unreachable!("raw source label requested for non-raw source"),
+            };
+            SpineError::InvalidEvent(format!(
+                "missing raw item for {missing_label} raw ordinal {raw_ordinal}"
+            ))
+        })
 }
 
 pub(super) fn tagged_tool_response_item(
