@@ -53,8 +53,7 @@ pub(super) fn build_compact_checkpoint(
     context: &[ResponseItem],
     replacement_history: &[ResponseItem],
 ) -> Result<SpineCompactCheckpoint, SpineError> {
-    let raw_boundary_usize = usize::try_from(raw_boundary)
-        .map_err(|_| SpineError::InvalidEvent("compact raw boundary overflow".to_string()))?;
+    let raw_boundary_usize = compact_raw_boundary_usize(raw_boundary)?;
     if raw_boundary_usize > raw_live.len() {
         return Err(SpineError::InvalidEvent(
             "compact raw boundary exceeds raw live length".to_string(),
@@ -99,8 +98,7 @@ pub(super) fn validate_compact_checkpoint(
             checkpoint.version
         )));
     }
-    let end = usize::try_from(checkpoint.raw_boundary)
-        .map_err(|_| SpineError::InvalidEvent("compact raw boundary overflow".to_string()))?;
+    let end = compact_raw_boundary_usize(checkpoint.raw_boundary)?;
     if end > raw_live.len() {
         return Err(SpineError::InvalidStore(format!(
             "spine compact checkpoint raw boundary exceeds rollout at {}",
@@ -276,16 +274,13 @@ fn validate_response_item_refs(
     }
     validate_response_item_ref_uniqueness(&checkpoint.response_item_refs)?;
     validate_memory_item_ref_uniqueness(&checkpoint.memory_item_refs)?;
+    let raw_boundary = compact_raw_boundary_usize(checkpoint.raw_boundary)?;
     let mut coverage: BTreeMap<usize, &'static str> = BTreeMap::new();
     for reference in &checkpoint.response_item_refs {
         let raw_index = usize::try_from(reference.raw_ordinal).map_err(|_| {
             SpineError::InvalidEvent("compact checkpoint raw ordinal overflow".to_string())
         })?;
-        if raw_index
-            >= usize::try_from(checkpoint.raw_boundary).map_err(|_| {
-                SpineError::InvalidEvent("compact raw boundary overflow".to_string())
-            })?
-        {
+        if raw_index >= raw_boundary {
             return Err(SpineError::InvalidStore(format!(
                 "compact checkpoint response item raw ordinal {} exceeds raw boundary {}",
                 reference.raw_ordinal, checkpoint.raw_boundary
@@ -435,6 +430,11 @@ fn insert_coverage(
 
 fn hash_response_item(item: &ResponseItem) -> Result<String, SpineError> {
     hash_response_items(std::slice::from_ref(item))
+}
+
+fn compact_raw_boundary_usize(raw_boundary: u64) -> Result<usize, SpineError> {
+    usize::try_from(raw_boundary)
+        .map_err(|_| SpineError::InvalidEvent("compact raw boundary overflow".to_string()))
 }
 
 #[cfg(test)]
