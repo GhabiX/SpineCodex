@@ -206,6 +206,7 @@ impl ParserState {
         Ok(parser)
     }
 
+    #[cfg(test)]
     pub(super) fn parse_stack(&self) -> &ParseStack {
         &self.parse_stack
     }
@@ -221,6 +222,35 @@ impl ParserState {
 
     pub(super) fn current_open_meta_cloned(&self) -> Option<TreeMeta> {
         self.parse_stack.current_open_meta_opt().cloned()
+    }
+
+    pub(super) fn current_open_index(&self) -> Result<usize, SpineError> {
+        Ok(self.parse_stack.current_open_meta()?.index)
+    }
+
+    #[cfg(test)]
+    pub(super) fn current_open_input_tokens(&self) -> Option<i64> {
+        self.parse_stack
+            .current_open_meta_opt()
+            .and_then(|meta| meta.open_input_tokens)
+    }
+
+    pub(super) fn current_close_open_meta(&self) -> Result<&TreeMeta, SpineError> {
+        let Some(open_meta) = self.parse_stack.current_open_meta_opt() else {
+            let cursor = self.parse_stack.current_cursor_id()?;
+            if cursor.is_root_epoch() {
+                return Err(SpineError::Operation(format!(
+                    "cannot close root epoch cursor {cursor}"
+                )));
+            }
+            return Err(SpineError::Operation(
+                "spine.close requires a live open task".to_string(),
+            ));
+        };
+        if open_meta.id.is_root_epoch() {
+            return Err(SpineError::Operation("cannot close root epoch".to_string()));
+        }
+        Ok(open_meta)
     }
 
     pub(super) fn live_open_metas_cloned(&self) -> Vec<TreeMeta> {
@@ -585,6 +615,11 @@ impl ParserState {
     #[cfg(test)]
     pub(super) fn toolcall_leaf_count_for_test(&self) -> usize {
         parse_stack_toolcall_leaf_count(&self.parse_stack.symbols)
+    }
+
+    #[cfg(test)]
+    pub(super) fn debug_for_test(&self) -> String {
+        format!("{:?}", self.parse_stack)
     }
 }
 

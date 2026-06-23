@@ -170,6 +170,31 @@ fn runtime_commit_routes_current_open_queries_through_parser_state() {
 }
 
 #[test]
+fn runtime_routes_open_cursor_reads_through_parser_state() {
+    let runtime = fs::read_to_string(spine_src("runtime.rs")).expect("read runtime source");
+    let current_open_index = runtime
+        .split("pub(crate) fn current_open_index")
+        .nth(1)
+        .and_then(|tail| tail.split("#[cfg(test)]").next())
+        .expect("current_open_index section");
+    assert!(
+        current_open_index.contains("self.parser.current_open_index()")
+            && !current_open_index.contains(".parse_stack()"),
+        "runtime current_open_index should delegate parser cursor reads to ParserState"
+    );
+    let current_close_open_meta = runtime
+        .split("fn current_close_open_meta")
+        .nth(1)
+        .and_then(|tail| tail.split("#[cfg(test)]").next())
+        .expect("current_close_open_meta section");
+    assert!(
+        current_close_open_meta.contains("self.parser.current_close_open_meta()")
+            && !current_close_open_meta.contains(".parse_stack()"),
+        "runtime close-open metadata checks should delegate parser cursor reads to ParserState"
+    );
+}
+
+#[test]
 fn runtime_commit_routes_open_token_staging_through_parser_state() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
