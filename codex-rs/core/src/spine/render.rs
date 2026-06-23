@@ -433,7 +433,7 @@ pub(super) fn matched_tool_output<'a>(
     }
 }
 
-fn trim_body_error(target: &TrimTarget) -> SpineError {
+pub(super) fn trim_body_error(target: &TrimTarget) -> SpineError {
     SpineError::SidecarCorruption(format!(
         "trim target {} references non-text tool response body",
         target.trim_id

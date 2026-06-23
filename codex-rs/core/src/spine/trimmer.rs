@@ -10,6 +10,7 @@ use crate::spine::model::TrimSliceSpec;
 use crate::spine::model::TrimTarget;
 use crate::spine::model::TrimTargetState;
 use crate::spine::render::matched_tool_output;
+use crate::spine::render::trim_body_error;
 use crate::spine::runtime::CompletedToolCall;
 use crate::spine::runtime::SpineError;
 use crate::spine::runtime::SpineTrimOutcome;
@@ -294,10 +295,7 @@ pub(super) fn current_visible_body(
                     ))
                 })?;
             let Some((response_kind, _)) = trimmable_text_tool_response(item) else {
-                return Err(SpineError::SidecarCorruption(format!(
-                    "trim target {} references non-text tool response body",
-                    target.trim_id
-                )));
+                return Err(trim_body_error(target));
             };
             if response_kind != target.response_kind {
                 return Err(SpineError::SidecarCorruption(format!(
@@ -308,12 +306,7 @@ pub(super) fn current_visible_body(
             let text = matched_tool_output(item, target, "visible raw item")?
                 .text_content()
                 .map(str::to_string)
-                .ok_or_else(|| {
-                    SpineError::SidecarCorruption(format!(
-                        "trim target {} references non-text tool response body",
-                        target.trim_id
-                    ))
-                })?;
+                .ok_or_else(|| trim_body_error(target))?;
             Ok(strip_trim_tag_prefix(&text, &target.trim_id))
         }
         TrimTargetState::Sliced { visible_body } => Ok(visible_body.clone()),
