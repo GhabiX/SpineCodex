@@ -23,7 +23,11 @@ pub(crate) struct SpineTreeHostUpdates {
     after_raw_output_durable: Vec<SpineTreeUpdateEvent>,
 }
 
-pub(crate) struct SpineRootCompactHistoryPublication {
+pub(crate) struct SpineRootCompactHostPublish {
+    publication: SpineRootCompactHistoryPublication,
+}
+
+struct SpineRootCompactHistoryPublication {
     materialized: Vec<ResponseItem>,
 }
 
@@ -72,7 +76,7 @@ impl SpineHostEffects {
 
     pub(crate) fn root_compact_history_publication(materialized: Vec<ResponseItem>) -> Self {
         Self::one(SpineHostEffect::RootCompactHistoryPublication(
-            SpineRootCompactHistoryPublication::new(materialized),
+            SpineRootCompactHostPublish::new(materialized),
         ))
     }
 
@@ -104,9 +108,9 @@ impl SpineHostEffects {
         (Self::many(remaining), requested)
     }
 
-    pub(crate) fn into_root_compact_history_publication(
+    pub(crate) fn into_root_compact_host_publish(
         self,
-    ) -> Result<(Self, Option<SpineRootCompactHistoryPublication>), String> {
+    ) -> Result<(Self, Option<SpineRootCompactHostPublish>), String> {
         let mut remaining = Vec::new();
         let mut publication = None;
         for effect in self.effects {
@@ -177,7 +181,7 @@ pub(crate) enum SpineHostEffect {
         delivery: SpineTreeUpdateDelivery,
     },
     PublishMaterializedHistoryAfterBatch,
-    RootCompactHistoryPublication(SpineRootCompactHistoryPublication),
+    RootCompactHistoryPublication(SpineRootCompactHostPublish),
     ToolcallCommitLoop(SpineToolcallCommitHostLoop),
 }
 
@@ -244,13 +248,15 @@ impl SpineHostEffect {
     }
 }
 
-impl SpineRootCompactHistoryPublication {
+impl SpineRootCompactHostPublish {
     fn new(materialized: Vec<ResponseItem>) -> Self {
-        Self { materialized }
+        Self {
+            publication: SpineRootCompactHistoryPublication { materialized },
+        }
     }
 
     pub(crate) fn materialized_len(&self) -> usize {
-        self.materialized.len()
+        self.publication.materialized.len()
     }
 
     pub(crate) fn published_history_from_native_items(
@@ -263,7 +269,7 @@ impl SpineRootCompactHistoryPublication {
             .filter(|item| is_fixed_prefix_item(item))
             .cloned()
             .collect::<Vec<_>>();
-        published.extend_from_slice(&self.materialized);
+        published.extend_from_slice(&self.publication.materialized);
         published
     }
 }

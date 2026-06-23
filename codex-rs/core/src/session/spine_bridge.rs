@@ -16,10 +16,10 @@ use crate::spine::SpineInitEvidence;
 use crate::spine::SpineMessageEvidence;
 use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineObservedContextItem;
-use crate::spine::SpineRootCompactHistoryPublication;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
 use crate::spine::SpineRootCompactHostOutcome;
+use crate::spine::SpineRootCompactHostPublish;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
@@ -72,7 +72,7 @@ pub(crate) struct SpineToolCommit {
 }
 
 pub(crate) struct SpineRootCompactPublish {
-    publication: SpineRootCompactHistoryPublication,
+    host_publish: SpineRootCompactHostPublish,
 }
 
 pub(crate) enum SpineToolcallTurnError {
@@ -108,19 +108,19 @@ impl SpineToolCommit {
 }
 
 impl SpineRootCompactPublish {
-    fn new(publication: SpineRootCompactHistoryPublication) -> Self {
-        Self { publication }
+    fn new(host_publish: SpineRootCompactHostPublish) -> Self {
+        Self { host_publish }
     }
 
     pub(crate) fn materialized_len(&self) -> usize {
-        self.publication.materialized_len()
+        self.host_publish.materialized_len()
     }
 
     pub(crate) fn published_history_from_native_items(
         &self,
         native_items: &[ResponseItem],
     ) -> Vec<ResponseItem> {
-        self.publication
+        self.host_publish
             .published_history_from_native_items(native_items, Session::is_spine_fixed_prefix_item)
     }
 }
@@ -1543,12 +1543,12 @@ impl Session {
                 reason: err.to_string(),
             })?;
         let (effects, publication) =
-            effects
-                .into_root_compact_history_publication()
-                .map_err(|reason| CodexErr::SpineTerminalFailure {
+            effects.into_root_compact_host_publish().map_err(|reason| {
+                CodexErr::SpineTerminalFailure {
                     operation: "install Spine root compact".to_string(),
                     reason,
-                })?;
+                }
+            })?;
         if !effects.is_empty() {
             return Err(CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
