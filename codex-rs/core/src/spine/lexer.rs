@@ -661,7 +661,7 @@ fn validate_toolcall_segments(
             "completed toolcall must contain at least one segment".to_string(),
         ));
     }
-    let mut has_request = false;
+    let mut request_segment_count = 0;
     let mut has_response = false;
     let mut previous_context_index = None;
     let mut previous_raw_ordinal = None;
@@ -673,7 +673,7 @@ fn validate_toolcall_segments(
                         "completed toolcall request segment {index} appears after a response segment"
                     )));
                 }
-                has_request = true;
+                request_segment_count += 1;
             }
             ToolCallSegmentKind::Response => has_response = true,
         }
@@ -696,7 +696,7 @@ fn validate_toolcall_segments(
         previous_context_index = Some(segment.context_index);
         previous_raw_ordinal = Some(segment.raw_ordinal);
     }
-    if !has_request {
+    if request_segment_count == 0 {
         return Err(SpineError::InvalidEvent(
             "completed toolcall must include at least one request segment".to_string(),
         ));
@@ -706,10 +706,6 @@ fn validate_toolcall_segments(
             "completed toolcall must include at least one response segment".to_string(),
         ));
     }
-    let request_segment_count = segments
-        .iter()
-        .filter(|segment| segment.kind == ToolCallSegmentKind::Request)
-        .count();
     if let Some(request_call_id_count) = request_call_id_count
         && request_segment_count != request_call_id_count
     {
