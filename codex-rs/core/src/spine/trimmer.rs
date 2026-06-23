@@ -75,8 +75,7 @@ impl<'a> Trimmer<'a> {
             {
                 continue;
             }
-            let raw_index = usize::try_from(segment.raw_ordinal)
-                .map_err(|_| SpineError::InvalidEvent("trim raw ordinal overflow".to_string()))?;
+            let raw_index = trim_raw_ordinal_usize(segment.raw_ordinal)?;
             let Some(item) = raw_items.get(raw_index).and_then(Option::as_ref) else {
                 continue;
             };
@@ -284,8 +283,7 @@ pub(super) fn current_visible_body(
 ) -> Result<String, SpineError> {
     match &target.state {
         TrimTargetState::Tagged => {
-            let raw_index = usize::try_from(target.raw_ordinal)
-                .map_err(|_| SpineError::InvalidEvent("trim raw ordinal overflow".to_string()))?;
+            let raw_index = trim_raw_ordinal_usize(target.raw_ordinal)?;
             let item = raw_items
                 .get(raw_index)
                 .and_then(Option::as_ref)
@@ -359,6 +357,11 @@ fn matched_trim_tool_output<'a>(
 fn strip_trim_tag_prefix(text: &str, trim_id: &str) -> String {
     let tag = format!("[TRIM_ID: {trim_id}]\n");
     text.strip_prefix(&tag).unwrap_or(text).to_string()
+}
+
+fn trim_raw_ordinal_usize(raw_ordinal: u64) -> Result<usize, SpineError> {
+    usize::try_from(raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("trim raw ordinal overflow".to_string()))
 }
 
 fn apply_slice(text: &str, slice: &TrimSliceSpec) -> Option<String> {
