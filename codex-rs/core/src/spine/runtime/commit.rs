@@ -374,8 +374,7 @@ impl SpineRuntime {
             })?;
             let events = vec![event, toolcall_event];
             self.append_committed_events_no_marker(events)?;
-            self.parser
-                .replace_parse_stack_for_runtime_transition(staged_parse_stack);
+            self.parser.install_staged(staged_parse_stack);
             self.append_trim_candidates_for_completed_toolcall(
                 &completed_toolcall,
                 toolcall_seq,
@@ -401,8 +400,7 @@ impl SpineRuntime {
             .staged_after_tokens([open_token], &self.archive())?;
         let events = vec![event];
         self.append_committed_events_no_marker(events)?;
-        self.parser
-            .replace_parse_stack_for_runtime_transition(staged_parse_stack);
+        self.parser.install_staged(staged_parse_stack);
         Ok(SpinePreparedCommit {
             kind: SpineCommitKind::Open {
                 open_request_index: usize::try_from(index).map_err(|_| {
