@@ -8,7 +8,6 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineCompletedToolCallHostOutcome;
 use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
@@ -19,16 +18,17 @@ use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
-use crate::spine::SpineToolcallHostAttempt;
-use crate::spine::SpineToolcallHostCommitAttempt;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
+use crate::spine::hooks::CompletedToolCallHostOutcome;
 use crate::spine::hooks::CompletedToolCallOutputEvidence;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::ToolcallHookEvidence;
+use crate::spine::hooks::ToolcallHostAttempt;
+use crate::spine::hooks::ToolcallHostCommitAttempt;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -98,7 +98,7 @@ impl SpineToolCommit {
 }
 
 #[cfg(test)]
-fn tool_commit_from_host_outcome(outcome: SpineCompletedToolCallHostOutcome) -> SpineToolCommit {
+fn tool_commit_from_host_outcome(outcome: CompletedToolCallHostOutcome) -> SpineToolCommit {
     let (recording, deferred_tree_update) = outcome.into_test_parts();
     SpineToolCommit {
         recording,
@@ -135,7 +135,7 @@ struct CompletedSpineToolCall<'a> {
 struct SpineToolcallCommitAttemptInput<'a> {
     tool_resp_item: &'a ResponseItem,
     expected_history: Vec<ResponseItem>,
-    attempt: SpineToolcallHostCommitAttempt,
+    attempt: ToolcallHostCommitAttempt,
     tool_resp_already_recorded: bool,
     raw_items: &'a [Option<ResponseItem>],
 }
@@ -200,7 +200,7 @@ impl Session {
     async fn apply_completed_spine_toolcall_host_outcome(
         &self,
         turn_context: &TurnContext,
-        outcome: &mut SpineCompletedToolCallHostOutcome,
+        outcome: &mut CompletedToolCallHostOutcome,
     ) {
         self.apply_completed_spine_toolcall_post_commit_effects(turn_context, outcome)
             .await;
@@ -212,15 +212,12 @@ impl Session {
     async fn apply_completed_spine_toolcall_post_commit_effects(
         &self,
         turn_context: &TurnContext,
-        outcome: &mut SpineCompletedToolCallHostOutcome,
+        outcome: &mut CompletedToolCallHostOutcome,
     ) {
         let post_commit_effects = outcome.take_post_commit_effects();
         outcome.set_deferred_tree_update(
-            self.apply_spine_post_commit_effects(
-                turn_context,
-                HostEffects::from_runtime(post_commit_effects),
-            )
-            .await,
+            self.apply_spine_post_commit_effects(turn_context, post_commit_effects)
+                .await,
         );
     }
 
@@ -1010,7 +1007,7 @@ impl Session {
         let evidence = evidence.into();
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(tool_commit_from_host_outcome(
-                SpineCompletedToolCallHostOutcome::no_spine_commit(),
+                CompletedToolCallHostOutcome::no_spine_commit(),
             ));
         };
         let Some(completed) = self
@@ -1018,7 +1015,7 @@ impl Session {
             .await?
         else {
             return Ok(tool_commit_from_host_outcome(
-                SpineCompletedToolCallHostOutcome::no_spine_commit(),
+                CompletedToolCallHostOutcome::no_spine_commit(),
             ));
         };
         let mut outcome = self
@@ -1194,9 +1191,9 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         toolcall: CompletedSpineToolCall<'_>,
-    ) -> Result<SpineCompletedToolCallHostOutcome, SpineError> {
+    ) -> Result<CompletedToolCallHostOutcome, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
+            return Ok(CompletedToolCallHostOutcome::no_spine_commit());
         };
         let call_id = toolcall.evidence.completed_output.call_id().to_string();
         let item = toolcall.evidence.response_item;
@@ -1227,7 +1224,7 @@ impl Session {
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
         let raw_items_ref = raw_items.as_slice();
-        let outcome: Result<Option<SpineCompletedToolCallHostOutcome>, SpineError> =
+        let outcome: Result<Option<CompletedToolCallHostOutcome>, SpineError> =
             toolcall_host_effects
                 .apply_toolcall_host_commit(
                     &call_id,
@@ -1266,7 +1263,7 @@ impl Session {
                 .await;
         match outcome {
             Ok(Some(outcome)) => Ok(outcome),
-            Ok(None) => return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit()),
+            Ok(None) => return Ok(CompletedToolCallHostOutcome::no_spine_commit()),
             Err(err) => {
                 if recorded_output_inside_reduce {
                     if let Some(history) = history_before_recorded_output.as_ref() {
@@ -1293,12 +1290,12 @@ impl Session {
         &self,
         spine_slot: &Mutex<SpineSessionState>,
         input: SpineToolcallCommitAttemptInput<'_>,
-    ) -> Result<SpineToolcallHostAttempt, SpineError> {
+    ) -> Result<ToolcallHostAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
-            return Ok(SpineToolcallHostAttempt::host_lock_busy());
+            return Ok(ToolcallHostAttempt::host_lock_busy());
         };
         let Ok(mut state) = self.state.try_lock() else {
-            return Ok(SpineToolcallHostAttempt::host_lock_busy());
+            return Ok(ToolcallHostAttempt::host_lock_busy());
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
@@ -1332,7 +1329,7 @@ impl Session {
                 }
             },
         )?;
-        Ok(attempt)
+        Ok(ToolcallHostAttempt::from_runtime(attempt))
     }
 
     async fn spine_raw_items_from_rollout_for_commit(

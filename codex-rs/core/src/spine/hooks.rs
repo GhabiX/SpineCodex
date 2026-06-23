@@ -4,11 +4,8 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
 use std::path::Path;
 
-use super::runtime::SpineCompletedToolCallHostOutcome;
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
-use super::runtime::SpineToolcallHostAttempt;
-use super::runtime::SpineToolcallHostCommitAttempt;
 
 pub(crate) struct HostEffects {
     inner: super::runtime::SpineHostEffects,
@@ -20,6 +17,18 @@ pub(crate) struct TreeHostUpdates {
 
 pub(crate) struct HistoryHostEffect {
     inner: super::runtime::SpineHostEffect,
+}
+
+pub(crate) struct CompletedToolCallHostOutcome {
+    inner: super::runtime::SpineCompletedToolCallHostOutcome,
+}
+
+pub(crate) struct ToolcallHostCommitAttempt {
+    inner: super::runtime::SpineToolcallHostCommitAttempt,
+}
+
+pub(crate) struct ToolcallHostAttempt {
+    inner: super::runtime::SpineToolcallHostAttempt,
 }
 
 pub(crate) struct InitEvidence<'a> {
@@ -203,14 +212,14 @@ impl HostEffects {
         self,
         call_id: &str,
         current_turn_provider_input_tokens: Option<i64>,
-        attempt_once: AttemptOnce,
+        mut attempt_once: AttemptOnce,
         yield_retry: YieldRetry,
         fail_closed: FailClosed,
         abort_pending: AbortPending,
-    ) -> Result<Option<SpineCompletedToolCallHostOutcome>, SpineError>
+    ) -> Result<Option<CompletedToolCallHostOutcome>, SpineError>
     where
-        AttemptOnce: FnMut(SpineToolcallHostCommitAttempt) -> AttemptOnceFuture,
-        AttemptOnceFuture: Future<Output = Result<SpineToolcallHostAttempt, SpineError>>,
+        AttemptOnce: FnMut(ToolcallHostCommitAttempt) -> AttemptOnceFuture,
+        AttemptOnceFuture: Future<Output = Result<ToolcallHostAttempt, SpineError>>,
         YieldRetry: FnMut() -> YieldRetryFuture,
         YieldRetryFuture: Future<Output = ()>,
         FailClosed: FnMut(&'static str) -> FailClosedFuture,
@@ -222,12 +231,16 @@ impl HostEffects {
             .apply_toolcall_host_commit(
                 call_id,
                 current_turn_provider_input_tokens,
-                attempt_once,
+                |attempt| {
+                    let future = attempt_once(ToolcallHostCommitAttempt { inner: attempt });
+                    async move { future.await.map(|attempt| attempt.inner) }
+                },
                 yield_retry,
                 fail_closed,
                 abort_pending,
             )
             .await
+            .map(|outcome| outcome.map(|inner| CompletedToolCallHostOutcome { inner }))
     }
 
     pub(crate) fn apply_history_updates_or_keep(
@@ -315,6 +328,65 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
 
     pub(crate) fn output_group_to_record_before_commit(&self) -> Option<&'a [ResponseItem]> {
         self.inner.output_group_to_record_before_commit()
+    }
+}
+
+impl CompletedToolCallHostOutcome {
+    pub(crate) fn no_spine_commit() -> Self {
+        Self {
+            inner: super::runtime::SpineCompletedToolCallHostOutcome::no_spine_commit(),
+        }
+    }
+
+    pub(crate) fn take_post_commit_effects(&mut self) -> HostEffects {
+        HostEffects::from_runtime(self.inner.take_post_commit_effects())
+    }
+
+    pub(crate) fn set_deferred_tree_update(
+        &mut self,
+        deferred_tree_update: Option<SpineTreeUpdateEvent>,
+    ) {
+        self.inner.set_deferred_tree_update(deferred_tree_update);
+    }
+
+    pub(crate) fn take_deferred_tree_update(&mut self) -> Option<SpineTreeUpdateEvent> {
+        self.inner.take_deferred_tree_update()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_test_parts(
+        self,
+    ) -> (
+        super::runtime::SpineToolOutputRecording,
+        Option<SpineTreeUpdateEvent>,
+    ) {
+        self.inner.into_test_parts()
+    }
+}
+
+impl ToolcallHostCommitAttempt {
+    pub(crate) fn into_commit_evidence(self) -> super::runtime::SpineToolcallCommitEvidence {
+        self.inner.into_commit_evidence()
+    }
+
+    pub(crate) fn pre_compact_provider_input_tokens(&self) -> Option<i64> {
+        self.inner.pre_compact_provider_input_tokens()
+    }
+
+    pub(crate) fn current_turn_provider_input_tokens(&self) -> Option<i64> {
+        self.inner.current_turn_provider_input_tokens()
+    }
+}
+
+impl ToolcallHostAttempt {
+    pub(crate) fn host_lock_busy() -> Self {
+        Self {
+            inner: super::runtime::SpineToolcallHostAttempt::host_lock_busy(),
+        }
+    }
+
+    pub(crate) fn from_runtime(inner: super::runtime::SpineToolcallHostAttempt) -> Self {
+        Self { inner }
     }
 }
 
