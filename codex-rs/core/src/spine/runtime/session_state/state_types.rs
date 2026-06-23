@@ -80,12 +80,6 @@ impl PreparedSpineReplayRuntime {
     }
 }
 
-impl SpinePostApplyEffectPolicy {
-    pub(crate) fn host_effects(self, snapshot: Option<SpineTreeUpdateEvent>) -> SpineHostEffects {
-        SpineHostEffects::from_optional_tree_update(snapshot, self.delivery)
-    }
-}
-
 impl CommittedSpineToolcall {
     pub(super) fn installed_commit(&self) -> bool {
         self.installed_commit
@@ -95,7 +89,10 @@ impl CommittedSpineToolcall {
         self,
         snapshot: Option<SpineTreeUpdateEvent>,
     ) -> SpineHostEffects {
-        self.post_apply_effect_policy.host_effects(snapshot)
+        SpineHostEffects::from_optional_tree_update(
+            snapshot,
+            self.post_apply_effect_policy.delivery,
+        )
     }
 }
 
