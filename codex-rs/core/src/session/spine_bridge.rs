@@ -8,12 +8,8 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineCompactEvidence;
 use crate::spine::SpineCompletedToolCallHostOutcome;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
-use crate::spine::SpineHostEffects;
-use crate::spine::SpineInitEvidence;
-use crate::spine::SpineMessageEvidence;
 use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
@@ -22,14 +18,17 @@ use crate::spine::SpineRootCompactHostInstall;
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
-use crate::spine::SpineToolCallEvidence;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
-use crate::spine::SpineToolcallHookEvidence;
 use crate::spine::SpineToolcallHostAttempt;
 use crate::spine::SpineToolcallHostCommitAttempt;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
+use crate::spine::hooks::CompactEvidence;
+use crate::spine::hooks::HostEffects;
+use crate::spine::hooks::InitEvidence;
+use crate::spine::hooks::MessageEvidence;
+use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -169,7 +168,7 @@ impl Session {
     pub(crate) async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        evidence: SpineToolCallEvidence<'_>,
+        evidence: hooks::ToolCallEvidence<'_>,
     ) -> Result<(), SpineToolcallTurnError> {
         self.commit_toolcall_evidence(turn_context, evidence)
             .await
@@ -179,7 +178,7 @@ impl Session {
     async fn commit_toolcall_evidence(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        evidence: SpineToolCallEvidence<'_>,
+        evidence: hooks::ToolCallEvidence<'_>,
     ) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
@@ -224,7 +223,7 @@ impl Session {
 
     fn apply_spine_host_effects_to_locked_state(
         state: &mut crate::state::SessionState,
-        effects: SpineHostEffects,
+        effects: HostEffects,
     ) -> Result<(), String> {
         let _ = effects.apply_history_updates_or_keep(|effect| {
             let history = state.clone_history();
@@ -263,7 +262,7 @@ impl Session {
     async fn apply_spine_post_commit_effects(
         &self,
         turn_context: &TurnContext,
-        effects: SpineHostEffects,
+        effects: HostEffects,
     ) -> Option<SpineTreeUpdateEvent> {
         let (immediate, deferred) = effects.into_tree_host_updates().into_parts();
         for snapshot in immediate {
@@ -311,7 +310,7 @@ impl Session {
         let mut guard = spine_slot.lock().await;
         let _effects = hooks::on_init(
             &mut guard,
-            SpineInitEvidence {
+            InitEvidence {
                 rollout_path: &rollout_path,
             },
         )?;
@@ -650,7 +649,7 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
-        let mut non_toolcall_msg_effects = SpineHostEffects::none();
+        let mut non_toolcall_msg_effects = HostEffects::none();
         let mut tool_items = Vec::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
@@ -659,7 +658,7 @@ impl Session {
             }
             if is_non_toolcall_msg(item) {
                 let outcome = self
-                    .on_non_toolcall_msg(SpineMessageEvidence {
+                    .on_non_toolcall_msg(MessageEvidence {
                         rollout_path: &rollout_path,
                         raw_ordinal,
                         context_index: append.context_index,
@@ -702,10 +701,10 @@ impl Session {
 
     pub(crate) async fn on_non_toolcall_msg(
         &self,
-        evidence: SpineMessageEvidence<'_>,
-    ) -> Result<SpineHostEffects, SpineError> {
+        evidence: MessageEvidence<'_>,
+    ) -> Result<HostEffects, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(SpineHostEffects::none());
+            return Ok(HostEffects::none());
         };
         let mut guard = spine_slot.lock().await;
         hooks::on_non_toolcall_msg(&mut guard, evidence)
@@ -714,9 +713,9 @@ impl Session {
     async fn materialized_history_host_effects_if_no_pending_tool_request(
         &self,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineHostEffects, SpineError> {
+    ) -> Result<HostEffects, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(SpineHostEffects::none());
+            return Ok(HostEffects::none());
         };
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
@@ -731,7 +730,7 @@ impl Session {
 
     async fn apply_non_toolcall_msg_host_outcome(
         &self,
-        effects: SpineHostEffects,
+        effects: HostEffects,
     ) -> Result<(), String> {
         let effects = {
             let mut state = self.state.lock().await;
@@ -1001,7 +1000,7 @@ impl Session {
     pub(crate) async fn test_on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        evidence: SpineToolCallEvidence<'_>,
+        evidence: hooks::ToolCallEvidence<'_>,
     ) -> Result<SpineToolCommit, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(tool_commit_from_host_outcome(
@@ -1031,7 +1030,7 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         spine_slot: &Mutex<SpineSessionState>,
-        evidence: SpineToolCallEvidence<'a>,
+        evidence: hooks::ToolCallEvidence<'a>,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
         let Some(output) = evidence.completed_output()? else {
             return Ok(None);
@@ -1208,7 +1207,7 @@ impl Session {
             guard.ensure_valid()?;
             hooks::on_toolcall(
                 &mut guard,
-                SpineToolcallHookEvidence {
+                ToolcallHookEvidence {
                     completed_output: &toolcall.evidence.completed_output,
                     output_raw_ordinals: toolcall.evidence.output_raw_ordinals.as_slice(),
                     output_context_start: toolcall.evidence.output_context_start,
@@ -1435,7 +1434,7 @@ impl Session {
     pub(crate) async fn on_compact(
         &self,
         evidence: SpineNativeCompactEvidence<'_>,
-    ) -> CodexResult<SpineHostEffects> {
+    ) -> CodexResult<HostEffects> {
         self.prepare_spine_root_compact_from_native_history(evidence)
             .await
             .map_err(|err| CodexErr::SpineTerminalFailure {
@@ -1447,9 +1446,9 @@ impl Session {
     async fn prepare_spine_root_compact_from_native_history(
         &self,
         evidence: SpineNativeCompactEvidence<'_>,
-    ) -> Result<SpineHostEffects, SpineError> {
+    ) -> Result<HostEffects, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(SpineHostEffects::none());
+            return Ok(HostEffects::none());
         };
         self.ensure_rollout_materialized().await;
         self.flush_rollout()
@@ -1473,7 +1472,7 @@ impl Session {
         let mut guard = spine_slot.lock().await;
         hooks::on_compact(
             &mut guard,
-            SpineCompactEvidence {
+            CompactEvidence {
                 rollout_path: &rollout_path,
                 compacted_history: evidence.compacted_history,
                 raw_items: &raw_items,
