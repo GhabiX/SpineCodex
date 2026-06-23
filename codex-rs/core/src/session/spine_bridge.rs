@@ -1345,10 +1345,10 @@ impl Session {
         input: SpineToolcallCommitAttemptInput<'_>,
     ) -> Result<SpineCommitAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
-            return Ok(SpineCommitAttempt::retry());
+            return Ok(SpineCommitAttempt::host_lock_busy());
         };
         let Ok(mut state) = self.state.try_lock() else {
-            return Ok(SpineCommitAttempt::retry());
+            return Ok(SpineCommitAttempt::host_lock_busy());
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();

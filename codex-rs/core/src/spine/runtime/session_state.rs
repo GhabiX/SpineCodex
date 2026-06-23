@@ -776,7 +776,7 @@ impl PreparedSpineToolcallCommit {
 }
 
 impl SpineCommitAttempt {
-    pub(crate) fn retry() -> Self {
+    pub(crate) fn host_lock_busy() -> Self {
         Self {
             kind: SpineCommitAttemptKind::Retry,
         }
