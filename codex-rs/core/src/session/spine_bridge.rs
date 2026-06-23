@@ -31,6 +31,7 @@ use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineToolcallCommitHostLoop;
 use crate::spine::SpineToolcallCommitProviderInputTokens;
 use crate::spine::SpineTrimOutcome;
+use crate::spine::hooks;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -360,9 +361,12 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        let _effects = guard.on_init(SpineInitEvidence {
-            rollout_path: &rollout_path,
-        })?;
+        let _effects = hooks::on_init(
+            &mut guard,
+            SpineInitEvidence {
+                rollout_path: &rollout_path,
+            },
+        )?;
         Ok(())
     }
 

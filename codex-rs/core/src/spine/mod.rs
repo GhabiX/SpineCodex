@@ -1,6 +1,7 @@
 mod archive;
 mod checkpoint;
 mod compact_checkpoint;
+pub(crate) mod hooks;
 mod instructions;
 mod io;
 mod lexer;
