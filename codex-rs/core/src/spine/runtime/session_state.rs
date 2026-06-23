@@ -3,6 +3,7 @@ use super::SpineRuntime;
 mod completed_toolcall_evidence;
 mod completed_toolcall_session;
 mod lifecycle_session;
+mod message_session;
 mod root_compact_session;
 mod state_types;
 mod toolcall_host_commit;

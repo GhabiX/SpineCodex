@@ -9,8 +9,6 @@ use super::super::SpineHostEffects;
 use super::super::SpineOpenNodeContextProjection;
 use super::super::SpineTreeUpdateDelivery;
 use super::super::prepared::SpineCommitPublication;
-use super::super::support::is_non_toolcall_msg;
-use super::super::support::is_real_user_message;
 use super::super::support::tool_request_call_id;
 use super::super::support::tool_response_call_id;
 use super::super::types::SpinePreparedCloseMemory;
@@ -27,7 +25,6 @@ use super::completed_toolcall_evidence::completed_toolcall_response_segment;
 use super::completed_toolcall_evidence::completed_toolcall_response_segments;
 use super::state_types::CommittedSpineToolcall;
 use super::state_types::SpineGroupedToolcallOutputRecordingPlan;
-use super::state_types::SpineMessageEvidence;
 use super::state_types::SpineObservedContextItem;
 use super::state_types::SpinePostApplyEffectPolicy;
 use super::state_types::SpineSingleToolcallOutputRecordingPlan;
@@ -210,65 +207,6 @@ impl SpineSessionState {
             )?;
         }
         Ok(())
-    }
-
-    pub(crate) fn observe_non_toolcall_msg(
-        &mut self,
-        evidence: SpineMessageEvidence<'_>,
-    ) -> Result<bool, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime_mut() else {
-            return Ok(false);
-        };
-        if !is_non_toolcall_msg(evidence.item) {
-            return Err(SpineError::InvalidEvent(
-                "on_non_toolcall_msg received toolcall item".to_string(),
-            ));
-        }
-        let observed_user_message = is_real_user_message(evidence.item);
-        if runtime.jit_enabled() && observed_user_message {
-            runtime.checkpoint_before_user_msg(
-                evidence.rollout_path,
-                evidence.raw_ordinal,
-                evidence.raw_items,
-            )?;
-        }
-        runtime.on_non_toolcall_msg(evidence.raw_ordinal, evidence.context_index, evidence.item)?;
-        Ok(observed_user_message)
-    }
-
-    pub(crate) fn observe_non_toolcall_msg_with_host_effects(
-        &mut self,
-        evidence: SpineMessageEvidence<'_>,
-    ) -> Result<SpineHostEffects, SpineError> {
-        let observed_user_message = self.observe_non_toolcall_msg(evidence)?;
-        if !observed_user_message {
-            return Ok(SpineHostEffects::none());
-        }
-        Ok(SpineHostEffects::publish_materialized_history_after_batch())
-    }
-
-    pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request(
-        &self,
-        raw_items: &[Option<ResponseItem>],
-        expected_history: Vec<ResponseItem>,
-        reference_context_item: Option<TurnContextItem>,
-    ) -> Result<SpineHostEffects, SpineError> {
-        let Some(replacement) = self.materialize_history_if_no_pending_tool_request(raw_items)?
-        else {
-            return Ok(SpineHostEffects::none());
-        };
-        if replacement == expected_history {
-            return Ok(SpineHostEffects::none());
-        }
-        Ok(SpineHostEffects::replace_history(SpineHistoryUpdate {
-            call_id: "non-toolcall-msg".to_string(),
-            operation: "publish Spine h(PS) after non-toolcall message",
-            suffix_start: 0,
-            expected_history,
-            replacement,
-            reference_context_item,
-        }))
     }
 
     pub(crate) fn single_completed_toolcall_evidence(
