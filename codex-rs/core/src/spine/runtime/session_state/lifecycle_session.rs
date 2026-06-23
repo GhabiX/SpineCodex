@@ -208,15 +208,11 @@ impl SpineSessionState {
         })
     }
 
-    fn invalid_error(&self) -> Option<SpineError> {
-        self.invalid
-            .as_ref()
-            .map(|reason| SpineError::Invariant(format!("spine runtime is invalid: {reason}")))
-    }
-
     pub(crate) fn ensure_valid(&self) -> Result<(), SpineError> {
-        if let Some(err) = self.invalid_error() {
-            return Err(err);
+        if let Some(reason) = self.invalid.as_ref() {
+            return Err(SpineError::Invariant(format!(
+                "spine runtime is invalid: {reason}"
+            )));
         }
         Ok(())
     }
