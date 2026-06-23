@@ -396,6 +396,24 @@ fn runtime_root_compact_routes_source_context_len_through_parser_state() {
 }
 
 #[test]
+fn lifecycle_fork_routes_context_len_through_parser_state() {
+    let lifecycle = fs::read_to_string(spine_src("runtime/session_state/lifecycle_session.rs"))
+        .expect("read lifecycle session source");
+    let fork_install = lifecycle
+        .split("fn install_cloned_sidecar_for_fork(")
+        .nth(1)
+        .expect("fork clone install function");
+    assert!(
+        !fork_install.contains("materialize_history(raw_items)?.len()"),
+        "fork clone append context index calculation must not materialize h(PS) directly"
+    );
+    assert!(
+        fork_install.contains("materialized_history_len(raw_items)?"),
+        "fork clone append context index calculation should route h(PS) length through ParserState"
+    );
+}
+
+#[test]
 fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     let root_compact = fs::read_to_string(spine_src("runtime/root_compact.rs"))
         .expect("read runtime root_compact source");
