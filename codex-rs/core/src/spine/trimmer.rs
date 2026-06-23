@@ -383,10 +383,7 @@ fn apply_slice(text: &str, slice: &TrimSliceSpec) -> Option<String> {
 }
 
 fn prefix_chars(text: &str, count: usize) -> String {
-    match text.char_indices().nth(count) {
-        Some((idx, _)) => text[..idx].to_string(),
-        None => text.to_string(),
-    }
+    text[..prefix_byte_index(text, count)].to_string()
 }
 
 fn suffix_chars(text: &str, count: usize) -> String {
@@ -395,10 +392,14 @@ fn suffix_chars(text: &str, count: usize) -> String {
     }
     let total = text.chars().count();
     let keep_from = total.saturating_sub(count);
-    match text.char_indices().nth(keep_from) {
-        Some((idx, _)) => text[idx..].to_string(),
-        None => text.to_string(),
-    }
+    text[prefix_byte_index(text, keep_from)..].to_string()
+}
+
+fn prefix_byte_index(text: &str, count: usize) -> usize {
+    text.char_indices()
+        .nth(count)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len())
 }
 
 fn byte_index_before_chars(text: &str, byte_index: usize, count: usize) -> usize {
