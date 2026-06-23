@@ -269,6 +269,20 @@ impl ParserState {
         Ok(ParserPreparedState::new(staged))
     }
 
+    pub(super) fn open_staged_parse_stack(
+        &self,
+        open_token: SpineToken,
+        toolcall_token: Option<SpineToken>,
+        archive: &SpineArchive,
+    ) -> Result<ParserPreparedState, SpineError> {
+        let mut staged = self.parse_stack.clone();
+        staged.shift(open_token, archive)?;
+        if let Some(toolcall_token) = toolcall_token {
+            staged.shift(toolcall_token, archive)?;
+        }
+        Ok(ParserPreparedState::new(staged))
+    }
+
     pub(super) fn close_reduced_next_child_id(
         &self,
         memory: MemoryRef,

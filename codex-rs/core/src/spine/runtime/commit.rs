@@ -366,9 +366,9 @@ impl SpineRuntime {
         let open_token = token;
         if let Some(completed_toolcall) = completed_toolcall {
             let (toolcall_event, token) = self.completed_toolcall_parts(&completed_toolcall)?;
-            let staged_parse_stack = self
-                .parser
-                .staged_after_tokens([open_token, token], &self.archive())?;
+            let staged_parse_stack =
+                self.parser
+                    .open_staged_parse_stack(open_token, Some(token), &self.archive())?;
             let toolcall_seq = self.ledger.next_event_seq.checked_add(1).ok_or_else(|| {
                 SpineError::InvalidEvent("spine.open toolcall seq overflow".to_string())
             })?;
@@ -395,9 +395,9 @@ impl SpineRuntime {
                 mem_for_accounting: None,
             });
         }
-        let staged_parse_stack = self
-            .parser
-            .staged_after_tokens([open_token], &self.archive())?;
+        let staged_parse_stack =
+            self.parser
+                .open_staged_parse_stack(open_token, None, &self.archive())?;
         let events = vec![event];
         self.append_committed_events_no_marker(events)?;
         self.parser.install_staged(staged_parse_stack);

@@ -179,11 +179,11 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
     );
     assert!(
         commit.contains("self.parser.next_child_id()")
-            && commit.contains(".staged_after_tokens([open_token"),
+            && commit.contains(".open_staged_parse_stack(open_token"),
         "runtime open commit should route child id and token staging through ParserState"
     );
     let open_with_toolcall_install = commit
-        .split(".staged_after_tokens([open_token, token]")
+        .split(".open_staged_parse_stack(open_token, Some(token)")
         .nth(1)
         .and_then(|tail| {
             tail.split("self.append_trim_candidates_for_completed_toolcall")
@@ -196,7 +196,7 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
         "runtime open-with-toolcall should install staged parser state through ParserState"
     );
     let open_without_toolcall_install = commit
-        .split(".staged_after_tokens([open_token]")
+        .split(".open_staged_parse_stack(open_token, None")
         .nth(1)
         .and_then(|tail| tail.split("Ok(SpinePreparedCommit").next())
         .expect("open-without-toolcall install section");
