@@ -89,11 +89,9 @@ impl MemRecord {
     pub(in crate::spine) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         match self.kind {
             MemKind::Suffix => raw_mask.span_live(self.raw_start, self.raw_end),
-            MemKind::RootEpoch => self
-                .raw_live_hash
-                .as_deref()
-                .map(|hash| raw_mask.prefix_hash_matches(self.raw_end, hash))
-                .unwrap_or(Ok(false)),
+            MemKind::RootEpoch => self.raw_live_hash.as_deref().map_or(Ok(false), |hash| {
+                raw_mask.prefix_hash_matches(self.raw_end, hash)
+            }),
         }
     }
 }
