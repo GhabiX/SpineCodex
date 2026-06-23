@@ -105,7 +105,7 @@ pub(super) fn archive_task_tree(
     let trajs_path = meta.node_dir.join("Trajs.md");
     let memory_body = archive.staged_memory_body(&memory.compact_id);
     let memory_content = render_memory_archive(memory, memory_body.as_deref())?;
-    let trajs_content = render_trajs_archive(children)?;
+    let trajs_content = render_trajs_archive(children);
     if archive.staging.is_some() {
         archive.stage_archive_file(memory_path.clone(), memory_content)?;
         archive.stage_archive_file(trajs_path.clone(), trajs_content)?;
@@ -264,16 +264,16 @@ fn push_optional_i64_field(out: &mut String, field: &str, value: Option<i64>) {
     }
 }
 
-fn render_trajs_archive(children: &[SpineTreeNode]) -> Result<String, SpineError> {
+fn render_trajs_archive(children: &[SpineTreeNode]) -> String {
     let mut out = String::new();
     out.push_str("# Spine Trajs Archive\n\n");
     for child in children {
-        render_trajs_node(&mut out, child)?;
+        render_trajs_node(&mut out, child);
     }
-    Ok(out)
+    out
 }
 
-fn render_trajs_node(out: &mut String, node: &SpineTreeNode) -> Result<(), SpineError> {
+fn render_trajs_node(out: &mut String, node: &SpineTreeNode) {
     match node {
         SpineTreeNode::MsgAsLeafNode { msg, from_user, .. } => match msg {
             SegRef::ResponseItem {
@@ -301,7 +301,7 @@ fn render_trajs_node(out: &mut String, node: &SpineTreeNode) -> Result<(), Spine
                     crate::spine::model::ToolCallSegmentKind::Request => "request ",
                     crate::spine::model::ToolCallSegmentKind::Response => "response ",
                 });
-                render_trajs_seg_ref(out, &segment.seg)?;
+                render_trajs_seg_ref(out, &segment.seg);
                 out.push('\n');
             }
         }
@@ -324,10 +324,9 @@ fn render_trajs_node(out: &mut String, node: &SpineTreeNode) -> Result<(), Spine
             ));
         }
     }
-    Ok(())
 }
 
-fn render_trajs_seg_ref(out: &mut String, seg: &SegRef) -> Result<(), SpineError> {
+fn render_trajs_seg_ref(out: &mut String, seg: &SegRef) {
     match seg {
         SegRef::ResponseItem {
             raw_ordinal,
@@ -347,7 +346,6 @@ fn render_trajs_seg_ref(out: &mut String, seg: &SegRef) -> Result<(), SpineError
             ));
         }
     }
-    Ok(())
 }
 
 pub(super) fn tree_meta(
