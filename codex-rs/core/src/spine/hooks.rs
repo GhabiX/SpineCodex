@@ -5,7 +5,6 @@ use std::future::Future;
 use std::path::Path;
 
 use super::runtime::SpineCompletedToolCallHostOutcome;
-use super::runtime::SpineCompletedToolCallOutputEvidence;
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
 use super::runtime::SpineToolcallHostAttempt;
@@ -49,13 +48,17 @@ pub(crate) struct ToolCallEvidence<'a> {
 }
 
 pub(crate) struct ToolcallHookEvidence<'a> {
-    pub(crate) completed_output: &'a SpineCompletedToolCallOutputEvidence<'a>,
+    pub(crate) completed_output: &'a CompletedToolCallOutputEvidence<'a>,
     pub(crate) output_raw_ordinals: &'a [Option<u64>],
     pub(crate) output_context_start: usize,
     pub(crate) raw_items: &'a [Option<ResponseItem>],
     pub(crate) current_turn_provider_input_tokens: Option<i64>,
     pub(crate) tool_resp_already_recorded: bool,
     pub(crate) recorded_inside_reduce: bool,
+}
+
+pub(crate) struct CompletedToolCallOutputEvidence<'a> {
+    inner: super::runtime::SpineCompletedToolCallOutputEvidence<'a>,
 }
 
 enum ToolCallEvidenceKind<'a> {
@@ -113,7 +116,7 @@ impl<'a> ToolCallEvidence<'a> {
 
     pub(crate) fn completed_output(
         &self,
-    ) -> Result<Option<super::runtime::SpineCompletedToolCallOutputEvidence<'a>>, SpineError> {
+    ) -> Result<Option<CompletedToolCallOutputEvidence<'a>>, SpineError> {
         let runtime_evidence = match &self.kind {
             ToolCallEvidenceKind::Single { item } => {
                 super::runtime::SpineToolCallEvidence::single(item)
@@ -137,9 +140,15 @@ impl<'a> ToolCallEvidence<'a> {
                 output_items,
             ),
             #[cfg(test)]
-            ToolCallEvidenceKind::Runtime(evidence) => return evidence.completed_output(),
+            ToolCallEvidenceKind::Runtime(evidence) => {
+                return evidence
+                    .completed_output()
+                    .map(|output| output.map(CompletedToolCallOutputEvidence::from_runtime));
+            }
         };
-        runtime_evidence.completed_output()
+        runtime_evidence
+            .completed_output()
+            .map(|output| output.map(CompletedToolCallOutputEvidence::from_runtime))
     }
 }
 
@@ -285,6 +294,30 @@ impl TreeHostUpdates {
     }
 }
 
+impl<'a> CompletedToolCallOutputEvidence<'a> {
+    fn from_runtime(inner: super::runtime::SpineCompletedToolCallOutputEvidence<'a>) -> Self {
+        Self { inner }
+    }
+
+    pub(crate) fn call_id(&self) -> &'a str {
+        self.inner.call_id()
+    }
+
+    pub(crate) fn commit_output_item(&self) -> &'a ResponseItem {
+        self.inner.commit_output_item()
+    }
+
+    pub(crate) fn single_output_requiring_optional_prerecord(
+        &self,
+    ) -> Option<(&'a str, &'a ResponseItem)> {
+        self.inner.single_output_requiring_optional_prerecord()
+    }
+
+    pub(crate) fn output_group_to_record_before_commit(&self) -> Option<&'a [ResponseItem]> {
+        self.inner.output_group_to_record_before_commit()
+    }
+}
+
 impl HistoryHostEffect {
     pub(crate) fn apply_history_update_or_self(
         self,
@@ -359,7 +392,7 @@ pub(crate) fn on_toolcall(
 ) -> Result<HostEffects, SpineError> {
     state
         .prepare_completed_toolcall_for_commit(super::runtime::SpineToolcallHookEvidence {
-            completed_output: evidence.completed_output,
+            completed_output: &evidence.completed_output.inner,
             output_raw_ordinals: evidence.output_raw_ordinals,
             output_context_start: evidence.output_context_start,
             raw_items: evidence.raw_items,

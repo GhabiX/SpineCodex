@@ -9,7 +9,6 @@ use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCompletedToolCallHostOutcome;
-use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
@@ -25,6 +24,7 @@ use crate::spine::SpineToolcallHostCommitAttempt;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
+use crate::spine::hooks::CompletedToolCallOutputEvidence;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
@@ -108,7 +108,7 @@ fn tool_commit_from_host_outcome(outcome: SpineCompletedToolCallHostOutcome) -> 
 
 struct SpinePreparedToolCallEvidence<'a> {
     response_item: &'a ResponseItem,
-    completed_output: SpineCompletedToolCallOutputEvidence<'a>,
+    completed_output: CompletedToolCallOutputEvidence<'a>,
     output_raw_ordinals: Vec<Option<u64>>,
     output_context_start: usize,
 }
@@ -1049,7 +1049,7 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         spine_slot: &Mutex<SpineSessionState>,
-        output: SpineCompletedToolCallOutputEvidence<'a>,
+        output: CompletedToolCallOutputEvidence<'a>,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
         let Some(output_anchor) = self
             .record_completed_spine_toolcall_output_if_needed(turn_context, spine_slot, &output)
@@ -1077,7 +1077,7 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         spine_slot: &Mutex<SpineSessionState>,
-        output: &SpineCompletedToolCallOutputEvidence<'_>,
+        output: &CompletedToolCallOutputEvidence<'_>,
     ) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError> {
         if let Some((call_id, item)) = output.single_output_requiring_optional_prerecord() {
             return self
