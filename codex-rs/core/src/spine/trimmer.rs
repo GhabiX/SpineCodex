@@ -9,11 +9,11 @@ use crate::spine::model::TrimResponseKind;
 use crate::spine::model::TrimSliceSpec;
 use crate::spine::model::TrimTarget;
 use crate::spine::model::TrimTargetState;
+use crate::spine::render::matched_tool_output;
 use crate::spine::runtime::CompletedToolCall;
 use crate::spine::runtime::SpineError;
 use crate::spine::runtime::SpineTrimOutcome;
 use crate::spine::store::SpineStore;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 
 pub(super) struct Trimmer<'a> {
@@ -305,7 +305,7 @@ pub(super) fn current_visible_body(
                     target.trim_id
                 )));
             }
-            let text = matched_trim_tool_output(item, target)?
+            let text = matched_tool_output(item, target, "visible raw item")?
                 .text_content()
                 .map(str::to_string)
                 .ok_or_else(|| {
@@ -320,31 +320,6 @@ pub(super) fn current_visible_body(
         TrimTargetState::Snipped => {
             Ok(crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE.to_string())
         }
-    }
-}
-
-fn matched_trim_tool_output<'a>(
-    item: &'a ResponseItem,
-    target: &TrimTarget,
-) -> Result<&'a FunctionCallOutputPayload, SpineError> {
-    match item {
-        ResponseItem::FunctionCallOutput { call_id, output }
-            if target.response_kind == TrimResponseKind::FunctionCallOutput
-                && call_id == &target.call_id =>
-        {
-            Ok(output)
-        }
-        ResponseItem::CustomToolCallOutput {
-            call_id, output, ..
-        } if target.response_kind == TrimResponseKind::CustomToolCallOutput
-            && call_id == &target.call_id =>
-        {
-            Ok(output)
-        }
-        _ => Err(SpineError::SidecarCorruption(format!(
-            "trim target {} does not match visible raw item for call_id={}",
-            target.trim_id, target.call_id
-        ))),
     }
 }
 

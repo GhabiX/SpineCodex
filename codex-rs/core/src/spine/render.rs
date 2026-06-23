@@ -407,7 +407,7 @@ fn projected_tool_response_item_with_state(
     }
 }
 
-fn matched_tool_output<'a>(
+pub(super) fn matched_tool_output<'a>(
     item: &'a ResponseItem,
     target: &TrimTarget,
     mismatch_label: &str,
