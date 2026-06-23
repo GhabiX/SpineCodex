@@ -29,27 +29,31 @@ pub(super) fn seq_watermark_for_raw_boundary(
 ) -> Option<u64> {
     events
         .iter()
-        .filter(|event| match &event.event {
-            TrimEvent::ToolCallBoundary {
-                raw_boundary: event_boundary,
-                ..
-            }
-            | TrimEvent::Cleared {
-                raw_boundary: event_boundary,
-                ..
-            }
-            | TrimEvent::Snipped {
-                raw_boundary: event_boundary,
-                ..
-            }
-            | TrimEvent::Sliced {
-                raw_boundary: event_boundary,
-                ..
-            } => *event_boundary <= raw_boundary,
-            TrimEvent::Candidate { raw_ordinal, .. } => *raw_ordinal < raw_boundary,
-        })
+        .filter(|event| trim_event_within_raw_boundary(&event.event, raw_boundary))
         .map(|event| event.trim_seq)
         .max()
+}
+
+fn trim_event_within_raw_boundary(event: &TrimEvent, raw_boundary: u64) -> bool {
+    match event {
+        TrimEvent::ToolCallBoundary {
+            raw_boundary: event_boundary,
+            ..
+        }
+        | TrimEvent::Cleared {
+            raw_boundary: event_boundary,
+            ..
+        }
+        | TrimEvent::Snipped {
+            raw_boundary: event_boundary,
+            ..
+        }
+        | TrimEvent::Sliced {
+            raw_boundary: event_boundary,
+            ..
+        } => *event_boundary <= raw_boundary,
+        TrimEvent::Candidate { raw_ordinal, .. } => *raw_ordinal < raw_boundary,
+    }
 }
 
 pub(super) fn toolcall_seq_limit_from_events(
