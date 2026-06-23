@@ -516,7 +516,7 @@ impl SpineRuntime {
             match err {
                 CloseFamilyTransactionError::PreparedSideEffect(err) => {
                     self.parser
-                        .replace_parse_stack_for_runtime_transition(pending_close_parse_stack);
+                        .install_pending_close_after_side_effect_failure(pending_close_parse_stack);
                     return Err(err);
                 }
                 CloseFamilyTransactionError::CommitProof(err) => return Err(err),
@@ -662,7 +662,7 @@ impl SpineRuntime {
     pub(crate) fn install_prepared_commit(&mut self, prepared: SpinePreparedCommit) {
         if let Some(final_parse_stack) = prepared.final_parse_stack {
             self.parser
-                .replace_parse_stack_for_runtime_transition(final_parse_stack);
+                .install_prepared_commit_final_parse_stack(final_parse_stack);
         }
         if let Some(completed_toolcall) = prepared.completed_toolcall.as_ref() {
             self.clear_completed_toolcall_anchors(completed_toolcall);

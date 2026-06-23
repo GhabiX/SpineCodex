@@ -21,6 +21,10 @@ fn observe_runtime_routes_token_shifts_through_parser_state() {
         "runtime/observe.rs must not directly access live ParseStack"
     );
     assert!(
+        !observe.contains("replace_parse_stack_for_runtime_transition"),
+        "runtime/observe.rs must not use the generic parser replacement escape hatch"
+    );
+    assert!(
         observe.contains("staged_after_token")
             && observe.contains("staged_after_lexed_batch_for_observe"),
         "runtime/observe.rs should stage ordinary observations through ParserState"
@@ -187,6 +191,21 @@ fn runtime_commit_routes_close_family_staging_through_parser_state() {
 }
 
 #[test]
+fn runtime_commit_routes_close_installs_through_named_parser_methods() {
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    assert!(
+        !commit.contains("replace_parse_stack_for_runtime_transition"),
+        "runtime/commit.rs must not use the generic parser replacement escape hatch"
+    );
+    assert!(
+        commit.contains(".install_pending_close_after_side_effect_failure(")
+            && commit.contains(".install_prepared_commit_final_parse_stack("),
+        "runtime close/next commit should install pending/final parser states through named ParserState methods"
+    );
+}
+
+#[test]
 fn runtime_checkpoint_routes_parser_reads_through_parser_state() {
     let checkpoint = fs::read_to_string(spine_src("runtime/checkpoint.rs"))
         .expect("read runtime checkpoint source");
@@ -247,5 +266,20 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
         root_compact.contains(".prepare_root_compact_reduction(")
             && root_compact.contains(".root_compact_staged_parse_stacks("),
         "runtime root compact should route staged parser reductions through ParserState"
+    );
+}
+
+#[test]
+fn runtime_root_compact_routes_installs_through_named_parser_methods() {
+    let root_compact = fs::read_to_string(spine_src("runtime/root_compact.rs"))
+        .expect("read runtime root_compact source");
+    assert!(
+        !root_compact.contains("replace_parse_stack_for_runtime_transition"),
+        "runtime/root_compact.rs must not use the generic parser replacement escape hatch"
+    );
+    assert!(
+        root_compact.contains(".install_pending_root_compact_after_side_effect_failure(")
+            && root_compact.contains(".install_prepared_root_compact_final_parse_stack("),
+        "runtime root compact should install pending/final parser states through named ParserState methods"
     );
 }

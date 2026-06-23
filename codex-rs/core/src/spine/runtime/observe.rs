@@ -436,8 +436,7 @@ impl SpineRuntime {
     ) -> Result<u64, SpineError> {
         let staged_parse_stack = self.parser.staged_after_token(token, &self.archive())?;
         let event_seq = self.append_cached_event(event)?;
-        self.parser
-            .replace_parse_stack_for_runtime_transition(staged_parse_stack);
+        self.parser.install_staged(staged_parse_stack);
         Ok(event_seq)
     }
 

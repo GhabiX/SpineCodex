@@ -342,7 +342,9 @@ impl SpineRuntime {
             prepared.compact_checkpoint.as_ref(),
         ) {
             self.parser
-                .replace_parse_stack_for_runtime_transition(pending_compact_parse_stack);
+                .install_pending_root_compact_after_side_effect_failure(
+                    pending_compact_parse_stack,
+                );
             return Err(err);
         }
         let marker =
@@ -357,7 +359,7 @@ impl SpineRuntime {
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
         self.parser
-            .replace_parse_stack_for_runtime_transition(prepared.final_parse_stack);
+            .install_prepared_root_compact_final_parse_stack(prepared.final_parse_stack);
     }
 
     pub(crate) fn install_prepared_root_compact_install(

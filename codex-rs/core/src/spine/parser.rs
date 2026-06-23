@@ -202,8 +202,33 @@ impl ParserState {
             .set_live_open_context_baseline(node, input_tokens, source)
     }
 
-    pub(super) fn replace_parse_stack_for_runtime_transition(&mut self, parse_stack: ParseStack) {
+    fn replace_parse_stack_for_runtime_transition(&mut self, parse_stack: ParseStack) {
         self.parse_stack = parse_stack;
+    }
+
+    pub(super) fn install_pending_close_after_side_effect_failure(
+        &mut self,
+        parse_stack: ParseStack,
+    ) {
+        self.replace_parse_stack_for_runtime_transition(parse_stack);
+    }
+
+    pub(super) fn install_prepared_commit_final_parse_stack(&mut self, parse_stack: ParseStack) {
+        self.replace_parse_stack_for_runtime_transition(parse_stack);
+    }
+
+    pub(super) fn install_pending_root_compact_after_side_effect_failure(
+        &mut self,
+        parse_stack: ParseStack,
+    ) {
+        self.replace_parse_stack_for_runtime_transition(parse_stack);
+    }
+
+    pub(super) fn install_prepared_root_compact_final_parse_stack(
+        &mut self,
+        parse_stack: ParseStack,
+    ) {
+        self.replace_parse_stack_for_runtime_transition(parse_stack);
     }
 
     pub(super) fn staged_after_token(
