@@ -58,6 +58,15 @@ fn parser_state_mutable_runtime_transition_handle_is_test_only() {
 }
 
 #[test]
+fn parser_state_does_not_expose_single_token_staging_api() {
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    assert!(
+        !parser.contains("fn staged_after_token("),
+        "ParserState should expose batch staging, not a single-token staging API"
+    );
+}
+
+#[test]
 fn runtime_replay_routes_token_consumption_through_parser_state() {
     let replay =
         fs::read_to_string(spine_src("runtime/replay.rs")).expect("read runtime replay source");

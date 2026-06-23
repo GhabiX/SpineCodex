@@ -232,14 +232,6 @@ impl ParserState {
         self.replace_parse_stack_for_runtime_transition(parse_stack);
     }
 
-    pub(super) fn staged_after_token(
-        &self,
-        token: SpineToken,
-        archive: &SpineArchive,
-    ) -> Result<ParseStack, SpineError> {
-        self.staged_after_tokens(std::iter::once(token), archive)
-    }
-
     pub(super) fn staged_after_tokens(
         &self,
         tokens: impl IntoIterator<Item = SpineToken>,
