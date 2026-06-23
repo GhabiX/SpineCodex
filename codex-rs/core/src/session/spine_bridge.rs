@@ -115,7 +115,7 @@ impl SpineRootCompactPublish {
         self.prepared.materialized_len()
     }
 
-    fn published_history_from_native_items(
+    pub(crate) fn published_history_from_native_items(
         &self,
         native_items: &[ResponseItem],
     ) -> Vec<ResponseItem> {
@@ -1486,8 +1486,6 @@ impl Session {
     pub(crate) async fn on_compact(
         &self,
         spine_root_compact_source: &[ResponseItem],
-        items: &mut Vec<ResponseItem>,
-        compacted_item: &mut CompactedItem,
     ) -> CodexResult<Option<SpineRootCompactPublish>> {
         let Some(prepared) = self
             .prepare_spine_root_compact_from_native_history(spine_root_compact_source)
@@ -1499,10 +1497,7 @@ impl Session {
         else {
             return Ok(None);
         };
-        let publish = SpineRootCompactPublish::new(prepared);
-        *items = publish.published_history_from_native_items(items);
-        compacted_item.replacement_history = Some(items.clone());
-        Ok(Some(publish))
+        Ok(Some(SpineRootCompactPublish::new(prepared)))
     }
 
     async fn prepare_spine_root_compact_from_native_history(
