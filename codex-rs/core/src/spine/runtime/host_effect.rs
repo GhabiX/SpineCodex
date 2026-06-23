@@ -1,6 +1,7 @@
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
+use std::future::Future;
 
 use super::session_state::SpineToolcallCommitHostLoop;
 
@@ -92,7 +93,7 @@ impl SpineHostEffects {
         self.effects.is_empty()
     }
 
-    pub(crate) fn into_after_batch_materialized_history_request(self) -> (Self, bool) {
+    fn partition_after_batch_materialized_history_request(self) -> (Self, bool) {
         let mut remaining = Vec::new();
         let mut requested = false;
         for effect in self.effects {
@@ -106,6 +107,32 @@ impl SpineHostEffects {
             }
         }
         (Self::many(remaining), requested)
+    }
+
+    pub(crate) async fn apply_after_batch_materialized_history_request<
+        E,
+        ApplyEffects,
+        ApplyEffectsFuture,
+        PublishMaterializedHistory,
+        PublishMaterializedHistoryFuture,
+    >(
+        self,
+        apply_effects: ApplyEffects,
+        publish_materialized_history: PublishMaterializedHistory,
+    ) -> Result<(), E>
+    where
+        ApplyEffects: FnOnce(Self) -> ApplyEffectsFuture,
+        ApplyEffectsFuture: Future<Output = Result<(), E>>,
+        PublishMaterializedHistory: FnOnce() -> PublishMaterializedHistoryFuture,
+        PublishMaterializedHistoryFuture: Future<Output = Result<(), E>>,
+    {
+        let (effects, publish_materialized_history_after_batch) =
+            self.partition_after_batch_materialized_history_request();
+        apply_effects(effects).await?;
+        if publish_materialized_history_after_batch {
+            publish_materialized_history().await?;
+        }
+        Ok(())
     }
 
     pub(crate) fn into_root_compact_host_publish(

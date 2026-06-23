@@ -732,19 +732,23 @@ impl Session {
             let mut guard = spine_slot.lock().await;
             guard.observe_toolcall_context_items(&tool_items, &raw_items)?;
         }
-        let (non_toolcall_msg_effects, publish_materialized_history_after_batch) =
-            non_toolcall_msg_effects.into_after_batch_materialized_history_request();
-        self.apply_non_toolcall_msg_host_outcome(non_toolcall_msg_effects)
-            .await
-            .map_err(SpineError::Invariant)?;
-        if publish_materialized_history_after_batch {
-            let outcome = self
-                .materialized_history_host_effects_if_no_pending_tool_request(&raw_items)
-                .await?;
-            self.apply_non_toolcall_msg_host_outcome(outcome)
-                .await
-                .map_err(SpineError::Invariant)?;
-        }
+        non_toolcall_msg_effects
+            .apply_after_batch_materialized_history_request(
+                |effects| async {
+                    self.apply_non_toolcall_msg_host_outcome(effects)
+                        .await
+                        .map_err(SpineError::Invariant)
+                },
+                || async {
+                    let outcome = self
+                        .materialized_history_host_effects_if_no_pending_tool_request(&raw_items)
+                        .await?;
+                    self.apply_non_toolcall_msg_host_outcome(outcome)
+                        .await
+                        .map_err(SpineError::Invariant)
+                },
+            )
+            .await?;
         Ok(())
     }
 
