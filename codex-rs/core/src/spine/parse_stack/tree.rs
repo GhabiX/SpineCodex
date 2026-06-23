@@ -90,7 +90,7 @@ pub(super) fn tree_snapshot_nodes(
                 node_id: row.id.as_path(),
                 summary,
                 status,
-                accounting: row.accounting.as_ref().and_then(snapshot_accounting),
+                accounting: row.accounting.as_ref().map(snapshot_accounting),
             }
         })
         .collect())
@@ -403,16 +403,15 @@ fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
     .filter(|accounting| !accounting.is_empty())
 }
 
-fn snapshot_accounting(accounting: &NodeAccounting) -> Option<SpineTreeNodeAccountingSnapshot> {
-    Some(SpineTreeNodeAccountingSnapshot {
+fn snapshot_accounting(accounting: &NodeAccounting) -> SpineTreeNodeAccountingSnapshot {
+    SpineTreeNodeAccountingSnapshot {
         current_node_context_tokens: None,
         current_node_context_problem: None,
         current_node_context_baseline_source: None,
         closed_source_suffix_tokens: accounting.closed_source_suffix_tokens,
         closed_memory_context_tokens: accounting.closed_memory_context_tokens,
         memory_output_tokens: accounting.memory_output_tokens,
-    })
-    .filter(|_| !accounting.is_empty())
+    }
 }
 
 fn format_node_accounting(accounting: &NodeAccounting) -> Option<String> {
