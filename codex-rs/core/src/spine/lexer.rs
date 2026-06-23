@@ -215,25 +215,19 @@ pub(in crate::spine) fn parse_control_tool_intent(
 ) -> Result<Option<ParsedControlToolIntent>, SpineError> {
     match tool_name {
         "open" => {
-            let args: OpenToolArgs = serde_json::from_str(arguments).map_err(|err| {
-                SpineError::ToolUse(format!("failed to parse spine.open arguments: {err}"))
-            })?;
+            let args: OpenToolArgs = parse_control_tool_args(arguments, "spine.open")?;
             Ok(Some(ParsedControlToolIntent::Open {
                 summary: args.summary,
             }))
         }
         "close" => {
-            let args: CloseToolArgs = serde_json::from_str(arguments).map_err(|err| {
-                SpineError::ToolUse(format!("failed to parse spine.close arguments: {err}"))
-            })?;
+            let args: CloseToolArgs = parse_control_tool_args(arguments, "spine.close")?;
             Ok(Some(ParsedControlToolIntent::Close {
                 memory: args.memory.trim().to_string(),
             }))
         }
         "next" => {
-            let args: NextToolArgs = serde_json::from_str(arguments).map_err(|err| {
-                SpineError::ToolUse(format!("failed to parse spine.next arguments: {err}"))
-            })?;
+            let args: NextToolArgs = parse_control_tool_args(arguments, "spine.next")?;
             Ok(Some(ParsedControlToolIntent::Next {
                 summary: args.summary,
                 memory: args.memory.trim().to_string(),
@@ -241,6 +235,15 @@ pub(in crate::spine) fn parse_control_tool_intent(
         }
         _ => Ok(None),
     }
+}
+
+fn parse_control_tool_args<'a, T: Deserialize<'a>>(
+    arguments: &'a str,
+    tool_label: &str,
+) -> Result<T, SpineError> {
+    serde_json::from_str(arguments).map_err(|err| {
+        SpineError::ToolUse(format!("failed to parse {tool_label} arguments: {err}"))
+    })
 }
 
 pub(in crate::spine) fn lex_init(
