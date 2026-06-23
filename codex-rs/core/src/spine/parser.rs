@@ -162,6 +162,15 @@ impl ParserState {
         self.parse_stack.current_open_has_nodes()
     }
 
+    pub(super) fn prepare_current_task_tree_reduction(
+        &self,
+        archive: &SpineArchive,
+        memory: MemoryRef,
+    ) -> Result<PreparedTaskTreeReduction, SpineError> {
+        self.parse_stack
+            .prepare_current_task_tree_reduction(archive, memory)
+    }
+
     pub(super) fn next_child_id(&self) -> Result<NodeId, SpineError> {
         self.parse_stack.next_child_id()
     }

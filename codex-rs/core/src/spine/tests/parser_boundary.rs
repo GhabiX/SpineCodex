@@ -160,6 +160,10 @@ fn runtime_commit_routes_current_open_queries_through_parser_state() {
         "runtime/commit.rs must not query current-open node state through the raw parser handle"
     );
     assert!(
+        !commit.contains(".parse_stack()"),
+        "runtime/commit.rs must not read ParseStack through the raw parser handle"
+    );
+    assert!(
         commit.contains(".current_open_has_nodes()"),
         "runtime commit should route current-open node queries through ParserState"
     );
@@ -226,7 +230,8 @@ fn runtime_commit_routes_close_family_staging_through_parser_state() {
     );
     assert!(
         commit.contains(".close_family_staged_parse_stacks(")
-            && commit.contains(".close_reduced_next_child_id("),
+            && commit.contains(".close_reduced_next_child_id(")
+            && commit.contains(".prepare_current_task_tree_reduction("),
         "runtime close/next commit should route staged parser reductions through ParserState"
     );
 }

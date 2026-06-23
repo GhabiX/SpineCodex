@@ -899,7 +899,6 @@ impl SpineRuntime {
         );
         let task_tree_reduction = self
             .parser
-            .parse_stack()
             .prepare_current_task_tree_reduction(&staged_archive, memory.clone())?;
         let archive_writes = staged_archive.staged_writes();
         let replacement = vec![memory_response_item(&body)];
