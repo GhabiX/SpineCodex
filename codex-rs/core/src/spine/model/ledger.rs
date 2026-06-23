@@ -93,12 +93,9 @@ impl SpineLedgerEvent {
             SpineLedgerEvent::Init { .. } => Ok(true),
             SpineLedgerEvent::Msg { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
             SpineLedgerEvent::ToolCall { segments } => {
-                for segment in segments {
-                    if !raw_mask.raw_index_live(segment.raw_ordinal)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
+                segments.iter().try_fold(true, |live, segment| {
+                    Ok(live && raw_mask.raw_index_live(segment.raw_ordinal)?)
+                })
             }
             SpineLedgerEvent::Open {
                 child,
