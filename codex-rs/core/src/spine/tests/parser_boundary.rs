@@ -119,3 +119,21 @@ fn runtime_commit_routes_current_open_queries_through_parser_state() {
         "runtime commit should route current-open node queries through ParserState"
     );
 }
+
+#[test]
+fn runtime_checkpoint_routes_parser_reads_through_parser_state() {
+    let checkpoint = fs::read_to_string(spine_src("runtime/checkpoint.rs"))
+        .expect("read runtime checkpoint source");
+    assert!(
+        !checkpoint.contains(".parse_stack()"),
+        "runtime/checkpoint.rs must not read ParseStack through the raw parser handle"
+    );
+    assert!(
+        !checkpoint.contains("use crate::spine::checkpoint::build_checkpoint"),
+        "runtime/checkpoint.rs must not import checkpoint construction outside ParserState"
+    );
+    assert!(
+        checkpoint.contains("self.parser.build_checkpoint("),
+        "runtime checkpoint construction should route PS and h(PS) reads through ParserState"
+    );
+}

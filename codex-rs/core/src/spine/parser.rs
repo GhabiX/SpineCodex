@@ -13,9 +13,12 @@
 use codex_protocol::models::ResponseItem;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
+use crate::spine::checkpoint::SpineCheckpoint;
+use crate::spine::checkpoint::build_checkpoint;
 use crate::spine::lexer::LexedTokenBatch;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::ControlSymbol;
@@ -190,6 +193,30 @@ impl ParserState {
             &self.parse_stack,
             raw_items,
             trim_projection,
+        )
+    }
+
+    pub(super) fn build_checkpoint(
+        &self,
+        rollout_path: &Path,
+        raw_ordinal: u64,
+        token_seq: u64,
+        pressure_seq_watermark: Option<u64>,
+        trim_seq_watermark: Option<u64>,
+        raw_live: &[bool],
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+    ) -> Result<SpineCheckpoint, SpineError> {
+        let context = self.materialize_variable_context(raw_items, trim_projection)?;
+        build_checkpoint(
+            rollout_path,
+            raw_ordinal,
+            token_seq,
+            pressure_seq_watermark,
+            trim_seq_watermark,
+            raw_live,
+            &self.parse_stack,
+            &context,
         )
     }
 

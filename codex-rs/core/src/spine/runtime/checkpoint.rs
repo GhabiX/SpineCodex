@@ -4,7 +4,6 @@ use std::path::Path;
 use super::SpineError;
 use super::SpineRuntime;
 use crate::spine::checkpoint::SpineCheckpoint;
-use crate::spine::checkpoint::build_checkpoint;
 
 impl SpineRuntime {
     pub(crate) fn checkpoint_before_user_msg(
@@ -38,16 +37,17 @@ impl SpineRuntime {
         raw_ordinal: u64,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCheckpoint, SpineError> {
-        let context = self.materialize_history(raw_items)?;
-        build_checkpoint(
+        self.ensure_jit_enabled("Spine checkpoint")?;
+        let trim_projection = self.current_trim_projection()?;
+        self.parser.build_checkpoint(
             rollout_path,
             raw_ordinal,
             self.ledger.next_event_seq,
             self.pressure_seq_watermark()?,
             self.trim_seq_watermark()?,
             &self.raw_live,
-            self.parser.parse_stack(),
-            &context,
+            raw_items,
+            &trim_projection,
         )
     }
 }
