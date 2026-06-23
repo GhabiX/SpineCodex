@@ -106,8 +106,7 @@ impl SpineLedgerEvent {
                 boundary,
                 ..
             } => {
-                if summary == "root" && child.parent().is_some_and(|parent| parent.is_root_epoch())
-                {
+                if summary == "root" && child.is_root_epoch_child() {
                     return Ok(true);
                 }
                 raw_mask.raw_index_live(*boundary)

@@ -84,7 +84,7 @@ fn mark_raw_covered_by_event(
             summary,
             ..
         } => {
-            if !(summary == "root" && child.parent().is_some_and(|parent| parent.is_root_epoch())) {
+            if !(summary == "root" && child.is_root_epoch_child()) {
                 mark_raw_covered(covered, *boundary)?;
             }
         }

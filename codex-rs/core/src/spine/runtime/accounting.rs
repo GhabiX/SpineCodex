@@ -322,12 +322,7 @@ impl SpineRuntime {
         &self,
         open_meta: &TreeMeta,
     ) -> Result<bool, SpineError> {
-        if open_meta.summary == "root"
-            && open_meta
-                .id
-                .parent()
-                .is_some_and(|parent| parent.is_root_epoch())
-        {
+        if open_meta.summary == "root" && open_meta.id.is_root_epoch_child() {
             return Ok(true);
         }
         let Some(open_seq) = self

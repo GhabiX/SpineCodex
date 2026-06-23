@@ -135,7 +135,7 @@ impl SpineRuntime {
                 "missing open event for {node_id}; node has no parent"
             )));
         };
-        if parent.is_root_epoch() && node_id.0.last() == Some(&1) {
+        if node_id.is_first_root_epoch_child() {
             return self.open_raw_start_from_root_compact(node_id, &parent);
         }
         Err(SpineError::SidecarCorruption(format!(
