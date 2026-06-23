@@ -363,7 +363,7 @@ pub(crate) struct SpineToolcallCommitHostLoop {
     lock_retries: usize,
 }
 
-enum SpineToolcallCommitHostStep {
+pub(crate) enum SpineToolcallCommitHostStep {
     Done(SpineHostEffects),
     Retry,
     NoSpineCommit,
@@ -603,7 +603,7 @@ impl SpineToolcallCommitHostLoop {
             .provider_input_tokens(current_turn_provider_input_tokens)
     }
 
-    fn interpret_attempt_for_host(
+    pub(crate) fn interpret_attempt_for_host(
         &mut self,
         attempt: SpineCommitAttempt,
         call_id: &str,
@@ -617,43 +617,16 @@ impl SpineToolcallCommitHostLoop {
         Ok(step)
     }
 
-    pub(crate) fn interpret_attempt_for_host_control<T>(
-        &mut self,
-        attempt: SpineCommitAttempt,
-        call_id: &str,
-        done: impl FnOnce(SpineHostEffects) -> T,
-        retry: impl FnOnce() -> T,
-        no_spine_commit: impl FnOnce() -> T,
-        fail_closed: impl FnOnce(&'static str, SpineError) -> T,
-        abort_pending: impl FnOnce(&'static str, SpineError) -> T,
-    ) -> Result<T, SpineError> {
-        let step = self.interpret_attempt_for_host(attempt, call_id)?;
-        Ok(step.fold(done, retry, no_spine_commit, fail_closed, abort_pending))
-    }
-
-    fn host_lock_busy_step(
+    pub(crate) fn host_lock_busy_step(
         &mut self,
         call_id: &str,
     ) -> Result<SpineToolcallCommitHostStep, SpineError> {
         self.interpret_attempt_for_host(SpineCommitAttempt::host_lock_busy(), call_id)
     }
-
-    pub(crate) fn host_lock_busy_control<T>(
-        &mut self,
-        call_id: &str,
-        done: impl FnOnce(SpineHostEffects) -> T,
-        retry: impl FnOnce() -> T,
-        no_spine_commit: impl FnOnce() -> T,
-        fail_closed: impl FnOnce(&'static str, SpineError) -> T,
-        abort_pending: impl FnOnce(&'static str, SpineError) -> T,
-    ) -> Result<T, SpineError> {
-        let step = self.host_lock_busy_step(call_id)?;
-        Ok(step.fold(done, retry, no_spine_commit, fail_closed, abort_pending))
-    }
 }
 
 impl SpineToolcallCommitHostStep {
-    fn fold<T>(
+    pub(crate) fn fold<T>(
         self,
         done: impl FnOnce(SpineHostEffects) -> T,
         retry: impl FnOnce() -> T,

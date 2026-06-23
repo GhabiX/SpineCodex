@@ -29,6 +29,7 @@ use crate::spine::SpineToolCallEvidence;
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineToolcallCommitHostLoop;
+use crate::spine::SpineToolcallCommitHostStep;
 use crate::spine::SpineToolcallCommitProviderInputTokens;
 use crate::spine::SpineToolcallHookEvidence;
 use crate::spine::SpineTrimOutcome;
@@ -166,10 +167,14 @@ struct SpineToolcallCommitAttemptInput<'a> {
     raw_items: &'a [Option<ResponseItem>],
 }
 
-enum SpineToolcallCommitHostControl {
+enum SpineToolcallCommitLoopControl {
     Done(SpineHostEffects),
     Retry,
     NoSpineCommit,
+}
+
+enum SpineToolcallHostSideEffect {
+    Continue(SpineToolcallCommitLoopControl),
     FailClosed {
         reason: &'static str,
         error: SpineError,
@@ -178,12 +183,6 @@ enum SpineToolcallCommitHostControl {
         reason: &'static str,
         error: SpineError,
     },
-}
-
-enum SpineToolcallCommitLoopControl {
-    Done(SpineHostEffects),
-    Retry,
-    NoSpineCommit,
 }
 
 enum SpineTrimRequest {
@@ -1361,22 +1360,25 @@ impl Session {
     async fn apply_spine_toolcall_commit_host_step(
         &self,
         call_id: &str,
-        control: SpineToolcallCommitHostControl,
+        control: SpineToolcallCommitHostStep,
     ) -> Result<SpineToolcallCommitLoopControl, SpineError> {
-        match control {
-            SpineToolcallCommitHostControl::Done(effects) => {
-                Ok(SpineToolcallCommitLoopControl::Done(effects))
-            }
-            SpineToolcallCommitHostControl::NoSpineCommit => {
-                Ok(SpineToolcallCommitLoopControl::NoSpineCommit)
-            }
-            SpineToolcallCommitHostControl::Retry => Ok(SpineToolcallCommitLoopControl::Retry),
-            SpineToolcallCommitHostControl::FailClosed { reason, error } => {
+        let side_effect = control.fold(
+            |effects| {
+                SpineToolcallHostSideEffect::Continue(SpineToolcallCommitLoopControl::Done(effects))
+            },
+            || SpineToolcallHostSideEffect::Continue(SpineToolcallCommitLoopControl::Retry),
+            || SpineToolcallHostSideEffect::Continue(SpineToolcallCommitLoopControl::NoSpineCommit),
+            |reason, error| SpineToolcallHostSideEffect::FailClosed { reason, error },
+            |reason, error| SpineToolcallHostSideEffect::AbortPending { reason, error },
+        );
+        match side_effect {
+            SpineToolcallHostSideEffect::Continue(control) => Ok(control),
+            SpineToolcallHostSideEffect::FailClosed { reason, error } => {
                 self.fail_closed_spine_toolcall_commit(call_id, reason)
                     .await;
                 Err(error)
             }
-            SpineToolcallCommitHostControl::AbortPending { reason, error } => {
+            SpineToolcallHostSideEffect::AbortPending { reason, error } => {
                 self.abort_spine_pending_tool(call_id, reason).await;
                 Err(error)
             }
@@ -1389,26 +1391,12 @@ impl Session {
         commit_host_loop: &mut SpineToolcallCommitHostLoop,
         call_id: &str,
         input: SpineToolcallCommitAttemptInput<'_>,
-    ) -> Result<SpineToolcallCommitHostControl, SpineError> {
+    ) -> Result<SpineToolcallCommitHostStep, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
-            return commit_host_loop.host_lock_busy_control(
-                call_id,
-                SpineToolcallCommitHostControl::Done,
-                || SpineToolcallCommitHostControl::Retry,
-                || SpineToolcallCommitHostControl::NoSpineCommit,
-                |reason, error| SpineToolcallCommitHostControl::FailClosed { reason, error },
-                |reason, error| SpineToolcallCommitHostControl::AbortPending { reason, error },
-            );
+            return commit_host_loop.host_lock_busy_step(call_id);
         };
         let Ok(mut state) = self.state.try_lock() else {
-            return commit_host_loop.host_lock_busy_control(
-                call_id,
-                SpineToolcallCommitHostControl::Done,
-                || SpineToolcallCommitHostControl::Retry,
-                || SpineToolcallCommitHostControl::NoSpineCommit,
-                |reason, error| SpineToolcallCommitHostControl::FailClosed { reason, error },
-                |reason, error| SpineToolcallCommitHostControl::AbortPending { reason, error },
-            );
+            return commit_host_loop.host_lock_busy_step(call_id);
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
@@ -1435,15 +1423,7 @@ impl Session {
                 }
             },
         )?;
-        commit_host_loop.interpret_attempt_for_host_control(
-            attempt,
-            call_id,
-            SpineToolcallCommitHostControl::Done,
-            || SpineToolcallCommitHostControl::Retry,
-            || SpineToolcallCommitHostControl::NoSpineCommit,
-            |reason, error| SpineToolcallCommitHostControl::FailClosed { reason, error },
-            |reason, error| SpineToolcallCommitHostControl::AbortPending { reason, error },
-        )
+        commit_host_loop.interpret_attempt_for_host(attempt, call_id)
     }
 
     async fn spine_raw_items_from_rollout_for_commit(

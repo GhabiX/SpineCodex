@@ -60,6 +60,7 @@ pub(crate) use runtime::SpineToolCallEvidence;
 pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineToolcallCommitEvidence;
 pub(crate) use runtime::SpineToolcallCommitHostLoop;
+pub(crate) use runtime::SpineToolcallCommitHostStep;
 pub(crate) use runtime::SpineToolcallCommitProviderInputTokens;
 pub(crate) use runtime::SpineToolcallHookEvidence;
 pub(crate) use runtime::SpineTrimOutcome;
