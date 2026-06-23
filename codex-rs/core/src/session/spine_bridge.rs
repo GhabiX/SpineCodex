@@ -166,6 +166,12 @@ struct SpineToolcallCommitAttemptInput<'a> {
     raw_items: &'a [Option<ResponseItem>],
 }
 
+enum SpineToolcallCommitLoopControl {
+    Done(SpineHostEffects),
+    Retry,
+    NoSpineCommit,
+}
+
 enum SpineTrimRequest {
     Snip,
     SliceHead {
@@ -1319,27 +1325,46 @@ impl Session {
                     return Err(err);
                 }
             };
-            match step {
-                SpineToolcallCommitHostStep::Done(effects) => break effects,
-                SpineToolcallCommitHostStep::NoSpineCommit => {
+            match self
+                .apply_spine_toolcall_commit_host_step(&call_id, step)
+                .await?
+            {
+                SpineToolcallCommitLoopControl::Done(effects) => break effects,
+                SpineToolcallCommitLoopControl::NoSpineCommit => {
                     return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
                 }
-                SpineToolcallCommitHostStep::Retry => {
+                SpineToolcallCommitLoopControl::Retry => {
                     tokio::task::yield_now().await;
                     continue;
-                }
-                SpineToolcallCommitHostStep::FailClosed { reason, error } => {
-                    self.fail_closed_spine_toolcall_commit(&call_id, reason)
-                        .await;
-                    return Err(error);
-                }
-                SpineToolcallCommitHostStep::AbortPending { reason, error } => {
-                    self.abort_spine_pending_tool(&call_id, reason).await;
-                    return Err(error);
                 }
             }
         };
         Ok(commit_host_loop.host_outcome(post_commit_effects))
+    }
+
+    async fn apply_spine_toolcall_commit_host_step(
+        &self,
+        call_id: &str,
+        step: SpineToolcallCommitHostStep,
+    ) -> Result<SpineToolcallCommitLoopControl, SpineError> {
+        match step {
+            SpineToolcallCommitHostStep::Done(effects) => {
+                Ok(SpineToolcallCommitLoopControl::Done(effects))
+            }
+            SpineToolcallCommitHostStep::NoSpineCommit => {
+                Ok(SpineToolcallCommitLoopControl::NoSpineCommit)
+            }
+            SpineToolcallCommitHostStep::Retry => Ok(SpineToolcallCommitLoopControl::Retry),
+            SpineToolcallCommitHostStep::FailClosed { reason, error } => {
+                self.fail_closed_spine_toolcall_commit(call_id, reason)
+                    .await;
+                Err(error)
+            }
+            SpineToolcallCommitHostStep::AbortPending { reason, error } => {
+                self.abort_spine_pending_tool(call_id, reason).await;
+                Err(error)
+            }
+        }
     }
 
     fn try_commit_spine_tool_output_once(
