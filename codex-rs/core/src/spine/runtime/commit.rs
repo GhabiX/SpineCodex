@@ -31,11 +31,21 @@ use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
+use crate::spine::model::SpineLedgerEvent;
+use crate::spine::model::SpineToken;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::render::memory_response_item;
 
 impl SpineRuntime {
+    fn completed_toolcall_parts(
+        &self,
+        toolcall: &CompletedToolCall,
+    ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+        self.completed_toolcall_batch(toolcall)?
+            .into_single("toolcall")
+    }
+
     #[cfg(test)]
     pub(crate) fn maybe_commit_output(
         &mut self,

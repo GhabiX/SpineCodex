@@ -25,9 +25,16 @@ fn observe_runtime_routes_token_shifts_through_parser_state() {
         "runtime/observe.rs must not use the generic parser replacement escape hatch"
     );
     assert!(
-        observe.contains("staged_after_token")
-            && observe.contains("staged_after_lexed_batch_for_observe"),
-        "runtime/observe.rs should stage ordinary observations through ParserState"
+        !observe.contains("staged_after_token"),
+        "runtime/observe.rs must stage observations as lexed batches, not raw tokens"
+    );
+    assert!(
+        !observe.contains("use crate::spine::model::SpineToken"),
+        "runtime/observe.rs must not import raw SpineToken"
+    );
+    assert!(
+        observe.contains("staged_after_lexed_batch_for_observe"),
+        "runtime/observe.rs should stage ordinary observations through ParserState batch API"
     );
 }
 

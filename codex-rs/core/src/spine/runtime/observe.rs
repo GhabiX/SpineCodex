@@ -15,12 +15,11 @@ use super::support::is_spine_parser_control_tool_name;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
 use crate::spine::lexer::ControlIntent;
+use crate::spine::lexer::LexedTokenBatch;
 use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::lex_observed_msg;
-use crate::spine::lexer::lex_toolcall_event_token;
+use crate::spine::lexer::lex_toolcall;
 use crate::spine::lexer::plan_control_toolcall;
-use crate::spine::model::SpineLedgerEvent;
-use crate::spine::model::SpineToken;
 use crate::spine::model::ToolCallSegmentKind;
 
 impl SpineRuntime {
@@ -223,9 +222,8 @@ impl SpineRuntime {
         if !self.jit_enabled {
             return self.observe_completed_toolcall_for_trim(toolcall, raw_items);
         }
-        let (event, token) = self.completed_toolcall_parts(&toolcall)?;
-        let toolcall_seq = self.append_cached_event(event)?;
-        self.push_completed_toolcall_token(token)?;
+        let lexed = self.completed_toolcall_batch(&toolcall)?;
+        let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
         self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
         Ok(())
@@ -255,8 +253,8 @@ impl SpineRuntime {
         {
             return Ok(false);
         }
-        let (event, token) = self.completed_toolcall_parts(&toolcall)?;
-        let toolcall_seq = self.append_event_after_staged_toolcall_shift(event, token)?;
+        let lexed = self.completed_toolcall_batch(&toolcall)?;
+        let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
         self.pending = None;
         self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
@@ -280,8 +278,8 @@ impl SpineRuntime {
                 call_id, toolcall, raw_items,
             );
         }
-        let (event, token) = self.completed_toolcall_parts(&toolcall)?;
-        let toolcall_seq = self.append_event_after_staged_toolcall_shift(event, token)?;
+        let lexed = self.completed_toolcall_batch(&toolcall)?;
+        let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
         self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
         Ok(false)
@@ -373,13 +371,13 @@ impl SpineRuntime {
         )
     }
 
-    pub(super) fn completed_toolcall_parts(
+    pub(super) fn completed_toolcall_batch(
         &self,
         toolcall: &CompletedToolCall,
-    ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+    ) -> Result<LexedTokenBatch, SpineError> {
         let plan = plan_control_toolcall(ControlIntent::Ordinary);
         debug_assert_eq!(plan.token_sequence(), &[LexedTokenKind::ToolCall]);
-        lex_toolcall_event_token(
+        lex_toolcall(
             toolcall.segments.iter().copied(),
             Some(toolcall.request_call_ids.len()),
         )
@@ -422,35 +420,23 @@ impl SpineRuntime {
         Ok(toolcall)
     }
 
-    fn push_completed_toolcall_token(&mut self, token: SpineToken) -> Result<(), SpineError> {
-        let staged = self.parser.staged_after_token(token, &self.archive())?;
-        self.parser.install_staged(staged);
-        Ok(())
+    fn append_and_shift_msg(&mut self, lexed: LexedTokenBatch) -> Result<(), SpineError> {
+        self.append_and_shift_lexed_batch(lexed).map(|_| ())
     }
 
-    #[cfg(test)]
-    fn append_event_after_staged_toolcall_shift(
-        &mut self,
-        event: SpineLedgerEvent,
-        token: SpineToken,
-    ) -> Result<u64, SpineError> {
-        let staged_parse_stack = self.parser.staged_after_token(token, &self.archive())?;
-        let event_seq = self.append_cached_event(event)?;
-        self.parser.install_staged(staged_parse_stack);
-        Ok(event_seq)
+    fn append_and_shift_toolcall(&mut self, lexed: LexedTokenBatch) -> Result<u64, SpineError> {
+        self.append_and_shift_lexed_batch(lexed)
     }
 
-    fn append_and_shift_msg(
-        &mut self,
-        lexed: crate::spine::lexer::LexedTokenBatch,
-    ) -> Result<(), SpineError> {
+    fn append_and_shift_lexed_batch(&mut self, lexed: LexedTokenBatch) -> Result<u64, SpineError> {
         let staged = self
             .parser
             .staged_after_lexed_batch_for_observe(&lexed, &self.archive())?;
+        let mut event_seq = None;
         for event in lexed.events {
-            self.append_cached_event(event)?;
+            event_seq = Some(self.append_cached_event(event)?);
         }
         self.parser.install_staged(staged);
-        Ok(())
+        event_seq.ok_or_else(|| SpineError::Invariant("lexer produced no event".to_string()))
     }
 }
