@@ -216,8 +216,11 @@ impl Session {
     ) {
         let post_commit_effects = outcome.take_post_commit_effects();
         outcome.set_deferred_tree_update(
-            self.apply_spine_post_commit_effects(turn_context, post_commit_effects)
-                .await,
+            self.apply_spine_post_commit_effects(
+                turn_context,
+                HostEffects::from_runtime(post_commit_effects),
+            )
+            .await,
         );
     }
 
@@ -226,9 +229,9 @@ impl Session {
         effects: HostEffects,
     ) -> Result<(), String> {
         let _ = effects.apply_history_updates_or_keep(|effect| {
-            let history = state.clone_history();
+            let current_history = state.clone_history().raw_items().to_vec();
             effect.apply_history_update_or_self(
-                history.raw_items(),
+                &current_history,
                 |range, replacement, reference| {
                     state
                         .replace_history_suffix(range, replacement, reference)
@@ -721,11 +724,13 @@ impl Session {
         let expected_history = history.raw_items().to_vec();
         let reference_context_item = history.reference_context_item();
         let guard = spine_slot.lock().await;
-        guard.materialized_history_host_effects_if_no_pending_tool_request(
-            raw_items,
-            expected_history,
-            reference_context_item,
-        )
+        guard
+            .materialized_history_host_effects_if_no_pending_tool_request(
+                raw_items,
+                expected_history,
+                reference_context_item,
+            )
+            .map(HostEffects::from_runtime)
     }
 
     async fn apply_non_toolcall_msg_host_outcome(
@@ -735,9 +740,9 @@ impl Session {
         let effects = {
             let mut state = self.state.lock().await;
             effects.apply_history_updates_or_keep(|effect| {
-                let history = state.clone_history();
+                let current_history = state.clone_history().raw_items().to_vec();
                 effect.apply_history_update_or_self(
-                    history.raw_items(),
+                    &current_history,
                     |range, replacement, reference| {
                         state
                             .replace_history_suffix(range, replacement, reference)
@@ -1310,7 +1315,12 @@ impl Session {
             reference_context_item,
             pre_compact_provider_input_tokens,
             current_turn_provider_input_tokens,
-            |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
+            |host_effects| {
+                Self::apply_spine_host_effects_to_locked_state(
+                    &mut state,
+                    HostEffects::from_runtime(host_effects),
+                )
+            },
             |projection| {
                 if let Some(projection) = projection {
                     Ok(Some(build_annotated_tree_snapshot(
