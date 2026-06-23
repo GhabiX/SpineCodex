@@ -758,7 +758,7 @@ impl Session {
                 SpineError::InvalidStore("spine_jit checkpoint requires rollout path".to_string())
             })?;
         let mut guard = spine_slot.lock().await;
-        guard.observe_non_toolcall_msg_with_host_effects(&rollout_path, evidence)
+        hooks::on_non_toolcall_msg(&mut guard, &rollout_path, evidence)
     }
 
     async fn materialized_history_host_effects_if_no_pending_tool_request(
