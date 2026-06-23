@@ -1585,11 +1585,12 @@ impl Session {
             .await
             .and_then(|info| provider_input_context_tokens(&info));
         let mut guard = spine_slot.lock().await;
-        guard.prepare_native_root_compact_from_history_with_checkpoint(
+        hooks::on_compact(
+            &mut guard,
             &rollout_path,
-            evidence.compacted_history,
             &raw_items,
             close_provider_input_tokens,
+            evidence,
         )
     }
 
