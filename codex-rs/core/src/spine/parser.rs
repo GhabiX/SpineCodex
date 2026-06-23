@@ -211,9 +211,7 @@ impl ParserState {
         token: SpineToken,
         archive: &SpineArchive,
     ) -> Result<ParseStack, SpineError> {
-        let mut staged = self.parse_stack.clone();
-        staged.shift(token, archive)?;
-        Ok(staged)
+        self.staged_after_tokens(std::iter::once(token), archive)
     }
 
     pub(super) fn staged_after_tokens(
@@ -340,11 +338,7 @@ impl ParserState {
         lexed: &LexedTokenBatch,
         archive: &SpineArchive,
     ) -> Result<ParseStack, SpineError> {
-        let mut staged = self.parse_stack.clone();
-        for token in &lexed.tokens {
-            staged.shift(token.clone(), archive)?;
-        }
-        Ok(staged)
+        self.staged_after_tokens(lexed.tokens.iter().cloned(), archive)
     }
 
     pub(super) fn materialize_variable_context(
