@@ -164,6 +164,29 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
 }
 
 #[test]
+fn runtime_commit_routes_close_family_staging_through_parser_state() {
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    assert!(
+        !commit.contains("shift_pending_close"),
+        "runtime/commit.rs must not directly stage spine.close parser tokens"
+    );
+    assert!(
+        !commit.contains("apply_prevalidated_task_tree_reduction"),
+        "runtime/commit.rs must not directly apply close task-tree reductions"
+    );
+    assert!(
+        !commit.contains("final_parse_stack.shift("),
+        "runtime/commit.rs must not directly shift close-family final parser tokens"
+    );
+    assert!(
+        commit.contains(".close_family_staged_parse_stacks(")
+            && commit.contains(".close_reduced_next_child_id("),
+        "runtime close/next commit should route staged parser reductions through ParserState"
+    );
+}
+
+#[test]
 fn runtime_checkpoint_routes_parser_reads_through_parser_state() {
     let checkpoint = fs::read_to_string(spine_src("runtime/checkpoint.rs"))
         .expect("read runtime checkpoint source");

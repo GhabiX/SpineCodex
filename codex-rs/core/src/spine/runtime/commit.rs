@@ -33,8 +33,6 @@ use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
-use crate::spine::parse_stack::ParseStack;
-use crate::spine::parse_stack::PreparedTaskTreeReduction;
 use crate::spine::render::memory_response_item;
 
 impl SpineRuntime {
@@ -323,14 +321,6 @@ impl SpineRuntime {
         Ok(Some(kind))
     }
 
-    fn task_tree_reduced_from(
-        &self,
-        parse_stack: ParseStack,
-        reduction: PreparedTaskTreeReduction,
-    ) -> Result<ParseStack, SpineError> {
-        parse_stack.task_tree_reduced(reduction)
-    }
-
     fn commit_open_pending(
         &mut self,
         summary: String,
@@ -492,14 +482,8 @@ impl SpineRuntime {
             .ok_or_else(|| {
                 SpineError::InvalidEvent(plan.toolcall_seq_overflow_error.to_string())
             })?;
-        let mut pending_close_parse_stack = self.parser.parse_stack().clone();
-        pending_close_parse_stack.shift_pending_close(prepared.memory.clone(), &self.archive())?;
-        let mut final_parse_stack = self.task_tree_reduced_from(
-            pending_close_parse_stack.clone(),
-            prepared.task_tree_reduction,
-        )?;
-        if let Some(open) = plan.open.as_ref() {
-            let token = crate::spine::lexer::lex_open_token(
+        let open_token = if let Some(open) = plan.open.as_ref() {
+            Some(crate::spine::lexer::lex_open_token(
                 &self.archive(),
                 open.child.clone(),
                 self.raw_len,
@@ -508,10 +492,18 @@ impl SpineRuntime {
                 None,
                 None,
                 None,
+            )?)
+        } else {
+            None
+        };
+        let (pending_close_parse_stack, final_parse_stack) =
+            self.parser.close_family_staged_parse_stacks(
+                prepared.memory.clone(),
+                prepared.task_tree_reduction,
+                open_token,
+                token,
+                &self.archive(),
             )?;
-            final_parse_stack.shift(token, &self.archive())?;
-        }
-        final_parse_stack.shift(token, &self.archive())?;
         if let Err(err) = self.commit_close_family_transaction(CloseFamilyTransaction {
             mem: &prepared.mem,
             memory_body: &prepared.memory_body,
@@ -564,12 +556,11 @@ impl SpineRuntime {
                 open: None,
             }),
             CloseFamilyAfterClose::Open { summary } => {
-                let mut close_reduced_parse_stack = self.parser.parse_stack().clone();
-                close_reduced_parse_stack
-                    .shift_pending_close(prepared.memory.clone(), &self.archive())?;
-                close_reduced_parse_stack
-                    .apply_prevalidated_task_tree_reduction(prepared.task_tree_reduction.clone());
-                let child = close_reduced_parse_stack.next_child_id()?;
+                let child = self.parser.close_reduced_next_child_id(
+                    prepared.memory.clone(),
+                    prepared.task_tree_reduction.clone(),
+                    &self.archive(),
+                )?;
                 let open_index = prepared
                     .suffix_start
                     .checked_add(prepared.replacement.len())

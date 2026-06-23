@@ -33,6 +33,7 @@ use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
+use crate::spine::parse_stack::PreparedTaskTreeReduction;
 use crate::spine::parse_stack::apply_replay_event_to_parse_stack;
 use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 #[cfg(test)]
@@ -217,6 +218,36 @@ impl ParserState {
             staged.shift(token, archive)?;
         }
         Ok(staged)
+    }
+
+    pub(super) fn close_reduced_next_child_id(
+        &self,
+        memory: MemoryRef,
+        reduction: PreparedTaskTreeReduction,
+        archive: &SpineArchive,
+    ) -> Result<NodeId, SpineError> {
+        let mut pending = self.parse_stack.clone();
+        pending.shift_pending_close(memory, archive)?;
+        let reduced = pending.task_tree_reduced(reduction)?;
+        reduced.next_child_id()
+    }
+
+    pub(super) fn close_family_staged_parse_stacks(
+        &self,
+        memory: MemoryRef,
+        reduction: PreparedTaskTreeReduction,
+        open_token: Option<SpineToken>,
+        toolcall_token: SpineToken,
+        archive: &SpineArchive,
+    ) -> Result<(ParseStack, ParseStack), SpineError> {
+        let mut pending = self.parse_stack.clone();
+        pending.shift_pending_close(memory, archive)?;
+        let mut final_parse_stack = pending.task_tree_reduced(reduction)?;
+        if let Some(open_token) = open_token {
+            final_parse_stack.shift(open_token, archive)?;
+        }
+        final_parse_stack.shift(toolcall_token, archive)?;
+        Ok((pending, final_parse_stack))
     }
 
     pub(super) fn install_staged(&mut self, parse_stack: ParseStack) {
