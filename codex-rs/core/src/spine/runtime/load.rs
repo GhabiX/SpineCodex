@@ -32,9 +32,7 @@ impl SpineRuntime {
     ) -> Result<Self, SpineError> {
         let store = SpineStore::load_or_create_for_writer(rollout_path)?;
         if !jit_enabled {
-            let raw_len_usize = usize::try_from(raw_len)
-                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
-            return Self::load_trim_only(store, vec![true; raw_len_usize]);
+            return Self::load_trim_only(store, live_raw_prefix(raw_len)?);
         }
         if jit_enabled && !store.tree_path().exists() {
             let archive = SpineArchive::new(store.root.clone());
@@ -128,10 +126,9 @@ impl SpineRuntime {
                     "spine_trim-only replay does not support rollback cuts".to_string(),
                 ));
             }
-            let raw_live = raw_items.iter().map(Option::is_some).collect();
             let runtime = Self::load_trim_only(
                 SpineStore::for_rollout(rollout_path)?.with_writer_lock()?,
-                raw_live,
+                raw_live_from_rollout_items(raw_items),
             )?;
             return Ok(Some(runtime));
         }
@@ -152,7 +149,7 @@ impl SpineRuntime {
     ) -> Result<Self, SpineError> {
         let runtime = Self::load_with_raw_live_for_rollout(
             store,
-            raw_items.iter().map(Option::is_some).collect(),
+            raw_live_from_rollout_items(raw_items),
             rollback_cuts,
             rollout_path,
             raw_items,
@@ -173,9 +170,7 @@ impl SpineRuntime {
     }
 
     pub(crate) fn load(store: SpineStore, raw_len: u64) -> Result<Self, SpineError> {
-        let raw_len_usize = usize::try_from(raw_len)
-            .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
-        Self::load_with_raw_live(store, vec![true; raw_len_usize])
+        Self::load_with_raw_live(store, live_raw_prefix(raw_len)?)
     }
 
     pub(crate) fn acquire_writer_lock(&mut self) -> Result<(), SpineError> {
@@ -354,6 +349,16 @@ impl SpineRuntime {
             next_user_anchor,
         )
     }
+}
+
+fn live_raw_prefix(raw_len: u64) -> Result<Vec<bool>, SpineError> {
+    let raw_len = usize::try_from(raw_len)
+        .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?;
+    Ok(vec![true; raw_len])
+}
+
+fn raw_live_from_rollout_items(raw_items: &[Option<ResponseItem>]) -> Vec<bool> {
+    raw_items.iter().map(Option::is_some).collect()
 }
 
 fn build_jit_runtime(
