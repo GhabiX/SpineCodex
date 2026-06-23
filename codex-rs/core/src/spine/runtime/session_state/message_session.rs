@@ -10,13 +10,13 @@ use super::SpineSessionState;
 use super::state_types::SpineMessageEvidence;
 
 impl SpineSessionState {
-    pub(crate) fn observe_non_toolcall_msg(
+    pub(crate) fn observe_non_toolcall_msg_with_host_effects(
         &mut self,
         evidence: SpineMessageEvidence<'_>,
-    ) -> Result<bool, SpineError> {
+    ) -> Result<SpineHostEffects, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
-            return Ok(false);
+            return Ok(SpineHostEffects::none());
         };
         if !is_non_toolcall_msg(evidence.item) {
             return Err(SpineError::InvalidEvent(
@@ -32,14 +32,6 @@ impl SpineSessionState {
             )?;
         }
         runtime.on_non_toolcall_msg(evidence.raw_ordinal, evidence.context_index, evidence.item)?;
-        Ok(observed_user_message)
-    }
-
-    pub(crate) fn observe_non_toolcall_msg_with_host_effects(
-        &mut self,
-        evidence: SpineMessageEvidence<'_>,
-    ) -> Result<SpineHostEffects, SpineError> {
-        let observed_user_message = self.observe_non_toolcall_msg(evidence)?;
         if !observed_user_message {
             return Ok(SpineHostEffects::none());
         }
