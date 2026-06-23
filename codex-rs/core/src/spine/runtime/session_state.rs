@@ -167,14 +167,12 @@ impl<'a> SpineToolCallEvidence<'a> {
         tool_call_ids: &'a [String],
         output_items: &'a [ResponseItem],
     ) -> Self {
-        Self {
-            kind: SpineToolCallEvidenceKind::Grouped {
-                commit_call_id,
-                tool_call_ids,
-                output_items,
-            },
-            control_policy: SpineToolCallControlPolicy::Normal,
-        }
+        Self::grouped_with_policy(
+            commit_call_id,
+            tool_call_ids,
+            output_items,
+            SpineToolCallControlPolicy::Normal,
+        )
     }
 
     pub(crate) fn grouped_as_ordinary(
@@ -182,13 +180,27 @@ impl<'a> SpineToolCallEvidence<'a> {
         tool_call_ids: &'a [String],
         output_items: &'a [ResponseItem],
     ) -> Self {
+        Self::grouped_with_policy(
+            commit_call_id,
+            tool_call_ids,
+            output_items,
+            SpineToolCallControlPolicy::ForceOrdinary,
+        )
+    }
+
+    fn grouped_with_policy(
+        commit_call_id: &'a str,
+        tool_call_ids: &'a [String],
+        output_items: &'a [ResponseItem],
+        control_policy: SpineToolCallControlPolicy,
+    ) -> Self {
         Self {
             kind: SpineToolCallEvidenceKind::Grouped {
                 commit_call_id,
                 tool_call_ids,
                 output_items,
             },
-            control_policy: SpineToolCallControlPolicy::ForceOrdinary,
+            control_policy,
         }
     }
 
