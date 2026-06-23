@@ -155,9 +155,7 @@ fn close_event_at_marker_start<'a>(
 }
 
 fn validate_commit_marker_width(marker: &SpineCommitMarker, width: u64) -> Result<(), SpineError> {
-    let expected_end = marker.token_seq_start.checked_add(width).ok_or_else(|| {
-        SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
-    })?;
+    let expected_end = marker_shape_seq(marker, width)?;
     if marker.token_seq_end != expected_end {
         return Err(SpineError::InvalidStore(format!(
             "Spine commit marker {} token range {}..{} has unexpected width {width}",
