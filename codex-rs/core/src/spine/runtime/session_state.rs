@@ -388,10 +388,6 @@ enum SpineToolcallCommitFailureAction {
     NoSpineCommit,
 }
 
-struct SpineToolcallCommitLoopDecision {
-    kind: SpineToolcallCommitLoopDecisionKind,
-}
-
 enum SpineToolcallCommitTerminalHostAction {
     FailClosed {
         reason: &'static str,
@@ -403,7 +399,7 @@ enum SpineToolcallCommitTerminalHostAction {
     },
 }
 
-enum SpineToolcallCommitLoopDecisionKind {
+enum SpineToolcallCommitLoopDecision {
     Done(SpineHostEffects),
     Retry,
     NoSpineCommit,
@@ -511,7 +507,7 @@ impl SpineToolcallCommitHostPlan {
     ) -> Result<SpineToolcallCommitLoopDecision, SpineError> {
         match attempt.kind {
             SpineCommitAttemptKind::Done(output) => {
-                Ok(SpineToolcallCommitLoopDecision::done(output))
+                Ok(SpineToolcallCommitLoopDecision::Done(output))
             }
             SpineCommitAttemptKind::RuntimeMissing => self.commit_missing_decision(call_id),
             SpineCommitAttemptKind::Retry => self.retry_decision(lock_retries, call_id),
@@ -534,7 +530,7 @@ impl SpineToolcallCommitHostPlan {
     ) -> Result<SpineToolcallCommitLoopDecision, SpineError> {
         match self.commit_missing_action {
             SpineToolcallCommitFailureAction::FailClosed => {
-                Ok(SpineToolcallCommitLoopDecision::host_action(
+                Ok(SpineToolcallCommitLoopDecision::HostAction(
                     SpineToolcallCommitTerminalHostAction::fail_closed(
                         SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON,
                         SpineError::Invariant(format!(
@@ -544,7 +540,7 @@ impl SpineToolcallCommitHostPlan {
                 ))
             }
             SpineToolcallCommitFailureAction::NoSpineCommit => {
-                Ok(SpineToolcallCommitLoopDecision::no_spine_commit())
+                Ok(SpineToolcallCommitLoopDecision::NoSpineCommit)
             }
             SpineToolcallCommitFailureAction::AbortPending => Err(SpineError::Invariant(format!(
                 "unsupported Spine runtime-missing action for call_id={call_id}"
@@ -558,12 +554,12 @@ impl SpineToolcallCommitHostPlan {
         call_id: &str,
     ) -> Result<SpineToolcallCommitLoopDecision, SpineError> {
         if lock_retries < self.lock_retry_limit {
-            return Ok(SpineToolcallCommitLoopDecision::retry());
+            return Ok(SpineToolcallCommitLoopDecision::Retry);
         }
         match self.retry_limit_action {
             action @ (SpineToolcallCommitFailureAction::FailClosed
             | SpineToolcallCommitFailureAction::AbortPending) => {
-                Ok(SpineToolcallCommitLoopDecision::host_action(
+                Ok(SpineToolcallCommitLoopDecision::HostAction(
                     SpineToolcallCommitTerminalHostAction::from_failure_action(
                         action,
                         SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
@@ -707,42 +703,12 @@ impl SpineCompletedToolCallHostOutcome {
 }
 
 impl SpineToolcallCommitLoopDecision {
-    fn done(post_commit_effects: SpineHostEffects) -> Self {
-        Self {
-            kind: SpineToolcallCommitLoopDecisionKind::Done(post_commit_effects),
-        }
-    }
-
-    fn retry() -> Self {
-        Self {
-            kind: SpineToolcallCommitLoopDecisionKind::Retry,
-        }
-    }
-
-    fn no_spine_commit() -> Self {
-        Self {
-            kind: SpineToolcallCommitLoopDecisionKind::NoSpineCommit,
-        }
-    }
-
-    fn host_action(host_action: SpineToolcallCommitTerminalHostAction) -> Self {
-        Self {
-            kind: SpineToolcallCommitLoopDecisionKind::HostAction(host_action),
-        }
-    }
-
     fn into_host_step(self) -> SpineToolcallCommitHostStep {
-        match self.kind {
-            SpineToolcallCommitLoopDecisionKind::Done(effects) => {
-                SpineToolcallCommitHostStep::Done(effects)
-            }
-            SpineToolcallCommitLoopDecisionKind::Retry => SpineToolcallCommitHostStep::Retry,
-            SpineToolcallCommitLoopDecisionKind::NoSpineCommit => {
-                SpineToolcallCommitHostStep::NoSpineCommit
-            }
-            SpineToolcallCommitLoopDecisionKind::HostAction(host_action) => {
-                host_action.into_host_step()
-            }
+        match self {
+            Self::Done(effects) => SpineToolcallCommitHostStep::Done(effects),
+            Self::Retry => SpineToolcallCommitHostStep::Retry,
+            Self::NoSpineCommit => SpineToolcallCommitHostStep::NoSpineCommit,
+            Self::HostAction(host_action) => host_action.into_host_step(),
         }
     }
 }
