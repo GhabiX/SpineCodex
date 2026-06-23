@@ -360,9 +360,10 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        guard.on_init(SpineInitEvidence {
+        let _effects = guard.on_init(SpineInitEvidence {
             rollout_path: &rollout_path,
-        })
+        })?;
+        Ok(())
     }
 
     pub(super) async fn spine_tools_visible(&self) -> bool {

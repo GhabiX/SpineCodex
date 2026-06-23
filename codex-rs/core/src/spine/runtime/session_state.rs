@@ -1443,9 +1443,13 @@ impl SpineSessionState {
         Ok(())
     }
 
-    pub(crate) fn on_init(&mut self, evidence: SpineInitEvidence<'_>) -> Result<(), SpineError> {
+    pub(crate) fn on_init(
+        &mut self,
+        evidence: SpineInitEvidence<'_>,
+    ) -> Result<SpineHostEffects, SpineError> {
         self.ensure_runtime(evidence.rollout_path)?;
-        self.checkpoint_initial_if_jit(evidence.rollout_path, &[])
+        self.checkpoint_initial_if_jit(evidence.rollout_path, &[])?;
+        Ok(SpineHostEffects::none())
     }
 
     pub(crate) fn take_initial_tree_snapshot(
