@@ -248,27 +248,17 @@ impl SpineSessionState {
         Ok(())
     }
 
-    pub(crate) fn checkpoint_initial_if_jit(
-        &self,
-        rollout_path: &Path,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(());
-        };
-        if runtime.jit_enabled() {
-            runtime.checkpoint_initial(rollout_path, raw_items)?;
-        }
-        Ok(())
-    }
-
     pub(crate) fn on_init(
         &mut self,
         evidence: SpineInitEvidence<'_>,
     ) -> Result<SpineHostEffects, SpineError> {
         self.ensure_runtime(evidence.rollout_path)?;
-        self.checkpoint_initial_if_jit(evidence.rollout_path, &[])?;
+        self.ensure_valid()?;
+        if let Some(runtime) = self.runtime() {
+            if runtime.jit_enabled() {
+                runtime.checkpoint_initial(evidence.rollout_path, &[])?;
+            }
+        }
         Ok(SpineHostEffects::none())
     }
 }
