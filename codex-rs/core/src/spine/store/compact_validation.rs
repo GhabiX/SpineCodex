@@ -47,6 +47,25 @@ fn unique_compact_checkpoint_for_boundary(
     raw_boundary: u64,
     replacement_history_hash: &str,
 ) -> Result<SpineCompactCheckpoint, SpineError> {
+    let checkpoints = compact_checkpoints_at_boundary(checkpoints, raw_boundary)?;
+    let checkpoints = compact_checkpoints_matching_replacement(
+        checkpoints,
+        raw_boundary,
+        replacement_history_hash,
+    )?;
+    validate_unique_compact_checkpoint_token_seq(&checkpoints, raw_boundary)?;
+    match checkpoints.as_slice() {
+        [checkpoint] => Ok(checkpoint.clone()),
+        _ => Err(SpineError::InvalidStore(format!(
+            "ambiguous spine compact checkpoint proof for raw boundary {raw_boundary}"
+        ))),
+    }
+}
+
+fn compact_checkpoints_at_boundary(
+    checkpoints: Vec<SpineCompactCheckpoint>,
+    raw_boundary: u64,
+) -> Result<Vec<SpineCompactCheckpoint>, SpineError> {
     let checkpoints = checkpoints
         .into_iter()
         .filter(|checkpoint| checkpoint.raw_boundary == raw_boundary)
@@ -56,6 +75,14 @@ fn unique_compact_checkpoint_for_boundary(
             "missing spine compact checkpoint at raw boundary {raw_boundary}"
         )));
     }
+    Ok(checkpoints)
+}
+
+fn compact_checkpoints_matching_replacement(
+    checkpoints: Vec<SpineCompactCheckpoint>,
+    raw_boundary: u64,
+    replacement_history_hash: &str,
+) -> Result<Vec<SpineCompactCheckpoint>, SpineError> {
     let checkpoints = checkpoints
         .into_iter()
         .filter(|checkpoint| {
@@ -68,6 +95,13 @@ fn unique_compact_checkpoint_for_boundary(
             "spine_jit replacement_history does not match sidecar h(PS) compact checkpoint at raw boundary {raw_boundary}"
         )));
     }
+    Ok(checkpoints)
+}
+
+fn validate_unique_compact_checkpoint_token_seq(
+    checkpoints: &[SpineCompactCheckpoint],
+    raw_boundary: u64,
+) -> Result<(), SpineError> {
     let token_seq = checkpoints[0].token_seq;
     if checkpoints
         .iter()
@@ -77,10 +111,5 @@ fn unique_compact_checkpoint_for_boundary(
             "ambiguous spine compact checkpoint token_seq for raw boundary {raw_boundary}"
         )));
     }
-    match checkpoints.as_slice() {
-        [checkpoint] => Ok(checkpoint.clone()),
-        _ => Err(SpineError::InvalidStore(format!(
-            "ambiguous spine compact checkpoint proof for raw boundary {raw_boundary}"
-        ))),
-    }
+    Ok(())
 }
