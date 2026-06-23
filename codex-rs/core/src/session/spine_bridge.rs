@@ -712,7 +712,12 @@ impl Session {
             }
             if is_non_toolcall_msg(item) {
                 let outcome = self
-                    .on_non_toolcall_msg(raw_ordinal, append.context_index, item, &raw_items)
+                    .on_non_toolcall_msg(SpineMessageEvidence {
+                        raw_ordinal,
+                        context_index: append.context_index,
+                        item,
+                        raw_items: &raw_items,
+                    })
                     .await?;
                 publish_materialized_history_after_batch |=
                     outcome.requests_materialized_history_publish();
@@ -741,10 +746,7 @@ impl Session {
 
     pub(crate) async fn on_non_toolcall_msg(
         &self,
-        raw_ordinal: u64,
-        context_index: usize,
-        item: &ResponseItem,
-        raw_items: &[Option<ResponseItem>],
+        evidence: SpineMessageEvidence<'_>,
     ) -> Result<SpineMessageHostOutcome, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(SpineMessageHostOutcome::none());
@@ -757,15 +759,7 @@ impl Session {
                 SpineError::InvalidStore("spine_jit checkpoint requires rollout path".to_string())
             })?;
         let mut guard = spine_slot.lock().await;
-        guard.observe_non_toolcall_msg_with_host_effects(
-            &rollout_path,
-            SpineMessageEvidence {
-                raw_ordinal,
-                context_index,
-                item,
-                raw_items,
-            },
-        )
+        guard.observe_non_toolcall_msg_with_host_effects(&rollout_path, evidence)
     }
 
     async fn materialized_history_host_effects_if_no_pending_tool_request(
