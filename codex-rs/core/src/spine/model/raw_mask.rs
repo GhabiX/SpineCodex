@@ -19,8 +19,7 @@ impl<'a> RawMask<'a> {
         if boundary == 0 {
             return Ok(true);
         }
-        let index = usize::try_from(boundary - 1)
-            .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
+        let index = raw_usize(boundary - 1, "raw boundary overflow")?;
         Ok(live.get(index).copied().unwrap_or(false))
     }
 
@@ -28,8 +27,7 @@ impl<'a> RawMask<'a> {
         let Some(live) = self.live else {
             return Ok(true);
         };
-        let index = usize::try_from(index)
-            .map_err(|_| SpineError::InvalidEvent("raw index overflow".to_string()))?;
+        let index = raw_usize(index, "raw index overflow")?;
         Ok(live.get(index).copied().unwrap_or(false))
     }
 
@@ -37,10 +35,8 @@ impl<'a> RawMask<'a> {
         let Some(live) = self.live else {
             return Ok(true);
         };
-        let start = usize::try_from(start)
-            .map_err(|_| SpineError::InvalidEvent("raw start overflow".to_string()))?;
-        let end = usize::try_from(end)
-            .map_err(|_| SpineError::InvalidEvent("raw end overflow".to_string()))?;
+        let start = raw_usize(start, "raw start overflow")?;
+        let end = raw_usize(end, "raw end overflow")?;
         if end > live.len() || start > end {
             return Ok(false);
         }
@@ -52,8 +48,7 @@ impl<'a> RawMask<'a> {
         end: u64,
         expected: &str,
     ) -> Result<bool, SpineError> {
-        let end = usize::try_from(end)
-            .map_err(|_| SpineError::InvalidEvent("raw end overflow".to_string()))?;
+        let end = raw_usize(end, "raw end overflow")?;
         let Some(live) = self.live else {
             return Ok(hash_raw_live_prefix_all_true(end) == expected);
         };
@@ -62,4 +57,8 @@ impl<'a> RawMask<'a> {
         }
         Ok(hash_raw_live(&live[..end]) == expected)
     }
+}
+
+fn raw_usize(value: u64, overflow_message: &str) -> Result<usize, SpineError> {
+    usize::try_from(value).map_err(|_| SpineError::InvalidEvent(overflow_message.to_string()))
 }
