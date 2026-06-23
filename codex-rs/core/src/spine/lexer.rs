@@ -558,6 +558,28 @@ pub(crate) struct ToolCallLexSegment {
     pub(crate) context_index: usize,
 }
 
+impl ToolCallLexSegment {
+    fn token_segment(self) -> ToolCallSegment {
+        ToolCallSegment {
+            kind: self.kind,
+            seg: SegRef::ResponseItem {
+                raw_ordinal: self.raw_ordinal,
+                context_index: self.context_index,
+            },
+        }
+    }
+
+    fn event_segment(self) -> Result<ToolCallEventSegment, SpineError> {
+        Ok(ToolCallEventSegment {
+            kind: self.kind,
+            raw_ordinal: self.raw_ordinal,
+            context_index: u64::try_from(self.context_index).map_err(|_| {
+                SpineError::InvalidEvent("toolcall context index overflow".to_string())
+            })?,
+        })
+    }
+}
+
 pub(in crate::spine) fn lex_toolcall(
     segments: impl IntoIterator<Item = ToolCallLexSegment>,
     request_call_id_count: Option<usize>,
@@ -567,25 +589,13 @@ pub(in crate::spine) fn lex_toolcall(
 
     let token_segments = segments
         .iter()
-        .map(|segment| ToolCallSegment {
-            kind: segment.kind,
-            seg: SegRef::ResponseItem {
-                raw_ordinal: segment.raw_ordinal,
-                context_index: segment.context_index,
-            },
-        })
+        .copied()
+        .map(ToolCallLexSegment::token_segment)
         .collect::<Vec<_>>();
     let event_segments = segments
         .iter()
-        .map(|segment| {
-            Ok(ToolCallEventSegment {
-                kind: segment.kind,
-                raw_ordinal: segment.raw_ordinal,
-                context_index: u64::try_from(segment.context_index).map_err(|_| {
-                    SpineError::InvalidEvent("toolcall context index overflow".to_string())
-                })?,
-            })
-        })
+        .copied()
+        .map(ToolCallLexSegment::event_segment)
         .collect::<Result<Vec<_>, SpineError>>()?;
 
     Ok(LexedTokenBatch::single(
