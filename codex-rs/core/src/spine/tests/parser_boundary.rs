@@ -287,6 +287,27 @@ fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() 
 }
 
 #[test]
+fn runtime_commit_delegates_parser_publication_plan_application() {
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    let publication_parts = commit
+        .split("fn commit_publication_history_update_parts")
+        .nth(1)
+        .and_then(|tail| tail.split("fn prepare_close_commit").next())
+        .expect("commit publication history update function");
+    assert!(
+        publication_parts.contains("plan.history_update_parts("),
+        "runtime commit publication should delegate parser publication plan application to ParserPublicationPlan"
+    );
+    assert!(
+        !publication_parts.contains("plan.replacement_prefix")
+            && !publication_parts.contains("plan.preserve_host_history_from")
+            && !publication_parts.contains("plan.append_current_tool_response_if_missing"),
+        "runtime commit publication must not interpret parser publication plan internals"
+    );
+}
+
+#[test]
 fn runtime_prepared_carriers_hold_parser_prepared_state() {
     let prepared =
         fs::read_to_string(spine_src("runtime/prepared.rs")).expect("read runtime prepared source");

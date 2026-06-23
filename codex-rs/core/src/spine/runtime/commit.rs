@@ -760,30 +760,12 @@ impl SpineRuntime {
     {
         if let Some(plan) = prepared_commit.and_then(|prepared| prepared.publication_plan.as_ref())
         {
-            let suffix_end = history_items.len();
-            if plan.suffix_start > suffix_end {
-                return Err(SpineError::Invariant(format!(
-                    "{} suffix start {} exceeds history length {suffix_end} for call_id={call_id}",
-                    plan.operation, plan.suffix_start
-                )));
-            }
-            if plan.preserve_host_history_from > suffix_end {
-                return Err(SpineError::Invariant(format!(
-                    "{} preserve-host-history index {} exceeds history length {suffix_end} for call_id={call_id}",
-                    plan.operation, plan.preserve_host_history_from
-                )));
-            }
-            let mut replacement = plan.replacement_prefix.clone();
-            replacement.extend_from_slice(&history_items[plan.preserve_host_history_from..]);
-            if plan.append_current_tool_response_if_missing && !tool_resp_already_recorded {
-                replacement.push(tool_resp_item.clone());
-            }
-            return Ok(Some((
-                plan.operation,
-                plan.suffix_start,
-                history_items.to_vec(),
-                replacement,
-            )));
+            return plan.history_update_parts(
+                call_id,
+                tool_resp_item,
+                tool_resp_already_recorded,
+                history_items,
+            );
         }
         if !tool_resp_already_recorded {
             return Ok(None);

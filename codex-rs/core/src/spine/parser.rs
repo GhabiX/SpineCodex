@@ -68,6 +68,40 @@ pub(crate) struct ParserPublicationPlan {
 }
 
 impl ParserPublicationPlan {
+    pub(super) fn history_update_parts(
+        &self,
+        call_id: &str,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        history_items: &[ResponseItem],
+    ) -> Result<Option<(&'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>)>, SpineError>
+    {
+        let suffix_end = history_items.len();
+        if self.suffix_start > suffix_end {
+            return Err(SpineError::Invariant(format!(
+                "{} suffix start {} exceeds history length {suffix_end} for call_id={call_id}",
+                self.operation, self.suffix_start
+            )));
+        }
+        if self.preserve_host_history_from > suffix_end {
+            return Err(SpineError::Invariant(format!(
+                "{} preserve-host-history index {} exceeds history length {suffix_end} for call_id={call_id}",
+                self.operation, self.preserve_host_history_from
+            )));
+        }
+        let mut replacement = self.replacement_prefix.clone();
+        replacement.extend_from_slice(&history_items[self.preserve_host_history_from..]);
+        if self.append_current_tool_response_if_missing && !tool_resp_already_recorded {
+            replacement.push(tool_resp_item.clone());
+        }
+        Ok(Some((
+            self.operation,
+            self.suffix_start,
+            history_items.to_vec(),
+            replacement,
+        )))
+    }
+
     #[cfg(test)]
     pub(crate) fn operation(&self) -> &'static str {
         self.operation
