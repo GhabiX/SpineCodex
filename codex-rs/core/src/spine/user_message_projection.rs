@@ -31,11 +31,12 @@ pub(crate) fn user_message_memory_body(item: &ResponseItem) -> Option<String> {
 }
 
 fn prefix_user_anchor(content: &mut Vec<ContentItem>, user_anchor: u64) {
+    let anchor_prefix = format!("[U{user_anchor}]");
     for content_item in content.iter_mut() {
         match content_item {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                if !text.starts_with(&format!("[U{user_anchor}]")) {
-                    *text = format!("[U{user_anchor}]\n{text}");
+                if !text.starts_with(&anchor_prefix) {
+                    *text = format!("{anchor_prefix}\n{text}");
                 }
                 return;
             }
@@ -47,7 +48,7 @@ fn prefix_user_anchor(content: &mut Vec<ContentItem>, user_anchor: u64) {
         0,
         ContentItem::InputText {
             text: format!(
-                "[U{user_anchor}]\n{}",
+                "{anchor_prefix}\n{}",
                 render_user_content_for_memory(content)
             ),
         },
