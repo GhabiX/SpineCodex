@@ -23,8 +23,9 @@ impl SpineRuntime {
         }
         let completed_tool_call_ids = completed_raw_tool_call_ids(raw_items);
         let mut covered = vec![false; raw_items.len()];
+        let raw_mask = RawMask::new(&self.raw_live);
         for event in &self.ledger.events {
-            if !event.allowed_by(RawMask::new(&self.raw_live))? {
+            if !event.allowed_by(raw_mask)? {
                 continue;
             }
             mark_raw_covered_by_event(&mut covered, event)?;
