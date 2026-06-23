@@ -220,9 +220,7 @@ impl SpineHostEffects {
         Ok(spine_tree_snapshot)
     }
 
-    pub(crate) fn into_toolcall_host_commit(
-        self,
-    ) -> Result<(Self, Option<SpineToolcallHostCommit>), String> {
+    fn into_toolcall_host_commit(self) -> Result<(Self, Option<SpineToolcallHostCommit>), String> {
         let mut remaining = Vec::new();
         let mut host_commit = None;
         for effect in self.effects {
