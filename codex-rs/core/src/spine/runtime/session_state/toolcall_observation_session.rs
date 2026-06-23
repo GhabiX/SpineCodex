@@ -88,11 +88,19 @@ impl SpineSessionState {
         evidence: SpineToolcallHookEvidence<'_>,
     ) -> Result<SpineHostEffects, SpineError> {
         self.ensure_valid()?;
+        let Some(commit_evidence) = self.completed_toolcall_commit_evidence_from_output(
+            evidence.completed_output,
+            evidence.output_raw_ordinals,
+            evidence.output_context_start,
+        )?
+        else {
+            return Ok(SpineHostEffects::none());
+        };
         let Some(runtime) = self.runtime_mut() else {
             return Ok(SpineHostEffects::none());
         };
-        let call_id = evidence.commit_evidence.call_id.as_str();
-        let force_ordinary = evidence.commit_evidence.force_ordinary();
+        let call_id = commit_evidence.call_id.as_str();
+        let force_ordinary = commit_evidence.force_ordinary();
         if !force_ordinary {
             runtime.ensure_pending_from_toolcall_request(call_id, evidence.raw_items)?;
         }
@@ -105,7 +113,7 @@ impl SpineSessionState {
             evidence.recorded_inside_reduce,
         );
         Ok(SpineHostEffects::toolcall_host_commit(
-            plan.into_host_commit(),
+            plan.into_host_commit(commit_evidence),
         ))
     }
 
@@ -131,7 +139,7 @@ impl SpineSessionState {
         Ok(())
     }
 
-    pub(crate) fn single_completed_toolcall_evidence(
+    pub(in crate::spine) fn single_completed_toolcall_evidence(
         &self,
         call_id: &str,
         response_anchor: (u64, usize),
@@ -161,7 +169,7 @@ impl SpineSessionState {
         )))
     }
 
-    pub(crate) fn grouped_completed_toolcall_evidence(
+    pub(in crate::spine) fn grouped_completed_toolcall_evidence(
         &self,
         commit_call_id: &str,
         tool_call_ids: &[String],
@@ -194,7 +202,7 @@ impl SpineSessionState {
         )))
     }
 
-    pub(crate) fn completed_toolcall_commit_evidence_from_output(
+    pub(in crate::spine) fn completed_toolcall_commit_evidence_from_output(
         &self,
         output: &SpineCompletedToolCallOutputEvidence<'_>,
         output_raw_ordinals: &[Option<u64>],

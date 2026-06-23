@@ -5,6 +5,7 @@ use super::super::SpineError;
 use super::super::SpineHostEffects;
 use super::SpineCommitAttempt;
 use super::SpineCommitAttemptKind;
+use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 
 pub(crate) struct SpineCompletedToolCallHostOutcome {
     #[cfg(test)]
@@ -60,6 +61,7 @@ pub(crate) struct SpineToolcallCommitProviderInputTokens {
 
 pub(crate) struct SpineToolcallHostCommit {
     plan: SpineToolcallCommitHostPlan,
+    evidence: SpineToolcallCommitEvidence,
     lock_retries: usize,
 }
 
@@ -139,9 +141,13 @@ impl SpineToolcallCommitPreparation {
 }
 
 impl SpineToolcallCommitHostPlan {
-    pub(crate) fn into_host_commit(self) -> SpineToolcallHostCommit {
+    pub(crate) fn into_host_commit(
+        self,
+        evidence: SpineToolcallCommitEvidence,
+    ) -> SpineToolcallHostCommit {
         SpineToolcallHostCommit {
             plan: self,
+            evidence,
             lock_retries: 0,
         }
     }
@@ -243,6 +249,10 @@ impl SpineToolcallHostAttempt {
 }
 
 impl SpineToolcallHostCommit {
+    pub(crate) fn evidence(&self) -> &SpineToolcallCommitEvidence {
+        &self.evidence
+    }
+
     pub(crate) fn host_outcome(
         &self,
         post_commit_effects: SpineHostEffects,

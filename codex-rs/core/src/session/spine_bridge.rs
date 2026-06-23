@@ -109,7 +109,9 @@ fn tool_commit_from_host_outcome(outcome: SpineCompletedToolCallHostOutcome) -> 
 
 struct SpinePreparedToolCallEvidence<'a> {
     response_item: &'a ResponseItem,
-    toolcall_evidence: SpineToolcallCommitEvidence,
+    completed_output: SpineCompletedToolCallOutputEvidence<'a>,
+    output_raw_ordinals: Vec<Option<u64>>,
+    output_context_start: usize,
 }
 
 struct SpineToolCallHostRecording {
@@ -1052,21 +1054,13 @@ impl Session {
         else {
             return Ok(None);
         };
-        let Some(toolcall_evidence) = self
-            .completed_spine_toolcall_commit_evidence(
-                spine_slot,
-                &output,
-                output_anchor.raw_ordinals.as_slice(),
-                output_anchor.context_start,
-            )
-            .await?
-        else {
-            return Ok(None);
-        };
+        let response_item = output.commit_output_item();
         Ok(Some(CompletedSpineToolCall {
             evidence: SpinePreparedToolCallEvidence {
-                response_item: output.commit_output_item(),
-                toolcall_evidence,
+                response_item,
+                completed_output: output,
+                output_raw_ordinals: output_anchor.raw_ordinals,
+                output_context_start: output_anchor.context_start,
             },
             host_recording: SpineToolCallHostRecording {
                 response_already_recorded: output_anchor.already_recorded,
@@ -1193,22 +1187,6 @@ impl Session {
         }))
     }
 
-    async fn completed_spine_toolcall_commit_evidence(
-        &self,
-        spine_slot: &Mutex<SpineSessionState>,
-        output: &SpineCompletedToolCallOutputEvidence<'_>,
-        output_raw_ordinals: &[Option<u64>],
-        output_context_start: usize,
-    ) -> Result<Option<SpineToolcallCommitEvidence>, SpineError> {
-        let guard = spine_slot.lock().await;
-        guard.ensure_valid()?;
-        guard.completed_toolcall_commit_evidence_from_output(
-            output,
-            output_raw_ordinals,
-            output_context_start,
-        )
-    }
-
     async fn commit_completed_spine_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
@@ -1217,7 +1195,7 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
         };
-        let call_id = toolcall.evidence.toolcall_evidence.call_id().to_string();
+        let call_id = toolcall.evidence.completed_output.call_id().to_string();
         let item = toolcall.evidence.response_item;
         let tool_resp_already_recorded = toolcall.host_recording.response_already_recorded;
         let recorded_output_inside_reduce = toolcall.host_recording.response_recorded_inside_reduce;
@@ -1233,7 +1211,9 @@ impl Session {
             hooks::on_toolcall(
                 &mut guard,
                 SpineToolcallHookEvidence {
-                    commit_evidence: &toolcall.evidence.toolcall_evidence,
+                    completed_output: &toolcall.evidence.completed_output,
+                    output_raw_ordinals: toolcall.evidence.output_raw_ordinals.as_slice(),
+                    output_context_start: toolcall.evidence.output_context_start,
                     raw_items: &raw_items,
                     current_turn_provider_input_tokens,
                     tool_resp_already_recorded,
@@ -1248,9 +1228,10 @@ impl Session {
             .apply_toolcall_host_commit(
                 &call_id,
                 current_turn_provider_input_tokens,
-                |pre_compact_provider_input_tokens, current_turn_provider_input_tokens| {
+                |toolcall_evidence,
+                 pre_compact_provider_input_tokens,
+                 current_turn_provider_input_tokens| {
                     let expected_history = expected_history.clone();
-                    let toolcall_evidence = toolcall.evidence.toolcall_evidence.clone();
                     let raw_items = raw_items_ref;
                     async move {
                         let attempt_input = SpineToolcallCommitAttemptInput {
