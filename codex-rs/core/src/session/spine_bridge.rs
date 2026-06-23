@@ -74,10 +74,7 @@ pub(crate) struct SpineRootCompactPublish {
 
 pub(crate) enum SpineToolcallTurnError {
     Codex(CodexErr),
-    Terminal {
-        operation: &'static str,
-        reason: String,
-    },
+    Terminal(String),
 }
 
 #[cfg(test)]
@@ -216,14 +213,10 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         evidence: SpineToolCallEvidence<'_>,
-        operation: &'static str,
     ) -> Result<(), SpineToolcallTurnError> {
-        let host_items = evidence.host_items_to_record_before_hook().map_err(|err| {
-            SpineToolcallTurnError::Terminal {
-                operation,
-                reason: err.to_string(),
-            }
-        })?;
+        let host_items = evidence
+            .host_items_to_record_before_hook()
+            .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))?;
         if let Some(items) = host_items {
             self.record_conversation_items_without_spine_observe(turn_context, items)
                 .await
@@ -231,10 +224,7 @@ impl Session {
         }
         self.commit_toolcall_evidence(turn_context, evidence)
             .await
-            .map_err(|err| SpineToolcallTurnError::Terminal {
-                operation,
-                reason: err.to_string(),
-            })
+            .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))
     }
 
     async fn commit_toolcall_evidence(

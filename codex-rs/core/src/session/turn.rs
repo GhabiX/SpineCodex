@@ -190,10 +190,13 @@ impl From<CodexErr> for SamplingRequestError {
 
 impl SamplingRequestError {}
 
-fn map_spine_toolcall_turn_error(err: SpineToolcallTurnError) -> SamplingRequestError {
+fn map_spine_toolcall_turn_error(
+    err: SpineToolcallTurnError,
+    operation: &'static str,
+) -> SamplingRequestError {
     match err {
         SpineToolcallTurnError::Codex(err) => SamplingRequestError::Codex(err),
-        SpineToolcallTurnError::Terminal { operation, reason } => {
+        SpineToolcallTurnError::Terminal(reason) => {
             SamplingRequestError::FailedNoTurnComplete(CodexErr::SpineTerminalFailure {
                 operation: operation.to_string(),
                 reason,
@@ -2104,13 +2107,11 @@ async fn drain_in_flight(
                 let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
                 let spine_trim_enabled = sess.features.enabled(Feature::SpineTrim);
                 if spine_jit_enabled {
-                    sess.on_toolcall(
-                        &turn_context,
-                        SpineToolCallEvidence::single(&response_item),
-                        "commit Spine tool output",
-                    )
-                    .await
-                    .map_err(|err| map_spine_toolcall_turn_error(err))?;
+                    sess.on_toolcall(&turn_context, SpineToolCallEvidence::single(&response_item))
+                        .await
+                        .map_err(|err| {
+                            map_spine_toolcall_turn_error(err, "commit Spine tool output")
+                        })?;
                     if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
                         spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
                     }
@@ -2204,10 +2205,9 @@ async fn drain_deferred_spine_tool_group(
     sess.on_toolcall(
         &turn_context,
         SpineToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
-        "commit grouped Spine toolcall",
     )
     .await
-    .map_err(|err| map_spine_toolcall_turn_error(err))?;
+    .map_err(|err| map_spine_toolcall_turn_error(err, "commit grouped Spine toolcall"))?;
     for response_item in &response_items {
         mark_thread_memory_mode_polluted_if_external_context(
             sess.as_ref(),
@@ -2297,10 +2297,9 @@ async fn drain_conflicting_spine_control_tool_group(
             &tool_call_ids,
             &response_items,
         ),
-        "commit conflicting Spine toolcall",
     )
     .await
-    .map_err(|err| map_spine_toolcall_turn_error(err))?;
+    .map_err(|err| map_spine_toolcall_turn_error(err, "commit conflicting Spine toolcall"))?;
     for response_item in &response_items {
         mark_thread_memory_mode_polluted_if_external_context(
             sess.as_ref(),
