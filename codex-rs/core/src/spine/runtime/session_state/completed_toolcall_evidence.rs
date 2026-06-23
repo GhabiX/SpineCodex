@@ -70,15 +70,6 @@ enum SpineToolCallOutputHostRecording {
     RecordGroupBeforeCommit,
 }
 
-struct CompletedToolCallEvidenceParts {
-    call_id: String,
-    request_call_ids: Vec<String>,
-    request_segments: Vec<CompletedToolCallSegment>,
-    response_segments: Vec<CompletedToolCallSegment>,
-    missing_request_error: &'static str,
-    missing_response_error: &'static str,
-}
-
 impl<'a> SpineToolCallEvidence<'a> {
     pub(crate) fn single(item: &'a ResponseItem) -> Self {
         Self {
@@ -377,32 +368,11 @@ pub(super) fn assign_response_item_raw_ordinals(
 pub(super) fn completed_toolcall_evidence_from_segments(
     call_id: &str,
     request_call_ids: &[String],
-    request_segments: Vec<CompletedToolCallSegment>,
-    response_segments: Vec<CompletedToolCallSegment>,
+    mut request_segments: Vec<CompletedToolCallSegment>,
+    mut response_segments: Vec<CompletedToolCallSegment>,
     missing_request_error: &'static str,
     missing_response_error: &'static str,
 ) -> Result<SpineCompletedToolCallEvidence, SpineError> {
-    completed_toolcall_evidence(CompletedToolCallEvidenceParts {
-        call_id: call_id.to_string(),
-        request_call_ids: request_call_ids.to_vec(),
-        request_segments,
-        response_segments,
-        missing_request_error,
-        missing_response_error,
-    })
-}
-
-fn completed_toolcall_evidence(
-    parts: CompletedToolCallEvidenceParts,
-) -> Result<SpineCompletedToolCallEvidence, SpineError> {
-    let CompletedToolCallEvidenceParts {
-        call_id,
-        request_call_ids,
-        mut request_segments,
-        mut response_segments,
-        missing_request_error,
-        missing_response_error,
-    } = parts;
     request_segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
     response_segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
     if request_segments.is_empty() {
@@ -415,8 +385,8 @@ fn completed_toolcall_evidence(
     segments.extend(request_segments);
     segments.extend(response_segments);
     Ok(SpineCompletedToolCallEvidence::new(CompletedToolCall {
-        call_id,
-        request_call_ids,
+        call_id: call_id.to_string(),
+        request_call_ids: request_call_ids.to_vec(),
         segments,
     }))
 }
