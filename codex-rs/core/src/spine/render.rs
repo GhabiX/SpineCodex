@@ -49,7 +49,12 @@ pub(super) fn render_parse_stack_to_context(
     ps: &ParseStack,
     raw_items: &[Option<ResponseItem>],
 ) -> Result<Vec<ResponseItem>, SpineError> {
-    render_parse_stack_to_context_with_memory_body(ps, raw_items, None)
+    render_parse_stack_to_context_with_memory_body_and_trim_projection(
+        ps,
+        raw_items,
+        None,
+        &TrimProjection::default(),
+    )
 }
 
 pub(super) fn render_parse_stack_to_context_with_trim_projection(
@@ -62,19 +67,6 @@ pub(super) fn render_parse_stack_to_context_with_trim_projection(
         raw_items,
         None,
         trim_projection,
-    )
-}
-
-pub(super) fn render_parse_stack_to_context_with_memory_body(
-    ps: &ParseStack,
-    raw_items: &[Option<ResponseItem>],
-    staged_memory_body: Option<(&str, &str)>,
-) -> Result<Vec<ResponseItem>, SpineError> {
-    render_parse_stack_to_context_with_memory_body_and_trim_projection(
-        ps,
-        raw_items,
-        staged_memory_body,
-        &TrimProjection::default(),
     )
 }
 
