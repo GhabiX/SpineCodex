@@ -165,7 +165,7 @@ impl SpineTrimOutcome {
             Self::Sliced { trim_id } => format!("Sliced tool response {trim_id}."),
             Self::Miss { trim_id } => {
                 format!(
-                    "Could not find trim id {trim_id} in the previous completed toolcall. Do not retry this TRIM_ID."
+                    "Could not find trim id {trim_id} in the latest returned tool-result batch. Do not retry this TRIM_ID."
                 )
             }
         }

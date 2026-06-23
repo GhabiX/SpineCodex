@@ -8,35 +8,29 @@ For anything beyond a direct answer in the current response, put the work under
 Spine control: plan with `tree`, execute focused work in leaf nodes, and carry
 completed phases forward with `close`/`next`.
 
-Concrete work happens in leaf nodes: the smallest semantically complete work
-units with one local objective. If a unit can still be usefully split, split it
-first. After completion, close/next; parent nodes only decompose, route,
-compare, and merge. In multi-turn or tool-using tasks, actively maintain the
-tree so each open leaf remains one such unit and completed units are carried
-forward by memory rather than retained history.
+Use Spine in recursive EE mode: exploration -> exploitation. When the work is
+still unclear, open a bounded exploration node to discover the work phase.
+When the work phase becomes actionable, use `next` to fold exploration into
+memory and continue in a fresh node. There, use `tree` to maintain the local
+worktree plan, including upcoming nodes, and `open` known child nodes down to
+focused leaf work.
 
-Task-level scaling is controlled by the current Spine configuration. When a
-`<spine_scaling>` block is present, follow it as the active policy for how
-aggressively to plan, branch, deepen, open, close, and merge nodes.
+If a leaf grows into a harder or broader problem, use `next` to carry that
+discovery into a fresh local work phase, then repeat EE mode from there. Use
+`close` when a leaf has produced the result its parent needs.
 
-Use `tree` actively as the planning surface: inspect and update the future node
-plan as the work evolves. Use `open` when a focused subtask would
-improve execution. Use `close` when a node's useful state can be faithfully
-carried by memory and its local history is no longer needed. Use `next` when
-moving to a peer phase under the same parent objective.
+`open` starts known child work inside the current work phase. `close` folds
+completed child work into memory for its parent. `next` folds the current work
+phase into memory and starts a fresh sibling phase. When memory can carry the
+useful state forward, transition promptly so later work depends on memory rather
+than retained history.
 
-`open` creates a child for a subtask of the current objective. `close` and `next` write the useful state of the current
-node into authored `memory`; the runtime preserves exact user messages and
-child memories, then appends that memory. When `memory` can carry the smallest
-sufficient state for later work, close or next promptly: preserve what is needed
-to continue, and leave behind local history that no longer matters.
-
-Plan leaf scope around minimal task units with manageable context pressure.
-`open` isolates the next focused subtask; `close` and `next` reduce retained
-history once memory can carry the smallest sufficient state.
-If live context approaches the window limit, carry completed work forward with
-`close`/`next` before global compaction is forced. Global compaction may lose
-Spine tree state, so later work may have to reorganize from a new root.
+Choose work-phase boundaries that keep live context small and memory useful.
+Prefer `next` after exploration produces an actionable work phase, and prefer
+`close` after focused child work produces the result its parent needs. If context
+pressure grows, use the next EE boundary to carry completed state forward before
+global compaction is forced. Global compaction may lose Spine tree state, so
+later work may have to reorganize from a new root.
 
 Root-epoch ids such as `1` or `2` cannot be closed; the initial `1.1` is a
 startup work node, not a concrete task node, so use `open` first before
@@ -71,13 +65,16 @@ pub(crate) const SPINE_TRIM_INSTRUCTIONS: &str = r#"<spine_trim>
 `spine.trim` keeps tagged tool responses to the smallest sufficient evidence for
 the current work.
 
-A `TRIM_ID` is valid only for the most recent completed toolcall: the tool
-request just made and the tool responses just returned. After any later toolcall
-completes, older `TRIM_ID`s expire.
+A trim window is the immediately previous tool-result batch: the tool responses
+returned from your last assistant tool request. A `TRIM_ID` is live only in that
+batch. If that request returned multiple tagged responses, all tagged responses
+in the batch can be trimmed. Once any later tool request completes, that
+previous batch's `TRIM_ID`s expire.
 
-After reading tagged tool responses, preserve the evidence needed to continue
-and trim the rest in your next assistant response that calls tools. `spine.trim`
-may be batched with other useful tools in that response.
+After reading a tagged tool-result batch, preserve the evidence needed to
+continue and use `spine.trim` in your next assistant tool request, optionally
+batched with other useful tools. Use only `TRIM_ID`s from the latest returned
+tool-result batch.
 
 Use `slice` to keep a sufficient head, tail, or anchor window. Use `snip` when
 the useful facts are already captured in memory, notes, code, tests, files, tool

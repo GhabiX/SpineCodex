@@ -108,7 +108,7 @@ fn spine_trim_tool() -> ResponsesApiTool {
         (
             "TRIM_ID".to_string(),
             JsonSchema::string(Some(
-                "Trim id attached to a tool response in the previous completed toolcall."
+                "Trim id attached to a tool response in the latest returned tool-result batch."
                     .to_string(),
             )),
         ),
@@ -155,7 +155,7 @@ fn spine_trim_tool() -> ResponsesApiTool {
     ]);
     ResponsesApiTool {
         name: SPINE_TOOL_TRIM.to_string(),
-        description: "Conservatively clean up one tagged tool response from the previous completed toolcall: snip replaces it with a cleared placeholder; slice keeps only a sufficient local part.".to_string(),
+        description: "Conservatively clean up one tagged tool response from the latest returned tool-result batch: snip replaces it with a cleared placeholder; slice keeps only a sufficient local part.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(
