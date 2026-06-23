@@ -367,8 +367,7 @@ pub(super) fn tree_meta_with_token_baselines(
     provider_input_tokens: Option<i64>,
     open_context_source: Option<crate::spine::model::ContextBaselineSource>,
 ) -> Result<TreeMeta, SpineError> {
-    let index = usize::try_from(index)
-        .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
+    let index = context_index_usize(index)?;
     Ok(TreeMeta {
         node_dir: archive.node_dir(&id),
         id,
@@ -414,4 +413,9 @@ pub(super) fn memory_ref(
         open_context_source,
         memory_output_tokens,
     }
+}
+
+fn context_index_usize(index: u64) -> Result<usize, SpineError> {
+    usize::try_from(index)
+        .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))
 }
