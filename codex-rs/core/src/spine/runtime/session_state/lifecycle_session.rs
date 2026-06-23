@@ -5,9 +5,9 @@ use super::super::SpineError;
 use super::super::SpineHostEffects;
 use super::super::SpineRuntime;
 use super::super::support::tool_response_call_id;
-use super::PreparedSpineReplayRuntime;
 use super::SpineInitEvidence;
 use super::SpineSessionState;
+use super::state_types::PreparedSpineReplayRuntime;
 use crate::spine::store::SpineCloneBoundary;
 use crate::spine::store::SpineStore;
 
