@@ -262,7 +262,7 @@ fn close_memory_assembly_from_source_plan(
 }
 
 fn assemble_close_memory_body(
-    node_id: &str,
+    node_id: &NodeId,
     source_plan: &SpineCompactSourcePlan,
     node_memory: &str,
 ) -> Result<String, SpineError> {
