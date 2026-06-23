@@ -486,7 +486,7 @@ impl SpineRuntime {
                     result.token_seq_after,
                     &self.raw_live,
                     raw_items,
-                    &prepared_reduction.final_parse_stack,
+                    prepared_reduction.final_parse_stack.parse_stack(),
                     &result.materialized,
                     &result.materialized,
                 )

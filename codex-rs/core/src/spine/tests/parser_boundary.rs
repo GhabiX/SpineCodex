@@ -247,6 +247,25 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
 }
 
 #[test]
+fn runtime_prepared_carriers_hold_parser_prepared_state() {
+    let prepared =
+        fs::read_to_string(spine_src("runtime/prepared.rs")).expect("read runtime prepared source");
+    assert!(
+        !prepared.contains("use crate::spine::parse_stack::ParseStack"),
+        "runtime prepared carriers must not import raw ParseStack"
+    );
+    assert!(
+        prepared.contains("use crate::spine::parser::ParserPreparedState"),
+        "runtime prepared carriers should hold parser-owned prepared states"
+    );
+    assert!(
+        prepared.contains("final_parse_stack: Option<ParserPreparedState>")
+            && prepared.contains("final_parse_stack: ParserPreparedState"),
+        "runtime prepared final parser states should be typed as ParserPreparedState"
+    );
+}
+
+#[test]
 fn runtime_checkpoint_routes_parser_reads_through_parser_state() {
     let checkpoint = fs::read_to_string(spine_src("runtime/checkpoint.rs"))
         .expect("read runtime checkpoint source");

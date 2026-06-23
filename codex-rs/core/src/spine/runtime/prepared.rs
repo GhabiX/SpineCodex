@@ -3,7 +3,7 @@ use codex_protocol::models::ResponseItem;
 use super::CompletedToolCall;
 use super::SpineRootCompactResult;
 use crate::spine::model::MemRecord;
-use crate::spine::parse_stack::ParseStack;
+use crate::spine::parser::ParserPreparedState;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
@@ -52,7 +52,7 @@ impl HistoryPublicationPlan {
 pub(crate) struct SpinePreparedCommit {
     pub(super) kind: SpineCommitKind,
     pub(super) publication_plan: Option<HistoryPublicationPlan>,
-    pub(super) final_parse_stack: Option<ParseStack>,
+    pub(super) final_parse_stack: Option<ParserPreparedState>,
     pub(super) completed_toolcall: Option<CompletedToolCall>,
     pub(super) toolcall_seq: Option<u64>,
     pub(super) raw_items: Vec<Option<ResponseItem>>,
@@ -74,7 +74,7 @@ pub(crate) struct SpineCommitPublication<T> {
 #[derive(Debug)]
 pub(crate) struct SpinePreparedRootCompact {
     pub(super) result: SpineRootCompactResult,
-    pub(super) final_parse_stack: ParseStack,
+    pub(super) final_parse_stack: ParserPreparedState,
 }
 
 #[derive(Debug)]

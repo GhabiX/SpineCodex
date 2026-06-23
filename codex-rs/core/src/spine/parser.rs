@@ -50,10 +50,29 @@ pub(super) struct ParserState {
 }
 
 pub(super) struct ParserRootCompactPreparedReduction {
-    pub(super) final_parse_stack: ParseStack,
+    pub(super) final_parse_stack: ParserPreparedState,
     pub(super) root_epoch_reduction: PreparedRootEpochReduction,
     pub(super) materialized: Vec<ResponseItem>,
     pub(super) current_open_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ParserPreparedState {
+    parse_stack: ParseStack,
+}
+
+impl ParserPreparedState {
+    fn new(parse_stack: ParseStack) -> Self {
+        Self { parse_stack }
+    }
+
+    pub(super) fn parse_stack(&self) -> &ParseStack {
+        &self.parse_stack
+    }
+
+    fn into_parse_stack(self) -> ParseStack {
+        self.parse_stack
+    }
 }
 
 impl ParserState {
@@ -209,45 +228,45 @@ impl ParserState {
             .set_live_open_context_baseline(node, input_tokens, source)
     }
 
-    fn replace_parse_stack_for_runtime_transition(&mut self, parse_stack: ParseStack) {
-        self.parse_stack = parse_stack;
+    fn replace_parse_stack_for_runtime_transition(&mut self, state: ParserPreparedState) {
+        self.parse_stack = state.into_parse_stack();
     }
 
     pub(super) fn install_pending_close_after_side_effect_failure(
         &mut self,
-        parse_stack: ParseStack,
+        state: ParserPreparedState,
     ) {
-        self.replace_parse_stack_for_runtime_transition(parse_stack);
+        self.replace_parse_stack_for_runtime_transition(state);
     }
 
-    pub(super) fn install_prepared_commit_final_parse_stack(&mut self, parse_stack: ParseStack) {
-        self.replace_parse_stack_for_runtime_transition(parse_stack);
+    pub(super) fn install_prepared_commit_final_parse_stack(&mut self, state: ParserPreparedState) {
+        self.replace_parse_stack_for_runtime_transition(state);
     }
 
     pub(super) fn install_pending_root_compact_after_side_effect_failure(
         &mut self,
-        parse_stack: ParseStack,
+        state: ParserPreparedState,
     ) {
-        self.replace_parse_stack_for_runtime_transition(parse_stack);
+        self.replace_parse_stack_for_runtime_transition(state);
     }
 
     pub(super) fn install_prepared_root_compact_final_parse_stack(
         &mut self,
-        parse_stack: ParseStack,
+        state: ParserPreparedState,
     ) {
-        self.replace_parse_stack_for_runtime_transition(parse_stack);
+        self.replace_parse_stack_for_runtime_transition(state);
     }
 
     pub(super) fn staged_after_tokens(
         &self,
         tokens: impl IntoIterator<Item = SpineToken>,
         archive: &SpineArchive,
-    ) -> Result<ParseStack, SpineError> {
+    ) -> Result<ParserPreparedState, SpineError> {
         let mut staged = self.parse_stack.clone();
         for token in tokens {
             staged.shift(token, archive)?;
         }
-        Ok(staged)
+        Ok(ParserPreparedState::new(staged))
     }
 
     pub(super) fn close_reduced_next_child_id(
@@ -269,7 +288,7 @@ impl ParserState {
         open_token: Option<SpineToken>,
         toolcall_token: SpineToken,
         archive: &SpineArchive,
-    ) -> Result<(ParseStack, ParseStack), SpineError> {
+    ) -> Result<(ParserPreparedState, ParserPreparedState), SpineError> {
         let mut pending = self.parse_stack.clone();
         pending.shift_pending_close(memory, archive)?;
         let mut final_parse_stack = pending.task_tree_reduced(reduction)?;
@@ -277,7 +296,10 @@ impl ParserState {
             final_parse_stack.shift(open_token, archive)?;
         }
         final_parse_stack.shift(toolcall_token, archive)?;
-        Ok((pending, final_parse_stack))
+        Ok((
+            ParserPreparedState::new(pending),
+            ParserPreparedState::new(final_parse_stack),
+        ))
     }
 
     pub(super) fn prepare_root_compact_reduction(
@@ -315,7 +337,7 @@ impl ParserState {
         )?;
         let current_open_index = final_parse_stack.current_open_meta()?.index;
         Ok(ParserRootCompactPreparedReduction {
-            final_parse_stack,
+            final_parse_stack: ParserPreparedState::new(final_parse_stack),
             root_epoch_reduction,
             materialized,
             current_open_index,
@@ -330,7 +352,7 @@ impl ParserState {
         next_open_context_tokens: Option<i64>,
         reduction: PreparedRootEpochReduction,
         archive: &SpineArchive,
-    ) -> Result<(ParseStack, ParseStack), SpineError> {
+    ) -> Result<(ParserPreparedState, ParserPreparedState), SpineError> {
         let mut pending = self.parse_stack.clone();
         pending.shift_pending_compact(
             memory,
@@ -340,11 +362,14 @@ impl ParserState {
             archive,
         )?;
         let final_parse_stack = pending.root_epoch_reduced(reduction)?;
-        Ok((pending, final_parse_stack))
+        Ok((
+            ParserPreparedState::new(pending),
+            ParserPreparedState::new(final_parse_stack),
+        ))
     }
 
-    pub(super) fn install_staged(&mut self, parse_stack: ParseStack) {
-        self.parse_stack = parse_stack;
+    pub(super) fn install_staged(&mut self, state: ParserPreparedState) {
+        self.parse_stack = state.into_parse_stack();
     }
 
     pub(super) fn apply_replay_event(
@@ -365,7 +390,7 @@ impl ParserState {
         &self,
         lexed: &LexedTokenBatch,
         archive: &SpineArchive,
-    ) -> Result<ParseStack, SpineError> {
+    ) -> Result<ParserPreparedState, SpineError> {
         self.staged_after_tokens(lexed.tokens.iter().cloned(), archive)
     }
 
