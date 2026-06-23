@@ -41,7 +41,7 @@ impl SpineRuntime {
             toolcall_start,
             call_id,
         )?;
-        close_memory_assembly_from_source_plan(&node.to_string(), &source_plan, &memory).map(Some)
+        close_memory_assembly_from_source_plan(&node, &source_plan, &memory).map(Some)
     }
 
     pub(crate) fn build_close_source_plan(
@@ -237,11 +237,11 @@ fn close_source_plan_raw_end(
 }
 
 fn close_memory_assembly_from_source_plan(
-    node_id: &str,
+    node_id: &NodeId,
     source_plan: &SpineCompactSourcePlan,
     node_memory: &str,
 ) -> Result<SpineCloseMemoryAssembly, SpineError> {
-    if source_plan.node_id.to_string() != node_id {
+    if &source_plan.node_id != node_id {
         return Err(SpineError::CompactFailure(format!(
             "spine.close source plan node {} does not match close node {node_id}",
             source_plan.node_id
