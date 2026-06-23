@@ -36,26 +36,23 @@ struct PreparedRootCompactCommit {
 }
 
 pub(crate) fn spine_root_compact_body(replaced_context: &[ResponseItem]) -> Option<String> {
-    let entries = replaced_context
-        .iter()
-        .enumerate()
-        .filter_map(|(index, item)| response_item_visible_text(item).map(|text| (index + 1, text)))
-        .collect::<Vec<_>>();
-    if entries.is_empty() {
-        return None;
-    }
-
     let mut body = "# Spine Native Compact Memory\n\n\
 This memory is derived from the host context after native compact succeeded.\n"
         .to_string();
-    for (index, text) in entries {
+    let mut wrote_entry = false;
+    for (index, text) in replaced_context
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| response_item_visible_text(item).map(|text| (index + 1, text)))
+    {
+        wrote_entry = true;
         body.push_str("\n## Replaced Context Item ");
         body.push_str(&index.to_string());
         body.push_str("\n\n");
         body.push_str(text.trim());
         body.push('\n');
     }
-    Some(body)
+    wrote_entry.then_some(body)
 }
 
 fn response_item_visible_text(item: &ResponseItem) -> Option<String> {
