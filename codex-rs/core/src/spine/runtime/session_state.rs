@@ -388,17 +388,6 @@ enum SpineToolcallCommitFailureAction {
     NoSpineCommit,
 }
 
-enum SpineToolcallCommitTerminalHostAction {
-    FailClosed {
-        reason: &'static str,
-        error: SpineError,
-    },
-    AbortPending {
-        reason: &'static str,
-        error: SpineError,
-    },
-}
-
 impl SpineToolcallCommitPreparation {
     fn new(requires_close_like_commit: bool) -> Self {
         Self {
@@ -519,15 +508,12 @@ impl SpineToolcallCommitHostPlan {
         call_id: &str,
     ) -> Result<SpineToolcallCommitHostStep, SpineError> {
         match self.commit_missing_action {
-            SpineToolcallCommitFailureAction::FailClosed => {
-                Ok(SpineToolcallCommitTerminalHostAction::fail_closed(
-                    SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON,
-                    SpineError::Invariant(format!(
-                        "{SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON} for call_id={call_id}"
-                    )),
-                )
-                .into_host_step())
-            }
+            SpineToolcallCommitFailureAction::FailClosed => Ok(fail_closed_host_step(
+                SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON,
+                SpineError::Invariant(format!(
+                    "{SPINE_TOOLCALL_COMMIT_RUNTIME_MISSING_REASON} for call_id={call_id}"
+                )),
+            )),
             SpineToolcallCommitFailureAction::NoSpineCommit => {
                 Ok(SpineToolcallCommitHostStep::NoSpineCommit)
             }
@@ -547,14 +533,11 @@ impl SpineToolcallCommitHostPlan {
         }
         match self.retry_limit_action {
             action @ (SpineToolcallCommitFailureAction::FailClosed
-            | SpineToolcallCommitFailureAction::AbortPending) => {
-                Ok(SpineToolcallCommitTerminalHostAction::from_failure_action(
-                    action,
-                    SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
-                    self.retry_limit_error(call_id),
-                )
-                .into_host_step())
-            }
+            | SpineToolcallCommitFailureAction::AbortPending) => Ok(host_step_from_failure_action(
+                action,
+                SPINE_TOOLCALL_COMMIT_RETRY_LIMIT_REASON,
+                self.retry_limit_error(call_id),
+            )),
             SpineToolcallCommitFailureAction::NoSpineCommit => Err(SpineError::Invariant(format!(
                 "unsupported Spine retry-limit action for call_id={call_id}"
             ))),
@@ -690,39 +673,24 @@ impl SpineCompletedToolCallHostOutcome {
     }
 }
 
-impl SpineToolcallCommitTerminalHostAction {
-    fn from_failure_action(
-        action: SpineToolcallCommitFailureAction,
-        reason: &'static str,
-        error: SpineError,
-    ) -> Self {
-        match action {
-            SpineToolcallCommitFailureAction::FailClosed => Self::fail_closed(reason, error),
-            SpineToolcallCommitFailureAction::AbortPending => Self::abort_pending(reason, error),
-            SpineToolcallCommitFailureAction::NoSpineCommit => {
-                unreachable!("no-commit is not a terminal host action")
-            }
+fn host_step_from_failure_action(
+    action: SpineToolcallCommitFailureAction,
+    reason: &'static str,
+    error: SpineError,
+) -> SpineToolcallCommitHostStep {
+    match action {
+        SpineToolcallCommitFailureAction::FailClosed => fail_closed_host_step(reason, error),
+        SpineToolcallCommitFailureAction::AbortPending => {
+            SpineToolcallCommitHostStep::AbortPending { reason, error }
+        }
+        SpineToolcallCommitFailureAction::NoSpineCommit => {
+            unreachable!("no-commit is not a terminal host action")
         }
     }
+}
 
-    fn fail_closed(reason: &'static str, error: SpineError) -> Self {
-        Self::FailClosed { reason, error }
-    }
-
-    fn abort_pending(reason: &'static str, error: SpineError) -> Self {
-        Self::AbortPending { reason, error }
-    }
-
-    fn into_host_step(self) -> SpineToolcallCommitHostStep {
-        match self {
-            Self::FailClosed { reason, error } => {
-                SpineToolcallCommitHostStep::FailClosed { reason, error }
-            }
-            Self::AbortPending { reason, error } => {
-                SpineToolcallCommitHostStep::AbortPending { reason, error }
-            }
-        }
-    }
+fn fail_closed_host_step(reason: &'static str, error: SpineError) -> SpineToolcallCommitHostStep {
+    SpineToolcallCommitHostStep::FailClosed { reason, error }
 }
 struct SpineToolcallCommitInput<'a> {
     call_id: &'a str,
