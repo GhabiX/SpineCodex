@@ -115,14 +115,16 @@ impl TrimProjection {
     }
 
     pub(in crate::spine) fn mark_snipped(&mut self, trim_id: &str) {
-        if let Some(target) = self.targets_by_id.get_mut(trim_id) {
-            target.state = TrimTargetState::Snipped;
-        }
+        self.mark_state(trim_id, TrimTargetState::Snipped);
     }
 
     pub(in crate::spine) fn mark_sliced(&mut self, trim_id: &str, visible_body: String) {
+        self.mark_state(trim_id, TrimTargetState::Sliced { visible_body });
+    }
+
+    fn mark_state(&mut self, trim_id: &str, state: TrimTargetState) {
         if let Some(target) = self.targets_by_id.get_mut(trim_id) {
-            target.state = TrimTargetState::Sliced { visible_body };
+            target.state = state;
         }
     }
 
