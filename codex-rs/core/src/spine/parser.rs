@@ -11,13 +11,20 @@
 //! enter through this facade.
 
 use codex_protocol::models::ResponseItem;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
 use crate::spine::lexer::LexedTokenBatch;
+use crate::spine::model::LoggedSpineLedgerEvent;
+use crate::spine::model::MemRecord;
+use crate::spine::model::RawMask;
 use crate::spine::model::SpineToken;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
+use crate::spine::parse_stack::apply_replay_event_to_parse_stack;
+use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 #[cfg(test)]
 use crate::spine::parse_stack::parse_stack_msg_leaf_count;
 #[cfg(test)]
@@ -40,8 +47,31 @@ impl ParserState {
         Self { parse_stack }
     }
 
+    pub(super) fn from_replay_events_with_forced_events(
+        events: &[LoggedSpineLedgerEvent],
+        archive: &SpineArchive,
+        mems: &[MemRecord],
+        raw_mask: RawMask<'_>,
+        forced_event_seqs: &BTreeSet<u64>,
+        marker_structural_event_seqs: &BTreeSet<u64>,
+    ) -> Result<Self, SpineError> {
+        parse_stack_from_events_with_forced_events(
+            events,
+            archive,
+            mems,
+            raw_mask,
+            forced_event_seqs,
+            marker_structural_event_seqs,
+        )
+        .map(Self::from_parse_stack)
+    }
+
     pub(super) fn parse_stack(&self) -> &ParseStack {
         &self.parse_stack
+    }
+
+    pub(super) fn into_parse_stack(self) -> ParseStack {
+        self.parse_stack
     }
 
     pub(super) fn parse_stack_mut_for_runtime_transition(&mut self) -> &mut ParseStack {
@@ -64,6 +94,16 @@ impl ParserState {
 
     pub(super) fn install_staged(&mut self, parse_stack: ParseStack) {
         self.parse_stack = parse_stack;
+    }
+
+    pub(super) fn apply_replay_event(
+        &mut self,
+        event: &LoggedSpineLedgerEvent,
+        archive: &SpineArchive,
+        mems: &BTreeMap<String, MemRecord>,
+        raw_mask: RawMask<'_>,
+    ) -> Result<(), SpineError> {
+        apply_replay_event_to_parse_stack(&mut self.parse_stack, event, archive, mems, raw_mask)
     }
 
     pub(super) fn staged_after_lexed_batch_for_observe(

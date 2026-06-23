@@ -19,8 +19,8 @@ mod accounting;
 mod replay;
 mod tree;
 
-pub(super) use replay::apply_replay_event_to_parse_stack;
-pub(super) use replay::parse_stack_from_events_with_forced_events;
+pub(in crate::spine) use replay::apply_replay_event_to_parse_stack;
+pub(in crate::spine) use replay::parse_stack_from_events_with_forced_events;
 #[cfg(test)]
 pub(super) use tree::parse_stack_msg_leaf_count;
 #[cfg(test)]

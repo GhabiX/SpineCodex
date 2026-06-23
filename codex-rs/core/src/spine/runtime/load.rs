@@ -17,7 +17,6 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::parse_stack::ParseStack;
-use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
 use crate::spine::parser::ParserState;
 use crate::spine::store::SpineStore;
 
@@ -415,14 +414,15 @@ fn validate_checkpoint_prefix_parse_stack(
         Some(checkpoint.token_seq),
         true,
     )?;
-    let prefix_ps = parse_stack_from_events_with_forced_events(
+    let prefix_ps = ParserState::from_replay_events_with_forced_events(
         &prefix_events,
         archive,
         mems,
         prefix_mask,
         &prefix_replay_event_seqs.forced,
         &prefix_replay_event_seqs.marker_structural,
-    )?;
+    )?
+    .into_parse_stack();
     if prefix_ps != checkpoint.parse_stack {
         return Err(SpineError::Invariant(format!(
             "spine checkpoint ParseStack mismatch for {} at raw_ordinal={} token_seq={}",

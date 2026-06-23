@@ -15,8 +15,7 @@ use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::TrimProjection;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use crate::spine::parse_stack::ParseStack;
-use crate::spine::parse_stack::apply_replay_event_to_parse_stack;
-use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
+use crate::spine::parser::ParserState;
 use crate::spine::trimmer::trim_projection_from_events;
 
 pub(super) fn protocol_context_baseline_source(
@@ -118,21 +117,22 @@ pub(super) fn replay_from_events(
             .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
             .cloned()
             .collect::<Vec<_>>();
-        return parse_stack_from_events_with_forced_events(
+        return ParserState::from_replay_events_with_forced_events(
             &events,
             archive,
             mems,
             raw_mask,
             &replay_event_seqs.forced,
             &replay_event_seqs.marker_structural,
-        );
+        )
+        .map(ParserState::into_parse_stack);
     };
     let mem_map = mems
         .iter()
         .cloned()
         .map(|mem| (mem.compact_id.clone(), mem))
         .collect::<BTreeMap<_, _>>();
-    let mut parse_stack = initial.clone();
+    let mut parser = ParserState::from_parse_stack(initial.clone());
     for event in events
         .iter()
         .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
@@ -141,13 +141,7 @@ pub(super) fn replay_from_events(
             continue;
         }
         if replay_event_seqs.forced.contains(&event.seq) {
-            apply_replay_event_to_parse_stack(
-                &mut parse_stack,
-                event,
-                archive,
-                &mem_map,
-                raw_mask,
-            )?;
+            parser.apply_replay_event(event, archive, &mem_map, raw_mask)?;
             continue;
         }
         if replay_event_seqs.marker_structural.contains(&event.seq)
@@ -155,9 +149,9 @@ pub(super) fn replay_from_events(
         {
             continue;
         }
-        apply_replay_event_to_parse_stack(&mut parse_stack, event, archive, &mem_map, raw_mask)?;
+        parser.apply_replay_event(event, archive, &mem_map, raw_mask)?;
     }
-    Ok(parse_stack)
+    Ok(parser.into_parse_stack())
 }
 
 pub(super) struct MarkerReplayEventSeqs {
