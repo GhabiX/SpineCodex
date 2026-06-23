@@ -49,13 +49,9 @@ pub(crate) struct SpineCommitAttempt {
 }
 
 enum SpineCommitAttemptKind {
-    Done(SpineCommitOutput),
+    Done(SpineHostEffects),
     Retry,
     RuntimeMissing,
-}
-
-struct SpineCommitOutput {
-    post_commit_effects: SpineHostEffects,
 }
 
 pub(crate) struct PreparedSpineReplayRuntime {
@@ -711,9 +707,9 @@ impl SpineCompletedToolCallHostOutcome {
 }
 
 impl SpineToolcallCommitLoopDecision {
-    fn done(output: SpineCommitOutput) -> Self {
+    fn done(post_commit_effects: SpineHostEffects) -> Self {
         Self {
-            kind: SpineToolcallCommitLoopDecisionKind::Done(output.into_post_commit_effects()),
+            kind: SpineToolcallCommitLoopDecisionKind::Done(post_commit_effects),
         }
     }
 
@@ -906,17 +902,10 @@ impl SpineCommitAttempt {
         snapshot: Option<SpineTreeUpdateEvent>,
     ) -> Self {
         Self {
-            kind: SpineCommitAttemptKind::Done(SpineCommitOutput {
-                post_commit_effects: state
-                    .committed_toolcall_post_apply_host_effects(committed, snapshot),
-            }),
+            kind: SpineCommitAttemptKind::Done(
+                state.committed_toolcall_post_apply_host_effects(committed, snapshot),
+            ),
         }
-    }
-}
-
-impl SpineCommitOutput {
-    fn into_post_commit_effects(self) -> SpineHostEffects {
-        self.post_commit_effects
     }
 }
 
