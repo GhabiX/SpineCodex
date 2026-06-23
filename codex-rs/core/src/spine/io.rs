@@ -96,19 +96,18 @@ pub(super) fn sha1_hex(bytes: &[u8]) -> String {
 }
 
 pub(super) fn hash_raw_live(raw_live: &[bool]) -> String {
-    use sha1::Digest;
-    let mut hasher = sha1::Sha1::new();
-    for live in raw_live {
-        hasher.update(if *live { b"1" } else { b"0" });
-    }
-    format!("{:x}", hasher.finalize())
+    hash_raw_live_iter(raw_live.iter().copied())
 }
 
 pub(super) fn hash_raw_live_prefix_all_true(len: usize) -> String {
+    hash_raw_live_iter(std::iter::repeat(true).take(len))
+}
+
+fn hash_raw_live_iter(raw_live: impl IntoIterator<Item = bool>) -> String {
     use sha1::Digest;
     let mut hasher = sha1::Sha1::new();
-    for _ in 0..len {
-        hasher.update(b"1");
+    for live in raw_live {
+        hasher.update(if live { b"1" } else { b"0" });
     }
     format!("{:x}", hasher.finalize())
 }
