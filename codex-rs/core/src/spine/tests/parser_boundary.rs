@@ -378,6 +378,24 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
 }
 
 #[test]
+fn runtime_root_compact_routes_source_context_len_through_parser_state() {
+    let root_compact = fs::read_to_string(spine_src("runtime/root_compact.rs"))
+        .expect("read runtime root_compact source");
+    let prepare_commit = root_compact
+        .split("fn prepare_root_compact_commit(")
+        .nth(1)
+        .expect("root compact prepare function");
+    assert!(
+        !prepare_commit.contains("self.materialize_history("),
+        "runtime/root_compact.rs must not materialize h(PS) directly while preparing root compact source bounds"
+    );
+    assert!(
+        prepare_commit.contains("materialized_variable_context_len("),
+        "root compact source context length should route through ParserState"
+    );
+}
+
+#[test]
 fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     let root_compact = fs::read_to_string(spine_src("runtime/root_compact.rs"))
         .expect("read runtime root_compact source");

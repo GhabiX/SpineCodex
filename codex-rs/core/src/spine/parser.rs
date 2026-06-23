@@ -473,6 +473,16 @@ impl ParserState {
         Ok(Some((operation, 0, history_items.to_vec(), materialized)))
     }
 
+    pub(super) fn materialized_variable_context_len(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+    ) -> Result<usize, SpineError> {
+        Ok(self
+            .materialize_variable_context(raw_items, trim_projection)?
+            .len())
+    }
+
     pub(super) fn build_checkpoint(
         &self,
         rollout_path: &Path,

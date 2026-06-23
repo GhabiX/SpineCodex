@@ -396,7 +396,10 @@ impl SpineRuntime {
                 "spine root compact memory body must not be empty".to_string(),
             ));
         }
-        let source_context_end = self.materialize_history(raw_items)?.len();
+        let trim_projection = self.current_trim_projection()?;
+        let source_context_end = self
+            .parser
+            .materialized_variable_context_len(raw_items, &trim_projection)?;
         let node = self.parser.current_root_epoch_id()?;
         let compact_id = format!("root-{}-{}", node.as_path().replace('.', "-"), self.raw_len);
         let raw_live_hash = hash_raw_live(&self.raw_live);
