@@ -63,6 +63,10 @@ pub(crate) struct PreparedSpineReplayRuntime {
     pub(crate) live_root_compacts: Vec<LiveRootCompact>,
 }
 
+pub(crate) struct SpineInitEvidence<'a> {
+    pub(crate) rollout_path: &'a Path,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SpineObservedContextItem<'a> {
     pub(crate) raw_ordinal: u64,
@@ -1435,9 +1439,9 @@ impl SpineSessionState {
         Ok(())
     }
 
-    pub(crate) fn on_init(&mut self, rollout_path: &Path) -> Result<(), SpineError> {
-        self.ensure_runtime(rollout_path)?;
-        self.checkpoint_initial_if_jit(rollout_path, &[])
+    pub(crate) fn on_init(&mut self, evidence: SpineInitEvidence<'_>) -> Result<(), SpineError> {
+        self.ensure_runtime(evidence.rollout_path)?;
+        self.checkpoint_initial_if_jit(evidence.rollout_path, &[])
     }
 
     pub(crate) fn take_initial_tree_snapshot(

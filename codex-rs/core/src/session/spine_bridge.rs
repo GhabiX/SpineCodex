@@ -11,6 +11,7 @@ use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineCompletedToolCallHostOutcome;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
 use crate::spine::SpineHostEffects;
+use crate::spine::SpineInitEvidence;
 use crate::spine::SpineMessageEvidence;
 use crate::spine::SpineMessageHostOutcome;
 use crate::spine::SpineObservedContextItem;
@@ -368,7 +369,9 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        guard.on_init(&rollout_path)
+        guard.on_init(SpineInitEvidence {
+            rollout_path: &rollout_path,
+        })
     }
 
     pub(super) async fn spine_tools_visible(&self) -> bool {

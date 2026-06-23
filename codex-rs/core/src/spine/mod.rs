@@ -36,6 +36,7 @@ pub(crate) use runtime::SpineCompletedToolCallHostOutcome;
 pub(crate) use runtime::SpineCompletedToolCallOutputEvidence;
 pub(crate) use runtime::SpineError;
 pub(crate) use runtime::SpineHostEffects;
+pub(crate) use runtime::SpineInitEvidence;
 pub(crate) use runtime::SpineMessageEvidence;
 pub(crate) use runtime::SpineMessageHostOutcome;
 pub(crate) use runtime::SpineObservedContextItem;
