@@ -5,12 +5,11 @@ use std::future::Future;
 use std::path::Path;
 
 use super::runtime::SpineCompletedToolCallHostOutcome;
+use super::runtime::SpineCompletedToolCallOutputEvidence;
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
 use super::runtime::SpineToolcallHostAttempt;
 use super::runtime::SpineToolcallHostCommitAttempt;
-
-pub(crate) use super::runtime::SpineToolcallHookEvidence as ToolcallHookEvidence;
 
 pub(crate) struct HostEffects {
     inner: super::runtime::SpineHostEffects,
@@ -47,6 +46,16 @@ pub(crate) struct MessageEvidence<'a> {
 pub(crate) struct ToolCallEvidence<'a> {
     kind: ToolCallEvidenceKind<'a>,
     force_ordinary: bool,
+}
+
+pub(crate) struct ToolcallHookEvidence<'a> {
+    pub(crate) completed_output: &'a SpineCompletedToolCallOutputEvidence<'a>,
+    pub(crate) output_raw_ordinals: &'a [Option<u64>],
+    pub(crate) output_context_start: usize,
+    pub(crate) raw_items: &'a [Option<ResponseItem>],
+    pub(crate) current_turn_provider_input_tokens: Option<i64>,
+    pub(crate) tool_resp_already_recorded: bool,
+    pub(crate) recorded_inside_reduce: bool,
 }
 
 enum ToolCallEvidenceKind<'a> {
@@ -349,6 +358,14 @@ pub(crate) fn on_toolcall(
     evidence: ToolcallHookEvidence<'_>,
 ) -> Result<HostEffects, SpineError> {
     state
-        .prepare_completed_toolcall_for_commit(evidence)
+        .prepare_completed_toolcall_for_commit(super::runtime::SpineToolcallHookEvidence {
+            completed_output: evidence.completed_output,
+            output_raw_ordinals: evidence.output_raw_ordinals,
+            output_context_start: evidence.output_context_start,
+            raw_items: evidence.raw_items,
+            current_turn_provider_input_tokens: evidence.current_turn_provider_input_tokens,
+            tool_resp_already_recorded: evidence.tool_resp_already_recorded,
+            recorded_inside_reduce: evidence.recorded_inside_reduce,
+        })
         .map(HostEffects::from_runtime)
 }
