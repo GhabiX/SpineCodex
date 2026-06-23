@@ -321,7 +321,7 @@ fn format_tree_rows(
         if let Some(trajs_path) = row.trajs_path.as_ref() {
             detail.push_str(&format!(" trajs={}", trajs_path.display()));
         }
-        if let Some(accounting) = row.accounting.as_ref().and_then(format_node_accounting) {
+        if let Some(accounting) = row.accounting.as_ref().map(format_node_accounting) {
             detail.push_str(&format!(" {accounting}"));
         }
         let summary = visible_summary(&row)
@@ -414,28 +414,26 @@ fn snapshot_accounting(accounting: &NodeAccounting) -> SpineTreeNodeAccountingSn
     }
 }
 
-fn format_node_accounting(accounting: &NodeAccounting) -> Option<String> {
+fn format_node_accounting(accounting: &NodeAccounting) -> String {
     match (
         accounting.closed_source_suffix_tokens,
         accounting.closed_memory_context_tokens,
         accounting.memory_output_tokens,
     ) {
-        (Some(source), Some(memory), _) => Some(format!(
+        (Some(source), Some(memory), _) => format!(
             "(~{} source -> ~{} memory context)",
             format_si_suffix(source),
             format_si_suffix(memory)
-        )),
-        (Some(source), None, Some(output)) => Some(format!(
+        ),
+        (Some(source), None, Some(output)) => format!(
             "(~{} source -> ~{} memory output)",
             format_si_suffix(source),
             format_si_suffix(output)
-        )),
-        (Some(source), None, None) => Some(format!("(~{} source)", format_si_suffix(source))),
-        (None, Some(memory), _) => Some(format!("(~{} memory context)", format_si_suffix(memory))),
-        (None, None, Some(output)) => {
-            Some(format!("(~{} memory output)", format_si_suffix(output)))
-        }
-        (None, None, None) => None,
+        ),
+        (Some(source), None, None) => format!("(~{} source)", format_si_suffix(source)),
+        (None, Some(memory), _) => format!("(~{} memory context)", format_si_suffix(memory)),
+        (None, None, Some(output)) => format!("(~{} memory output)", format_si_suffix(output)),
+        (None, None, None) => unreachable!("empty NodeAccounting is filtered at construction"),
     }
 }
 
