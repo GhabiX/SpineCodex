@@ -14,7 +14,8 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
     let shape = commit_marker_event_shape(marker.kind);
     validate_commit_marker_width(marker, shape.width)?;
     if shape.requires_close_prefix {
-        validate_close_prefix(marker, events_by_seq)?;
+        let (node, boundary) = close_event_at_marker_start(marker, events_by_seq)?;
+        validate_close_marker_fields(marker, node, *boundary)?;
     }
     if let Some(offset) = shape.synthetic_open_offset {
         validate_required_synthetic_open(marker, events_by_seq, marker_shape_seq(marker, offset)?)?;
@@ -30,14 +31,6 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
         validate_root_compact_shape(marker, events_by_seq)?;
     }
     Ok(())
-}
-
-fn validate_close_prefix(
-    marker: &SpineCommitMarker,
-    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
-) -> Result<(), SpineError> {
-    let (node, boundary) = close_event_at_marker_start(marker, events_by_seq)?;
-    validate_close_marker_fields(marker, node, *boundary)
 }
 
 fn validate_required_synthetic_open(
