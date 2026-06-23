@@ -24,12 +24,9 @@ pub(in crate::spine::store) fn commit_marker_allowed_by_source_live(
     {
         return Ok(false);
     }
-    for memory in &marker.memory_refs {
-        if !commit_memory_ref_allowed_by_source_live(memory, raw_live)? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    marker.memory_refs.iter().try_fold(true, |live, memory| {
+        Ok(live && commit_memory_ref_allowed_by_source_live(memory, raw_live)?)
+    })
 }
 
 pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs(
