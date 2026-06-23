@@ -19,7 +19,6 @@ use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
-use crate::spine::SpineRootCompactPublishedHistory;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
 use crate::spine::SpineRuntime;
@@ -1462,28 +1461,13 @@ impl Session {
     pub(crate) async fn on_compact(
         &self,
         evidence: SpineNativeCompactEvidence<'_>,
-    ) -> CodexResult<Option<SpineRootCompactPublishedHistory>> {
-        let native_items = evidence.native_items;
-        let effects = self
-            .prepare_spine_root_compact_from_native_history(evidence)
+    ) -> CodexResult<SpineHostEffects> {
+        self.prepare_spine_root_compact_from_native_history(evidence)
             .await
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
                 reason: err.to_string(),
-            })?;
-        let published_history = effects
-            .apply_root_compact_history_publication(
-                native_items,
-                Session::is_spine_fixed_prefix_item,
-            )
-            .map_err(|reason| CodexErr::SpineTerminalFailure {
-                operation: "install Spine root compact".to_string(),
-                reason,
-            })?;
-        let Some(published_history) = published_history else {
-            return Ok(None);
-        };
-        Ok(Some(published_history))
+            })
     }
 
     async fn prepare_spine_root_compact_from_native_history(
@@ -1527,7 +1511,7 @@ impl Session {
     pub(crate) async fn replace_compacted_history_with_spine_hooks(
         &self,
         turn_context: &TurnContext,
-        mut items: Vec<ResponseItem>,
+        items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         mut compacted_item: CompactedItem,
         spine_root_compact_source: Option<Vec<ResponseItem>>,
@@ -1540,60 +1524,78 @@ impl Session {
                 fallback_spine_root_compact_source.as_slice()
             }
         };
-        let prepared_spine_root_compact = self
+        let effects = self
             .on_compact(SpineNativeCompactEvidence {
                 compacted_history: spine_root_compact_source,
                 native_items: &items,
             })
             .await?;
-        if let Some(prepared) = prepared_spine_root_compact.as_ref() {
-            items = prepared.published_history().to_vec();
-            compacted_item.replacement_history = Some(items.clone());
-        }
-        let installed_spine_root_compact = prepared_spine_root_compact.is_some();
-        let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
-        if let Some(turn_context_item) = reference_context_item.clone() {
-            rollout_items.push(RolloutItem::TurnContext(turn_context_item));
-        }
-        if let Err(err) = self.try_persist_rollout_items(&rollout_items).await {
-            let reason = err.to_string();
-            self.invalidate_spine_runtime(format!(
-                "failed to persist native compact rollout boundary after sidecar commit: {reason}"
-            ))
-            .await;
-            return Err(CodexErr::SpineCompactCommitFailure {
-                operation: "persist native compact rollout boundary".to_string(),
-                reason,
-            });
-        }
-        self.replace_history(items, reference_context_item.clone())
-            .await;
-        let spine_tree_snapshot =
-            if let Some(prepared_spine_root_compact) = prepared_spine_root_compact {
-                match self
-                    .finalize_spine_root_compact_after_history_publish(prepared_spine_root_compact)
-                    .await
-                {
-                    Ok(spine_tree_snapshot) => spine_tree_snapshot,
-                    Err(err) => {
-                        self.invalidate_spine_runtime(format!(
-                        "failed to install Spine root compact after host history publication: {err}"
-                    ))
-                    .await;
-                        return Err(err);
+        let publish_reference_context_item = reference_context_item.clone();
+        let after_installed_reference_context_item = reference_context_item.clone();
+        let spine_tree_snapshot = effects
+            .apply_root_compact_history_publication(
+                items,
+                Session::is_spine_fixed_prefix_item,
+                |reason| CodexErr::SpineTerminalFailure {
+                    operation: "install Spine root compact".to_string(),
+                    reason,
+                },
+                |published_items, installed_spine_root_compact| {
+                    let reference_context_item = publish_reference_context_item;
+                    async move {
+                        if installed_spine_root_compact {
+                            compacted_item.replacement_history = Some(published_items.clone());
+                        }
+                        let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
+                        if let Some(turn_context_item) = reference_context_item.clone() {
+                            rollout_items.push(RolloutItem::TurnContext(turn_context_item));
+                        }
+                        if let Err(err) = self.try_persist_rollout_items(&rollout_items).await {
+                            let reason = err.to_string();
+                            self.invalidate_spine_runtime(format!(
+                                "failed to persist native compact rollout boundary after sidecar commit: {reason}"
+                            ))
+                            .await;
+                            return Err(CodexErr::SpineCompactCommitFailure {
+                                operation: "persist native compact rollout boundary".to_string(),
+                                reason,
+                            });
+                        }
+                        self.replace_history(published_items, reference_context_item).await;
+                        Ok(())
                     }
-                }
-            } else {
-                None
-            };
-        if installed_spine_root_compact && reference_context_item.is_some() {
-            let environment_context = Self::cwd_only_environment_context_item(turn_context);
-            self.record_conversation_items(
-                turn_context,
-                std::slice::from_ref(&environment_context),
+                },
+                |published_variable_history_len| async move {
+                    match self
+                        .finalize_spine_root_compact_after_history_publish(
+                        published_variable_history_len,
+                    )
+                    .await
+                    {
+                        Ok(spine_tree_snapshot) => Ok(spine_tree_snapshot),
+                        Err(err) => {
+                            self.invalidate_spine_runtime(format!(
+                                "failed to install Spine root compact after host history publication: {err}"
+                            ))
+                            .await;
+                            Err(err)
+                        }
+                    }
+                },
+                || async move {
+                    if after_installed_reference_context_item.is_some() {
+                        let environment_context =
+                            Self::cwd_only_environment_context_item(turn_context);
+                        self.record_conversation_items(
+                            turn_context,
+                            std::slice::from_ref(&environment_context),
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                },
             )
             .await?;
-        }
         self.services.model_client.advance_window_generation();
         Ok(ReplaceCompactedHistoryOutcome {
             spine_tree_snapshot,
@@ -1602,7 +1604,7 @@ impl Session {
 
     pub(crate) async fn finalize_spine_root_compact_after_history_publish(
         &self,
-        published_history: SpineRootCompactPublishedHistory,
+        published_variable_history_len: usize,
     ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Err(CodexErr::SpineTerminalFailure {
@@ -1611,7 +1613,6 @@ impl Session {
             });
         };
         let mut guard = spine_slot.lock().await;
-        let published_variable_history_len = published_history.materialized_len();
         guard
             .take_pending_root_compact_after_history_publish(published_variable_history_len)
             .map(Some)

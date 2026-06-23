@@ -32,7 +32,7 @@ pub(crate) struct SpineRootCompactHostPublish {
     publication: SpineRootCompactHistoryPublication,
 }
 
-pub(crate) struct SpineRootCompactPublishedHistory {
+struct SpineRootCompactPublishedHistory {
     published_history: Vec<ResponseItem>,
     materialized_len: usize,
 }
@@ -176,19 +176,48 @@ impl SpineHostEffects {
         Ok(publication)
     }
 
-    pub(crate) fn apply_root_compact_history_publication(
+    pub(crate) async fn apply_root_compact_history_publication<
+        E,
+        PublishHistory,
+        PublishHistoryFuture,
+        FinalizeAfterPublish,
+        FinalizeAfterPublishFuture,
+        AfterInstalled,
+        AfterInstalledFuture,
+    >(
         self,
-        native_items: &[ResponseItem],
+        native_items: Vec<ResponseItem>,
         is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
-    ) -> Result<Option<SpineRootCompactPublishedHistory>, String> {
-        let Some(host_publish) = self.into_only_root_compact_host_publish()? else {
+        invariant_error: impl Fn(String) -> E,
+        publish_history: PublishHistory,
+        finalize_after_publish: FinalizeAfterPublish,
+        after_installed: AfterInstalled,
+    ) -> Result<Option<SpineTreeUpdateEvent>, E>
+    where
+        PublishHistory: FnOnce(Vec<ResponseItem>, bool) -> PublishHistoryFuture,
+        PublishHistoryFuture: Future<Output = Result<(), E>>,
+        FinalizeAfterPublish: FnOnce(usize) -> FinalizeAfterPublishFuture,
+        FinalizeAfterPublishFuture: Future<Output = Result<Option<SpineTreeUpdateEvent>, E>>,
+        AfterInstalled: FnOnce() -> AfterInstalledFuture,
+        AfterInstalledFuture: Future<Output = Result<(), E>>,
+    {
+        let Some(host_publish) = self
+            .into_only_root_compact_host_publish()
+            .map_err(invariant_error)?
+        else {
+            publish_history(native_items, false).await?;
             return Ok(None);
         };
-        Ok(Some(SpineRootCompactPublishedHistory::new(
+        let published_history = SpineRootCompactPublishedHistory::new(
             host_publish,
-            native_items,
+            &native_items,
             is_fixed_prefix_item,
-        )))
+        );
+        let published_variable_history_len = published_history.materialized_len();
+        publish_history(published_history.into_published_history(), true).await?;
+        let spine_tree_snapshot = finalize_after_publish(published_variable_history_len).await?;
+        after_installed().await?;
+        Ok(spine_tree_snapshot)
     }
 
     pub(crate) fn into_toolcall_host_commit(
@@ -403,12 +432,12 @@ impl SpineRootCompactPublishedHistory {
         }
     }
 
-    pub(crate) fn materialized_len(&self) -> usize {
+    fn materialized_len(&self) -> usize {
         self.materialized_len
     }
 
-    pub(crate) fn published_history(&self) -> &[ResponseItem] {
-        &self.published_history
+    fn into_published_history(self) -> Vec<ResponseItem> {
+        self.published_history
     }
 }
 

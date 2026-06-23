@@ -63,7 +63,6 @@ mod types;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use host_effect::SpineHistoryUpdate;
 pub(crate) use host_effect::SpineHostEffects;
-pub(crate) use host_effect::SpineRootCompactPublishedHistory;
 pub(crate) use host_effect::SpineTreeUpdateDelivery;
 pub(crate) use pending::CompletedToolCall;
 pub(crate) use pending::CompletedToolCallSegment;
