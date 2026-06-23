@@ -12,7 +12,6 @@ use super::SpineHostEffects;
 use super::SpineOpenNodeContextProjection;
 use super::SpineRuntime;
 use super::SpineTreeUpdateDelivery;
-use super::SpineTrimOutcome;
 use super::prepared::SpineCommitPublication;
 use super::support::is_non_toolcall_msg;
 use super::support::is_real_user_message;
@@ -27,6 +26,7 @@ mod completed_toolcall_evidence;
 mod root_compact_session;
 mod state_types;
 mod toolcall_host_commit;
+mod trim_session;
 
 pub(crate) use completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence;
 use completed_toolcall_evidence::SpineCompletedToolCallRequestIds;
@@ -609,105 +609,6 @@ impl SpineSessionState {
             replacement,
             reference_context_item,
         }))
-    }
-
-    pub(crate) fn trim_tool_response(
-        &mut self,
-        trim_id: &str,
-    ) -> Result<SpineTrimOutcome, SpineError> {
-        self.runtime_mut_after_init()?.trim_tool_response(trim_id)
-    }
-
-    pub(crate) fn slice_tool_response_head(
-        &mut self,
-        trim_id: &str,
-        head: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineTrimOutcome, SpineError> {
-        self.runtime_mut_after_init()?
-            .slice_tool_response_head(trim_id, head, raw_items)
-    }
-
-    pub(crate) fn slice_tool_response_tail(
-        &mut self,
-        trim_id: &str,
-        tail: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineTrimOutcome, SpineError> {
-        self.runtime_mut_after_init()?
-            .slice_tool_response_tail(trim_id, tail, raw_items)
-    }
-
-    pub(crate) fn slice_tool_response_anchor(
-        &mut self,
-        trim_id: &str,
-        anchor: &str,
-        preceding: usize,
-        following: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineTrimOutcome, SpineError> {
-        self.runtime_mut_after_init()?
-            .slice_tool_response_anchor(trim_id, anchor, preceding, following, raw_items)
-    }
-
-    pub(crate) fn trim_projection_needs_rollout_raw_items(
-        &self,
-    ) -> Result<Option<bool>, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        Ok(Some(runtime.jit_enabled()))
-    }
-
-    pub(crate) fn materialize_trim_projection_from_raw_items(
-        &self,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        Ok(Some(runtime.materialize_history(raw_items)?))
-    }
-
-    pub(crate) fn materialize_history_if_no_pending_tool_request(
-        &self,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        if runtime.has_pending_tool_request() {
-            return Ok(None);
-        }
-        Ok(Some(runtime.materialize_history(raw_items)?))
-    }
-
-    pub(crate) fn project_trim_projection_from_history(
-        &self,
-        history_items: &[ResponseItem],
-    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        Ok(Some(runtime.project_raw_history_with_trim(history_items)?))
-    }
-
-    pub(crate) fn prepare_trim_replay_from_history(
-        rollout_path: &Path,
-        raw_len: u64,
-        history_items: &[ResponseItem],
-    ) -> Result<Option<(SpineRuntime, Vec<ResponseItem>)>, SpineError> {
-        if !SpineStore::has_for_rollout(rollout_path)? {
-            return Ok(None);
-        }
-        let mut runtime = SpineRuntime::load_or_create_with_jit(rollout_path, raw_len, false)?;
-        runtime.set_trim_enabled(true);
-        let materialized = runtime.project_raw_history_with_trim(history_items)?;
-        Ok(Some((runtime, materialized)))
     }
 
     pub(crate) fn single_completed_toolcall_evidence(
