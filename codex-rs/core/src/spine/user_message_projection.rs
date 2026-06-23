@@ -56,30 +56,29 @@ fn prefix_user_anchor(content: &mut Vec<ContentItem>, user_anchor: u64) {
 }
 
 fn render_user_content_for_memory(content: &[ContentItem]) -> String {
-    let mut out = String::new();
-    for item in content {
-        let part = match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                text.trim_matches('\n').to_string()
-            }
-            ContentItem::InputImage { detail, .. } => match detail {
-                Some(detail) => format!("<image omitted detail={}>", image_detail_label(*detail)),
-                None => "<image omitted>".to_string(),
-            },
-        };
-        if part.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(&part);
-    }
+    let out = content
+        .iter()
+        .filter_map(memory_content_part)
+        .collect::<Vec<_>>()
+        .join("\n");
     if out.is_empty() {
         "<empty user message>".to_string()
     } else {
         out
     }
+}
+
+fn memory_content_part(item: &ContentItem) -> Option<String> {
+    let part = match item {
+        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            text.trim_matches('\n').to_string()
+        }
+        ContentItem::InputImage { detail, .. } => match detail {
+            Some(detail) => format!("<image omitted detail={}>", image_detail_label(*detail)),
+            None => "<image omitted>".to_string(),
+        },
+    };
+    (!part.is_empty()).then_some(part)
 }
 
 fn image_detail_label(detail: ImageDetail) -> &'static str {
