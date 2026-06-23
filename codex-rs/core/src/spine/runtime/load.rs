@@ -34,7 +34,7 @@ impl SpineRuntime {
         if !jit_enabled {
             return Self::load_trim_only(store, live_raw_prefix(raw_len)?);
         }
-        if jit_enabled && !store.tree_path().exists() {
+        if !store.tree_path().exists() {
             let archive = SpineArchive::new(store.root.clone());
             let (init_event, _init_token) = crate::spine::lexer::lex_init_event_token(&archive, 0)?;
             let (open_event, _open_token) = crate::spine::lexer::lex_open_event_token(
