@@ -101,7 +101,7 @@ impl SpineSessionState {
         .map(SpineRootCompactHostInstall::new)
     }
 
-    pub(crate) fn prepare_native_root_compact_from_history_with_checkpoint(
+    pub(in crate::spine) fn prepare_native_root_compact_from_history_with_checkpoint(
         &mut self,
         evidence: SpineCompactEvidence<'_>,
     ) -> Result<SpineHostEffects, SpineError> {

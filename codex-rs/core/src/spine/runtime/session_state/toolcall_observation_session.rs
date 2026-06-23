@@ -83,7 +83,7 @@ impl SpineSessionState {
         runtime.is_control_output_call_id(call_id)
     }
 
-    pub(crate) fn prepare_completed_toolcall_for_commit(
+    pub(in crate::spine) fn prepare_completed_toolcall_for_commit(
         &mut self,
         evidence: SpineToolcallHookEvidence<'_>,
     ) -> Result<SpineHostEffects, SpineError> {

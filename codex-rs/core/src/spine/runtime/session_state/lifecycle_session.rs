@@ -246,7 +246,7 @@ impl SpineSessionState {
         Ok(())
     }
 
-    pub(crate) fn on_init(
+    pub(in crate::spine) fn on_init(
         &mut self,
         evidence: SpineInitEvidence<'_>,
     ) -> Result<SpineHostEffects, SpineError> {

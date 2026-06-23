@@ -10,7 +10,7 @@ use super::SpineSessionState;
 use super::state_types::SpineMessageEvidence;
 
 impl SpineSessionState {
-    pub(crate) fn observe_non_toolcall_msg_with_host_effects(
+    pub(in crate::spine) fn observe_non_toolcall_msg_with_host_effects(
         &mut self,
         evidence: SpineMessageEvidence<'_>,
     ) -> Result<SpineHostEffects, SpineError> {
