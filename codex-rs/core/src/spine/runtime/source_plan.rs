@@ -56,41 +56,15 @@ impl SpineRuntime {
         close_call_id: &str,
     ) -> Result<SpineCompactSourcePlan, SpineError> {
         let open_meta = self.current_close_open_meta()?;
-        if &open_meta.id != node {
-            return Err(SpineError::Invariant(format!(
-                "spine.close source plan requested for node {node}, but current close node is {}",
-                open_meta.id
-            )));
-        }
-        if open_meta.index != suffix_start {
-            return Err(SpineError::CompactFailure(format!(
-                "spine.close source plan suffix start {suffix_start} does not match h(PS) open index {} for node {node}",
-                open_meta.index
-            )));
-        }
-        if !self.parse_stack.current_open_has_nodes()? {
-            return Err(SpineError::Operation(format!(
-                "spine.close requires non-empty live suffix for node {node}"
-            )));
-        }
-        if suffix_start >= raw_context_items.len() {
-            return Err(SpineError::Operation(format!(
-                "spine.close suffix start {suffix_start} is outside history length {} for node {node}",
-                raw_context_items.len()
-            )));
-        }
-
-        let close_context_end = toolcall_start;
-        if close_context_end < suffix_start {
-            return Err(SpineError::Operation(format!(
-                "spine.close request index {close_context_end} precedes suffix start {suffix_start} for node {node} call_id={close_call_id}"
-            )));
-        }
-        if close_context_end == suffix_start {
-            return Err(SpineError::Operation(format!(
-                "spine.close requires non-empty live suffix for node {node} call_id={close_call_id}"
-            )));
-        }
+        let close_context_end = self.validate_close_source_plan_request(
+            raw_context_items,
+            node,
+            suffix_start,
+            toolcall_start,
+            close_call_id,
+            open_meta.index,
+            &open_meta.id,
+        )?;
 
         let suffix_nodes = self.current_open_suffix_nodes()?;
         let visible_refs = project_spine_tree_nodes_visible_items(suffix_nodes, suffix_start)?;
@@ -153,6 +127,53 @@ impl SpineRuntime {
                 "spine.close source plan expected live node list after current Open, found {suffix:?}"
             ))),
         }
+    }
+
+    fn validate_close_source_plan_request(
+        &self,
+        raw_context_items: &[ResponseItem],
+        node: &NodeId,
+        suffix_start: usize,
+        toolcall_start: usize,
+        close_call_id: &str,
+        open_index: usize,
+        open_node: &NodeId,
+    ) -> Result<usize, SpineError> {
+        if open_node != node {
+            return Err(SpineError::Invariant(format!(
+                "spine.close source plan requested for node {node}, but current close node is {}",
+                open_node
+            )));
+        }
+        if open_index != suffix_start {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close source plan suffix start {suffix_start} does not match h(PS) open index {open_index} for node {node}",
+            )));
+        }
+        if !self.parse_stack.current_open_has_nodes()? {
+            return Err(SpineError::Operation(format!(
+                "spine.close requires non-empty live suffix for node {node}"
+            )));
+        }
+        if suffix_start >= raw_context_items.len() {
+            return Err(SpineError::Operation(format!(
+                "spine.close suffix start {suffix_start} is outside history length {} for node {node}",
+                raw_context_items.len()
+            )));
+        }
+
+        let close_context_end = toolcall_start;
+        if close_context_end < suffix_start {
+            return Err(SpineError::Operation(format!(
+                "spine.close request index {close_context_end} precedes suffix start {suffix_start} for node {node} call_id={close_call_id}"
+            )));
+        }
+        if close_context_end == suffix_start {
+            return Err(SpineError::Operation(format!(
+                "spine.close requires non-empty live suffix for node {node} call_id={close_call_id}"
+            )));
+        }
+        Ok(close_context_end)
     }
 }
 
