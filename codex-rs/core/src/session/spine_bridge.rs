@@ -8,6 +8,7 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
+use crate::spine::SpineCommitAttempt;
 use crate::spine::SpineCompactEvidence;
 use crate::spine::SpineCompletedToolCallHostOutcome;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
@@ -28,10 +29,8 @@ use crate::spine::SpineToolCallEvidence;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
-use crate::spine::SpineToolcallCommitHostStep;
 use crate::spine::SpineToolcallCommitProviderInputTokens;
 use crate::spine::SpineToolcallHookEvidence;
-use crate::spine::SpineToolcallHostCommit;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
 use crate::spine::is_non_toolcall_msg;
@@ -165,24 +164,6 @@ struct SpineToolcallCommitAttemptInput<'a> {
     toolcall_evidence: SpineToolcallCommitEvidence,
     tool_resp_already_recorded: bool,
     raw_items: &'a [Option<ResponseItem>],
-}
-
-enum SpineToolcallCommitLoopControl {
-    Done(SpineHostEffects),
-    Retry,
-    NoSpineCommit,
-}
-
-enum SpineToolcallHostSideEffect {
-    Continue(SpineToolcallCommitLoopControl),
-    FailClosed {
-        reason: &'static str,
-        error: SpineError,
-    },
-    AbortPending {
-        reason: &'static str,
-        error: SpineError,
-    },
 }
 
 enum SpineTrimRequest {
@@ -1307,100 +1288,74 @@ impl Session {
         let expected_history = history.raw_items().to_vec();
         let provider_input_tokens =
             commit_host_loop.provider_input_tokens(current_turn_provider_input_tokens);
-        let post_commit_effects = loop {
-            let attempt_input = SpineToolcallCommitAttemptInput {
-                tool_resp_item: item,
-                expected_history: expected_history.clone(),
-                provider_input_tokens,
-                toolcall_evidence: toolcall.evidence.toolcall_evidence.clone(),
-                tool_resp_already_recorded,
-                raw_items: &raw_items,
-            };
-            let step = self.try_commit_spine_tool_output_once(
-                spine_slot,
-                &mut commit_host_loop,
+        let post_commit_effects = commit_host_loop
+            .run_host_commit_loop(
                 &call_id,
-                attempt_input,
-            );
-            let step = match step {
-                Ok(step) => step,
-                Err(err) => {
-                    if recorded_output_inside_reduce {
-                        if let Some(history) = history_before_recorded_output.as_ref() {
-                            self.replace_history(
-                                history.raw_items().to_vec(),
-                                history.reference_context_item(),
-                            )
+                || async {
+                    let attempt_input = SpineToolcallCommitAttemptInput {
+                        tool_resp_item: item,
+                        expected_history: expected_history.clone(),
+                        provider_input_tokens,
+                        toolcall_evidence: toolcall.evidence.toolcall_evidence.clone(),
+                        tool_resp_already_recorded,
+                        raw_items: &raw_items,
+                    };
+                    self.try_commit_spine_tool_output_once(spine_slot, attempt_input)
+                },
+                || async {
+                    tokio::task::yield_now().await;
+                },
+                |reason| {
+                    let call_id = call_id.clone();
+                    async move {
+                        self.fail_closed_spine_toolcall_commit(&call_id, reason)
                             .await;
-                        }
                     }
-                    if err.should_invalidate_runtime() {
-                        self.invalidate_spine_runtime(format!(
-                            "failed to commit completed Spine toolcall [{:?}] for call_id={call_id}: {err}",
-                            err.class()
-                        ))
+                },
+                |reason| {
+                    let call_id = call_id.clone();
+                    async move {
+                        self.abort_spine_pending_tool(&call_id, reason).await;
+                    }
+                },
+            )
+            .await;
+        let post_commit_effects = match post_commit_effects {
+            Ok(Some(effects)) => effects,
+            Ok(None) => return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit()),
+            Err(err) => {
+                if recorded_output_inside_reduce {
+                    if let Some(history) = history_before_recorded_output.as_ref() {
+                        self.replace_history(
+                            history.raw_items().to_vec(),
+                            history.reference_context_item(),
+                        )
                         .await;
                     }
-                    return Err(err);
                 }
-            };
-            match self
-                .apply_spine_toolcall_commit_host_step(&call_id, step)
-                .await?
-            {
-                SpineToolcallCommitLoopControl::Done(effects) => break effects,
-                SpineToolcallCommitLoopControl::NoSpineCommit => {
-                    return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
+                if err.should_invalidate_runtime() {
+                    self.invalidate_spine_runtime(format!(
+                        "failed to commit completed Spine toolcall [{:?}] for call_id={call_id}: {err}",
+                        err.class()
+                    ))
+                    .await;
                 }
-                SpineToolcallCommitLoopControl::Retry => {
-                    tokio::task::yield_now().await;
-                    continue;
-                }
+                return Err(err);
             }
         };
         Ok(commit_host_loop.host_outcome(post_commit_effects))
     }
 
-    async fn apply_spine_toolcall_commit_host_step(
-        &self,
-        call_id: &str,
-        control: SpineToolcallCommitHostStep,
-    ) -> Result<SpineToolcallCommitLoopControl, SpineError> {
-        let side_effect = control.fold(
-            |effects| {
-                SpineToolcallHostSideEffect::Continue(SpineToolcallCommitLoopControl::Done(effects))
-            },
-            || SpineToolcallHostSideEffect::Continue(SpineToolcallCommitLoopControl::Retry),
-            || SpineToolcallHostSideEffect::Continue(SpineToolcallCommitLoopControl::NoSpineCommit),
-            |reason, error| SpineToolcallHostSideEffect::FailClosed { reason, error },
-            |reason, error| SpineToolcallHostSideEffect::AbortPending { reason, error },
-        );
-        match side_effect {
-            SpineToolcallHostSideEffect::Continue(control) => Ok(control),
-            SpineToolcallHostSideEffect::FailClosed { reason, error } => {
-                self.fail_closed_spine_toolcall_commit(call_id, reason)
-                    .await;
-                Err(error)
-            }
-            SpineToolcallHostSideEffect::AbortPending { reason, error } => {
-                self.abort_spine_pending_tool(call_id, reason).await;
-                Err(error)
-            }
-        }
-    }
-
     fn try_commit_spine_tool_output_once(
         &self,
         spine_slot: &Mutex<SpineSessionState>,
-        commit_host_loop: &mut SpineToolcallHostCommit,
-        call_id: &str,
         input: SpineToolcallCommitAttemptInput<'_>,
-    ) -> Result<SpineToolcallCommitHostStep, SpineError> {
+    ) -> Result<SpineCommitAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
-            return commit_host_loop.host_lock_busy_step(call_id);
+            return Ok(SpineCommitAttempt::host_lock_busy());
         };
         let Ok(mut state) = self.state.try_lock() else {
-            return commit_host_loop.host_lock_busy_step(call_id);
+            return Ok(SpineCommitAttempt::host_lock_busy());
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
@@ -1427,7 +1382,7 @@ impl Session {
                 }
             },
         )?;
-        commit_host_loop.interpret_attempt_for_host(attempt, call_id)
+        Ok(attempt)
     }
 
     async fn spine_raw_items_from_rollout_for_commit(

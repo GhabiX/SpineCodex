@@ -4,6 +4,7 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::path::Path;
 
 use super::CompletedToolCall;
@@ -617,30 +618,49 @@ impl SpineToolcallHostCommit {
         Ok(step)
     }
 
-    pub(crate) fn host_lock_busy_step(
+    pub(crate) async fn run_host_commit_loop<
+        AttemptOnce,
+        AttemptOnceFuture,
+        YieldRetry,
+        YieldRetryFuture,
+        FailClosed,
+        FailClosedFuture,
+        AbortPending,
+        AbortPendingFuture,
+    >(
         &mut self,
         call_id: &str,
-    ) -> Result<SpineToolcallCommitHostStep, SpineError> {
-        self.interpret_attempt_for_host(SpineCommitAttempt::host_lock_busy(), call_id)
-    }
-}
-
-impl SpineToolcallCommitHostStep {
-    pub(crate) fn fold<T>(
-        self,
-        done: impl FnOnce(SpineHostEffects) -> T,
-        retry: impl FnOnce() -> T,
-        no_spine_commit: impl FnOnce() -> T,
-        fail_closed: impl FnOnce(&'static str, SpineError) -> T,
-        abort_pending: impl FnOnce(&'static str, SpineError) -> T,
-    ) -> T {
-        match self {
-            SpineToolcallCommitHostStep::Done(effects) => done(effects),
-            SpineToolcallCommitHostStep::Retry => retry(),
-            SpineToolcallCommitHostStep::NoSpineCommit => no_spine_commit(),
-            SpineToolcallCommitHostStep::FailClosed { reason, error } => fail_closed(reason, error),
-            SpineToolcallCommitHostStep::AbortPending { reason, error } => {
-                abort_pending(reason, error)
+        mut attempt_once: AttemptOnce,
+        mut yield_retry: YieldRetry,
+        mut fail_closed: FailClosed,
+        mut abort_pending: AbortPending,
+    ) -> Result<Option<SpineHostEffects>, SpineError>
+    where
+        AttemptOnce: FnMut() -> AttemptOnceFuture,
+        AttemptOnceFuture: Future<Output = Result<SpineCommitAttempt, SpineError>>,
+        YieldRetry: FnMut() -> YieldRetryFuture,
+        YieldRetryFuture: Future<Output = ()>,
+        FailClosed: FnMut(&'static str) -> FailClosedFuture,
+        FailClosedFuture: Future<Output = ()>,
+        AbortPending: FnMut(&'static str) -> AbortPendingFuture,
+        AbortPendingFuture: Future<Output = ()>,
+    {
+        loop {
+            let attempt = attempt_once().await?;
+            match self.interpret_attempt_for_host(attempt, call_id)? {
+                SpineToolcallCommitHostStep::Done(effects) => return Ok(Some(effects)),
+                SpineToolcallCommitHostStep::Retry => {
+                    yield_retry().await;
+                }
+                SpineToolcallCommitHostStep::NoSpineCommit => return Ok(None),
+                SpineToolcallCommitHostStep::FailClosed { reason, error } => {
+                    fail_closed(reason).await;
+                    return Err(error);
+                }
+                SpineToolcallCommitHostStep::AbortPending { reason, error } => {
+                    abort_pending(reason).await;
+                    return Err(error);
+                }
             }
         }
     }
