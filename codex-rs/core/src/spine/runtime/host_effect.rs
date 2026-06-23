@@ -166,7 +166,7 @@ impl SpineHostEffects {
         Ok((Self::many(remaining), publication))
     }
 
-    pub(crate) fn into_only_root_compact_host_publish(
+    fn into_only_root_compact_host_publish(
         self,
     ) -> Result<Option<SpineRootCompactHostPublish>, String> {
         let (effects, publication) = self.into_root_compact_host_publish()?;
@@ -176,7 +176,7 @@ impl SpineHostEffects {
         Ok(publication)
     }
 
-    pub(crate) fn into_only_root_compact_published_history(
+    pub(crate) fn apply_root_compact_history_publication(
         self,
         native_items: &[ResponseItem],
         is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,

@@ -1473,7 +1473,7 @@ impl Session {
                 reason: err.to_string(),
             })?;
         let published_history = effects
-            .into_only_root_compact_published_history(
+            .apply_root_compact_history_publication(
                 native_items,
                 Session::is_spine_fixed_prefix_item,
             )
