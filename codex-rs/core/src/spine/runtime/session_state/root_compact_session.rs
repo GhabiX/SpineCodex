@@ -79,22 +79,6 @@ impl SpineSessionState {
         }
     }
 
-    pub(crate) fn prepare_root_compact_apply_with_checkpoint(
-        &mut self,
-        rollout_path: &Path,
-        body: String,
-        raw_items: &[Option<ResponseItem>],
-        token_metadata: SpineRootCompactTokenMetadata,
-    ) -> Result<SpineRootCompactHostInstall, SpineError> {
-        self.prepare_root_compact_commit_with_checkpoint(
-            rollout_path,
-            body,
-            raw_items,
-            token_metadata,
-        )
-        .map(SpineRootCompactHostInstall::new)
-    }
-
     pub(crate) fn prepare_native_root_compact_apply_with_checkpoint(
         &mut self,
         rollout_path: &Path,
@@ -108,12 +92,13 @@ impl SpineSessionState {
             next_open_input_tokens: None,
             next_open_context_tokens: None,
         };
-        self.prepare_root_compact_apply_with_checkpoint(
+        self.prepare_root_compact_commit_with_checkpoint(
             rollout_path,
             body,
             raw_items,
             token_metadata,
         )
+        .map(SpineRootCompactHostInstall::new)
     }
 
     pub(crate) fn prepare_native_root_compact_from_history_with_checkpoint(
