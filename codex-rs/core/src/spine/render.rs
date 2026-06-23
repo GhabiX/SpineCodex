@@ -363,9 +363,18 @@ fn projected_tool_response_item_with_state(
     target: &TrimTarget,
     state: &TrimTargetState,
 ) -> Result<ResponseItem, SpineError> {
+    let output_payload = match state {
+        TrimTargetState::Tagged => matched_tool_output(item, target, "text body item")?,
+        TrimTargetState::Snipped | TrimTargetState::Sliced { .. } => {
+            matched_tool_output(item, target, "output payload")?
+        }
+    };
     let body = match state {
         TrimTargetState::Tagged => {
-            let text = text_body(item, target)?;
+            let text = output_payload
+                .text_content()
+                .map(str::to_string)
+                .ok_or_else(|| trim_body_error(target))?;
             FunctionCallOutputBody::Text(format!("[TRIM_ID: {}]\n{text}", target.trim_id))
         }
         TrimTargetState::Snipped => {
@@ -377,7 +386,7 @@ fn projected_tool_response_item_with_state(
     };
     let output = FunctionCallOutputPayload {
         body,
-        success: output_success(item, target)?,
+        success: output_payload.success,
     };
     match item {
         ResponseItem::FunctionCallOutput { call_id, .. }
@@ -404,17 +413,6 @@ fn projected_tool_response_item_with_state(
             target.trim_id, target.call_id
         ))),
     }
-}
-
-fn text_body(item: &ResponseItem, target: &TrimTarget) -> Result<String, SpineError> {
-    matched_tool_output(item, target, "text body item")?
-        .text_content()
-        .map(str::to_string)
-        .ok_or_else(|| trim_body_error(target))
-}
-
-fn output_success(item: &ResponseItem, target: &TrimTarget) -> Result<Option<bool>, SpineError> {
-    Ok(matched_tool_output(item, target, "output payload")?.success)
 }
 
 fn matched_tool_output<'a>(
