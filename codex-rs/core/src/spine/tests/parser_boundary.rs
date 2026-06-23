@@ -86,6 +86,21 @@ fn runtime_replay_routes_token_consumption_through_parser_state() {
 }
 
 #[test]
+fn parse_stack_replay_is_not_a_token_consumer() {
+    let replay =
+        fs::read_to_string(spine_src("parse_stack/replay.rs")).expect("read parse_stack replay");
+    assert!(
+        !replay.contains(".shift("),
+        "parse_stack/replay.rs should adapt replay events to parser inputs, not consume tokens"
+    );
+    assert!(
+        !replay.contains("fn apply_replay_event_to_parse_stack")
+            && !replay.contains("fn parse_stack_from_events_with_forced_events"),
+        "replay event loops belong in ParserState, not parse_stack replay helpers"
+    );
+}
+
+#[test]
 fn runtime_load_checkpoint_replay_routes_through_parser_state() {
     let load = fs::read_to_string(spine_src("runtime/load.rs")).expect("read runtime load source");
     assert!(

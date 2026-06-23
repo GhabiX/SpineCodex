@@ -9,7 +9,6 @@ use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineToken;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 
 pub(in crate::spine) fn event_to_token(
     event: &LoggedSpineLedgerEvent,
@@ -140,41 +139,4 @@ pub(in crate::spine) fn apply_metadata_event(
         }
         _ => Ok(false),
     }
-}
-
-pub(in crate::spine) fn apply_replay_event_to_parse_stack(
-    ps: &mut ParseStack,
-    event: &LoggedSpineLedgerEvent,
-    archive: &SpineArchive,
-    mems: &BTreeMap<String, MemRecord>,
-    raw_mask: RawMask<'_>,
-) -> Result<(), SpineError> {
-    if !apply_metadata_event(ps, event)? {
-        ps.shift(event_to_token(event, archive, mems, raw_mask)?, archive)?;
-    }
-    Ok(())
-}
-
-pub(in crate::spine) fn parse_stack_from_events_with_forced_events(
-    events: &[LoggedSpineLedgerEvent],
-    archive: &SpineArchive,
-    mems: &[MemRecord],
-    raw_mask: RawMask<'_>,
-    forced_event_seqs: &BTreeSet<u64>,
-    marker_structural_event_seqs: &BTreeSet<u64>,
-) -> Result<ParseStack, SpineError> {
-    let mems = mems
-        .iter()
-        .cloned()
-        .map(|mem| (mem.compact_id.clone(), mem))
-        .collect::<BTreeMap<_, _>>();
-    let mut ps = ParseStack::new();
-    for event in events {
-        if forced_event_seqs.contains(&event.seq)
-            || (!marker_structural_event_seqs.contains(&event.seq) && event.allowed_by(raw_mask)?)
-        {
-            apply_replay_event_to_parse_stack(&mut ps, event, archive, &mems, raw_mask)?;
-        }
-    }
-    Ok(ps)
 }

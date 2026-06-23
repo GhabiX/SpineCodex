@@ -35,8 +35,8 @@ use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::PreparedRootEpochReduction;
 use crate::spine::parse_stack::PreparedTaskTreeReduction;
-use crate::spine::parse_stack::apply_replay_event_to_parse_stack;
-use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
+use crate::spine::parse_stack::apply_metadata_event;
+use crate::spine::parse_stack::event_to_token;
 #[cfg(test)]
 use crate::spine::parse_stack::parse_stack_msg_leaf_count;
 #[cfg(test)]
@@ -75,15 +75,21 @@ impl ParserState {
         forced_event_seqs: &BTreeSet<u64>,
         marker_structural_event_seqs: &BTreeSet<u64>,
     ) -> Result<Self, SpineError> {
-        parse_stack_from_events_with_forced_events(
-            events,
-            archive,
-            mems,
-            raw_mask,
-            forced_event_seqs,
-            marker_structural_event_seqs,
-        )
-        .map(Self::from_parse_stack)
+        let mems = mems
+            .iter()
+            .cloned()
+            .map(|mem| (mem.compact_id.clone(), mem))
+            .collect::<BTreeMap<_, _>>();
+        let mut parser = Self::new();
+        for event in events {
+            if forced_event_seqs.contains(&event.seq)
+                || (!marker_structural_event_seqs.contains(&event.seq)
+                    && event.allowed_by(raw_mask)?)
+            {
+                parser.apply_replay_event(event, archive, &mems, raw_mask)?;
+            }
+        }
+        Ok(parser)
     }
 
     pub(super) fn parse_stack(&self) -> &ParseStack {
@@ -348,7 +354,11 @@ impl ParserState {
         mems: &BTreeMap<String, MemRecord>,
         raw_mask: RawMask<'_>,
     ) -> Result<(), SpineError> {
-        apply_replay_event_to_parse_stack(&mut self.parse_stack, event, archive, mems, raw_mask)
+        if !apply_metadata_event(&mut self.parse_stack, event)? {
+            let token = event_to_token(event, archive, mems, raw_mask)?;
+            self.parse_stack.shift(token, archive)?;
+        }
+        Ok(())
     }
 
     pub(super) fn staged_after_lexed_batch_for_observe(
