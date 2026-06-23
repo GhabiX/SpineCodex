@@ -105,21 +105,11 @@ impl ParseStack {
     }
 
     fn reduce_fixpoint(&mut self, archive: &SpineArchive) -> Result<(), SpineError> {
-        loop {
-            if self.reduce_task_tree(archive)? {
-                continue;
-            }
-            if self.reduce_root_epoch(archive)? {
-                continue;
-            }
-            if self.reduce_nodes_append() {
-                continue;
-            }
-            if self.reduce_node_to_nodes() {
-                continue;
-            }
-            break;
-        }
+        while self.reduce_task_tree(archive)?
+            || self.reduce_root_epoch(archive)?
+            || self.reduce_nodes_append()
+            || self.reduce_node_to_nodes()
+        {}
         Ok(())
     }
 
@@ -322,15 +312,7 @@ impl ParseStack {
     }
 
     fn reduce_nodes_fixpoint(&mut self) {
-        loop {
-            if self.reduce_nodes_append() {
-                continue;
-            }
-            if self.reduce_node_to_nodes() {
-                continue;
-            }
-            break;
-        }
+        while self.reduce_nodes_append() || self.reduce_node_to_nodes() {}
     }
 
     fn reduce_root_epoch(&mut self, archive: &SpineArchive) -> Result<bool, SpineError> {
