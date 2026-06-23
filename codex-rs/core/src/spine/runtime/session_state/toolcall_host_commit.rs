@@ -196,15 +196,6 @@ impl SpineToolcallCommitHostPlan {
         }
     }
 
-    fn interpret_attempt_for_host(
-        &self,
-        attempt: SpineCommitAttempt,
-        lock_retries: usize,
-        call_id: &str,
-    ) -> Result<SpineToolcallCommitHostStep, SpineError> {
-        self.interpret_attempt(attempt, lock_retries, call_id)
-    }
-
     fn commit_missing_decision(
         &self,
         call_id: &str,
@@ -277,7 +268,7 @@ impl SpineToolcallHostCommit {
     ) -> Result<SpineToolcallCommitHostStep, SpineError> {
         let step = self
             .plan
-            .interpret_attempt_for_host(attempt, self.lock_retries, call_id)?;
+            .interpret_attempt(attempt, self.lock_retries, call_id)?;
         if matches!(step, SpineToolcallCommitHostStep::Retry) {
             self.lock_retries += 1;
         }
