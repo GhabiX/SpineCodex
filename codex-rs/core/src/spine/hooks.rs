@@ -31,10 +31,5 @@ pub(crate) fn on_toolcall(
     state: &mut SpineSessionState,
     evidence: SpineToolcallHookEvidence<'_>,
 ) -> Result<SpineHostEffects, SpineError> {
-    state
-        .prepare_completed_toolcall_for_commit(evidence)
-        .map(|plan| {
-            plan.map(|plan| SpineHostEffects::toolcall_host_commit(plan.into_host_commit()))
-                .unwrap_or_else(SpineHostEffects::none)
-        })
+    state.prepare_completed_toolcall_for_commit(evidence)
 }

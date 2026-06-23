@@ -1,6 +1,7 @@
 use codex_protocol::models::ResponseItem;
 
 use super::super::SpineError;
+use super::super::SpineHostEffects;
 use super::super::SpineRuntime;
 use super::super::support::tool_request_call_id;
 use super::super::support::tool_response_call_id;
@@ -18,7 +19,6 @@ use super::completed_toolcall_evidence::completed_toolcall_response_segments;
 use super::state_types::SpineGroupedToolcallOutputRecordingPlan;
 use super::state_types::SpineObservedContextItem;
 use super::state_types::SpineSingleToolcallOutputRecordingPlan;
-use super::toolcall_host_commit::SpineToolcallCommitHostPlan;
 use super::toolcall_host_commit::SpineToolcallCommitPreparation;
 
 fn observe_toolcall_context_item(
@@ -96,10 +96,10 @@ impl SpineSessionState {
     pub(crate) fn prepare_completed_toolcall_for_commit(
         &mut self,
         evidence: SpineToolcallHookEvidence<'_>,
-    ) -> Result<Option<SpineToolcallCommitHostPlan>, SpineError> {
+    ) -> Result<SpineHostEffects, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
-            return Ok(None);
+            return Ok(SpineHostEffects::none());
         };
         let call_id = evidence.commit_evidence.call_id.as_str();
         let force_ordinary = evidence.commit_evidence.force_ordinary();
@@ -110,11 +110,14 @@ impl SpineSessionState {
             !force_ordinary
                 && runtime.has_close_like_control_request(call_id, evidence.raw_items)?,
         );
-        Ok(Some(preparation.host_plan(
+        let plan = preparation.host_plan(
             evidence.current_turn_provider_input_tokens,
             evidence.tool_resp_already_recorded,
             evidence.recorded_inside_reduce,
-        )))
+        );
+        Ok(SpineHostEffects::toolcall_host_commit(
+            plan.into_host_commit(),
+        ))
     }
 
     pub(crate) fn observe_toolcall_context_items(
