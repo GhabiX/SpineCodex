@@ -97,31 +97,6 @@ impl SpineToolcallCommitPreparation {
         }
     }
 
-    fn pre_compact_provider_input_tokens(
-        &self,
-        current_turn_provider_input_tokens: Option<i64>,
-    ) -> Option<i64> {
-        if self.requires_close_like_commit {
-            current_turn_provider_input_tokens
-        } else {
-            None
-        }
-    }
-
-    #[cfg(test)]
-    fn output_recording_after_successful_commit(
-        &self,
-        tool_resp_already_recorded: bool,
-        recorded_inside_hook: bool,
-    ) -> SpineToolOutputRecording {
-        let raw_only_durable_without_emission =
-            self.requires_close_like_commit && !tool_resp_already_recorded && !recorded_inside_hook;
-        SpineToolOutputRecording::after_successful_toolcall_commit(
-            recorded_inside_hook,
-            raw_only_durable_without_emission,
-        )
-    }
-
     pub(super) fn host_plan(
         self,
         current_turn_provider_input_tokens: Option<i64>,
@@ -130,13 +105,19 @@ impl SpineToolcallCommitPreparation {
     ) -> SpineToolcallCommitHostPlan {
         #[cfg(not(test))]
         let _ = recorded_inside_hook;
+        #[cfg(test)]
+        let raw_only_durable_without_emission =
+            self.requires_close_like_commit && !tool_resp_already_recorded && !recorded_inside_hook;
         SpineToolcallCommitHostPlan {
-            pre_compact_provider_input_tokens: self
-                .pre_compact_provider_input_tokens(current_turn_provider_input_tokens),
+            pre_compact_provider_input_tokens: if self.requires_close_like_commit {
+                current_turn_provider_input_tokens
+            } else {
+                None
+            },
             #[cfg(test)]
-            output_recording: self.output_recording_after_successful_commit(
-                tool_resp_already_recorded,
+            output_recording: SpineToolOutputRecording::after_successful_toolcall_commit(
                 recorded_inside_hook,
+                raw_only_durable_without_emission,
             ),
             commit_missing_action: if tool_resp_already_recorded {
                 SpineToolcallCommitFailureAction::FailClosed
