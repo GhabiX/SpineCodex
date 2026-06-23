@@ -7,6 +7,7 @@ mod message_session;
 mod root_compact_session;
 mod state_types;
 mod toolcall_host_commit;
+mod toolcall_observation_session;
 mod tree_session;
 mod trim_session;
 
