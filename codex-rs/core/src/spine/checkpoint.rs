@@ -48,8 +48,7 @@ pub(super) fn build_checkpoint(
     parse_stack: &ParseStack,
     context: &[ResponseItem],
 ) -> Result<SpineCheckpoint, SpineError> {
-    let raw_ordinal_usize = usize::try_from(raw_ordinal)
-        .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
+    let raw_ordinal_usize = checkpoint_raw_ordinal_usize(raw_ordinal)?;
     if raw_ordinal_usize > raw_live.len() {
         return Err(SpineError::InvalidEvent(
             "checkpoint raw ordinal exceeds raw boundary".to_string(),
@@ -248,8 +247,7 @@ pub(super) fn validate_checkpoint(
             checkpoint.version
         )));
     }
-    let end = usize::try_from(checkpoint.raw_ordinal)
-        .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
+    let end = checkpoint_raw_ordinal_usize(checkpoint.raw_ordinal)?;
     if end > raw_live.len() || end > raw_items.len() {
         return Err(SpineError::InvalidStore(format!(
             "spine checkpoint raw boundary exceeds rollout for {}",
@@ -293,4 +291,9 @@ pub(super) fn validate_checkpoint(
         )));
     }
     Ok(())
+}
+
+fn checkpoint_raw_ordinal_usize(raw_ordinal: u64) -> Result<usize, SpineError> {
+    usize::try_from(raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))
 }
