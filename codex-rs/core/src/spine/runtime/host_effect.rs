@@ -3,9 +3,9 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
 
-use super::SpineCommitAttempt;
 use super::SpineCompletedToolCallHostOutcome;
 use super::SpineError;
+use super::SpineToolcallHostAttempt;
 use super::session_state::SpineToolcallHostCommit;
 
 #[derive(Debug)]
@@ -256,7 +256,7 @@ impl SpineHostEffects {
     ) -> Result<Option<SpineCompletedToolCallHostOutcome>, SpineError>
     where
         AttemptOnce: FnMut(Option<i64>, Option<i64>) -> AttemptOnceFuture,
-        AttemptOnceFuture: Future<Output = Result<SpineCommitAttempt, SpineError>>,
+        AttemptOnceFuture: Future<Output = Result<SpineToolcallHostAttempt, SpineError>>,
         YieldRetry: FnMut() -> YieldRetryFuture,
         YieldRetryFuture: Future<Output = ()>,
         FailClosed: FnMut(&'static str) -> FailClosedFuture,

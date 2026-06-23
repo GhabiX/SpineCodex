@@ -15,7 +15,7 @@ pub(crate) use completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence
 pub(crate) use completed_toolcall_evidence::SpineToolCallEvidence;
 pub(crate) use completed_toolcall_evidence::SpineToolcallCommitEvidence;
 pub(crate) use completed_toolcall_evidence::SpineToolcallHookEvidence;
-pub(crate) use completed_toolcall_session::SpineCommitAttempt;
+use completed_toolcall_session::SpineCommitAttempt;
 use completed_toolcall_session::SpineCommitAttemptKind;
 use state_types::CommittedSpineToolcall;
 pub(crate) use state_types::PreparedSpineRootCompactCommit;
@@ -30,6 +30,7 @@ pub(crate) use state_types::SpineSingleToolcallOutputRecordingPlan;
 pub(crate) use toolcall_host_commit::SpineCompletedToolCallHostOutcome;
 #[cfg(test)]
 pub(crate) use toolcall_host_commit::SpineToolOutputRecording;
+pub(crate) use toolcall_host_commit::SpineToolcallHostAttempt;
 pub(crate) use toolcall_host_commit::SpineToolcallHostCommit;
 
 #[derive(Debug)]

@@ -63,6 +63,10 @@ pub(crate) struct SpineToolcallHostCommit {
     lock_retries: usize,
 }
 
+pub(crate) struct SpineToolcallHostAttempt {
+    kind: SpineCommitAttemptKind,
+}
+
 pub(crate) enum SpineToolcallCommitHostStep {
     Done(SpineHostEffects),
     Retry,
@@ -166,7 +170,7 @@ impl SpineToolcallCommitHostPlan {
 
     fn interpret_attempt(
         &self,
-        attempt: SpineCommitAttempt,
+        attempt: SpineToolcallHostAttempt,
         lock_retries: usize,
         call_id: &str,
     ) -> Result<SpineToolcallCommitHostStep, SpineError> {
@@ -226,6 +230,18 @@ impl SpineToolcallCommitHostPlan {
     }
 }
 
+impl SpineToolcallHostAttempt {
+    pub(crate) fn host_lock_busy() -> Self {
+        Self {
+            kind: SpineCommitAttemptKind::Retry,
+        }
+    }
+
+    pub(super) fn from_commit_attempt(attempt: SpineCommitAttempt) -> Self {
+        Self { kind: attempt.kind }
+    }
+}
+
 impl SpineToolcallHostCommit {
     pub(crate) fn host_outcome(
         &self,
@@ -244,7 +260,7 @@ impl SpineToolcallHostCommit {
 
     pub(crate) fn interpret_attempt_for_host(
         &mut self,
-        attempt: SpineCommitAttempt,
+        attempt: SpineToolcallHostAttempt,
         call_id: &str,
     ) -> Result<SpineToolcallCommitHostStep, SpineError> {
         let step = self
@@ -275,7 +291,7 @@ impl SpineToolcallHostCommit {
     ) -> Result<Option<SpineHostEffects>, SpineError>
     where
         AttemptOnce: FnMut() -> AttemptOnceFuture,
-        AttemptOnceFuture: Future<Output = Result<SpineCommitAttempt, SpineError>>,
+        AttemptOnceFuture: Future<Output = Result<SpineToolcallHostAttempt, SpineError>>,
         YieldRetry: FnMut() -> YieldRetryFuture,
         YieldRetryFuture: Future<Output = ()>,
         FailClosed: FnMut(&'static str) -> FailClosedFuture,

@@ -30,7 +30,6 @@ pub(crate) use runtime::SPINE_TOOL_TREE;
 pub(crate) use runtime::SPINE_TOOL_TRIM;
 #[cfg(test)]
 pub(crate) use runtime::SpineCloseMemoryAssembly;
-pub(crate) use runtime::SpineCommitAttempt;
 #[cfg(test)]
 pub(crate) use runtime::SpineCommitKind;
 pub(crate) use runtime::SpineCompactEvidence;
@@ -68,6 +67,7 @@ pub(crate) use runtime::SpineToolCallEvidence;
 pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineToolcallCommitEvidence;
 pub(crate) use runtime::SpineToolcallHookEvidence;
+pub(crate) use runtime::SpineToolcallHostAttempt;
 pub(crate) use runtime::SpineTrimOutcome;
 pub(crate) use runtime::is_non_toolcall_msg;
 pub(crate) use runtime::is_real_user_message;

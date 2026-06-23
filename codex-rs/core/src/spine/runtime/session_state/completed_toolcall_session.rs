@@ -14,6 +14,7 @@ use super::SpineSessionState;
 use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 use super::state_types::CommittedSpineToolcall;
 use super::state_types::SpinePostApplyEffectPolicy;
+use super::toolcall_host_commit::SpineToolcallHostAttempt;
 
 pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
@@ -285,7 +286,7 @@ impl SpineSessionState {
         build_snapshot: impl FnOnce(
             Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>,
         ) -> Result<Option<SpineTreeUpdateEvent>, SpineError>,
-    ) -> Result<SpineCommitAttempt, SpineError> {
+    ) -> Result<SpineToolcallHostAttempt, SpineError> {
         let call_id = evidence.call_id.clone();
         let Some(prepared_commit) = self.prepare_completed_toolcall_commit(
             evidence,
@@ -299,7 +300,9 @@ impl SpineSessionState {
             current_turn_provider_input_tokens,
         )?
         else {
-            return Ok(SpineCommitAttempt::runtime_missing());
+            return Ok(SpineToolcallHostAttempt::from_commit_attempt(
+                SpineCommitAttempt::runtime_missing(),
+            ));
         };
         let committed = self.commit_prepared_toolcall_with_host_effects(
             &call_id,
@@ -308,6 +311,8 @@ impl SpineSessionState {
         )?;
         let projection = self.committed_toolcall_tree_snapshot_projection(&committed)?;
         let snapshot = build_snapshot(projection)?;
-        Ok(SpineCommitAttempt::done(self, committed, snapshot))
+        Ok(SpineToolcallHostAttempt::from_commit_attempt(
+            SpineCommitAttempt::done(self, committed, snapshot),
+        ))
     }
 }

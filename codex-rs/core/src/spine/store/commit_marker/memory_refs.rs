@@ -106,15 +106,7 @@ fn commit_memory_ref_allowed_by_source_live(
     raw_live: &[bool],
 ) -> Result<bool, SpineError> {
     match memory.kind {
-        MemKind::Suffix => {
-            let start = usize::try_from(memory.raw_start)
-                .map_err(|_| SpineError::InvalidEvent("raw start overflow".to_string()))?;
-            let end = usize::try_from(memory.raw_end)
-                .map_err(|_| SpineError::InvalidEvent("raw end overflow".to_string()))?;
-            Ok(start <= end
-                && end <= raw_live.len()
-                && raw_live[start..end].iter().all(|live| *live))
-        }
+        MemKind::Suffix => RawMask::new(raw_live).span_live(memory.raw_start, memory.raw_end),
         MemKind::RootEpoch => memory.raw_live_hash.as_deref().map_or(Ok(false), |hash| {
             raw_live_prefix_hash_matches(raw_live, memory.raw_end, hash)
         }),

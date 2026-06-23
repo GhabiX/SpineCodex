@@ -8,7 +8,6 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineCommitAttempt;
 use crate::spine::SpineCompactEvidence;
 use crate::spine::SpineCompletedToolCallHostOutcome;
 use crate::spine::SpineCompletedToolCallOutputEvidence;
@@ -28,6 +27,7 @@ use crate::spine::SpineToolCallEvidence;
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineToolcallCommitEvidence;
 use crate::spine::SpineToolcallHookEvidence;
+use crate::spine::SpineToolcallHostAttempt;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
 use crate::spine::is_non_toolcall_msg;
@@ -1319,12 +1319,12 @@ impl Session {
         &self,
         spine_slot: &Mutex<SpineSessionState>,
         input: SpineToolcallCommitAttemptInput<'_>,
-    ) -> Result<SpineCommitAttempt, SpineError> {
+    ) -> Result<SpineToolcallHostAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
-            return Ok(SpineCommitAttempt::host_lock_busy());
+            return Ok(SpineToolcallHostAttempt::host_lock_busy());
         };
         let Ok(mut state) = self.state.try_lock() else {
-            return Ok(SpineCommitAttempt::host_lock_busy());
+            return Ok(SpineToolcallHostAttempt::host_lock_busy());
         };
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
