@@ -140,16 +140,12 @@ pub(super) fn replay_from_events(
         if matches!(event.event, SpineLedgerEvent::OpenContextBaseline { .. }) {
             continue;
         }
-        if replay_event_seqs.forced.contains(&event.seq) {
-            parser.apply_replay_event(event, archive, &mem_map, raw_mask)?;
-            continue;
-        }
-        if replay_event_seqs.marker_structural.contains(&event.seq)
-            || !event.allowed_by(raw_mask)?
+        if replay_event_seqs.forced.contains(&event.seq)
+            || (!replay_event_seqs.marker_structural.contains(&event.seq)
+                && event.allowed_by(raw_mask)?)
         {
-            continue;
+            parser.apply_replay_event(event, archive, &mem_map, raw_mask)?;
         }
-        parser.apply_replay_event(event, archive, &mem_map, raw_mask)?;
     }
     Ok(parser.into_parse_stack())
 }
