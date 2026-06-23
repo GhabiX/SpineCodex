@@ -383,11 +383,8 @@ impl SpineHostEffect {
         self,
     ) -> Option<(SpineTreeUpdateEvent, SpineTreeUpdateDelivery)> {
         match self {
-            Self::ReplaceHistory(_) => None,
             Self::TreeUpdate { snapshot, delivery } => Some((snapshot, delivery)),
-            Self::PublishMaterializedHistoryAfterBatch => None,
-            Self::RootCompactHistoryPublication(_) => None,
-            Self::ToolcallHostCommit(_) => None,
+            _ => None,
         }
     }
 }
