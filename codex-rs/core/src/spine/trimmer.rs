@@ -305,28 +305,22 @@ pub(super) fn current_visible_body(
                     target.trim_id
                 )));
             }
-            Ok(strip_trim_tag_prefix(
-                &response_item_text(item, target)?,
-                &target.trim_id,
-            ))
+            let text = matched_trim_tool_output(item, target)?
+                .text_content()
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    SpineError::SidecarCorruption(format!(
+                        "trim target {} references non-text tool response body",
+                        target.trim_id
+                    ))
+                })?;
+            Ok(strip_trim_tag_prefix(&text, &target.trim_id))
         }
         TrimTargetState::Sliced { visible_body } => Ok(visible_body.clone()),
         TrimTargetState::Snipped => {
             Ok(crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE.to_string())
         }
     }
-}
-
-fn response_item_text(item: &ResponseItem, target: &TrimTarget) -> Result<String, SpineError> {
-    matched_trim_tool_output(item, target)?
-        .text_content()
-        .map(str::to_string)
-        .ok_or_else(|| {
-            SpineError::SidecarCorruption(format!(
-                "trim target {} references non-text tool response body",
-                target.trim_id
-            ))
-        })
 }
 
 fn matched_trim_tool_output<'a>(
