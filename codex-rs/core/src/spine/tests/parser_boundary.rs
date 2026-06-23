@@ -226,3 +226,26 @@ fn runtime_root_compact_routes_probe_reads_through_parser_state() {
         "runtime root compact should route root id and next-open probe reads through ParserState"
     );
 }
+
+#[test]
+fn runtime_root_compact_routes_reductions_through_parser_state() {
+    let root_compact = fs::read_to_string(spine_src("runtime/root_compact.rs"))
+        .expect("read runtime root_compact source");
+    assert!(
+        !root_compact.contains("shift_pending_compact"),
+        "runtime/root_compact.rs must not directly stage root compact parser tokens"
+    );
+    assert!(
+        !root_compact.contains("apply_prevalidated_root_epoch_reduction"),
+        "runtime/root_compact.rs must not directly apply root epoch reductions"
+    );
+    assert!(
+        !root_compact.contains("prepare_root_epoch_reduction("),
+        "runtime/root_compact.rs must not directly prepare root epoch reductions"
+    );
+    assert!(
+        root_compact.contains(".prepare_root_compact_reduction(")
+            && root_compact.contains(".root_compact_staged_parse_stacks("),
+        "runtime root compact should route staged parser reductions through ParserState"
+    );
+}

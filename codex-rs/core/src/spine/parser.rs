@@ -33,6 +33,7 @@ use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
+use crate::spine::parse_stack::PreparedRootEpochReduction;
 use crate::spine::parse_stack::PreparedTaskTreeReduction;
 use crate::spine::parse_stack::apply_replay_event_to_parse_stack;
 use crate::spine::parse_stack::parse_stack_from_events_with_forced_events;
@@ -46,6 +47,13 @@ use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ParserState {
     parse_stack: ParseStack,
+}
+
+pub(super) struct ParserRootCompactPreparedReduction {
+    pub(super) final_parse_stack: ParseStack,
+    pub(super) root_epoch_reduction: PreparedRootEpochReduction,
+    pub(super) materialized: Vec<ResponseItem>,
+    pub(super) current_open_index: usize,
 }
 
 impl ParserState {
@@ -247,6 +255,69 @@ impl ParserState {
             final_parse_stack.shift(open_token, archive)?;
         }
         final_parse_stack.shift(toolcall_token, archive)?;
+        Ok((pending, final_parse_stack))
+    }
+
+    pub(super) fn prepare_root_compact_reduction(
+        &self,
+        memory: MemoryRef,
+        next_open_index: usize,
+        next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
+        raw_items: &[Option<ResponseItem>],
+        staged_memory_body: Option<(&str, &str)>,
+        trim_projection: &TrimProjection,
+        archive: &SpineArchive,
+    ) -> Result<ParserRootCompactPreparedReduction, SpineError> {
+        let mut pending = self.parse_stack.clone();
+        pending.shift_pending_compact(
+            memory.clone(),
+            next_open_index,
+            next_open_input_tokens,
+            next_open_context_tokens,
+            archive,
+        )?;
+        let root_epoch_reduction = pending.prepare_root_epoch_reduction(
+            archive,
+            memory,
+            next_open_index,
+            next_open_input_tokens,
+            next_open_context_tokens,
+        )?;
+        let final_parse_stack = pending.root_epoch_reduced(root_epoch_reduction.clone())?;
+        let materialized = render_parse_stack_to_context_with_memory_body_and_trim_projection(
+            &final_parse_stack,
+            raw_items,
+            staged_memory_body,
+            trim_projection,
+        )?;
+        let current_open_index = final_parse_stack.current_open_meta()?.index;
+        Ok(ParserRootCompactPreparedReduction {
+            final_parse_stack,
+            root_epoch_reduction,
+            materialized,
+            current_open_index,
+        })
+    }
+
+    pub(super) fn root_compact_staged_parse_stacks(
+        &self,
+        memory: MemoryRef,
+        next_open_index: usize,
+        next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
+        reduction: PreparedRootEpochReduction,
+        archive: &SpineArchive,
+    ) -> Result<(ParseStack, ParseStack), SpineError> {
+        let mut pending = self.parse_stack.clone();
+        pending.shift_pending_compact(
+            memory,
+            next_open_index,
+            next_open_input_tokens,
+            next_open_context_tokens,
+            archive,
+        )?;
+        let final_parse_stack = pending.root_epoch_reduced(reduction)?;
         Ok((pending, final_parse_stack))
     }
 

@@ -19,7 +19,6 @@ use crate::spine::io::sha1_hex;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::parse_stack::ParseStack;
 use crate::spine::parse_stack::PreparedRootEpochReduction;
 use crate::spine::store::BODY_DIR;
 
@@ -328,18 +327,15 @@ impl SpineRuntime {
             token_metadata,
             checkpoint_rollout_path,
         )?;
-        let mut pending_compact_parse_stack = self.parser.parse_stack().clone();
-        pending_compact_parse_stack.shift_pending_compact(
-            prepared.memory.clone(),
-            prepared.next_open_index,
-            token_metadata.next_open_input_tokens,
-            token_metadata.next_open_context_tokens,
-            &self.archive(),
-        )?;
-        let final_parse_stack = self.root_epoch_reduced_from(
-            pending_compact_parse_stack.clone(),
-            prepared.root_epoch_reduction,
-        )?;
+        let (pending_compact_parse_stack, final_parse_stack) =
+            self.parser.root_compact_staged_parse_stacks(
+                prepared.memory.clone(),
+                prepared.next_open_index,
+                token_metadata.next_open_input_tokens,
+                token_metadata.next_open_context_tokens,
+                prepared.root_epoch_reduction,
+                &self.archive(),
+            )?;
         if let Err(err) = self.commit_root_compact_prepared_side_effects(
             &prepared.mem,
             &prepared.memory_body,
@@ -357,14 +353,6 @@ impl SpineRuntime {
             result: prepared.result,
             final_parse_stack,
         })
-    }
-
-    fn root_epoch_reduced_from(
-        &self,
-        parse_stack: ParseStack,
-        reduction: PreparedRootEpochReduction,
-    ) -> Result<ParseStack, SpineError> {
-        parse_stack.root_epoch_reduced(reduction)
     }
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
@@ -463,40 +451,28 @@ impl SpineRuntime {
             &self.archive(),
         )?;
 
-        let mut staged_parse_stack = self.parser.parse_stack().clone();
-        staged_parse_stack.shift_pending_compact(
+        let prepared_reduction = self.parser.prepare_root_compact_reduction(
             memory.clone(),
             next_open_index_usize,
             token_metadata.next_open_input_tokens,
             token_metadata.next_open_context_tokens,
-            &self.archive(),
-        )?;
-        let root_epoch_reduction = staged_parse_stack.prepare_root_epoch_reduction(
-            &self.archive(),
-            memory.clone(),
-            next_open_index_usize,
-            token_metadata.next_open_input_tokens,
-            token_metadata.next_open_context_tokens,
-        )?;
-        staged_parse_stack.apply_prevalidated_root_epoch_reduction(root_epoch_reduction.clone());
-        let materialized = crate::spine::render::render_parse_stack_to_context_with_memory_body_and_trim_projection(
-            &staged_parse_stack,
             raw_items,
             staged_memory_body,
             &trim_projection,
+            &self.archive(),
         )?;
-        let current_open_index = staged_parse_stack.current_open_meta()?.index;
-        if current_open_index != materialized.len() {
+        if prepared_reduction.current_open_index != prepared_reduction.materialized.len() {
             return Err(SpineError::Invariant(format!(
-                "spine root compact open index {current_open_index} does not match materialized history length {}",
-                materialized.len()
+                "spine root compact open index {} does not match materialized history length {}",
+                prepared_reduction.current_open_index,
+                prepared_reduction.materialized.len()
             )));
         }
         let token_seq_after = seq.checked_add(1).ok_or_else(|| {
             SpineError::InvalidEvent("root compact token seq overflow".to_string())
         })?;
         let result = SpineRootCompactResult {
-            materialized,
+            materialized: prepared_reduction.materialized,
             raw_boundary: self.raw_len,
             token_seq_after,
         };
@@ -508,7 +484,7 @@ impl SpineRuntime {
                     result.token_seq_after,
                     &self.raw_live,
                     raw_items,
-                    &staged_parse_stack,
+                    &prepared_reduction.final_parse_stack,
                     &result.materialized,
                     &result.materialized,
                 )
@@ -531,7 +507,7 @@ impl SpineRuntime {
             compact_checkpoint,
             root_compact_event,
             memory,
-            root_epoch_reduction,
+            root_epoch_reduction: prepared_reduction.root_epoch_reduction,
             next_open_index: next_open_index_usize,
         })
     }
