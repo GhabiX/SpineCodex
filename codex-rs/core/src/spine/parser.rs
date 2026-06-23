@@ -126,6 +126,10 @@ impl ParserState {
         self.parse_stack.current_open_has_nodes()
     }
 
+    pub(super) fn next_child_id(&self) -> Result<NodeId, SpineError> {
+        self.parse_stack.next_child_id()
+    }
+
     pub(super) fn into_parse_stack(self) -> ParseStack {
         self.parse_stack
     }
@@ -155,6 +159,18 @@ impl ParserState {
     ) -> Result<ParseStack, SpineError> {
         let mut staged = self.parse_stack.clone();
         staged.shift(token, archive)?;
+        Ok(staged)
+    }
+
+    pub(super) fn staged_after_tokens(
+        &self,
+        tokens: impl IntoIterator<Item = SpineToken>,
+        archive: &SpineArchive,
+    ) -> Result<ParseStack, SpineError> {
+        let mut staged = self.parse_stack.clone();
+        for token in tokens {
+            staged.shift(token, archive)?;
+        }
         Ok(staged)
     }
 

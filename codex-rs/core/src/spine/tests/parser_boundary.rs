@@ -121,6 +121,25 @@ fn runtime_commit_routes_current_open_queries_through_parser_state() {
 }
 
 #[test]
+fn runtime_commit_routes_open_token_staging_through_parser_state() {
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    assert!(
+        !commit.contains("self.parser.parse_stack().next_child_id()"),
+        "runtime/commit.rs must not query open child ids through the raw parser handle"
+    );
+    assert!(
+        !commit.contains("staged_parse_stack.shift("),
+        "runtime/commit.rs open staging must not directly shift parser tokens"
+    );
+    assert!(
+        commit.contains("self.parser.next_child_id()")
+            && commit.contains(".staged_after_tokens([open_token"),
+        "runtime open commit should route child id and token staging through ParserState"
+    );
+}
+
+#[test]
 fn runtime_checkpoint_routes_parser_reads_through_parser_state() {
     let checkpoint = fs::read_to_string(spine_src("runtime/checkpoint.rs"))
         .expect("read runtime checkpoint source");

@@ -349,7 +349,7 @@ impl SpineRuntime {
                 )
             })?;
         }
-        let child = self.parser.parse_stack().next_child_id()?;
+        let child = self.parser.next_child_id()?;
         let open_context_source = token_baselines
             .provider_input_tokens
             .map(|_| ContextBaselineSource::ProviderAtOpen);
@@ -363,11 +363,12 @@ impl SpineRuntime {
             token_baselines.provider_input_tokens,
             open_context_source,
         )?;
-        let mut staged_parse_stack = self.parser.parse_stack().clone();
-        staged_parse_stack.shift(token, &self.archive())?;
+        let open_token = token;
         if let Some(completed_toolcall) = completed_toolcall {
             let (toolcall_event, token) = self.completed_toolcall_parts(&completed_toolcall)?;
-            staged_parse_stack.shift(token, &self.archive())?;
+            let staged_parse_stack = self
+                .parser
+                .staged_after_tokens([open_token, token], &self.archive())?;
             let toolcall_seq = self.ledger.next_event_seq.checked_add(1).ok_or_else(|| {
                 SpineError::InvalidEvent("spine.open toolcall seq overflow".to_string())
             })?;
@@ -395,6 +396,9 @@ impl SpineRuntime {
                 mem_for_accounting: None,
             });
         }
+        let staged_parse_stack = self
+            .parser
+            .staged_after_tokens([open_token], &self.archive())?;
         let events = vec![event];
         self.append_committed_events_no_marker(events)?;
         self.parser
