@@ -1788,7 +1788,108 @@ fn retain_still_valid_planned_nodes(
     snapshot: &SpineTreeUpdateEvent,
     planned_nodes: &[SpinePlannedNodeSnapshot],
 ) -> Vec<SpinePlannedNodeSnapshot> {
-    validate_planned_nodes(snapshot, planned_nodes.to_vec()).unwrap_or_default()
+    let committed_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let committed_nodes = snapshot
+        .nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let active = match parse_spine_node_path(&snapshot.active_node_id) {
+        Ok(active) => active,
+        Err(_) => return Vec::new(),
+    };
+    let active_parent = parent_path(&active);
+    let active_index = match active.last().copied() {
+        Some(active_index) => active_index,
+        None => return Vec::new(),
+    };
+    let max_committed_child_by_parent = match max_committed_child_by_parent(&snapshot.nodes) {
+        Ok(max_committed_child_by_parent) => max_committed_child_by_parent,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut retained = planned_nodes
+        .iter()
+        .filter(|node| !committed_ids.contains(node.node_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    loop {
+        let before_len = retained.len();
+        let planned_ids = retained
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut parsed_planned = BTreeMap::new();
+        let mut seen = BTreeSet::new();
+
+        retained.retain(|node| {
+            if node.summary.trim().is_empty() || !seen.insert(node.node_id.clone()) {
+                return false;
+            }
+            let Ok(path) = parse_spine_node_path(&node.node_id) else {
+                return false;
+            };
+            let parent = parent_path(&path);
+            let parent_id = parent.as_ref().map(|parent| path_to_string(parent));
+            if node.parent_id != parent_id {
+                return false;
+            }
+            if let Some(parent_id) = parent_id.as_deref()
+                && !committed_ids.contains(parent_id)
+                && !planned_ids.contains(parent_id)
+            {
+                return false;
+            }
+            parsed_planned.insert(node.node_id.clone(), path);
+            true
+        });
+
+        retained.retain(|node| {
+            let Some(path) = parsed_planned.get(node.node_id.as_str()) else {
+                return false;
+            };
+            let parent = parent_path(path);
+            if planned_parent_contains(&parsed_planned, parent.as_deref()) {
+                return true;
+            }
+            let Some(index) = path.last().copied() else {
+                return false;
+            };
+
+            if parent.as_deref() == Some(active.as_slice()) {
+                let max_existing = max_committed_child_by_parent
+                    .get(active.as_slice())
+                    .copied()
+                    .unwrap_or(0);
+                return index > max_existing;
+            }
+
+            if parent.as_deref() == active_parent.as_deref() && index > active_index {
+                return true;
+            }
+
+            let parent_id = parent.as_ref().map(|parent| path_to_string(parent));
+            if let Some(parent_id) = parent_id.as_deref()
+                && committed_nodes.contains_key(parent_id)
+            {
+                return false;
+            }
+
+            false
+        });
+
+        if retained.len() == before_len {
+            break;
+        }
+    }
+
+    debug_assert!(validate_planned_nodes(snapshot, retained.clone()).is_ok());
+    retained
 }
 
 fn validate_planned_nodes(

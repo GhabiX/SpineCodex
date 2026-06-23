@@ -15860,6 +15860,93 @@ async fn spine_tree_plan_overlay_is_model_visible_and_non_durable() {
 }
 
 #[tokio::test]
+async fn spine_tree_plan_overlay_consumes_opened_node_without_clearing_remaining_plan() {
+    let (mut session, turn_context, _rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::SpineJit)
+                    .expect("enable spine feature");
+            },
+        )
+        .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+        .await;
+
+    session.on_init().await.expect("initialize spine");
+
+    let tree = session
+        .spine_tree_with_plan(Some(vec![
+            SpinePlannedNodeSnapshot {
+                node_id: "1.1.1".to_string(),
+                parent_id: Some("1.1".to_string()),
+                summary: "Explore implementation surface".to_string(),
+            },
+            SpinePlannedNodeSnapshot {
+                node_id: "1.1.1.1".to_string(),
+                parent_id: Some("1.1.1".to_string()),
+                summary: "Validate parser-state isolation".to_string(),
+            },
+            SpinePlannedNodeSnapshot {
+                node_id: "1.1.2".to_string(),
+                parent_id: Some("1.1".to_string()),
+                summary: "Integrate retained plan".to_string(),
+            },
+        ]))
+        .await
+        .expect("planned tree");
+    assert!(
+        tree.contains("[planned] 1.1.1 Explore implementation surface"),
+        "{tree}"
+    );
+    assert!(
+        tree.contains("  [planned] 1.1.1.1 Validate parser-state isolation"),
+        "{tree}"
+    );
+    assert!(
+        tree.contains("[planned] 1.1.2 Integrate retained plan"),
+        "{tree}"
+    );
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "planned-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .test_seed_spine_open_control_request(
+            "planned-open".to_string(),
+            "Explore implementation surface".to_string(),
+        )
+        .await
+        .expect("stage open");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("planned-open"),
+    )
+    .await
+    .expect("commit open output");
+
+    let tree = session.spine_tree().await.expect("tree after open");
+    assert!(
+        !tree.contains("[planned] 1.1.1 Explore implementation surface"),
+        "{tree}"
+    );
+    assert!(
+        tree.contains("[planned] 1.1.1.1 Validate parser-state isolation"),
+        "{tree}"
+    );
+    assert!(
+        tree.contains("[planned] 1.1.2 Integrate retained plan"),
+        "{tree}"
+    );
+}
+
+#[tokio::test]
 async fn spine_open_control_toolcall_is_durable_context_history() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
