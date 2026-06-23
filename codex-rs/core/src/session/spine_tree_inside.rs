@@ -123,14 +123,8 @@ fn build_open_nodes_inside(
     open_nodes
         .iter()
         .map(|open_node| {
-            let (current_node_context_tokens, problem) = if let Some(problem) = open_node.problem {
-                (None, Some(problem))
-            } else {
-                match node_context_tokens(current, open_node.provider_input_tokens) {
-                    Ok(tokens) => (Some(tokens), None),
-                    Err(problem) => (None, Some(problem)),
-                }
-            };
+            let (current_node_context_tokens, problem) =
+                open_node_context_state(current, open_node);
             let node_id = open_node.node_id.to_string();
             let summary = snapshot
                 .nodes
@@ -179,24 +173,23 @@ fn annotate_open_node_contexts(
         let accounting = node
             .accounting
             .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default);
-        if let Some(problem) = open_node.problem {
-            accounting.current_node_context_tokens = None;
-            accounting.current_node_context_baseline_source = open_node.baseline_source;
-            accounting.current_node_context_problem = Some(problem);
-            continue;
-        }
-        match node_context_tokens(current, open_node.provider_input_tokens) {
-            Ok(tokens) => {
-                accounting.current_node_context_tokens = Some(tokens);
-                accounting.current_node_context_baseline_source = open_node.baseline_source;
-                accounting.current_node_context_problem = None;
-            }
-            Err(problem) => {
-                accounting.current_node_context_tokens = None;
-                accounting.current_node_context_baseline_source = open_node.baseline_source;
-                accounting.current_node_context_problem = Some(problem);
-            }
-        }
+        let (current_node_context_tokens, problem) = open_node_context_state(current, open_node);
+        accounting.current_node_context_tokens = current_node_context_tokens;
+        accounting.current_node_context_baseline_source = open_node.baseline_source;
+        accounting.current_node_context_problem = problem;
+    }
+}
+
+fn open_node_context_state(
+    current: Option<&TokenUsageInfo>,
+    open_node: &SpineOpenNodeContextProjection,
+) -> (Option<i64>, Option<SpineNodeContextProblem>) {
+    if let Some(problem) = open_node.problem {
+        return (None, Some(problem));
+    }
+    match node_context_tokens(current, open_node.provider_input_tokens) {
+        Ok(tokens) => (Some(tokens), None),
+        Err(problem) => (None, Some(problem)),
     }
 }
 
