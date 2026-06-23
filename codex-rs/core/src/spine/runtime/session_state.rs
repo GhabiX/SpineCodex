@@ -270,12 +270,7 @@ impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
     pub(crate) fn single_output_requiring_optional_prerecord(
         &self,
     ) -> Option<(&'a str, &'a ResponseItem)> {
-        match self.recording {
-            SpineToolCallOutputHostRecording::MaybePreRecordSingle => {
-                Some((self.call_id, self.commit_output_item))
-            }
-            SpineToolCallOutputHostRecording::RecordGroupBeforeCommit => None,
-        }
+        self.single_output_item().map(|item| (self.call_id, item))
     }
 
     pub(crate) fn output_group_to_record_before_commit(&self) -> Option<&'a [ResponseItem]> {
