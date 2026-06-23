@@ -391,51 +391,38 @@ fn projected_tool_response_item_with_state(
 }
 
 fn text_body(item: &ResponseItem, target: &TrimTarget) -> Result<String, SpineError> {
-    match item {
-        ResponseItem::FunctionCallOutput { call_id, output }
-            if target.response_kind == TrimResponseKind::FunctionCallOutput
-                && call_id == &target.call_id =>
-        {
-            output
-                .text_content()
-                .map(str::to_string)
-                .ok_or_else(|| trim_body_error(target))
-        }
-        ResponseItem::CustomToolCallOutput {
-            call_id, output, ..
-        } if target.response_kind == TrimResponseKind::CustomToolCallOutput
-            && call_id == &target.call_id =>
-        {
-            output
-                .text_content()
-                .map(str::to_string)
-                .ok_or_else(|| trim_body_error(target))
-        }
-        _ => Err(SpineError::SidecarCorruption(format!(
-            "trim target {} does not match text body item for call_id={}",
-            target.trim_id, target.call_id
-        ))),
-    }
+    matched_tool_output(item, target, "text body item")?
+        .text_content()
+        .map(str::to_string)
+        .ok_or_else(|| trim_body_error(target))
 }
 
 fn output_success(item: &ResponseItem, target: &TrimTarget) -> Result<Option<bool>, SpineError> {
+    Ok(matched_tool_output(item, target, "output payload")?.success)
+}
+
+fn matched_tool_output<'a>(
+    item: &'a ResponseItem,
+    target: &TrimTarget,
+    mismatch_label: &str,
+) -> Result<&'a FunctionCallOutputPayload, SpineError> {
     match item {
         ResponseItem::FunctionCallOutput { call_id, output }
             if target.response_kind == TrimResponseKind::FunctionCallOutput
                 && call_id == &target.call_id =>
         {
-            Ok(output.success)
+            Ok(output)
         }
         ResponseItem::CustomToolCallOutput {
             call_id, output, ..
         } if target.response_kind == TrimResponseKind::CustomToolCallOutput
             && call_id == &target.call_id =>
         {
-            Ok(output.success)
+            Ok(output)
         }
         _ => Err(SpineError::SidecarCorruption(format!(
-            "trim target {} does not match output payload for call_id={}",
-            target.trim_id, target.call_id
+            "trim target {} does not match {mismatch_label} for call_id={}",
+            target.trim_id, target.call_id,
         ))),
     }
 }
