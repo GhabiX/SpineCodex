@@ -839,6 +839,10 @@ pub(crate) struct SpineRootCompactHostPublish {
     materialized: Vec<ResponseItem>,
 }
 
+pub(crate) struct SpineRootCompactHostOutcome {
+    spine_tree_snapshot: Option<SpineTreeUpdateEvent>,
+}
+
 impl PreparedSpineRootCompactCommit {
     pub(crate) fn from_install(install: SpinePreparedRootCompactInstall) -> Self {
         Self { install }
@@ -880,6 +884,18 @@ impl SpineRootCompactHostPublish {
 
     pub(crate) fn materialized_len(&self) -> usize {
         self.materialized.len()
+    }
+}
+
+impl SpineRootCompactHostOutcome {
+    fn with_spine_tree_snapshot(spine_tree_snapshot: SpineTreeUpdateEvent) -> Self {
+        Self {
+            spine_tree_snapshot: Some(spine_tree_snapshot),
+        }
+    }
+
+    pub(crate) fn into_spine_tree_snapshot(self) -> Option<SpineTreeUpdateEvent> {
+        self.spine_tree_snapshot
     }
 }
 
@@ -1366,15 +1382,14 @@ impl SpineSessionState {
         self.apply_root_compact_after_history_publish(prepared, published_history_len)
     }
 
-    pub(crate) fn take_pending_root_compact_host_effects_after_history_publish(
+    pub(crate) fn take_pending_root_compact_host_outcome_after_history_publish(
         &mut self,
         published_history_len: usize,
-    ) -> Result<SpineHostEffects, SpineError> {
+    ) -> Result<SpineRootCompactHostOutcome, SpineError> {
         let snapshot =
             self.take_pending_root_compact_after_history_publish(published_history_len)?;
-        Ok(SpineHostEffects::tree_update(
+        Ok(SpineRootCompactHostOutcome::with_spine_tree_snapshot(
             snapshot,
-            SpineTreeUpdateDelivery::Immediate,
         ))
     }
 
