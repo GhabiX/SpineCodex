@@ -1,7 +1,6 @@
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::CompletedToolCall;
@@ -18,7 +17,6 @@ use super::support::is_real_user_message;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
 use super::types::SpinePreparedCloseMemory;
-use crate::spine::model::NodeId;
 use crate::spine::store::SpineCloneBoundary;
 use crate::spine::store::SpineStore;
 
@@ -26,6 +24,7 @@ mod completed_toolcall_evidence;
 mod root_compact_session;
 mod state_types;
 mod toolcall_host_commit;
+mod tree_session;
 mod trim_session;
 
 pub(crate) use completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence;
@@ -113,7 +112,7 @@ pub(crate) struct SpineSessionState {
     pub(super) pending_root_compact_install: Option<SpineRootCompactHostInstall>,
     jit_enabled: bool,
     trim_enabled: bool,
-    initial_tree_snapshot_emitted: bool,
+    pub(super) initial_tree_snapshot_emitted: bool,
     invalid: Option<String>,
 }
 
@@ -380,70 +379,6 @@ impl SpineSessionState {
         self.ensure_runtime(evidence.rollout_path)?;
         self.checkpoint_initial_if_jit(evidence.rollout_path, &[])?;
         Ok(SpineHostEffects::none())
-    }
-
-    pub(crate) fn take_initial_tree_snapshot(
-        &mut self,
-    ) -> Result<Option<SpineTreeUpdateEvent>, SpineError> {
-        self.ensure_valid()?;
-        if self.initial_tree_snapshot_emitted {
-            return Ok(None);
-        }
-        let Some(runtime) = self.runtime.as_ref() else {
-            return Ok(None);
-        };
-        if !runtime.jit_enabled() {
-            return Ok(None);
-        }
-        let snapshot = runtime.build_tree_snapshot()?;
-        self.initial_tree_snapshot_emitted = true;
-        Ok(Some(snapshot))
-    }
-
-    pub(crate) fn tree_snapshot_projection(
-        &self,
-    ) -> Result<Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>, SpineError>
-    {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        Ok(Some((
-            runtime.build_tree_snapshot()?,
-            runtime.open_node_context_projections(),
-        )))
-    }
-
-    fn committed_toolcall_tree_snapshot_projection(
-        &self,
-        committed: &CommittedSpineToolcall,
-    ) -> Result<Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>, SpineError>
-    {
-        if !committed.installed_commit() {
-            return Ok(None);
-        }
-        self.tree_snapshot_projection()
-    }
-
-    pub(crate) fn committed_toolcall_post_apply_host_effects(
-        &self,
-        committed: CommittedSpineToolcall,
-        snapshot: Option<SpineTreeUpdateEvent>,
-    ) -> SpineHostEffects {
-        committed.post_apply_host_effects(snapshot)
-    }
-
-    pub(crate) fn render_tree_with_context_annotations(
-        &self,
-        annotations: &BTreeMap<NodeId, String>,
-    ) -> Result<Option<String>, SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
-        runtime
-            .render_tree_with_context_annotations(annotations)
-            .map(Some)
     }
 
     pub(crate) fn prepare_single_toolcall_output_recording(
