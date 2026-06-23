@@ -56,13 +56,12 @@ impl SpineStore {
         }
         let source = Self::for_rollout(&boundary.source_rollout_path)?;
         let staging_root = locator::create_unpublished_clone_root(target_rollout_path)?;
-        let target_root = staging_root.clone();
         let target = Self::from_root(staging_root.clone());
 
         let result = clone_for_rollout_into_store(
             &source,
             &target,
-            &target_root,
+            &staging_root,
             boundary,
             target_rollout_path,
             raw_live,
