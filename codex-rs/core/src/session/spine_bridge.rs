@@ -1263,7 +1263,7 @@ impl Session {
         let current_turn_provider_input_tokens = current_turn_token_info
             .as_ref()
             .and_then(provider_input_context_tokens);
-        let commit_host_plan = {
+        let mut commit_host_loop = {
             let mut guard = spine_slot.lock().await;
             guard.ensure_valid()?;
             let Some(commit_host_plan) = guard.prepare_completed_toolcall_for_commit(
@@ -1276,13 +1276,12 @@ impl Session {
             else {
                 return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
             };
-            commit_host_plan
+            commit_host_plan.into_host_loop()
         };
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
         let provider_input_tokens =
-            commit_host_plan.provider_input_tokens(current_turn_provider_input_tokens);
-        let mut lock_retries = 0;
+            commit_host_loop.provider_input_tokens(current_turn_provider_input_tokens);
         let post_commit_effects = loop {
             let attempt_input = SpineToolcallCommitAttemptInput {
                 tool_resp_item: item,
@@ -1315,13 +1314,12 @@ impl Session {
                     return Err(err);
                 }
             };
-            match commit_host_plan.interpret_attempt_for_host(attempt, lock_retries, &call_id)? {
+            match commit_host_loop.interpret_attempt_for_host(attempt, &call_id)? {
                 SpineToolcallCommitHostStep::Done(effects) => break effects,
                 SpineToolcallCommitHostStep::NoSpineCommit => {
                     return Ok(SpineCompletedToolCallHostOutcome::no_spine_commit());
                 }
                 SpineToolcallCommitHostStep::Retry => {
-                    lock_retries += 1;
                     tokio::task::yield_now().await;
                     continue;
                 }
@@ -1336,7 +1334,7 @@ impl Session {
                 }
             }
         };
-        Ok(commit_host_plan.host_outcome(post_commit_effects))
+        Ok(commit_host_loop.host_outcome(post_commit_effects))
     }
 
     fn try_commit_spine_tool_output_once(

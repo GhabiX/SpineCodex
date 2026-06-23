@@ -338,6 +338,11 @@ pub(crate) struct SpineToolcallCommitProviderInputTokens {
     current_turn: Option<i64>,
 }
 
+pub(crate) struct SpineToolcallCommitHostLoop {
+    plan: SpineToolcallCommitHostPlan,
+    lock_retries: usize,
+}
+
 pub(crate) enum SpineToolcallCommitHostStep {
     Done(SpineHostEffects),
     Retry,
@@ -451,6 +456,13 @@ impl SpineToolcallCommitPreparation {
 }
 
 impl SpineToolcallCommitHostPlan {
+    pub(crate) fn into_host_loop(self) -> SpineToolcallCommitHostLoop {
+        SpineToolcallCommitHostLoop {
+            plan: self,
+            lock_retries: 0,
+        }
+    }
+
     pub(crate) fn host_outcome(
         &self,
         post_commit_effects: SpineHostEffects,
@@ -552,6 +564,37 @@ impl SpineToolcallCommitHostPlan {
             "spine tool output commit could not acquire session locks after {} retries for call_id={call_id}",
             self.lock_retry_limit
         ))
+    }
+}
+
+impl SpineToolcallCommitHostLoop {
+    pub(crate) fn host_outcome(
+        &self,
+        post_commit_effects: SpineHostEffects,
+    ) -> SpineCompletedToolCallHostOutcome {
+        self.plan.host_outcome(post_commit_effects)
+    }
+
+    pub(crate) fn provider_input_tokens(
+        &self,
+        current_turn_provider_input_tokens: Option<i64>,
+    ) -> SpineToolcallCommitProviderInputTokens {
+        self.plan
+            .provider_input_tokens(current_turn_provider_input_tokens)
+    }
+
+    pub(crate) fn interpret_attempt_for_host(
+        &mut self,
+        attempt: SpineCommitAttempt,
+        call_id: &str,
+    ) -> Result<SpineToolcallCommitHostStep, SpineError> {
+        let step = self
+            .plan
+            .interpret_attempt_for_host(attempt, self.lock_retries, call_id)?;
+        if matches!(step, SpineToolcallCommitHostStep::Retry) {
+            self.lock_retries += 1;
+        }
+        Ok(step)
     }
 }
 
