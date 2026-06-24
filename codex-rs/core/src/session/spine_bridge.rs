@@ -1157,7 +1157,6 @@ impl Session {
             .and_then(provider_input_context_tokens);
         let toolcall_host_effects = {
             let mut guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
             hooks::on_toolcall(
                 &mut guard,
                 ToolcallHookEvidence {

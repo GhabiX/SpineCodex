@@ -731,6 +731,7 @@ pub(crate) fn on_toolcall(
     state: &mut SpineSessionState,
     evidence: ToolcallHookEvidence<'_>,
 ) -> Result<HostEffects, SpineError> {
+    state.ensure_valid()?;
     state
         .prepare_completed_toolcall_for_commit(super::runtime::SpineToolcallHookEvidence {
             completed_output: &evidence.completed_output.inner,
