@@ -106,7 +106,7 @@ pub(crate) struct ParserPublicationUpdate {
 }
 
 impl ParserPublicationUpdate {
-    pub(crate) fn new(
+    fn new(
         operation: &'static str,
         suffix_start: usize,
         expected_history: Vec<ResponseItem>,

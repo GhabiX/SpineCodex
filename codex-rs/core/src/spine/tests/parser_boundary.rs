@@ -420,6 +420,26 @@ fn runtime_commit_delegates_parser_publication_plan_application() {
 }
 
 #[test]
+fn parser_publication_update_constructor_is_parser_private() {
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let publication_update_impl = parser
+        .split("impl ParserPublicationUpdate")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ParserPublicationPlan").next())
+        .expect("ParserPublicationUpdate impl block");
+    assert!(
+        publication_update_impl.contains("fn new("),
+        "ParserPublicationUpdate should still have a parser-local constructor"
+    );
+    assert!(
+        !publication_update_impl.contains("pub(crate) fn new(")
+            && !publication_update_impl.contains("pub(super) fn new(")
+            && !publication_update_impl.contains("pub(in crate::spine) fn new("),
+        "ParserPublicationUpdate construction must stay inside parser.rs"
+    );
+}
+
+#[test]
 fn runtime_commit_does_not_interpret_close_family_plan_fields() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
