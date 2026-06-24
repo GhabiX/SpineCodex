@@ -117,6 +117,26 @@ pub(crate) fn observe_raw_items(
     state.observe_raw_items(count)
 }
 
+pub(crate) fn trim_projection_needs_rollout_raw_items(
+    state: &SpineSessionState,
+) -> Result<Option<bool>, SpineError> {
+    state.trim_projection_needs_rollout_raw_items()
+}
+
+pub(crate) fn materialize_trim_projection_from_raw_items(
+    state: &SpineSessionState,
+    raw_items: &[Option<ResponseItem>],
+) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+    state.materialize_trim_projection_from_raw_items(raw_items)
+}
+
+pub(crate) fn project_trim_projection_from_history(
+    state: &SpineSessionState,
+    history_items: &[ResponseItem],
+) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+    state.project_trim_projection_from_history(history_items)
+}
+
 pub(crate) fn is_ready(state: &SpineSessionState) -> bool {
     state.is_ready()
 }

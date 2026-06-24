@@ -316,7 +316,7 @@ impl Session {
         };
         let Some(needs_rollout_raw_items) = ({
             let guard = spine_slot.lock().await;
-            guard.trim_projection_needs_rollout_raw_items()?
+            hooks::trim_projection_needs_rollout_raw_items(&guard)?
         }) else {
             return Ok(());
         };
@@ -324,7 +324,7 @@ impl Session {
             let raw_items = self.spine_raw_items_from_rollout().await?;
             let Some(projected) = ({
                 let guard = spine_slot.lock().await;
-                guard.materialize_trim_projection_from_raw_items(&raw_items)?
+                hooks::materialize_trim_projection_from_raw_items(&guard, &raw_items)?
             }) else {
                 return Ok(());
             };
@@ -333,7 +333,7 @@ impl Session {
             let history = self.clone_history().await;
             let guard = spine_slot.lock().await;
             let Some(projected) =
-                guard.project_trim_projection_from_history(history.raw_items())?
+                hooks::project_trim_projection_from_history(&guard, history.raw_items())?
             else {
                 return Ok(());
             };
