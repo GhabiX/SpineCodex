@@ -329,7 +329,7 @@ fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() 
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
     let publication_parts = commit
-        .split("fn commit_publication_history_update_parts")
+        .split("fn parser_commit_publication_update")
         .nth(1)
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
@@ -338,7 +338,7 @@ fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() 
         "runtime/commit.rs must not materialize h(PS) directly while preparing toolcall projection publication"
     );
     assert!(
-        publication_parts.contains(".full_variable_context_publication_update_parts("),
+        publication_parts.contains(".full_variable_context_publication_update("),
         "toolcall projection publication should route h(PS) materialization through ParserState"
     );
 }
@@ -348,12 +348,12 @@ fn runtime_commit_delegates_parser_publication_plan_application() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
     let publication_parts = commit
-        .split("fn commit_publication_history_update_parts")
+        .split("fn parser_commit_publication_update")
         .nth(1)
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
     assert!(
-        publication_parts.contains("plan.history_update_parts("),
+        publication_parts.contains("plan.history_update("),
         "runtime commit publication should delegate parser publication plan application to ParserPublicationPlan"
     );
     assert!(
@@ -375,6 +375,10 @@ fn runtime_commit_does_not_construct_parser_publication_plans() {
     assert!(
         !commit.contains("ParserPublicationPlan {"),
         "runtime/commit.rs must not construct parser publication plans field-by-field"
+    );
+    assert!(
+        !commit.contains("(operation, suffix_start, expected_history, replacement)"),
+        "runtime/commit.rs must not reconstruct parser publication updates as untyped tuples"
     );
     assert!(
         commit.contains(".close_family_publication_plan("),

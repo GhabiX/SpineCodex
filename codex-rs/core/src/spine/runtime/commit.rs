@@ -32,6 +32,7 @@ use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
+use crate::spine::parser::ParserPublicationUpdate;
 use crate::spine::render::memory_response_item;
 
 impl SpineRuntime {
@@ -664,25 +665,18 @@ impl SpineRuntime {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        let Some((operation, suffix_start, expected_history, replacement)) = self
-            .commit_publication_history_update_parts(
-                call_id,
-                prepared_commit,
-                tool_resp_item,
-                tool_resp_already_recorded,
-                raw_items,
-                history_items,
-            )?
+        let Some(update) = self.parser_commit_publication_update(
+            call_id,
+            prepared_commit,
+            tool_resp_item,
+            tool_resp_already_recorded,
+            raw_items,
+            history_items,
+        )?
         else {
             return Ok(None);
         };
-        Ok(Some(build_update(
-            call_id,
-            operation,
-            suffix_start,
-            expected_history,
-            replacement,
-        )))
+        Ok(Some(update.into_history_update(call_id, build_update)))
     }
 
     pub(crate) fn commit_install_publication_history_update<T>(
@@ -731,7 +725,7 @@ impl SpineRuntime {
         Ok(SpineCommitPublication::new(install, history_update))
     }
 
-    fn commit_publication_history_update_parts(
+    fn parser_commit_publication_update(
         &self,
         call_id: &str,
         prepared_commit: Option<&SpinePreparedCommit>,
@@ -739,11 +733,10 @@ impl SpineRuntime {
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
         history_items: &[ResponseItem],
-    ) -> Result<Option<(&'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>)>, SpineError>
-    {
+    ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
         if let Some(plan) = prepared_commit.and_then(|prepared| prepared.publication_plan.as_ref())
         {
-            return plan.history_update_parts(
+            return plan.history_update(
                 call_id,
                 tool_resp_item,
                 tool_resp_already_recorded,
@@ -754,7 +747,7 @@ impl SpineRuntime {
             return Ok(None);
         }
         let trim_projection = self.current_trim_projection()?;
-        self.parser.full_variable_context_publication_update_parts(
+        self.parser.full_variable_context_publication_update(
             "spine toolcall projection",
             raw_items,
             &trim_projection,

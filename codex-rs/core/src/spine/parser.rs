@@ -96,15 +96,52 @@ pub(crate) struct ParserPublicationPlan {
     pub(super) append_current_tool_response_if_missing: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ParserPublicationUpdate {
+    operation: &'static str,
+    suffix_start: usize,
+    expected_history: Vec<ResponseItem>,
+    replacement: Vec<ResponseItem>,
+}
+
+impl ParserPublicationUpdate {
+    fn new(
+        operation: &'static str,
+        suffix_start: usize,
+        expected_history: Vec<ResponseItem>,
+        replacement: Vec<ResponseItem>,
+    ) -> Self {
+        Self {
+            operation,
+            suffix_start,
+            expected_history,
+            replacement,
+        }
+    }
+
+    pub(crate) fn into_history_update<T>(
+        self,
+        call_id: &str,
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> T {
+        build_update(
+            call_id,
+            self.operation,
+            self.suffix_start,
+            self.expected_history,
+            self.replacement,
+        )
+    }
+}
+
 impl ParserPublicationPlan {
-    pub(super) fn history_update_parts(
+    pub(super) fn history_update(
         &self,
         call_id: &str,
         tool_resp_item: &ResponseItem,
         tool_resp_already_recorded: bool,
         history_items: &[ResponseItem],
-    ) -> Result<Option<(&'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>)>, SpineError>
-    {
+    ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
         let suffix_end = history_items.len();
         if self.suffix_start > suffix_end {
             return Err(SpineError::Invariant(format!(
@@ -123,7 +160,7 @@ impl ParserPublicationPlan {
         if self.append_current_tool_response_if_missing && !tool_resp_already_recorded {
             replacement.push(tool_resp_item.clone());
         }
-        Ok(Some((
+        Ok(Some(ParserPublicationUpdate::new(
             self.operation,
             self.suffix_start,
             history_items.to_vec(),
@@ -674,19 +711,23 @@ impl ParserState {
         )
     }
 
-    pub(super) fn full_variable_context_publication_update_parts(
+    pub(super) fn full_variable_context_publication_update(
         &self,
         operation: &'static str,
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
         history_items: &[ResponseItem],
-    ) -> Result<Option<(&'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>)>, SpineError>
-    {
+    ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
         let materialized = self.materialize_variable_context(raw_items, trim_projection)?;
         if materialized.as_slice() == history_items {
             return Ok(None);
         }
-        Ok(Some((operation, 0, history_items.to_vec(), materialized)))
+        Ok(Some(ParserPublicationUpdate::new(
+            operation,
+            0,
+            history_items.to_vec(),
+            materialized,
+        )))
     }
 
     pub(super) fn materialized_variable_context_len(
