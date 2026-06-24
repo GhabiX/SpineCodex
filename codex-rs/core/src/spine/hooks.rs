@@ -39,6 +39,13 @@ pub(crate) struct GroupedToolcallOutputRecordingPlan {
     inner: super::runtime::SpineGroupedToolcallOutputRecordingPlan,
 }
 
+pub(crate) struct ReplayRuntime {
+    raw_len: u64,
+    runtime: Option<super::runtime::SpineRuntime>,
+    materialized: Option<Vec<ResponseItem>>,
+    live_root_compacts: Vec<super::runtime::LiveRootCompact>,
+}
+
 pub(crate) struct InitEvidence<'a> {
     pub(crate) rollout_path: &'a Path,
 }
@@ -465,6 +472,20 @@ impl GroupedToolcallOutputRecordingPlan {
     }
 }
 
+impl ReplayRuntime {
+    pub(crate) fn has_runtime(&self) -> bool {
+        self.runtime.is_some()
+    }
+
+    pub(crate) fn live_root_compacts(&self) -> &[super::runtime::LiveRootCompact] {
+        &self.live_root_compacts
+    }
+
+    pub(crate) fn into_materialized(self) -> Option<Vec<ResponseItem>> {
+        self.materialized
+    }
+}
+
 impl HistoryHostEffect {
     pub(crate) fn apply_history_update_or_self(
         self,
@@ -583,6 +604,49 @@ pub(crate) fn prepare_grouped_toolcall_output_recording(
     state
         .prepare_grouped_toolcall_output_recording(output_items)
         .map(|inner| GroupedToolcallOutputRecordingPlan { inner })
+}
+
+pub(crate) fn prepare_jit_replay_from_rollout_items(
+    state: &SpineSessionState,
+    rollout_path: &Path,
+    raw_len: u64,
+    raw_items: &[Option<ResponseItem>],
+    rollback_cuts: &[usize],
+) -> Result<ReplayRuntime, SpineError> {
+    let prepared =
+        state.prepare_jit_replay_from_rollout_items(rollout_path, raw_items, rollback_cuts)?;
+    Ok(ReplayRuntime {
+        raw_len,
+        runtime: prepared.runtime,
+        materialized: prepared.materialized,
+        live_root_compacts: prepared.live_root_compacts,
+    })
+}
+
+pub(crate) fn prepare_trim_replay_from_history(
+    rollout_path: &Path,
+    raw_len: u64,
+    history_items: &[ResponseItem],
+) -> Result<Option<ReplayRuntime>, SpineError> {
+    let Some((runtime, materialized)) =
+        SpineSessionState::prepare_trim_replay_from_history(rollout_path, raw_len, history_items)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ReplayRuntime {
+        raw_len,
+        runtime: Some(runtime),
+        materialized: Some(materialized),
+        live_root_compacts: Vec::new(),
+    }))
+}
+
+pub(crate) fn install_replay(
+    state: &mut SpineSessionState,
+    replay: ReplayRuntime,
+) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+    state.set_replayed(replay.raw_len, replay.runtime)?;
+    Ok(replay.materialized)
 }
 
 pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request(

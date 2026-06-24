@@ -12,7 +12,6 @@ use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineRootCompactHostInstall;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
-use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
@@ -36,22 +35,12 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 
 pub(super) struct PreparedSpineReplay {
-    raw_len: u64,
-    runtime: Option<SpineRuntime>,
-    materialized: Option<Vec<ResponseItem>>,
+    replay: hooks::ReplayRuntime,
 }
 
 impl PreparedSpineReplay {
-    pub(super) fn new(
-        raw_len: u64,
-        runtime: Option<SpineRuntime>,
-        materialized: Option<Vec<ResponseItem>>,
-    ) -> Self {
-        Self {
-            raw_len,
-            runtime,
-            materialized,
-        }
+    pub(super) fn new(replay: hooks::ReplayRuntime) -> Self {
+        Self { replay }
     }
 }
 
@@ -422,9 +411,15 @@ impl Session {
         })?;
         let prepared_runtime = {
             let guard = spine_slot.lock().await;
-            guard.prepare_jit_replay_from_rollout_items(&rollout_path, raw_items, rollback_cuts)?
+            hooks::prepare_jit_replay_from_rollout_items(
+                &guard,
+                &rollout_path,
+                raw_len,
+                raw_items,
+                rollback_cuts,
+            )?
         };
-        if prepared_runtime.runtime.is_none()
+        if !prepared_runtime.has_runtime()
             && (used_replacement_history || raw_items.iter().any(Option::is_some))
         {
             return Err(SpineError::InvalidStore(
@@ -450,7 +445,7 @@ impl Session {
                 &base_variable_replacement_history,
             )?;
             validate_live_root_compacts_have_rollout_boundary_proofs(
-                &prepared_runtime.live_root_compacts,
+                prepared_runtime.live_root_compacts(),
                 replacement_history_boundaries,
                 &store,
                 &rollout_path,
@@ -459,14 +454,10 @@ impl Session {
             )?;
         } else {
             validate_no_live_root_compacts_without_rollout_boundaries(
-                &prepared_runtime.live_root_compacts,
+                prepared_runtime.live_root_compacts(),
             )?;
         }
-        Ok(Some(PreparedSpineReplay {
-            raw_len,
-            runtime: prepared_runtime.runtime,
-            materialized: prepared_runtime.materialized,
-        }))
+        Ok(Some(PreparedSpineReplay::new(prepared_runtime)))
     }
 
     pub(super) async fn prepare_spine_trim_replay_from_rollout_items(
@@ -487,16 +478,12 @@ impl Session {
         else {
             return Ok(None);
         };
-        let Some((runtime, materialized)) =
-            SpineSessionState::prepare_trim_replay_from_history(&rollout_path, raw_len, history)?
+        let Some(replay) =
+            hooks::prepare_trim_replay_from_history(&rollout_path, raw_len, history)?
         else {
             return Ok(None);
         };
-        Ok(Some(PreparedSpineReplay::new(
-            raw_len,
-            Some(runtime),
-            Some(materialized),
-        )))
+        Ok(Some(PreparedSpineReplay::new(replay)))
     }
 
     pub(super) async fn apply_spine_replay(
@@ -504,13 +491,10 @@ impl Session {
         replay: PreparedSpineReplay,
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(replay.materialized);
+            return Ok(replay.replay.into_materialized());
         };
-        spine_slot
-            .lock()
-            .await
-            .set_replayed(replay.raw_len, replay.runtime)?;
-        Ok(replay.materialized)
+        let mut guard = spine_slot.lock().await;
+        hooks::install_replay(&mut *guard, replay.replay)
     }
 
     pub(crate) fn variable_spine_items_for_root_compact(
