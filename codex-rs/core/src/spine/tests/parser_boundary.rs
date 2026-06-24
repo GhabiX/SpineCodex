@@ -525,9 +525,18 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "runtime/root_compact.rs must not use the generic parser replacement escape hatch"
     );
     assert!(
+        !root_compact.contains("ParserPreparedState"),
+        "runtime/root_compact.rs must not hold raw parser prepared states; use parser-owned install handles"
+    );
+    assert!(
         root_compact.contains(".install_pending_root_compact_after_side_effect_failure(")
             && root_compact.contains(".install_prepared_root_compact("),
         "runtime root compact should install pending/final parser states through named ParserState methods"
+    );
+    assert!(
+        root_compact.contains("ParserRootCompactPendingInstall")
+            && root_compact.contains("ParserRootCompactInstall"),
+        "runtime root compact should hold parser-owned pending and final install handles"
     );
     assert!(
         !root_compact.contains(".install_prepared_root_compact_final_parse_stack("),

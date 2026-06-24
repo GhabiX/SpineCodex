@@ -53,7 +53,7 @@ pub(super) struct ParserState {
 pub(super) struct ParserRootCompactPreparedReduction {
     materialized: Vec<ResponseItem>,
     current_open_index: usize,
-    pending_parse_stack: ParserPreparedState,
+    pending_install: ParserRootCompactPendingInstall,
     parser_install: ParserRootCompactInstall,
 }
 
@@ -75,6 +75,11 @@ pub(super) struct ParserCommitInstall {
 #[derive(Debug)]
 pub(super) struct ParserRootCompactInstall {
     final_parse_stack: ParserPreparedState,
+}
+
+#[derive(Debug)]
+pub(super) struct ParserRootCompactPendingInstall {
+    pending_parse_stack: ParserPreparedState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -167,14 +172,10 @@ impl ParserRootCompactPreparedReduction {
         self,
     ) -> (
         Vec<ResponseItem>,
-        ParserPreparedState,
+        ParserRootCompactPendingInstall,
         ParserRootCompactInstall,
     ) {
-        (
-            self.materialized,
-            self.pending_parse_stack,
-            self.parser_install,
-        )
+        (self.materialized, self.pending_install, self.parser_install)
     }
 
     pub(super) fn build_compact_checkpoint(
@@ -236,6 +237,18 @@ impl ParserRootCompactInstall {
 
     fn into_final_parse_stack(self) -> ParserPreparedState {
         self.final_parse_stack
+    }
+}
+
+impl ParserRootCompactPendingInstall {
+    fn new(pending_parse_stack: ParserPreparedState) -> Self {
+        Self {
+            pending_parse_stack,
+        }
+    }
+
+    fn into_pending_parse_stack(self) -> ParserPreparedState {
+        self.pending_parse_stack
     }
 }
 
@@ -491,9 +504,9 @@ impl ParserState {
 
     pub(super) fn install_pending_root_compact_after_side_effect_failure(
         &mut self,
-        state: ParserPreparedState,
+        install: ParserRootCompactPendingInstall,
     ) {
-        self.replace_parse_stack_for_runtime_transition(state);
+        self.replace_parse_stack_for_runtime_transition(install.into_pending_parse_stack());
     }
 
     pub(super) fn install_prepared_root_compact(&mut self, install: ParserRootCompactInstall) {
@@ -600,7 +613,9 @@ impl ParserState {
         Ok(ParserRootCompactPreparedReduction {
             materialized,
             current_open_index,
-            pending_parse_stack: ParserPreparedState::new(pending),
+            pending_install: ParserRootCompactPendingInstall::new(ParserPreparedState::new(
+                pending,
+            )),
             parser_install: ParserRootCompactInstall::new(ParserPreparedState::new(
                 final_parse_stack,
             )),
