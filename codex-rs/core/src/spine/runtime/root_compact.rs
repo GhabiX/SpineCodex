@@ -435,7 +435,6 @@ impl SpineRuntime {
         );
 
         let staged_memory_body = Some((compact_id.as_str(), body.as_str()));
-        let trim_projection = self.current_trim_projection()?;
         let next_open_index_usize = self.parser.root_compact_next_open_index_or_probe(
             &memory,
             token_metadata.next_open_input_tokens,
