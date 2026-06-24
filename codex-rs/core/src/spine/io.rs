@@ -97,14 +97,10 @@ pub(super) fn sha1_hex(bytes: &[u8]) -> String {
 }
 
 pub(super) fn hash_raw_live(raw_live: &[bool]) -> String {
-    hash_raw_live_iter(raw_live.iter().copied())
-}
-
-fn hash_raw_live_iter(raw_live: impl IntoIterator<Item = bool>) -> String {
     use sha1::Digest;
     let mut hasher = sha1::Sha1::new();
     for live in raw_live {
-        hasher.update(if live { b"1" } else { b"0" });
+        hasher.update(if *live { b"1" } else { b"0" });
     }
     format!("{:x}", hasher.finalize())
 }
