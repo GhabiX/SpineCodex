@@ -409,7 +409,7 @@ impl ParseStack {
         next_open_context_tokens: Option<i64>,
         archive: &SpineArchive,
     ) -> Result<(), SpineError> {
-        if self.pending_compact_memory()?.is_some() {
+        if self.pending_compact_memory().is_some() {
             self.validate_pending_compact_memory(&memory)?;
             return Ok(());
         }
@@ -653,15 +653,15 @@ impl ParseStack {
         Ok(())
     }
 
-    fn pending_compact_memory(&self) -> Result<Option<&MemoryRef>, SpineError> {
+    fn pending_compact_memory(&self) -> Option<&MemoryRef> {
         match self.symbols.last() {
-            Some(Symbol::Control(ControlSymbol::Compact(memory, ..))) => Ok(Some(memory)),
-            _ => Ok(None),
+            Some(Symbol::Control(ControlSymbol::Compact(memory, ..))) => Some(memory),
+            _ => None,
         }
     }
 
     fn validate_pending_compact_memory(&self, memory: &MemoryRef) -> Result<(), SpineError> {
-        let Some(existing) = self.pending_compact_memory()? else {
+        let Some(existing) = self.pending_compact_memory() else {
             return Ok(());
         };
         if existing != memory {
