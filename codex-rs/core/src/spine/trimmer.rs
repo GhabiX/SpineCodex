@@ -184,13 +184,11 @@ impl<'a> Trimmer<'a> {
             return Ok(None);
         }
         let projection = self.current_projection(current_structural_seq)?;
-        let Some(target) = projection.targets_by_id.get(trim_id) else {
-            return Ok(None);
-        };
-        if Some(target.toolcall_seq) != latest_live_completed_toolcall_seq {
-            return Ok(None);
-        }
-        Ok(Some(target.clone()))
+        Ok(projection
+            .targets_by_id
+            .get(trim_id)
+            .filter(|target| Some(target.toolcall_seq) == latest_live_completed_toolcall_seq)
+            .cloned())
     }
 
     fn append_event(&mut self, event: TrimEvent) -> Result<u64, SpineError> {
