@@ -57,7 +57,8 @@ impl SpinePreparedRootCompact {
         &self.result.materialized
     }
 
-    pub(crate) fn clone_publication_result(&self) -> SpineRootCompactResult {
+    #[cfg(test)]
+    pub(crate) fn clone_publication_result_for_test(&self) -> SpineRootCompactResult {
         self.result.clone()
     }
 
@@ -75,7 +76,13 @@ impl SpinePreparedRootCompact {
     }
 
     pub(super) fn into_parser_install(self) -> ParserRootCompactInstall {
-        self.parser_install
+        self.into_publication_result_and_parser_install().1
+    }
+
+    pub(super) fn into_publication_result_and_parser_install(
+        self,
+    ) -> (SpineRootCompactResult, ParserRootCompactInstall) {
+        (self.result, self.parser_install)
     }
 }
 

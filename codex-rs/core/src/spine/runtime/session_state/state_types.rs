@@ -127,7 +127,7 @@ impl SpineRootCompactHostInstall {
 
     #[cfg(test)]
     pub(crate) fn result(&self) -> SpineRootCompactResult {
-        self.prepared.clone_publication_result()
+        self.prepared.clone_publication_result_for_test()
     }
 
     pub(super) fn into_prepared(self) -> SpinePreparedRootCompact {

@@ -685,9 +685,14 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         !prepared.contains("fn result(&self)")
             && prepared.contains("fn publication_history(&self) -> &[ResponseItem]")
-            && prepared.contains("fn clone_publication_result(&self) -> SpineRootCompactResult")
+            && prepared.contains("#[cfg(test)]\n    pub(crate) fn clone_publication_result_for_test(&self) -> SpineRootCompactResult")
             && !prepared.contains("fn publication_result(&self) -> &SpineRootCompactResult"),
-        "runtime root compact prepared carrier should expose publication/result intent without leaking borrowed result internals"
+        "runtime root compact prepared carrier should expose publication intent and keep cloned result access test-only"
+    );
+    assert!(
+        prepared.contains("fn into_publication_result_and_parser_install(")
+            && prepared.contains("(SpineRootCompactResult, ParserRootCompactInstall)"),
+        "runtime root compact prepared carrier should expose one-shot result/install consumption for direct installs"
     );
     assert!(
         !prepared.contains("SpinePreparedRootCompactInstall"),
@@ -966,6 +971,17 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         root_compact.contains("SpinePreparedRootCompact::new("),
         "runtime root compact should construct prepared root compact through a named constructor"
     );
+    assert!(
+        !root_compact.contains("clone_publication_result"),
+        "runtime root compact production paths should consume prepared result/install without cloning publication results"
+    );
+    assert!(
+        root_compact
+            .matches(".into_publication_result_and_parser_install()")
+            .count()
+            == 2,
+        "runtime root compact direct install helpers should consume publication result and parser install together"
+    );
     let install_prepared_root_compact = root_compact
         .split("pub(crate) fn install_prepared_root_compact(")
         .nth(1)
@@ -1006,7 +1022,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     assert!(
         state_types.contains("self.prepared.publication_history()")
-            && state_types.contains("self.prepared.clone_publication_result()")
+            && state_types.contains("self.prepared.clone_publication_result_for_test()")
             && !state_types.contains("self.prepared.publication_result()")
             && !state_types.contains("self.prepared.result().materialized"),
         "root compact host install should publish through prepared publication accessors, not parser result internals"
