@@ -855,6 +855,13 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !root_compact_session.contains(".materialized().to_vec()"),
         "root compact session should publish through the host-publication wrapper accessor"
     );
+    assert!(
+        root_compact_session
+            .contains("let publication_history = install.publication_history().to_vec();")
+            && !root_compact_session
+                .contains("let materialized = install.publication_history().to_vec();"),
+        "root compact host publication locals should keep publication naming instead of parser materialization naming"
+    );
     let apply_after_publish = root_compact_session
         .split("pub(crate) fn apply_root_compact_after_history_publish(")
         .nth(1)
