@@ -1326,9 +1326,11 @@ impl Session {
         };
         let result = prepared.result();
         let mut guard = spine_slot.lock().await;
-        guard.ensure_valid()?;
-        let snapshot =
-            guard.apply_root_compact_after_history_publish(prepared, result.materialized.len())?;
+        let snapshot = hooks::install_test_root_compact_after_history_publish(
+            &mut guard,
+            prepared,
+            result.materialized.len(),
+        )?;
         Ok(Some((result, snapshot)))
     }
 
@@ -1342,8 +1344,7 @@ impl Session {
         };
         {
             let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            if !hooks::is_ready(&guard) {
+            if !hooks::is_ready_for_test_root_compact(&guard)? {
                 return Ok(None);
             }
         }
