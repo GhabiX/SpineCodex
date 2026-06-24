@@ -816,17 +816,9 @@ impl Session {
         call_id: String,
         summary: String,
     ) -> Result<(), SpineError> {
-        // TODO(spine-hook-refactor): replace direct runtime seeding with
-        // test evidence passed through the unified on_toolcall hook.
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        guard.ensure_valid()?;
-        let Some(runtime) = guard.runtime_mut() else {
-            return Err(SpineError::InvalidStore(
-                "spine runtime missing after initialization".to_string(),
-            ));
-        };
-        runtime.stage_open(call_id, summary)
+        hooks::test_seed_open_control_request(&mut guard, call_id, summary)
     }
 
     #[cfg(test)]
@@ -835,17 +827,9 @@ impl Session {
         call_id: String,
         memory: M,
     ) -> Result<(), SpineError> {
-        // TODO(spine-hook-refactor): replace direct runtime seeding with
-        // test evidence passed through the unified on_toolcall hook.
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        guard.ensure_valid()?;
-        let Some(runtime) = guard.runtime_mut() else {
-            return Err(SpineError::InvalidStore(
-                "spine runtime missing after initialization".to_string(),
-            ));
-        };
-        runtime.stage_close(call_id, memory)
+        hooks::test_seed_close_control_request(&mut guard, call_id, memory)
     }
 
     #[cfg(test)]
@@ -855,17 +839,9 @@ impl Session {
         summary: String,
         memory: M,
     ) -> Result<(), SpineError> {
-        // TODO(spine-hook-refactor): replace direct runtime seeding with
-        // test evidence passed through the unified on_toolcall hook.
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        guard.ensure_valid()?;
-        let Some(runtime) = guard.runtime_mut() else {
-            return Err(SpineError::InvalidStore(
-                "spine runtime missing after initialization".to_string(),
-            ));
-        };
-        runtime.stage_next(call_id, summary, memory)
+        hooks::test_seed_next_control_request(&mut guard, call_id, summary, memory)
     }
 
     pub(crate) async fn trim_spine_tool_response(
