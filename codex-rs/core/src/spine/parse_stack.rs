@@ -600,10 +600,8 @@ impl ParseStack {
                     ..,
                     Symbol::Control(ControlSymbol::Open(meta)),
                     Symbol::SpineTreeNodes(children),
-                ],
-            ) if !children.is_empty() => Some((meta, children)),
-            Some(
-                [
+                ]
+                | [
                     ..,
                     Symbol::Control(ControlSymbol::Open(meta)),
                     Symbol::SpineTreeNodes(children),
