@@ -170,15 +170,11 @@ impl SpineRuntime {
     }
 
     pub(crate) fn load(store: SpineStore, raw_len: u64) -> Result<Self, SpineError> {
-        Self::load_with_raw_live(store, live_raw_prefix(raw_len)?)
+        Self::load_with_raw_live_and_event_limit(store, live_raw_prefix(raw_len)?, None)
     }
 
     pub(crate) fn acquire_writer_lock(&mut self) -> Result<(), SpineError> {
         self.store.ensure_writer_lock()
-    }
-
-    fn load_with_raw_live(store: SpineStore, raw_live: Vec<bool>) -> Result<Self, SpineError> {
-        Self::load_with_raw_live_and_event_limit(store, raw_live, None)
     }
 
     fn load_with_raw_live_for_rollout(
@@ -204,7 +200,7 @@ impl SpineRuntime {
             )?;
             Self::validate_checkpoint_parse_stack_prefix(&store, &raw_live, &checkpoint)?;
         }
-        Self::load_with_raw_live(store, raw_live)
+        Self::load_with_raw_live_and_event_limit(store, raw_live, None)
     }
 
     fn validate_checkpoint_parse_stack_prefix(
