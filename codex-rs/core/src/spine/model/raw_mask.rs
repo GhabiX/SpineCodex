@@ -27,10 +27,10 @@ impl<'a> RawMask<'a> {
     pub(in crate::spine) fn span_live(self, start: u64, end: u64) -> Result<bool, SpineError> {
         let start = raw_usize(start, "raw start overflow")?;
         let end = raw_usize(end, "raw end overflow")?;
-        if end > self.live.len() || start > end {
-            return Ok(false);
-        }
-        Ok(self.live[start..end].iter().all(|item| *item))
+        Ok(self
+            .live
+            .get(start..end)
+            .is_some_and(|span| span.iter().all(|item| *item)))
     }
 
     pub(in crate::spine) fn prefix_hash_matches(
@@ -39,10 +39,10 @@ impl<'a> RawMask<'a> {
         expected: &str,
     ) -> Result<bool, SpineError> {
         let end = raw_usize(end, "raw end overflow")?;
-        if end > self.live.len() {
-            return Ok(false);
-        }
-        Ok(hash_raw_live(&self.live[..end]) == expected)
+        Ok(self
+            .live
+            .get(..end)
+            .is_some_and(|prefix| hash_raw_live(prefix) == expected))
     }
 }
 
