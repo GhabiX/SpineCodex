@@ -3,6 +3,7 @@ use crate::goals::GoalRuntimeState;
 use crate::session::spine_pressure_prompt::SpinePressurePromptState;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineSessionState;
+use crate::spine::hooks;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -947,7 +948,7 @@ impl Session {
             let spine_enabled = config.features.enabled(Feature::SpineJit)
                 || config.features.enabled(Feature::SpineTrim);
             let spine = spine_enabled.then(|| {
-                Mutex::new(SpineSessionState::new_with_features(
+                Mutex::new(hooks::new_session_state(
                     config.features.enabled(Feature::SpineJit),
                     config.features.enabled(Feature::SpineTrim),
                 ))

@@ -97,6 +97,10 @@ pub(crate) struct ObservedContextItem<'a> {
     pub(crate) item: &'a ResponseItem,
 }
 
+pub(crate) fn new_session_state(jit_enabled: bool, trim_enabled: bool) -> SpineSessionState {
+    SpineSessionState::new_with_features(jit_enabled, trim_enabled)
+}
+
 enum ToolCallEvidenceKind<'a> {
     Single {
         item: &'a ResponseItem,
