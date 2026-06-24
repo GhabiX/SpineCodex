@@ -212,41 +212,33 @@ fn render_memory_archive(
         "source_token_seq: [{}..{})\n",
         memory.source_token_seq.start, memory.source_token_seq.end
     ));
-    push_optional_i64_field(&mut out, "open_input_tokens", memory.open_input_tokens);
-    push_optional_i64_field(&mut out, "close_input_tokens", memory.close_input_tokens);
-    push_optional_i64_field(&mut out, "open_context_tokens", memory.open_context_tokens);
-    push_optional_i64_field(
-        &mut out,
-        "close_context_tokens",
-        memory.close_context_tokens,
-    );
-    push_optional_i64_field(
-        &mut out,
-        "closed_source_suffix_tokens",
-        memory.closed_source_suffix_tokens,
-    );
-    push_optional_i64_field(
-        &mut out,
-        "closed_memory_context_tokens",
-        memory.closed_memory_context_tokens,
-    );
+    let mut wrote_optional = false;
+    for (field, value) in [
+        ("open_input_tokens", memory.open_input_tokens),
+        ("close_input_tokens", memory.close_input_tokens),
+        ("open_context_tokens", memory.open_context_tokens),
+        ("close_context_tokens", memory.close_context_tokens),
+        (
+            "closed_source_suffix_tokens",
+            memory.closed_source_suffix_tokens,
+        ),
+        (
+            "closed_memory_context_tokens",
+            memory.closed_memory_context_tokens,
+        ),
+    ] {
+        wrote_optional |= push_optional_i64_field(&mut out, field, value);
+    }
     if let Some(source) = memory.open_context_source {
         out.push_str(&format!("open_context_source: {source:?}\n"));
+        wrote_optional = true;
     }
-    push_optional_i64_field(
+    wrote_optional |= push_optional_i64_field(
         &mut out,
         "memory_output_tokens",
         memory.memory_output_tokens,
     );
-    if memory.open_input_tokens.is_some()
-        || memory.close_input_tokens.is_some()
-        || memory.open_context_tokens.is_some()
-        || memory.close_context_tokens.is_some()
-        || memory.closed_source_suffix_tokens.is_some()
-        || memory.closed_memory_context_tokens.is_some()
-        || memory.open_context_source.is_some()
-        || memory.memory_output_tokens.is_some()
-    {
+    if wrote_optional {
         out.push('\n');
     }
     out.push_str("## Body\n\n");
@@ -257,9 +249,12 @@ fn render_memory_archive(
     Ok(out)
 }
 
-fn push_optional_i64_field(out: &mut String, field: &str, value: Option<i64>) {
+fn push_optional_i64_field(out: &mut String, field: &str, value: Option<i64>) -> bool {
     if let Some(value) = value {
         out.push_str(&format!("{field}: {value}\n"));
+        true
+    } else {
+        false
     }
 }
 
