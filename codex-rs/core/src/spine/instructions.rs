@@ -178,7 +178,15 @@ pub(crate) fn append_spine_scaling_instructions(
         return base_instructions;
     };
     let override_contents = read_spine_instruction_override(codex_home, dev_debug_prompt_overrides);
-    let Some(block) = spine_scaling_prompt_block(spine_scaling, override_contents.as_deref())
+    let tag = match spine_scaling {
+        SpineScalingLevel::Low => return base_instructions,
+        SpineScalingLevel::Medium => "spine_scaling_medium",
+        SpineScalingLevel::High => "spine_scaling_high",
+        SpineScalingLevel::Auto => "spine_scaling_auto",
+    };
+    let Some(block) = override_contents
+        .as_deref()
+        .and_then(|contents| extract_section_body(contents, tag))
     else {
         return base_instructions;
     };
@@ -187,23 +195,6 @@ pub(crate) fn append_spine_scaling_instructions(
     }
     base_instructions.push_str(&block);
     base_instructions
-}
-
-fn spine_scaling_prompt_block(
-    spine_scaling: SpineScalingLevel,
-    override_contents: Option<&str>,
-) -> Option<String> {
-    let tag = spine_scaling_override_tag(spine_scaling)?;
-    override_contents.and_then(|contents| extract_section_body(contents, tag))
-}
-
-fn spine_scaling_override_tag(spine_scaling: SpineScalingLevel) -> Option<&'static str> {
-    match spine_scaling {
-        SpineScalingLevel::Low => None,
-        SpineScalingLevel::Medium => Some("spine_scaling_medium"),
-        SpineScalingLevel::High => Some("spine_scaling_high"),
-        SpineScalingLevel::Auto => Some("spine_scaling_auto"),
-    }
 }
 
 fn joined_spine_instructions(
