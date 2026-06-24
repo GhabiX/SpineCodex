@@ -32,19 +32,12 @@ pub(crate) use runtime::SPINE_TOOL_TRIM;
 pub(crate) use runtime::SpineCloseMemoryAssembly;
 #[cfg(test)]
 pub(crate) use runtime::SpineCommitKind;
-pub(crate) use runtime::SpineCompactEvidence;
 pub(crate) use runtime::SpineCompactSourceEntryKind;
 pub(crate) use runtime::SpineCompactSourcePlan;
 #[cfg(test)]
 pub(crate) use runtime::SpineCompactSourcePlanEntry;
-pub(crate) use runtime::SpineCompletedToolCallHostOutcome;
-pub(crate) use runtime::SpineCompletedToolCallOutputEvidence;
 pub(crate) use runtime::SpineCurrentTrimTarget;
 pub(crate) use runtime::SpineError;
-pub(crate) use runtime::SpineHostEffects;
-pub(crate) use runtime::SpineInitEvidence;
-pub(crate) use runtime::SpineMessageEvidence;
-pub(crate) use runtime::SpineNativeCompactEvidence;
 pub(crate) use runtime::SpineObservedContextItem;
 pub(crate) use runtime::SpineOpenNodeContextProjection;
 #[cfg(test)]
@@ -67,9 +60,6 @@ pub(crate) use runtime::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineToolcallCommitEvidence;
-pub(crate) use runtime::SpineToolcallHookEvidence;
-pub(crate) use runtime::SpineToolcallHostCommitAttempt;
-pub(crate) use runtime::SpineToolcallHostAttempt;
 pub(crate) use runtime::SpineTrimOutcome;
 pub(crate) use runtime::is_non_toolcall_msg;
 pub(crate) use runtime::is_real_user_message;
