@@ -39,15 +39,14 @@ pub(super) fn read_json_lines<T: for<'de> Deserialize<'de>>(
 ) -> Result<Vec<T>, SpineError> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let mut out = Vec::new();
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        out.push(serde_json::from_str(&line)?);
-    }
-    Ok(out)
+    reader
+        .lines()
+        .filter_map(|line| match line {
+            Ok(line) if line.trim().is_empty() => None,
+            Ok(line) => Some(serde_json::from_str(&line).map_err(Into::into)),
+            Err(err) => Some(Err(err.into())),
+        })
+        .collect()
 }
 
 pub(super) fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, SpineError> {
