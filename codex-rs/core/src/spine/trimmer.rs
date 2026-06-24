@@ -295,37 +295,42 @@ pub(super) fn current_visible_body(
     raw_items: &[Option<ResponseItem>],
 ) -> Result<String, SpineError> {
     match &target.state {
-        TrimTargetState::Tagged => {
-            let raw_index = trim_raw_ordinal_usize(target.raw_ordinal)?;
-            let item = raw_items
-                .get(raw_index)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| {
-                    SpineError::InvalidEvent(format!(
-                        "missing raw item for trim target {}",
-                        target.trim_id
-                    ))
-                })?;
-            let Some((response_kind, _)) = trimmable_text_tool_response(item) else {
-                return Err(trim_body_error(target));
-            };
-            if response_kind != target.response_kind {
-                return Err(SpineError::SidecarCorruption(format!(
-                    "trim target {} response kind mismatch",
-                    target.trim_id
-                )));
-            }
-            let text = matched_tool_output(item, target, "visible raw item")?
-                .text_content()
-                .map(str::to_string)
-                .ok_or_else(|| trim_body_error(target))?;
-            Ok(strip_trim_tag_prefix(&text, &target.trim_id))
-        }
+        TrimTargetState::Tagged => current_tagged_visible_body(target, raw_items),
         TrimTargetState::Sliced { visible_body } => Ok(visible_body.clone()),
         TrimTargetState::Snipped => {
             Ok(crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE.to_string())
         }
     }
+}
+
+fn current_tagged_visible_body(
+    target: &TrimTarget,
+    raw_items: &[Option<ResponseItem>],
+) -> Result<String, SpineError> {
+    let raw_index = trim_raw_ordinal_usize(target.raw_ordinal)?;
+    let item = raw_items
+        .get(raw_index)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| {
+            SpineError::InvalidEvent(format!(
+                "missing raw item for trim target {}",
+                target.trim_id
+            ))
+        })?;
+    let Some((response_kind, _)) = trimmable_text_tool_response(item) else {
+        return Err(trim_body_error(target));
+    };
+    if response_kind != target.response_kind {
+        return Err(SpineError::SidecarCorruption(format!(
+            "trim target {} response kind mismatch",
+            target.trim_id
+        )));
+    }
+    let text = matched_tool_output(item, target, "visible raw item")?
+        .text_content()
+        .map(str::to_string)
+        .ok_or_else(|| trim_body_error(target))?;
+    Ok(strip_trim_tag_prefix(&text, &target.trim_id))
 }
 
 fn strip_trim_tag_prefix(text: &str, trim_id: &str) -> String {
