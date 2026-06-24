@@ -452,8 +452,8 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         root_compact.contains(".prepare_root_compact_reduction(")
-            && root_compact.contains(".root_compact_staged_parse_stacks("),
-        "runtime root compact should route staged parser reductions through ParserState"
+            && !root_compact.contains(".root_compact_staged_parse_stacks("),
+        "runtime root compact should prepare root compact parser transaction once through ParserState"
     );
     assert!(
         !root_compact.contains("final_parse_stack.parse_stack()"),
@@ -471,7 +471,7 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         root_compact.contains(".validate_current_open_matches_materialized_len()")
-            && root_compact.contains(".into_materialized_and_reduction()"),
+            && root_compact.contains(".into_materialized_and_install()"),
         "runtime root compact should consume parser prepared reduction through named parser methods"
     );
 }

@@ -35,7 +35,6 @@ use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
-use crate::spine::parse_stack::PreparedRootEpochReduction;
 use crate::spine::parse_stack::PreparedTaskTreeReduction;
 use crate::spine::parse_stack::apply_metadata_event;
 use crate::spine::parse_stack::event_to_token;
@@ -52,10 +51,10 @@ pub(super) struct ParserState {
 }
 
 pub(super) struct ParserRootCompactPreparedReduction {
-    final_parse_stack: ParserPreparedState,
-    root_epoch_reduction: PreparedRootEpochReduction,
     materialized: Vec<ResponseItem>,
     current_open_index: usize,
+    pending_parse_stack: ParserPreparedState,
+    parser_install: ParserRootCompactInstall,
 }
 
 #[derive(Debug)]
@@ -154,10 +153,18 @@ impl ParserRootCompactPreparedReduction {
         &self.materialized
     }
 
-    pub(super) fn into_materialized_and_reduction(
+    pub(super) fn into_materialized_and_install(
         self,
-    ) -> (Vec<ResponseItem>, PreparedRootEpochReduction) {
-        (self.materialized, self.root_epoch_reduction)
+    ) -> (
+        Vec<ResponseItem>,
+        ParserPreparedState,
+        ParserRootCompactInstall,
+    ) {
+        (
+            self.materialized,
+            self.pending_parse_stack,
+            self.parser_install,
+        )
     }
 
     pub(super) fn build_compact_checkpoint(
@@ -175,7 +182,7 @@ impl ParserRootCompactPreparedReduction {
             token_seq,
             raw_live,
             raw_items,
-            self.final_parse_stack.parse_stack(),
+            self.parser_install.final_parse_stack.parse_stack(),
             &self.materialized,
             replacement_history,
         )
@@ -553,35 +560,13 @@ impl ParserState {
         )?;
         let current_open_index = final_parse_stack.current_open_meta()?.index;
         Ok(ParserRootCompactPreparedReduction {
-            final_parse_stack: ParserPreparedState::new(final_parse_stack),
-            root_epoch_reduction,
             materialized,
             current_open_index,
+            pending_parse_stack: ParserPreparedState::new(pending),
+            parser_install: ParserRootCompactInstall::new(ParserPreparedState::new(
+                final_parse_stack,
+            )),
         })
-    }
-
-    pub(super) fn root_compact_staged_parse_stacks(
-        &self,
-        memory: MemoryRef,
-        next_open_index: usize,
-        next_open_input_tokens: Option<i64>,
-        next_open_context_tokens: Option<i64>,
-        reduction: PreparedRootEpochReduction,
-        archive: &SpineArchive,
-    ) -> Result<(ParserPreparedState, ParserRootCompactInstall), SpineError> {
-        let mut pending = self.parse_stack.clone();
-        pending.shift_pending_compact(
-            memory,
-            next_open_index,
-            next_open_input_tokens,
-            next_open_context_tokens,
-            archive,
-        )?;
-        let final_parse_stack = pending.root_epoch_reduced(reduction)?;
-        Ok((
-            ParserPreparedState::new(pending),
-            ParserRootCompactInstall::new(ParserPreparedState::new(final_parse_stack)),
-        ))
     }
 
     pub(super) fn install_staged(&mut self, state: ParserPreparedState) {

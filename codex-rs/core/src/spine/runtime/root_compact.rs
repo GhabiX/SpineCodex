@@ -18,7 +18,8 @@ use crate::spine::io::sha1_hex;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::parse_stack::PreparedRootEpochReduction;
+use crate::spine::parser::ParserPreparedState;
+use crate::spine::parser::ParserRootCompactInstall;
 use crate::spine::store::BODY_DIR;
 
 struct PreparedRootCompactCommit {
@@ -27,9 +28,8 @@ struct PreparedRootCompactCommit {
     memory_body: String,
     compact_checkpoint: Option<crate::spine::compact_checkpoint::SpineCompactCheckpoint>,
     root_compact_event: SpineLedgerEvent,
-    memory: crate::spine::model::MemoryRef,
-    root_epoch_reduction: PreparedRootEpochReduction,
-    next_open_index: usize,
+    pending_compact_parse_stack: ParserPreparedState,
+    parser_install: ParserRootCompactInstall,
 }
 
 pub(crate) fn spine_root_compact_body(replaced_context: &[ResponseItem]) -> Option<String> {
@@ -326,15 +326,6 @@ impl SpineRuntime {
             token_metadata,
             checkpoint_rollout_path,
         )?;
-        let (pending_compact_parse_stack, parser_install) =
-            self.parser.root_compact_staged_parse_stacks(
-                prepared.memory.clone(),
-                prepared.next_open_index,
-                token_metadata.next_open_input_tokens,
-                token_metadata.next_open_context_tokens,
-                prepared.root_epoch_reduction,
-                &self.archive(),
-            )?;
         if let Err(err) = self.commit_root_compact_prepared_side_effects(
             &prepared.mem,
             &prepared.memory_body,
@@ -342,7 +333,7 @@ impl SpineRuntime {
         ) {
             self.parser
                 .install_pending_root_compact_after_side_effect_failure(
-                    pending_compact_parse_stack,
+                    prepared.pending_compact_parse_stack,
                 );
             return Err(err);
         }
@@ -352,7 +343,7 @@ impl SpineRuntime {
         self.pending = None;
         Ok(SpinePreparedRootCompact {
             result: prepared.result,
-            parser_install,
+            parser_install: prepared.parser_install,
         })
     }
 
@@ -481,8 +472,8 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let (materialized, root_epoch_reduction) =
-            prepared_reduction.into_materialized_and_reduction();
+        let (materialized, pending_compact_parse_stack, parser_install) =
+            prepared_reduction.into_materialized_and_install();
         let result = SpineRootCompactResult {
             materialized,
             raw_boundary: self.raw_len,
@@ -504,9 +495,8 @@ impl SpineRuntime {
             memory_body: body,
             compact_checkpoint,
             root_compact_event,
-            memory,
-            root_epoch_reduction,
-            next_open_index: next_open_index_usize,
+            pending_compact_parse_stack,
+            parser_install,
         })
     }
 }
