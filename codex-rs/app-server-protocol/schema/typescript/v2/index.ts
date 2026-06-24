@@ -346,7 +346,6 @@ export type { SkillsListResponse } from "./SkillsListResponse";
 export type { SortDirection } from "./SortDirection";
 export type { SpineNodeContextBaselineSource } from "./SpineNodeContextBaselineSource";
 export type { SpineNodeContextProblem } from "./SpineNodeContextProblem";
-export type { SpinePlannedNode } from "./SpinePlannedNode";
 export type { SpineTreeNode } from "./SpineTreeNode";
 export type { SpineTreeNodeAccounting } from "./SpineTreeNodeAccounting";
 export type { SpineTreeNodeStatus } from "./SpineTreeNodeStatus";

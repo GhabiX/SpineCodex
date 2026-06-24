@@ -32,12 +32,8 @@ use crate::spine::hooks::ToolcallHostCommitAttempt;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::spine_tree::SpinePlannedNodeSnapshot;
-use codex_protocol::spine_tree::SpineTreeNodeSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 
 pub(super) struct PreparedSpineReplay {
     raw_len: u64,
@@ -783,15 +779,7 @@ impl Session {
         Ok(spine_slot)
     }
 
-    #[cfg(test)]
     pub(crate) async fn spine_tree(&self) -> Result<String, SpineError> {
-        self.spine_tree_with_plan(None).await
-    }
-
-    pub(crate) async fn spine_tree_with_plan(
-        &self,
-        planned_nodes: Option<Vec<SpinePlannedNodeSnapshot>>,
-    ) -> Result<String, SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let token_info = self.token_usage_info().await;
         let view = {
@@ -816,20 +804,7 @@ impl Session {
                 token_info.as_ref(),
             )
         };
-
-        if let Some(planned_nodes) = planned_nodes {
-            let planned_nodes = validate_planned_nodes(&view.snapshot, planned_nodes)?;
-            let mut guard = self.spine_planned_nodes.lock().await;
-            *guard = planned_nodes;
-        } else {
-            self.prune_spine_planned_nodes(&view.snapshot).await;
-        }
-
-        let planned_nodes = self.spine_planned_nodes.lock().await.clone();
-        Ok(render_spine_tree_for_model_with_plan(
-            view.rendered_tree,
-            &planned_nodes,
-        ))
+        Ok(view.rendered_tree)
     }
 
     pub(crate) async fn emit_spine_tree_snapshot(
@@ -838,7 +813,7 @@ impl Session {
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let token_info = self.token_usage_info().await;
-        let mut snapshot = {
+        let snapshot = {
             let guard = spine.lock().await;
             let Some(projection) = guard.tree_snapshot_projection()? else {
                 return Err(SpineError::InvalidStore(
@@ -847,15 +822,8 @@ impl Session {
             };
             build_annotated_tree_snapshot(projection, token_info.as_ref())?
         };
-        self.prune_spine_planned_nodes(&snapshot).await;
-        snapshot.planned_nodes = self.spine_planned_nodes.lock().await.clone();
         self.send_spine_tree_update(turn_context, snapshot).await;
         Ok(())
-    }
-
-    async fn prune_spine_planned_nodes(&self, snapshot: &SpineTreeUpdateEvent) {
-        let mut planned_nodes = self.spine_planned_nodes.lock().await;
-        *planned_nodes = retain_still_valid_planned_nodes(snapshot, &planned_nodes);
     }
 
     #[cfg(test)]

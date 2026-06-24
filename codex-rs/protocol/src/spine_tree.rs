@@ -9,8 +9,6 @@ pub struct SpineTreeUpdateEvent {
     pub snapshot_seq: u64,
     pub active_node_id: String,
     pub nodes: Vec<SpineTreeNodeSnapshot>,
-    #[serde(default)]
-    pub planned_nodes: Vec<SpinePlannedNodeSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
@@ -21,14 +19,6 @@ pub struct SpineTreeNodeSnapshot {
     pub summary: Option<String>,
     pub status: SpineTreeNodeStatus,
     pub accounting: Option<SpineTreeNodeAccountingSnapshot>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SpinePlannedNodeSnapshot {
-    pub node_id: String,
-    pub parent_id: Option<String>,
-    pub summary: String,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]

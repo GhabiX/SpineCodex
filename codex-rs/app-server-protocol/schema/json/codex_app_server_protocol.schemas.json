@@ -15013,27 +15013,6 @@
         ],
         "type": "string"
       },
-      "SpinePlannedNode": {
-        "properties": {
-          "nodeId": {
-            "type": "string"
-          },
-          "parentId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "summary": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "nodeId",
-          "summary"
-        ],
-        "type": "object"
-      },
       "SpineTreeNode": {
         "properties": {
           "accounting": {
@@ -15142,13 +15121,6 @@
           "nodes": {
             "items": {
               "$ref": "#/definitions/v2/SpineTreeNode"
-            },
-            "type": "array"
-          },
-          "plannedNodes": {
-            "default": [],
-            "items": {
-              "$ref": "#/definitions/v2/SpinePlannedNode"
             },
             "type": "array"
           },

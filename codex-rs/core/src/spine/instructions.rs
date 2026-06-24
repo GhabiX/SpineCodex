@@ -2,61 +2,66 @@ use std::path::Path;
 use std::str::FromStr;
 
 pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
-All work is actively managed by Spine tools to keep the **smallest sufficient
-working context** for efficient and effective task resolution.
-For anything beyond a direct answer in the current response, put the work under
-Spine control: plan with `tree`, execute focused work in leaf nodes, and carry
-completed phases forward with `close`/`next`.
+Use Spine to control all work and keep the **smallest sufficient working context**,
+with the goal of efficient and effective task resolution.
 
-Use Spine in recursive EE mode: exploration -> exploitation. When the work is
-still unclear, open a bounded exploration node to discover the work phase.
-When the work phase becomes actionable, use `next` to fold exploration into
-memory and continue in a fresh node. There, use `tree` to maintain the local
-worktree plan, including upcoming nodes, and `open` known child nodes down to
-focused leaf work.
+Use Spine in recursive EE mode: exploration -> exploitation. A node carries one
+local work phase. When the phase is unclear, use the current node only for bounded
+exploration: reduce uncertainty, identify the active intent, and discover the
+next actionable phase. When the phase becomes actionable, use `next` to fold the
+exploration into memory and continue in a fresh sibling node.
 
-If a leaf grows into a harder or broader problem, use `next` to carry that
-discovery into a fresh local work phase, then repeat EE mode from there. Use
-`close` when a leaf has produced the result its parent needs.
+In an actionable node, keep the local work plan in `update_plan`; open child
+nodes only for work that needs its own context boundary. Use `open` only for
+known child work under the current phase: a subproblem, file/module slice,
+experiment, verification gate, or artifact whose result should return to the
+parent. Each child node follows the same recursive EE mode. If exploration yields
+multiple independent targets, track them in `update_plan`; open focused child
+nodes for targets that need isolated work.
 
-`open` starts known child work inside the current work phase. `close` folds
-completed child work into memory for its parent. `next` folds the current work
-phase into memory and starts a fresh sibling phase. When memory can carry the
-useful state forward, transition promptly so later work depends on memory rather
-than retained history.
+A leaf is the smallest focused executable work unit under the current phase: one
+clear objective, one evidence frontier, and a near-term close point. If a leaf
+grows into a harder, broader, or shifted problem, use `next` to carry that
+discovery into a fresh local phase and repeat EE mode. Use `close` when a child
+has produced the result its parent needs.
 
-Choose work-phase boundaries that keep live context small and memory useful.
-Prefer `next` after exploration produces an actionable work phase, and prefer
-`close` after focused child work produces the result its parent needs. If context
-pressure grows, use the next EE boundary to carry completed state forward before
-global compaction is forced. Global compaction may lose Spine tree state, so
-later work may have to reorganize from a new root.
+Use `next` when exploration produces an actionable phase, the active intent
+shifts, or the current node has enough stable understanding to continue fresh.
+Use `open` to start known child work. Use `close` to fold completed child work
+into parent memory. Transition promptly when memory can carry the useful state
+forward, so later work depends on continuation memory rather than retained
+history.
 
-Root-epoch ids such as `1` or `2` cannot be closed; the initial `1.1` is a
-startup work node, not a concrete task node, so use `open` first before
-substantive work. Place user-facing replies at the node where they are most
-useful: local intermediate results may wait for later merge, while complete
-conclusions, blocking status, or information needing user decision should be
-surfaced promptly.
+If context pressure grows, use the next EE boundary to carry completed state
+forward before global compaction is forced. Global compaction may lose Spine tree
+state, so later work may have to reorganize from a new root.
+
+Place user-facing replies at the node where they are most useful: local
+intermediate results may wait for later merge, while complete conclusions,
+blocking status, or information needing user decision should be surfaced promptly.
 
 Conventions:
-- `summary` is a short label in the user's language.
-- `memory` on `close`/`next` is required. Write concise continuation state for
+* Prefer batching Spine tools with ordinary task-progress tool calls in the same assistant tool request.
+* `summary` is a short label in the user's language.
+* `memory` on `close`/`next` is required. Write concise continuation state for
   the next LLM: progress, stable facts, decisions, evidence, constraints,
   unresolved risks, remaining work, and critical files, tests, commands, or
   references. When preserved user messages have `[U#]` anchors, cite them and
   mark each request as completed, partial, blocked, or pending. Record what has
   already been told to the user so later continuation does not repeat it as new
   work.
-- Before replying after `<spine_memory>` continuity or a node transition, check
+* Before replying after `<spine_memory>` continuity or a node transition, check
   what has already been told to the user and only report new status, changes, or
   requested details.
-- `<spine_status>` gives current node context and orientation.
-- `<spine_memory>` gives continuation state from closed work.
-- Use at most one of `open`, `close`, or `next` in one assistant response.
-- `spine.tree` shows the committed task tree, cursor, and any ongoing/future
-  node plan. Actual tree transitions happen only through `open`, `close`, and
-  `next`.
+* Root-epoch ids such as `1` or `2` cannot be closed. For substantive
+  Spine-managed work, the initial `1.1` is a startup work node, not a concrete
+  task node; use `open` before doing substantive task work.
+* `<spine_status>` gives current node context and orientation.
+* `<spine_memory>` gives continuation state from closed work.
+* Use at most one of `open`, `close`, or `next` in one assistant response.
+* `spine.tree` is read-only: it shows the committed task tree, cursor, and
+  context status. Actual tree transitions happen only through `open`, `close`,
+  and `next`.
 
 </spine_view>
 "#;
@@ -210,36 +215,7 @@ fn spine_scaling_override_tag(spine_scaling: SpineScalingLevel) -> Option<&'stat
 fn default_spine_scaling_prompt_block(spine_scaling: SpineScalingLevel) -> Option<&'static str> {
     match spine_scaling {
         SpineScalingLevel::Low => None,
-        SpineScalingLevel::Medium => Some(
-            r#"<spine_scaling>
-Task-level scaling: medium.
-Use `spine.tree` as the planning surface before substantial work: decompose the
-task into a shallow future node plan, solve focused parts in separate nodes,
-then merge resolved work upward through memory.
-Budget: depth 2 x branch 2; plan up to 4 focused leaves.
-Prefer `close`/`next` after each resolved phase so progress accumulates by
-summarized state, not retained history.
-</spine_scaling>"#,
-        ),
-        SpineScalingLevel::High => Some(
-            r#"<spine_scaling>
-Task-level scaling: high.
-Use `spine.tree` as the task-level test-time-scaling controller before
-substantial work: decompose the problem thoroughly, choose tree depth from
-complexity and uncertainty, solve focused leaves independently, and merge
-findings upward through memory.
-Budget: depth 3 x branch 3; plan up to 27 focused leaves.
-Revise the future tree as evidence changes; open deeper nodes for hard blockers
-or independent phases, and reduce completed leaves with `close`/`next` before
-broadening.
-</spine_scaling>"#,
-        ),
-        SpineScalingLevel::Auto => Some(
-            r#"<spine_scaling>
-Task-level scaling: auto.
-Budget: choose reasonable depth and branch count for the task.
-</spine_scaling>"#,
-        ),
+        SpineScalingLevel::Medium | SpineScalingLevel::High | SpineScalingLevel::Auto => None,
     }
 }
 

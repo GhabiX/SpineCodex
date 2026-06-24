@@ -1220,11 +1220,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 snapshot_seq: spine_tree_event.snapshot_seq,
                 active_node_id: spine_tree_event.active_node_id,
                 nodes: spine_tree_event.nodes.into_iter().map(Into::into).collect(),
-                planned_nodes: spine_tree_event
-                    .planned_nodes
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
             };
             outgoing
                 .send_server_notification(ServerNotification::SpineTreeUpdated(notification))

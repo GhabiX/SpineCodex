@@ -2248,7 +2248,6 @@ mod tests {
                 snapshot_seq,
                 active_node_id: "1.1".to_string(),
                 nodes: Vec::new(),
-                planned_nodes: Vec::new(),
             },
         ))
     }
@@ -2261,7 +2260,6 @@ mod tests {
                 snapshot_seq,
                 active_node_id: "1.1".to_string(),
                 nodes: Vec::new(),
-                planned_nodes: Vec::new(),
             },
         ))
     }

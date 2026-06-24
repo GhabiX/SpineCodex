@@ -53,52 +53,12 @@ pub(crate) fn create_spine_namespace_tool(
 }
 
 fn spine_tree_tool() -> ResponsesApiTool {
-    let planned_node_properties = BTreeMap::from([
-        (
-            "node_id".to_string(),
-            JsonSchema::string(Some("Future right-side Spine node id.".to_string())),
-        ),
-        (
-            "summary".to_string(),
-            JsonSchema::string(Some("Short label for the planned future node.".to_string())),
-        ),
-    ]);
-    let plan_properties = BTreeMap::from([
-        (
-            "note".to_string(),
-            JsonSchema::string(Some(
-                "Optional short note explaining the plan update.".to_string(),
-            )),
-        ),
-        (
-            "nodes".to_string(),
-            JsonSchema::array(
-                JsonSchema::object(
-                    planned_node_properties,
-                    Some(vec!["node_id".to_string(), "summary".to_string()]),
-                    Some(false.into()),
-                ),
-                Some("Complete right-side future node plan.".to_string()),
-            ),
-        ),
-    ]);
     ResponsesApiTool {
         name: SPINE_TOOL_TREE.to_string(),
-        description: "Inspect the current Spine tree, cursor, and context status. Optionally replace the right-side future node plan without moving the cursor or committing tree transitions.".to_string(),
+        description: "Inspect the current Spine tree, cursor, and context status.".to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(
-            BTreeMap::from([(
-                "plan".to_string(),
-                JsonSchema::object(
-                    plan_properties,
-                    Some(vec!["nodes".to_string()]),
-                    Some(false.into()),
-                ),
-            )]),
-            Some(Vec::new()),
-            Some(false.into()),
-        ),
+        parameters: JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(false.into())),
         output_schema: None,
     }
 }
