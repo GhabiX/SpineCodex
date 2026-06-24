@@ -362,18 +362,20 @@ fn visible_tree_row_ids(
     for node_id in &path {
         visible.insert(node_id.clone());
         if node_id.is_root_epoch() {
-            for sibling in rows.keys() {
-                if sibling.is_root_epoch() && sibling < node_id {
-                    visible.insert(sibling.clone());
-                }
-            }
+            visible.extend(
+                rows.keys()
+                    .filter(|sibling| sibling.is_root_epoch() && *sibling < node_id)
+                    .cloned(),
+            );
         }
         if let Some(parent) = node_id.parent() {
-            for sibling in rows.keys() {
-                if sibling.parent().as_ref() == Some(&parent) && sibling < node_id {
-                    visible.insert(sibling.clone());
-                }
-            }
+            visible.extend(
+                rows.keys()
+                    .filter(|sibling| {
+                        sibling.parent().as_ref() == Some(&parent) && *sibling < node_id
+                    })
+                    .cloned(),
+            );
         }
     }
     for (id, row) in rows {
@@ -430,8 +432,5 @@ fn format_node_accounting(accounting: &NodeAccounting) -> String {
 
 fn visible_summary(row: &TreeRenderRow) -> Option<&str> {
     let summary = row.summary.trim();
-    if summary.is_empty() || summary == "root" {
-        return None;
-    }
-    Some(summary)
+    (!summary.is_empty() && summary != "root").then_some(summary)
 }
