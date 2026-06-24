@@ -329,20 +329,6 @@ fn raw_ordinal_usize(raw_ordinal: u64) -> Result<usize, SpineError> {
         .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))
 }
 
-pub(super) fn tagged_tool_response_item(
-    item: &ResponseItem,
-    target: &TrimTarget,
-) -> Result<ResponseItem, SpineError> {
-    projected_tool_response_item_with_state(item, target, &TrimTargetState::Tagged)
-}
-
-pub(super) fn cleared_tool_response_item(
-    item: &ResponseItem,
-    target: &TrimTarget,
-) -> Result<ResponseItem, SpineError> {
-    projected_tool_response_item_with_state(item, target, &TrimTargetState::Snipped)
-}
-
 fn projected_tool_response_item(
     item: &ResponseItem,
     target: &TrimTarget,
