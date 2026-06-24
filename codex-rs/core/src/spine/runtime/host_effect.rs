@@ -29,10 +29,6 @@ pub(crate) struct SpineTreeHostUpdates {
 }
 
 pub(crate) struct SpineRootCompactHostPublish {
-    publication: SpineRootCompactHistoryPublication,
-}
-
-struct SpineRootCompactHistoryPublication {
     materialized: Vec<ResponseItem>,
 }
 
@@ -322,13 +318,6 @@ pub(crate) enum SpineHostEffect {
 }
 
 impl SpineHostEffect {
-    fn into_history_update_or_self(self) -> Result<SpineHistoryUpdate, Self> {
-        match self {
-            Self::ReplaceHistory(update) => Ok(update),
-            effect => Err(effect),
-        }
-    }
-
     pub(crate) fn apply_history_update_or_self(
         self,
         current_history: &[ResponseItem],
@@ -338,9 +327,9 @@ impl SpineHostEffect {
             Option<TurnContextItem>,
         ) -> Result<(), String>,
     ) -> Result<Result<(), Self>, String> {
-        let update = match self.into_history_update_or_self() {
-            Ok(update) => update,
-            Err(effect) => return Ok(Err(effect)),
+        let update = match self {
+            Self::ReplaceHistory(update) => update,
+            effect => return Ok(Err(effect)),
         };
         if current_history != update.expected_history.as_slice() {
             Err(format!(
@@ -370,26 +359,15 @@ impl SpineHostEffect {
             Ok(Ok(()))
         }
     }
-
-    pub(crate) fn into_tree_update(
-        self,
-    ) -> Option<(SpineTreeUpdateEvent, SpineTreeUpdateDelivery)> {
-        match self {
-            Self::TreeUpdate { snapshot, delivery } => Some((snapshot, delivery)),
-            _ => None,
-        }
-    }
 }
 
 impl SpineRootCompactHostPublish {
     fn new(materialized: Vec<ResponseItem>) -> Self {
-        Self {
-            publication: SpineRootCompactHistoryPublication { materialized },
-        }
+        Self { materialized }
     }
 
     pub(crate) fn materialized_len(&self) -> usize {
-        self.publication.materialized.len()
+        self.materialized.len()
     }
 
     pub(crate) fn published_history_from_native_items(
@@ -402,7 +380,7 @@ impl SpineRootCompactHostPublish {
             .filter(|item| is_fixed_prefix_item(item))
             .cloned()
             .collect::<Vec<_>>();
-        published.extend_from_slice(&self.publication.materialized);
+        published.extend_from_slice(&self.materialized);
         published
     }
 }
@@ -421,7 +399,7 @@ impl SpineTreeHostUpdates {
     }
 
     fn push_effect(&mut self, effect: SpineHostEffect) {
-        let Some((snapshot, delivery)) = effect.into_tree_update() else {
+        let SpineHostEffect::TreeUpdate { snapshot, delivery } = effect else {
             return;
         };
         match delivery {
