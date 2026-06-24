@@ -400,9 +400,6 @@ pub(super) fn pending_memory_context_accounting_from_store(
             }
         }
     }
-    for compact_id in accounted {
-        pending_by_id.remove(&compact_id);
-    }
     let mut pending = pending_by_id.into_values();
     match (pending.next(), pending.next()) {
         (None, _) => Ok(None),
