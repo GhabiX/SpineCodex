@@ -162,54 +162,35 @@ fn validate_close_source_plan_entries(
 ) -> Result<(), SpineError> {
     let mut previous_context_index = None;
     for (expected_ordinal, entry) in entries.iter().enumerate() {
-        validate_close_source_plan_entry(
-            entry,
-            expected_ordinal,
-            raw_context_items,
+        if entry.source_ordinal != expected_ordinal {
+            return Err(SpineError::Invariant(format!(
+                "spine.close source plan ordinal {} is not contiguous at expected ordinal {expected_ordinal}",
+                entry.source_ordinal
+            )));
+        }
+        validate_source_plan_context_index(
+            entry.source_ordinal,
+            entry.context_index,
             suffix_start,
             close_context_end,
             &mut previous_context_index,
         )?;
-    }
-    Ok(())
-}
-
-fn validate_close_source_plan_entry(
-    entry: &SpineCompactSourcePlanEntry,
-    expected_ordinal: usize,
-    raw_context_items: &[ResponseItem],
-    suffix_start: usize,
-    close_context_end: usize,
-    previous_context_index: &mut Option<usize>,
-) -> Result<(), SpineError> {
-    if entry.source_ordinal != expected_ordinal {
-        return Err(SpineError::Invariant(format!(
-            "spine.close source plan ordinal {} is not contiguous at expected ordinal {expected_ordinal}",
-            entry.source_ordinal
-        )));
-    }
-    validate_source_plan_context_index(
-        entry.source_ordinal,
-        entry.context_index,
-        suffix_start,
-        close_context_end,
-        previous_context_index,
-    )?;
-    let host_item = raw_context_items.get(entry.context_index).ok_or_else(|| {
-        SpineError::CompactFailure(format!(
-            "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
-            entry.source_ordinal,
-            entry.context_index,
-            raw_context_items.len()
-        ))
-    })?;
-    let expected_item = entry.visible_response_item();
-    let host_hash = hash_response_items(std::slice::from_ref(host_item))?;
-    if host_item != &expected_item || host_hash != entry.source_hash {
-        return Err(SpineError::CompactFailure(format!(
-            "spine.close source plan mismatch at ordinal {} context_index {} source_hash {} host_hash {host_hash}",
-            entry.source_ordinal, entry.context_index, entry.source_hash
-        )));
+        let host_item = raw_context_items.get(entry.context_index).ok_or_else(|| {
+            SpineError::CompactFailure(format!(
+                "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
+                entry.source_ordinal,
+                entry.context_index,
+                raw_context_items.len()
+            ))
+        })?;
+        let expected_item = entry.visible_response_item();
+        let host_hash = hash_response_items(std::slice::from_ref(host_item))?;
+        if host_item != &expected_item || host_hash != entry.source_hash {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close source plan mismatch at ordinal {} context_index {} source_hash {} host_hash {host_hash}",
+                entry.source_ordinal, entry.context_index, entry.source_hash
+            )));
+        }
     }
     Ok(())
 }
