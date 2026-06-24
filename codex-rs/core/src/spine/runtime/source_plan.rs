@@ -292,7 +292,11 @@ fn assemble_close_memory_body(
             }
         }
     }
-    validate_generated_node_memory_body(node_memory)?;
+    if node_memory.trim().is_empty() {
+        return Err(SpineError::CompactFailure(
+            "spine.close memory argument produced empty node memory".to_string(),
+        ));
+    }
     push_memory_block(&mut body, "## Node Memory", node_memory);
     if !body.ends_with('\n') {
         body.push('\n');
@@ -306,14 +310,4 @@ fn push_memory_block(body: &mut String, heading: &str, block_body: &str) {
     body.push('\n');
     body.push_str(block_body.trim_matches('\n'));
     body.push('\n');
-}
-
-fn validate_generated_node_memory_body(body: &str) -> Result<(), SpineError> {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return Err(SpineError::CompactFailure(
-            "spine.close memory argument produced empty node memory".to_string(),
-        ));
-    }
-    Ok(())
 }
