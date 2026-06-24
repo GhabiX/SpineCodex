@@ -38,13 +38,27 @@ pub(crate) struct SpineCommitPublication<T> {
 
 #[derive(Debug)]
 pub(crate) struct SpinePreparedRootCompact {
-    pub(super) result: SpineRootCompactResult,
-    pub(super) parser_install: ParserRootCompactInstall,
+    result: SpineRootCompactResult,
+    parser_install: ParserRootCompactInstall,
 }
 
 impl SpinePreparedRootCompact {
+    pub(super) fn new(
+        result: SpineRootCompactResult,
+        parser_install: ParserRootCompactInstall,
+    ) -> Self {
+        Self {
+            result,
+            parser_install,
+        }
+    }
+
     pub(crate) fn result(&self) -> &SpineRootCompactResult {
         &self.result
+    }
+
+    pub(super) fn into_parser_install(self) -> ParserRootCompactInstall {
+        self.parser_install
     }
 }
 

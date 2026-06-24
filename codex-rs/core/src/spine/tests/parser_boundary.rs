@@ -438,6 +438,16 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "runtime root compact prepared carrier should hold a parser-owned install handle"
     );
     assert!(
+        !prepared.contains("pub(super) result: SpineRootCompactResult")
+            && !prepared.contains("pub(super) parser_install: ParserRootCompactInstall"),
+        "runtime root compact prepared carrier fields must stay private"
+    );
+    assert!(
+        prepared.contains("fn new(\n        result: SpineRootCompactResult,\n        parser_install: ParserRootCompactInstall,")
+            && prepared.contains("fn into_parser_install(self) -> ParserRootCompactInstall"),
+        "runtime root compact prepared carrier should expose a constructor and parser install consumer"
+    );
+    assert!(
         !prepared.contains("SpinePreparedRootCompactInstall"),
         "runtime root compact should not add an extra install wrapper around the parser-owned install handle"
     );
@@ -648,6 +658,23 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     assert!(
         !root_compact.contains(".install_prepared_root_compact_final_parse_stack("),
         "runtime root compact final install should use the parser-owned root compact install handle"
+    );
+    assert!(
+        root_compact.contains("SpinePreparedRootCompact::new("),
+        "runtime root compact should construct prepared root compact through a named constructor"
+    );
+    let install_prepared_root_compact = root_compact
+        .split("pub(crate) fn install_prepared_root_compact(")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("fn commit_root_compact_prepared_side_effects")
+                .next()
+        })
+        .expect("install_prepared_root_compact section");
+    assert!(
+        install_prepared_root_compact.contains(".into_parser_install()")
+            && !install_prepared_root_compact.contains(".parser_install"),
+        "runtime root compact should construct and consume prepared root compact through named methods"
     );
     assert!(
         !root_compact.contains("prepare_root_compact_install_with_checkpoint")

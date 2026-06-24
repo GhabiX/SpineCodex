@@ -237,7 +237,7 @@ impl SpineRuntime {
             SpineRootCompactTokenMetadata::default(),
             None,
         )?;
-        let result = prepared.result.clone();
+        let result = prepared.result().clone();
         self.install_prepared_root_compact(prepared);
         Ok(result.materialized)
     }
@@ -255,7 +255,7 @@ impl SpineRuntime {
             raw_items,
             token_metadata,
         )?;
-        let result = prepared.result.clone();
+        let result = prepared.result().clone();
         self.install_prepared_root_compact(prepared);
         Ok(result)
     }
@@ -313,15 +313,15 @@ impl SpineRuntime {
             super::support::root_compact_commit_marker(self.ledger.next_event_seq, &prepared.mem)?;
         self.append_committed_events(vec![prepared.root_compact_event], marker)?;
         self.pending = None;
-        Ok(SpinePreparedRootCompact {
-            result: prepared.result,
-            parser_install: prepared.parser_install,
-        })
+        Ok(SpinePreparedRootCompact::new(
+            prepared.result,
+            prepared.parser_install,
+        ))
     }
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
         self.parser
-            .install_prepared_root_compact(prepared.parser_install);
+            .install_prepared_root_compact(prepared.into_parser_install());
     }
 
     fn commit_root_compact_prepared_side_effects(
