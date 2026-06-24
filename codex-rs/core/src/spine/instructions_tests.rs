@@ -1,7 +1,7 @@
 use super::SPINE_JIT_INSTRUCTIONS;
 use super::SPINE_TRIM_INSTRUCTIONS;
 use super::append_spine_view_instructions;
-use super::extract_spine_instruction_section_body;
+use super::extract_section_body;
 
 fn occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
@@ -54,13 +54,11 @@ fn trim_feature_appends_trim_policy_without_jit_controls() {
 
 #[test]
 fn trim_instructions_are_a_parseable_standalone_section() {
-    let body = extract_spine_instruction_section_body(SPINE_TRIM_INSTRUCTIONS, "spine_trim")
+    let body = extract_section_body(SPINE_TRIM_INSTRUCTIONS, "spine_trim")
         .expect("default trim instructions should expose a spine_trim section");
 
     assert!(!body.trim().is_empty());
-    assert!(
-        extract_spine_instruction_section_body(SPINE_TRIM_INSTRUCTIONS, "spine_view").is_none()
-    );
+    assert!(extract_section_body(SPINE_TRIM_INSTRUCTIONS, "spine_view").is_none());
     assert!(
         SPINE_TRIM_INSTRUCTIONS
             .trim_start()

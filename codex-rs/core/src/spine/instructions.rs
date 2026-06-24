@@ -132,10 +132,6 @@ pub(crate) fn read_spine_instruction_override(
     }
 }
 
-pub(crate) fn extract_spine_instruction_section_body(contents: &str, tag: &str) -> Option<String> {
-    extract_section_body(contents, tag)
-}
-
 pub(crate) fn append_spine_view_instructions(
     mut base_instructions: String,
     spine_jit_enabled: bool,
@@ -193,12 +189,12 @@ pub(crate) fn append_spine_scaling_instructions(
     base_instructions
 }
 
-pub(crate) fn spine_scaling_prompt_block(
+fn spine_scaling_prompt_block(
     spine_scaling: SpineScalingLevel,
     override_contents: Option<&str>,
 ) -> Option<String> {
     let tag = spine_scaling_override_tag(spine_scaling)?;
-    override_contents.and_then(|contents| extract_spine_instruction_section_body(contents, tag))
+    override_contents.and_then(|contents| extract_section_body(contents, tag))
 }
 
 fn spine_scaling_override_tag(spine_scaling: SpineScalingLevel) -> Option<&'static str> {
