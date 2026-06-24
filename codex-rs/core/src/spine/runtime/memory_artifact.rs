@@ -1,6 +1,5 @@
 use super::SpineError;
 use super::SpineRuntime;
-use super::support::mem_record_matches;
 use super::types::SpineCloseMemoryAssembly;
 use super::types::SpineTokenBaselines;
 use crate::spine::io::sha1_hex;
@@ -33,7 +32,7 @@ impl SpineRuntime {
             .filter(|existing| existing.compact_id == mem.compact_id);
         match (matching_mems.next(), matching_mems.next()) {
             (None, _) => self.store.append_mem(mem),
-            (Some(existing), None) if mem_record_matches(existing, mem) => {
+            (Some(existing), None) if existing == mem => {
                 self.validate_existing_prepared_memory_body(existing, mem, body)
             }
             (Some(_), None) => Err(SpineError::InvalidStore(format!(

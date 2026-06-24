@@ -402,10 +402,6 @@ fn commit_memory_ref(mem: &MemRecord) -> SpineCommitMemoryRef {
     }
 }
 
-pub(super) fn mem_record_matches(existing: &MemRecord, expected: &MemRecord) -> bool {
-    existing == expected
-}
-
 pub(crate) fn is_user_message(item: &ResponseItem) -> bool {
     matches!(item, ResponseItem::Message { role, .. } if role == "user")
 }
