@@ -402,10 +402,6 @@ fn commit_memory_ref(mem: &MemRecord) -> SpineCommitMemoryRef {
     }
 }
 
-pub(crate) fn is_user_message(item: &ResponseItem) -> bool {
-    matches!(item, ResponseItem::Message { role, .. } if role == "user")
-}
-
 pub(crate) fn is_real_user_message(item: &ResponseItem) -> bool {
     crate::spine::lexer::is_real_user_message(item)
 }
