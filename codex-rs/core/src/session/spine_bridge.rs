@@ -1344,14 +1344,14 @@ impl Session {
             .await
             .and_then(|info| provider_input_context_tokens(&info));
         let mut guard = spine_slot.lock().await;
-        guard
-            .prepare_native_root_compact_apply_with_checkpoint(
-                &rollout_path,
-                body,
-                &raw_items,
-                close_provider_input_tokens,
-            )
-            .map(Some)
+        hooks::prepare_test_root_compact_apply_with_checkpoint(
+            &mut guard,
+            &rollout_path,
+            body,
+            &raw_items,
+            close_provider_input_tokens,
+        )
+        .map(Some)
     }
 
     pub(crate) async fn on_compact(

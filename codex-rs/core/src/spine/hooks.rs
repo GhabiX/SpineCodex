@@ -196,6 +196,22 @@ pub(crate) fn install_test_root_compact_after_history_publish(
     state.apply_root_compact_after_history_publish(prepared, published_history_len)
 }
 
+#[cfg(test)]
+pub(crate) fn prepare_test_root_compact_apply_with_checkpoint(
+    state: &mut SpineSessionState,
+    rollout_path: &Path,
+    body: String,
+    raw_items: &[Option<ResponseItem>],
+    close_provider_input_tokens: Option<i64>,
+) -> Result<super::runtime::SpineRootCompactHostInstall, SpineError> {
+    state.prepare_native_root_compact_apply_with_checkpoint(
+        rollout_path,
+        body,
+        raw_items,
+        close_provider_input_tokens,
+    )
+}
+
 pub(crate) fn invalidate_runtime(state: &mut SpineSessionState, reason: String) {
     state.invalidate(reason);
 }
