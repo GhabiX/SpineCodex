@@ -30,17 +30,16 @@ impl SpineRuntime {
             }
             mark_raw_covered_by_event(&mut covered, event)?;
         }
-        for (index, item) in raw_items.iter().enumerate() {
-            if item.as_ref().is_some_and(|item| {
+        if let Some(index) = raw_items.iter().enumerate().position(|(index, item)| {
+            item.as_ref().is_some_and(|item| {
                 raw_item_requires_spine_coverage(item, &completed_tool_call_ids)
             }) && !covered[index]
-            {
-                return Err(SpineError::SidecarCorruption(format!(
-                    "spine sidecar is missing token coverage for raw ordinal {index}; raw_len={} token_seq={}",
-                    raw_items.len(),
-                    self.ledger.next_event_seq
-                )));
-            }
+        }) {
+            return Err(SpineError::SidecarCorruption(format!(
+                "spine sidecar is missing token coverage for raw ordinal {index}; raw_len={} token_seq={}",
+                raw_items.len(),
+                self.ledger.next_event_seq
+            )));
         }
         Ok(())
     }
