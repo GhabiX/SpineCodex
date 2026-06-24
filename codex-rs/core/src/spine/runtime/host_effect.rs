@@ -110,20 +110,15 @@ impl SpineHostEffects {
         PublishMaterializedHistory: FnOnce() -> PublishMaterializedHistoryFuture,
         PublishMaterializedHistoryFuture: Future<Output = Result<(), E>>,
     {
-        let mut remaining = Vec::new();
-        let mut publish_requested = false;
-        for effect in self.effects {
-            if matches!(
-                effect,
-                SpineHostEffect::PublishMaterializedHistoryAfterBatch
-            ) {
-                publish_requested = true;
-            } else {
-                remaining.push(effect);
-            }
-        }
+        let (publish_requests, remaining): (Vec<_>, Vec<_>) =
+            self.effects.into_iter().partition(|effect| {
+                matches!(
+                    effect,
+                    SpineHostEffect::PublishMaterializedHistoryAfterBatch
+                )
+            });
         apply_effects(Self::many(remaining)).await?;
-        if publish_requested {
+        if !publish_requests.is_empty() {
             publish_materialized_history().await?;
         }
         Ok(())
