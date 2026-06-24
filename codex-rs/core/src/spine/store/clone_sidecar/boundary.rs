@@ -8,10 +8,9 @@ pub(in crate::spine::store::clone_sidecar) fn clone_boundary_for_rollout(
     source_rollout_path: &Path,
     raw_ordinal_limit: u64,
 ) -> Result<Option<SpineCloneBoundary>, SpineError> {
-    if !SpineStore::has_for_rollout(source_rollout_path)? {
+    let Some(source) = existing_source_store(source_rollout_path)? else {
         return Ok(None);
-    }
-    let source = SpineStore::for_rollout(source_rollout_path)?;
+    };
     let structural_seq_limit = if source.tree_path().exists() {
         source.next_event_seq()?
     } else {
@@ -36,10 +35,9 @@ pub(in crate::spine::store::clone_sidecar) fn clone_boundary_for_checkpoint(
     source_rollout_path: &Path,
     raw_ordinal: u64,
 ) -> Result<Option<SpineCloneBoundary>, SpineError> {
-    if !SpineStore::has_for_rollout(source_rollout_path)? {
+    let Some(source) = existing_source_store(source_rollout_path)? else {
         return Ok(None);
-    }
-    let source = SpineStore::for_rollout(source_rollout_path)?;
+    };
     if !source.tree_path().exists() {
         return trim_only_clone_boundary_for_raw_ordinal(&source, source_rollout_path, raw_ordinal);
     }
@@ -73,4 +71,11 @@ fn trim_only_clone_boundary_for_raw_ordinal(
             trim_seq_watermark,
         )?,
     }))
+}
+
+fn existing_source_store(source_rollout_path: &Path) -> Result<Option<SpineStore>, SpineError> {
+    if !SpineStore::has_for_rollout(source_rollout_path)? {
+        return Ok(None);
+    }
+    SpineStore::for_rollout(source_rollout_path).map(Some)
 }
