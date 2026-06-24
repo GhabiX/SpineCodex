@@ -307,7 +307,7 @@ impl Session {
             return false;
         };
         let guard = spine_slot.lock().await;
-        guard.is_ready()
+        hooks::is_ready(&guard)
     }
 
     pub(crate) async fn apply_spine_trim_projection_if_available(&self) -> Result<(), SpineError> {
@@ -1346,7 +1346,7 @@ impl Session {
         {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            if !guard.is_ready() {
+            if !hooks::is_ready(&guard) {
                 return Ok(None);
             }
         }

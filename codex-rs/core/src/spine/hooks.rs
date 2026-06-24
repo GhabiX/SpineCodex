@@ -109,6 +109,10 @@ pub(crate) fn ensure_runtime(
     state.ensure_runtime(rollout_path)
 }
 
+pub(crate) fn is_ready(state: &SpineSessionState) -> bool {
+    state.is_ready()
+}
+
 pub(crate) fn invalidate_runtime(state: &mut SpineSessionState, reason: String) {
     state.invalidate(reason);
 }
