@@ -53,7 +53,11 @@ impl SpinePreparedRootCompact {
         }
     }
 
-    pub(crate) fn result(&self) -> &SpineRootCompactResult {
+    pub(crate) fn publication_history(&self) -> &[ResponseItem] {
+        &self.publication_result().materialized
+    }
+
+    pub(crate) fn publication_result(&self) -> &SpineRootCompactResult {
         &self.result
     }
 

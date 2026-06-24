@@ -554,6 +554,12 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "runtime root compact prepared carrier should expose a constructor and parser install consumer"
     );
     assert!(
+        !prepared.contains("fn result(&self)")
+            && prepared.contains("fn publication_history(&self) -> &[ResponseItem]")
+            && prepared.contains("fn publication_result(&self) -> &SpineRootCompactResult"),
+        "runtime root compact prepared carrier should expose publication/result intent without leaking borrowed parser materialization"
+    );
+    assert!(
         !prepared.contains("SpinePreparedRootCompactInstall"),
         "runtime root compact should not add an extra install wrapper around the parser-owned install handle"
     );
@@ -807,6 +813,11 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && state_types.contains("fn publication_history_len(")
             && !state_types.contains("fn materialized("),
         "root compact host install should expose publication-oriented accessors, not parser materialization internals"
+    );
+    assert!(
+        state_types.contains("self.prepared.publication_history()")
+            && !state_types.contains("self.prepared.result().materialized"),
+        "root compact host install should publish through prepared publication accessors, not parser result internals"
     );
     let root_compact_session =
         fs::read_to_string(spine_src("runtime/session_state/root_compact_session.rs"))

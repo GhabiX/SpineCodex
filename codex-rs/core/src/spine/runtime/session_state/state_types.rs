@@ -109,7 +109,7 @@ impl SpineRootCompactHostInstall {
     }
 
     pub(crate) fn publication_history(&self) -> &[ResponseItem] {
-        &self.prepared.result().materialized
+        self.prepared.publication_history()
     }
 
     #[cfg(test)]
@@ -127,7 +127,7 @@ impl SpineRootCompactHostInstall {
 
     #[cfg(test)]
     pub(crate) fn result(&self) -> SpineRootCompactResult {
-        self.prepared.result().clone()
+        self.prepared.publication_result().clone()
     }
 
     pub(super) fn into_prepared(self) -> SpinePreparedRootCompact {
