@@ -224,11 +224,11 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
     );
     assert!(
         commit.contains("self.parser.next_child_id()")
-            && commit.contains(".open_staged_parse_stack(&open_lexed"),
+            && commit.contains(".prepare_open_install(&open_lexed"),
         "runtime open commit should route child id and token staging through ParserState"
     );
     let open_with_toolcall_install = commit
-        .split(".open_staged_parse_stack(\n                &open_lexed,\n                Some(&toolcall_lexed)")
+        .split(".prepare_open_install(\n                &open_lexed,\n                Some(&toolcall_lexed)")
         .nth(1)
         .and_then(|tail| {
             tail.split("self.append_trim_candidates_for_completed_toolcall")
@@ -236,20 +236,20 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
         })
         .expect("open-with-toolcall install section");
     assert!(
-        open_with_toolcall_install.contains(".install_staged(staged_parse_stack)")
+        open_with_toolcall_install.contains(".install_prepared_open(parser_install)")
             && !open_with_toolcall_install.contains("replace_parse_stack_for_runtime_transition"),
-        "runtime open-with-toolcall should install staged parser state through ParserState"
+        "runtime open-with-toolcall should install parser-owned open handle through ParserState"
     );
     let open_without_toolcall_install = commit
-        .split(".open_staged_parse_stack(&open_lexed, None")
+        .split(".prepare_open_install(&open_lexed, None")
         .nth(1)
         .and_then(|tail| tail.split("Ok(SpinePreparedCommit").next())
         .expect("open-without-toolcall install section");
     assert!(
-        open_without_toolcall_install.contains(".install_staged(staged_parse_stack)")
+        open_without_toolcall_install.contains(".install_prepared_open(parser_install)")
             && !open_without_toolcall_install
                 .contains("replace_parse_stack_for_runtime_transition"),
-        "runtime open-without-toolcall should install staged parser state through ParserState"
+        "runtime open-without-toolcall should install parser-owned open handle through ParserState"
     );
 }
 

@@ -354,7 +354,7 @@ impl SpineRuntime {
         )?;
         if let Some(completed_toolcall) = completed_toolcall {
             let toolcall_lexed = self.completed_toolcall_batch(&completed_toolcall)?;
-            let staged_parse_stack = self.parser.open_staged_parse_stack(
+            let parser_install = self.parser.prepare_open_install(
                 &open_lexed,
                 Some(&toolcall_lexed),
                 &self.archive(),
@@ -365,7 +365,7 @@ impl SpineRuntime {
             let mut events = open_lexed.into_events();
             events.extend(toolcall_lexed.into_events());
             self.append_committed_events_no_marker(events)?;
-            self.parser.install_staged(staged_parse_stack);
+            self.parser.install_prepared_open(parser_install);
             self.append_trim_candidates_for_completed_toolcall(
                 &completed_toolcall,
                 toolcall_seq,
@@ -386,12 +386,12 @@ impl SpineRuntime {
                 mem_for_accounting: None,
             });
         }
-        let staged_parse_stack =
+        let parser_install =
             self.parser
-                .open_staged_parse_stack(&open_lexed, None, &self.archive())?;
+                .prepare_open_install(&open_lexed, None, &self.archive())?;
         let events = open_lexed.into_events();
         self.append_committed_events_no_marker(events)?;
-        self.parser.install_staged(staged_parse_stack);
+        self.parser.install_prepared_open(parser_install);
         Ok(SpinePreparedCommit {
             kind: SpineCommitKind::Open {
                 open_request_index: usize::try_from(index).map_err(|_| {

@@ -58,6 +58,11 @@ pub(super) struct ParserRootCompactPreparedReduction {
 }
 
 #[derive(Debug)]
+pub(super) struct ParserOpenInstall {
+    final_parse_stack: ParserPreparedState,
+}
+
+#[derive(Debug)]
 pub(super) struct ParserCommitInstall {
     final_parse_stack: ParserPreparedState,
 }
@@ -190,6 +195,16 @@ impl ParserRootCompactPreparedReduction {
 }
 
 impl ParserCommitInstall {
+    fn new(final_parse_stack: ParserPreparedState) -> Self {
+        Self { final_parse_stack }
+    }
+
+    fn into_final_parse_stack(self) -> ParserPreparedState {
+        self.final_parse_stack
+    }
+}
+
+impl ParserOpenInstall {
     fn new(final_parse_stack: ParserPreparedState) -> Self {
         Self { final_parse_stack }
     }
@@ -451,6 +466,10 @@ impl ParserState {
         self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
     }
 
+    pub(super) fn install_prepared_open(&mut self, install: ParserOpenInstall) {
+        self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
+    }
+
     pub(super) fn install_pending_root_compact_after_side_effect_failure(
         &mut self,
         state: ParserPreparedState,
@@ -474,12 +493,12 @@ impl ParserState {
         Ok(ParserPreparedState::new(staged))
     }
 
-    pub(super) fn open_staged_parse_stack(
+    pub(super) fn prepare_open_install(
         &self,
         open_lexed: &LexedTokenBatch,
         toolcall_lexed: Option<&LexedTokenBatch>,
         archive: &SpineArchive,
-    ) -> Result<ParserPreparedState, SpineError> {
+    ) -> Result<ParserOpenInstall, SpineError> {
         let mut staged = self.parse_stack.clone();
         let open_token = single_lexed_token(open_lexed, "open")?;
         staged.shift(open_token, archive)?;
@@ -487,7 +506,7 @@ impl ParserState {
             let toolcall_token = single_lexed_token(toolcall_lexed, "toolcall")?;
             staged.shift(toolcall_token, archive)?;
         }
-        Ok(ParserPreparedState::new(staged))
+        Ok(ParserOpenInstall::new(ParserPreparedState::new(staged)))
     }
 
     pub(super) fn close_reduced_next_child_id(
