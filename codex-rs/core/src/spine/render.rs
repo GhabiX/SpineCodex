@@ -79,13 +79,12 @@ pub(super) fn render_parse_stack_to_context_with_memory_body_and_trim_projection
     let visible_refs = project_parse_stack_visible_items(ps)?;
     let mut out = Vec::with_capacity(visible_refs.len());
     for visible_ref in &visible_refs {
-        render_visible_ref_to_context(
+        out.push(render_visible_ref_to_context_item(
             &visible_ref.source,
             raw_items,
             staged_memory_body,
             trim_projection,
-            &mut out,
-        )?;
+        )?);
     }
     Ok(out)
 }
@@ -242,13 +241,12 @@ fn push_visible_ref(
     Ok(())
 }
 
-fn render_visible_ref_to_context(
+fn render_visible_ref_to_context_item(
     source: &VisibleItemSource,
     raw_items: &[Option<ResponseItem>],
     staged_memory_body: Option<(&str, &str)>,
     trim_projection: &TrimProjection,
-    out: &mut Vec<ResponseItem>,
-) -> Result<(), SpineError> {
+) -> Result<ResponseItem, SpineError> {
     match source {
         VisibleItemSource::RawResponseItem { raw_ordinal, .. }
         | VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
@@ -270,8 +268,7 @@ fn render_visible_ref_to_context(
             {
                 item = anchored_user_message_item(&item, *user_anchor)?;
             }
-            out.push(item);
-            Ok(())
+            Ok(item)
         }
         VisibleItemSource::MemoryRef {
             memory,
@@ -284,16 +281,14 @@ fn render_visible_ref_to_context(
                 )));
             }
             let body = read_memory_ref_body_with_staged(memory, staged_memory_body)?;
-            out.push(memory_response_item(&body));
-            Ok(())
+            Ok(memory_response_item(&body))
         }
         VisibleItemSource::MemorySeg {
             memory_id,
             body_path,
         } => {
             let body = read_memory_body(memory_id, body_path, None)?;
-            out.push(memory_response_item(&body));
-            Ok(())
+            Ok(memory_response_item(&body))
         }
     }
 }
