@@ -93,6 +93,7 @@ fn runtime_replay_routes_token_consumption_through_parser_state() {
 fn parse_stack_replay_is_not_a_token_consumer() {
     let replay =
         fs::read_to_string(spine_src("parse_stack/replay.rs")).expect("read parse_stack replay");
+    let parse_stack = fs::read_to_string(spine_src("parse_stack.rs")).expect("read parse_stack");
     assert!(
         !replay.contains(".shift("),
         "parse_stack/replay.rs should adapt replay events to parser inputs, not consume tokens"
@@ -101,6 +102,18 @@ fn parse_stack_replay_is_not_a_token_consumer() {
         !replay.contains("fn apply_replay_event_to_parse_stack")
             && !replay.contains("fn parse_stack_from_events_with_forced_events"),
         "replay event loops belong in ParserState, not parse_stack replay helpers"
+    );
+    assert!(
+        !parse_stack.contains("pub(in crate::spine) use replay::event_to_token")
+            && !parse_stack.contains("pub(in crate::spine) use replay::apply_metadata_event")
+            && !parse_stack.contains("mod replay;"),
+        "parse_stack must not export replay token adapters; parser owns replay event adaptation"
+    );
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser");
+    assert!(
+        parser.contains("fn replay_event_to_token(")
+            && parser.contains("fn apply_replay_metadata_event("),
+        "parser should own replay event-to-token and replay metadata adapters"
     );
 }
 
