@@ -63,12 +63,12 @@ pub(super) fn validate_compact_checkpoint_root_marker(
         )));
     }
     let memory_ref = unique_root_compact_checkpoint_memory_ref(checkpoint, mem)?;
-    validate_checkpoint_memory_ref_for_mem(
+    validate_checkpoint_memory_ref(
         store_root,
         checkpoint,
         memory_ref,
         mem_record,
-        root_event.seq..checkpoint.token_seq,
+        Some(root_event.seq..checkpoint.token_seq),
     )
 }
 
@@ -129,9 +129,7 @@ pub(super) fn validate_compact_checkpoint_memory_refs(
             )));
         }
         let mem_record = unique_checkpoint_memory(checkpoint, memory, mems)?;
-        validate_checkpoint_memory_ref_for_committed_mem(
-            store_root, checkpoint, memory, mem_record,
-        )?;
+        validate_checkpoint_memory_ref(store_root, checkpoint, memory, mem_record, None)?;
     }
     Ok(())
 }
@@ -198,30 +196,12 @@ fn unique_one<T>(
     Ok(item)
 }
 
-fn validate_checkpoint_memory_ref_for_mem(
+fn validate_checkpoint_memory_ref(
     store_root: &Path,
     checkpoint: &SpineCompactCheckpoint,
     memory: &CheckpointMemoryRef,
     mem: &MemRecord,
-    token_seq: std::ops::Range<u64>,
-) -> Result<(), SpineError> {
-    validate_checkpoint_memory_ref_for_committed_mem(store_root, checkpoint, memory, mem)?;
-    if memory.source_token_seq_start != token_seq.start
-        || memory.source_token_seq_end != token_seq.end
-    {
-        return Err(SpineError::InvalidStore(format!(
-            "compact checkpoint RootCompact memory ref {} does not match committed memory record at raw boundary {}",
-            memory.compact_id, checkpoint.raw_boundary
-        )));
-    }
-    Ok(())
-}
-
-fn validate_checkpoint_memory_ref_for_committed_mem(
-    store_root: &Path,
-    checkpoint: &SpineCompactCheckpoint,
-    memory: &CheckpointMemoryRef,
-    mem: &MemRecord,
+    token_seq: Option<std::ops::Range<u64>>,
 ) -> Result<(), SpineError> {
     let mem_body_path = sidecar_store_path(store_root, &mem.body_path);
     let checkpoint_body_path = sidecar_store_path(store_root, &memory.body_path);
@@ -232,6 +212,16 @@ fn validate_checkpoint_memory_ref_for_committed_mem(
         )));
     }
     memory_body::read_body_with_hash(checkpoint_body_path, &memory.compact_id, &memory.body_hash)?;
+    if let Some(token_seq) = token_seq {
+        if memory.source_token_seq_start != token_seq.start
+            || memory.source_token_seq_end != token_seq.end
+        {
+            return Err(SpineError::InvalidStore(format!(
+                "compact checkpoint RootCompact memory ref {} does not match committed memory record at raw boundary {}",
+                memory.compact_id, checkpoint.raw_boundary
+            )));
+        }
+    }
     Ok(())
 }
 
