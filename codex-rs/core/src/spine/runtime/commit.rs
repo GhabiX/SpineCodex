@@ -623,19 +623,12 @@ impl SpineRuntime {
         Ok(())
     }
 
-    pub(crate) fn persist_prepared_commit_application_side_effects(
-        &mut self,
-        application: &SpinePreparedCommitApplication,
-    ) -> Result<(), SpineError> {
-        self.persist_prepared_commit_side_effects(application.as_prepared_commit())
-    }
-
     pub(crate) fn persist_commit_publication_side_effects<T>(
         &mut self,
         publication: &SpineCommitPublication<T>,
     ) -> Result<(), SpineError> {
         if let Some(application) = publication.application() {
-            self.persist_prepared_commit_application_side_effects(application)?;
+            self.persist_prepared_commit_side_effects(application.as_prepared_commit())?;
         }
         Ok(())
     }
@@ -649,19 +642,12 @@ impl SpineRuntime {
         }
     }
 
-    pub(crate) fn install_prepared_commit_application(
-        &mut self,
-        application: SpinePreparedCommitApplication,
-    ) {
-        self.install_prepared_commit(application.into_prepared_commit());
-    }
-
     pub(crate) fn install_commit_publication<T>(
         &mut self,
         publication: SpineCommitPublication<T>,
     ) -> bool {
         if let Some(application) = publication.into_application() {
-            self.install_prepared_commit_application(application);
+            self.install_prepared_commit(application.into_prepared_commit());
             true
         } else {
             false
