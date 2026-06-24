@@ -398,6 +398,10 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "runtime root compact prepared carrier should hold a parser-owned install handle"
     );
     assert!(
+        !prepared.contains("SpinePreparedRootCompactInstall"),
+        "runtime root compact should not add an extra install wrapper around the parser-owned install handle"
+    );
+    assert!(
         !prepared.contains("struct HistoryPublicationPlan"),
         "runtime prepared carriers must not define parser publication plans"
     );
@@ -552,5 +556,24 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     assert!(
         !root_compact.contains(".install_prepared_root_compact_final_parse_stack("),
         "runtime root compact final install should use the parser-owned root compact install handle"
+    );
+    assert!(
+        !root_compact.contains("prepare_root_compact_install_with_checkpoint")
+            && !root_compact.contains("install_prepared_root_compact_install"),
+        "runtime root compact should not reintroduce transitional root compact install wrapper APIs"
+    );
+    let session_state =
+        fs::read_to_string(spine_src("runtime/session_state.rs")).expect("read session_state");
+    let state_types = fs::read_to_string(spine_src("runtime/session_state/state_types.rs"))
+        .expect("read session state types");
+    assert!(
+        !session_state.contains("PreparedSpineRootCompactCommit")
+            && !state_types.contains("PreparedSpineRootCompactCommit"),
+        "session root compact host install should directly carry the prepared root compact commit"
+    );
+    assert!(
+        state_types.contains("struct SpineRootCompactHostInstall")
+            && state_types.contains("prepared: SpinePreparedRootCompact"),
+        "root compact host install should keep only the host-publication boundary wrapper"
     );
 }

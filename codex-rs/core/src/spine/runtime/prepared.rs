@@ -42,18 +42,9 @@ pub(crate) struct SpinePreparedRootCompact {
     pub(super) parser_install: ParserRootCompactInstall,
 }
 
-#[derive(Debug)]
-pub(crate) struct SpinePreparedRootCompactInstall {
-    prepared: SpinePreparedRootCompact,
-}
-
 impl SpinePreparedRootCompact {
     pub(crate) fn result(&self) -> &SpineRootCompactResult {
         &self.result
-    }
-
-    pub(crate) fn into_install(self) -> SpinePreparedRootCompactInstall {
-        SpinePreparedRootCompactInstall { prepared: self }
     }
 }
 
@@ -146,15 +137,5 @@ impl<T> SpineCommitPublication<T> {
 
     pub(super) fn into_application(self) -> Option<SpinePreparedCommitApplication> {
         self.application
-    }
-}
-
-impl SpinePreparedRootCompactInstall {
-    pub(crate) fn result(&self) -> &SpineRootCompactResult {
-        self.prepared.result()
-    }
-
-    pub(super) fn into_prepared(self) -> SpinePreparedRootCompact {
-        self.prepared
     }
 }

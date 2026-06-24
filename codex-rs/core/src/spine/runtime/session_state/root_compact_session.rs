@@ -6,7 +6,6 @@ use super::super::SpineError;
 use super::super::SpineHostEffects;
 use super::super::SpineRootCompactTokenMetadata;
 use super::super::root_compact::spine_root_compact_body;
-use super::PreparedSpineRootCompactCommit;
 use super::SpineCompactEvidence;
 use super::SpineRootCompactHostInstall;
 use super::SpineSessionState;
@@ -23,7 +22,7 @@ impl SpineSessionState {
                 "spine runtime missing before root compact PS install".to_string(),
             ));
         };
-        runtime.install_prepared_root_compact_install(prepared.commit.install);
+        runtime.install_prepared_root_compact(prepared.into_prepared());
         let current_open_index = runtime.current_open_index()?;
         if current_open_index != published_history_len {
             return Err(SpineError::InvalidStore(format!(
@@ -51,7 +50,7 @@ impl SpineSessionState {
         body: String,
         raw_items: &[Option<ResponseItem>],
         token_metadata: SpineRootCompactTokenMetadata,
-    ) -> Result<PreparedSpineRootCompactCommit, SpineError> {
+    ) -> Result<SpineRootCompactHostInstall, SpineError> {
         let prepared = {
             let runtime = self.runtime_mut_after_init()?;
             runtime.prepare_root_compact_commit_with_checkpoint(
@@ -77,6 +76,7 @@ impl SpineSessionState {
                 Err(err)
             }
         }
+        .map(SpineRootCompactHostInstall::new)
     }
 
     fn prepare_native_root_compact_apply_with_checkpoint_impl(
@@ -98,7 +98,6 @@ impl SpineSessionState {
             raw_items,
             token_metadata,
         )
-        .map(SpineRootCompactHostInstall::new)
     }
 
     #[cfg(test)]
@@ -137,7 +136,7 @@ impl SpineSessionState {
             evidence.raw_items,
             evidence.close_provider_input_tokens,
         )?;
-        let materialized = install.commit.materialized().to_vec();
+        let materialized = install.materialized().to_vec();
         self.pending_root_compact_install = Some(install);
         Ok(SpineHostEffects::root_compact_history_publication(
             materialized,

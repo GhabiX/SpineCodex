@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::super::LiveRootCompact;
 use super::super::SpineHostEffects;
-use super::super::SpinePreparedRootCompactInstall;
+use super::super::SpinePreparedRootCompact;
 #[cfg(test)]
 use super::super::SpineRootCompactResult;
 use super::super::SpineRuntime;
@@ -99,37 +99,25 @@ impl SpineGroupedToolcallOutputRecordingPlan {
 }
 
 #[derive(Debug)]
-pub(crate) struct PreparedSpineRootCompactCommit {
-    pub(super) install: SpinePreparedRootCompactInstall,
-}
-
-#[derive(Debug)]
 pub(crate) struct SpineRootCompactHostInstall {
-    pub(super) commit: PreparedSpineRootCompactCommit,
-}
-
-impl PreparedSpineRootCompactCommit {
-    pub(crate) fn from_install(install: SpinePreparedRootCompactInstall) -> Self {
-        Self { install }
-    }
-
-    pub(crate) fn materialized(&self) -> &[ResponseItem] {
-        &self.install.result().materialized
-    }
-
-    #[cfg(test)]
-    pub(crate) fn result(&self) -> SpineRootCompactResult {
-        self.install.result().clone()
-    }
+    pub(super) prepared: SpinePreparedRootCompact,
 }
 
 impl SpineRootCompactHostInstall {
-    pub(super) fn new(commit: PreparedSpineRootCompactCommit) -> Self {
-        Self { commit }
+    pub(super) fn new(prepared: SpinePreparedRootCompact) -> Self {
+        Self { prepared }
+    }
+
+    pub(crate) fn materialized(&self) -> &[ResponseItem] {
+        &self.prepared.result().materialized
     }
 
     #[cfg(test)]
     pub(crate) fn result(&self) -> SpineRootCompactResult {
-        self.commit.result()
+        self.prepared.result().clone()
+    }
+
+    pub(super) fn into_prepared(self) -> SpinePreparedRootCompact {
+        self.prepared
     }
 }

@@ -18,7 +18,6 @@ pub(crate) use completed_toolcall_evidence::SpineToolcallHookEvidence;
 use completed_toolcall_session::SpineCommitAttempt;
 use completed_toolcall_session::SpineCommitAttemptKind;
 use state_types::CommittedSpineToolcall;
-pub(crate) use state_types::PreparedSpineRootCompactCommit;
 pub(crate) use state_types::SpineCompactEvidence;
 pub(crate) use state_types::SpineInitEvidence;
 pub(crate) use state_types::SpineMessageEvidence;
