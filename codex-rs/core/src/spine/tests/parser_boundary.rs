@@ -287,8 +287,12 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
     );
     assert!(
         commit.contains(".install_pending_close_after_side_effect_failure(")
-            && commit.contains(".install_prepared_commit_final_parse_stack("),
+            && commit.contains(".install_prepared_commit("),
         "runtime close/next commit should install pending/final parser states through named ParserState methods"
+    );
+    assert!(
+        !commit.contains(".install_prepared_commit_final_parse_stack("),
+        "runtime close/next final install should use the parser-owned commit install handle"
     );
 }
 
@@ -341,12 +345,16 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "runtime prepared carriers must not import raw ParseStack"
     );
     assert!(
-        prepared.contains("use crate::spine::parser::ParserPreparedState"),
-        "runtime close prepared carriers should hold parser-owned prepared states"
+        prepared.contains("use crate::spine::parser::ParserCommitInstall"),
+        "runtime close prepared carriers should hold parser-owned install handles"
     );
     assert!(
-        prepared.contains("final_parse_stack: Option<ParserPreparedState>"),
-        "runtime close prepared final parser states should be typed as ParserPreparedState"
+        prepared.contains("parser_install: Option<ParserCommitInstall>"),
+        "runtime close prepared carrier should not expose final parser state directly"
+    );
+    assert!(
+        !prepared.contains("final_parse_stack: Option<ParserPreparedState>"),
+        "runtime close prepared carrier must not expose final parser state directly"
     );
     assert!(
         !prepared.contains("pub(super) final_parse_stack: ParserPreparedState"),

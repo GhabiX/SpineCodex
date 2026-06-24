@@ -380,7 +380,7 @@ impl SpineRuntime {
                     })?,
                 },
                 publication_plan: None,
-                final_parse_stack: None,
+                parser_install: None,
                 completed_toolcall: None,
                 toolcall_seq: None,
                 raw_items: Vec::new(),
@@ -400,7 +400,7 @@ impl SpineRuntime {
                 })?,
             },
             publication_plan: None,
-            final_parse_stack: None,
+            parser_install: None,
             completed_toolcall: None,
             toolcall_seq: None,
             raw_items: Vec::new(),
@@ -484,7 +484,7 @@ impl SpineRuntime {
             .ok_or_else(|| {
                 SpineError::InvalidEvent(plan.toolcall_seq_overflow_error.to_string())
             })?;
-        let (pending_close_parse_stack, final_parse_stack) =
+        let (pending_close_parse_stack, parser_install) =
             self.parser.close_family_staged_parse_stacks(
                 prepared.memory.clone(),
                 prepared.task_tree_reduction,
@@ -519,7 +519,7 @@ impl SpineRuntime {
                 preserve_host_history_from: toolcall_start,
                 append_current_tool_response_if_missing: true,
             }),
-            final_parse_stack: Some(final_parse_stack),
+            parser_install: Some(parser_install),
             completed_toolcall: Some(completed_toolcall),
             toolcall_seq: Some(toolcall_seq),
             raw_items: raw_items.to_vec(),
@@ -643,9 +643,8 @@ impl SpineRuntime {
     }
 
     pub(crate) fn install_prepared_commit(&mut self, prepared: SpinePreparedCommit) {
-        if let Some(final_parse_stack) = prepared.final_parse_stack {
-            self.parser
-                .install_prepared_commit_final_parse_stack(final_parse_stack);
+        if let Some(parser_install) = prepared.parser_install {
+            self.parser.install_prepared_commit(parser_install);
         }
         if let Some(completed_toolcall) = prepared.completed_toolcall.as_ref() {
             self.clear_completed_toolcall_anchors(completed_toolcall);

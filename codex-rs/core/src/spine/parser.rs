@@ -59,6 +59,11 @@ pub(super) struct ParserRootCompactPreparedReduction {
 }
 
 #[derive(Debug)]
+pub(super) struct ParserCommitInstall {
+    final_parse_stack: ParserPreparedState,
+}
+
+#[derive(Debug)]
 pub(super) struct ParserRootCompactInstall {
     final_parse_stack: ParserPreparedState,
 }
@@ -153,6 +158,16 @@ impl ParserRootCompactPreparedReduction {
             &self.materialized,
             replacement_history,
         )
+    }
+}
+
+impl ParserCommitInstall {
+    fn new(final_parse_stack: ParserPreparedState) -> Self {
+        Self { final_parse_stack }
+    }
+
+    fn into_final_parse_stack(self) -> ParserPreparedState {
+        self.final_parse_stack
     }
 }
 
@@ -388,8 +403,8 @@ impl ParserState {
         self.replace_parse_stack_for_runtime_transition(state);
     }
 
-    pub(super) fn install_prepared_commit_final_parse_stack(&mut self, state: ParserPreparedState) {
-        self.replace_parse_stack_for_runtime_transition(state);
+    pub(super) fn install_prepared_commit(&mut self, install: ParserCommitInstall) {
+        self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
     }
 
     pub(super) fn install_pending_root_compact_after_side_effect_failure(
@@ -450,7 +465,7 @@ impl ParserState {
         open_lexed: Option<&LexedTokenBatch>,
         toolcall_lexed: &LexedTokenBatch,
         archive: &SpineArchive,
-    ) -> Result<(ParserPreparedState, ParserPreparedState), SpineError> {
+    ) -> Result<(ParserPreparedState, ParserCommitInstall), SpineError> {
         let mut pending = self.parse_stack.clone();
         pending.shift_pending_close(memory, archive)?;
         let mut final_parse_stack = pending.task_tree_reduced(reduction)?;
@@ -462,7 +477,7 @@ impl ParserState {
         final_parse_stack.shift(toolcall_token, archive)?;
         Ok((
             ParserPreparedState::new(pending),
-            ParserPreparedState::new(final_parse_stack),
+            ParserCommitInstall::new(ParserPreparedState::new(final_parse_stack)),
         ))
     }
 
