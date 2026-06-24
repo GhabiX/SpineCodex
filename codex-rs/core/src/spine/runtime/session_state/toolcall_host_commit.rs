@@ -53,12 +53,6 @@ pub(crate) struct SpineToolcallCommitHostPlan {
     lock_retry_limit: usize,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct SpineToolcallCommitProviderInputTokens {
-    pre_compact: Option<i64>,
-    current_turn: Option<i64>,
-}
-
 pub(crate) struct SpineToolcallHostCommit {
     plan: SpineToolcallCommitHostPlan,
     evidence: SpineToolcallCommitEvidence,
@@ -170,16 +164,6 @@ impl SpineToolcallCommitHostPlan {
         }
     }
 
-    pub(crate) fn provider_input_tokens(
-        &self,
-        current_turn_provider_input_tokens: Option<i64>,
-    ) -> SpineToolcallCommitProviderInputTokens {
-        SpineToolcallCommitProviderInputTokens {
-            pre_compact: self.pre_compact_provider_input_tokens,
-            current_turn: current_turn_provider_input_tokens,
-        }
-    }
-
     fn interpret_attempt(
         &self,
         attempt: SpineToolcallHostAttempt,
@@ -262,23 +246,14 @@ impl SpineToolcallHostCommit {
         self.plan.host_outcome(post_commit_effects)
     }
 
-    pub(crate) fn provider_input_tokens(
-        &self,
-        current_turn_provider_input_tokens: Option<i64>,
-    ) -> SpineToolcallCommitProviderInputTokens {
-        self.plan
-            .provider_input_tokens(current_turn_provider_input_tokens)
-    }
-
     fn attempt_input(
         &self,
         current_turn_provider_input_tokens: Option<i64>,
     ) -> SpineToolcallHostCommitAttempt {
-        let tokens = self.provider_input_tokens(current_turn_provider_input_tokens);
         SpineToolcallHostCommitAttempt {
             evidence: self.evidence.clone(),
-            pre_compact_provider_input_tokens: tokens.pre_compact(),
-            current_turn_provider_input_tokens: tokens.current_turn(),
+            pre_compact_provider_input_tokens: self.plan.pre_compact_provider_input_tokens,
+            current_turn_provider_input_tokens,
         }
     }
 
@@ -357,16 +332,6 @@ impl SpineToolcallHostCommitAttempt {
 
     pub(crate) fn current_turn_provider_input_tokens(&self) -> Option<i64> {
         self.current_turn_provider_input_tokens
-    }
-}
-
-impl SpineToolcallCommitProviderInputTokens {
-    pub(crate) fn pre_compact(&self) -> Option<i64> {
-        self.pre_compact
-    }
-
-    pub(crate) fn current_turn(&self) -> Option<i64> {
-        self.current_turn
     }
 }
 
