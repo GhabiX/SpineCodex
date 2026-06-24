@@ -97,17 +97,12 @@ impl SpineLedgerEvent {
                     Ok(live && raw_mask.raw_index_live(segment.raw_ordinal)?)
                 })
             }
-            SpineLedgerEvent::Open {
-                child,
-                summary,
-                boundary,
-                ..
-            } => {
-                if summary == "root" && child.is_root_epoch_child() {
-                    return Ok(true);
-                }
-                raw_mask.raw_index_live(*boundary)
+            SpineLedgerEvent::Open { child, summary, .. }
+                if summary == "root" && child.is_root_epoch_child() =>
+            {
+                Ok(true)
             }
+            SpineLedgerEvent::Open { boundary, .. } => raw_mask.raw_index_live(*boundary),
             SpineLedgerEvent::Close { boundary, .. } => raw_mask.boundary_live(*boundary),
             SpineLedgerEvent::RootCompact {
                 boundary,
