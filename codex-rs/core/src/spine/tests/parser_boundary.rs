@@ -387,6 +387,24 @@ fn runtime_commit_does_not_construct_parser_publication_plans() {
 }
 
 #[test]
+fn parser_publication_plan_fields_are_parser_private() {
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let publication_plan = parser
+        .split("struct ParserPublicationPlan")
+        .nth(1)
+        .and_then(|tail| tail.split("struct ParserPublicationUpdate").next())
+        .expect("ParserPublicationPlan definition");
+    assert!(
+        !publication_plan.contains("pub(super) operation")
+            && !publication_plan.contains("pub(super) suffix_start")
+            && !publication_plan.contains("pub(super) replacement_prefix")
+            && !publication_plan.contains("pub(super) preserve_host_history_from")
+            && !publication_plan.contains("pub(super) append_current_tool_response_if_missing"),
+        "ParserPublicationPlan fields must stay parser-private so runtime cannot interpret publication internals"
+    );
+}
+
+#[test]
 fn runtime_prepared_carriers_hold_parser_prepared_state() {
     let prepared =
         fs::read_to_string(spine_src("runtime/prepared.rs")).expect("read runtime prepared source");

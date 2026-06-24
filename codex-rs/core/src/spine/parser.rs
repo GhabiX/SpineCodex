@@ -89,11 +89,11 @@ pub(super) struct ParserRootCompactPendingInstall {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ParserPublicationPlan {
-    pub(super) operation: &'static str,
-    pub(super) suffix_start: usize,
-    pub(super) replacement_prefix: Vec<ResponseItem>,
-    pub(super) preserve_host_history_from: usize,
-    pub(super) append_current_tool_response_if_missing: bool,
+    operation: &'static str,
+    suffix_start: usize,
+    replacement_prefix: Vec<ResponseItem>,
+    preserve_host_history_from: usize,
+    append_current_tool_response_if_missing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
