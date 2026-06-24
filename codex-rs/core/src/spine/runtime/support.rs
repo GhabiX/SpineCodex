@@ -298,12 +298,12 @@ pub(super) fn validate_source_plan_context_index(
             "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is outside source context range [{suffix_start}..{source_context_end})"
         )));
     }
-    if let Some(previous) = *previous_context_index {
-        if context_index <= previous {
-            return Err(SpineError::CompactFailure(format!(
-                "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is not strictly after previous context_index {previous}"
-            )));
-        }
+    if let Some(previous) = *previous_context_index
+        && context_index <= previous
+    {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is not strictly after previous context_index {previous}"
+        )));
     }
     *previous_context_index = Some(context_index);
     Ok(())
