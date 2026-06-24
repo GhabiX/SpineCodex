@@ -32,11 +32,6 @@ pub(crate) struct SpineRootCompactHostPublish {
     publication: SpineRootCompactHistoryPublication,
 }
 
-struct SpineRootCompactPublishedHistory {
-    published_history: Vec<ResponseItem>,
-    materialized_len: usize,
-}
-
 struct SpineRootCompactHistoryPublication {
     materialized: Vec<ResponseItem>,
 }
@@ -198,13 +193,10 @@ impl SpineHostEffects {
             publish_history(native_items, false).await?;
             return Ok(None);
         };
-        let published_history = SpineRootCompactPublishedHistory::new(
-            host_publish,
-            &native_items,
-            is_fixed_prefix_item,
-        );
-        let published_variable_history_len = published_history.materialized_len();
-        publish_history(published_history.into_published_history(), true).await?;
+        let published_variable_history_len = host_publish.materialized_len();
+        let published_history =
+            host_publish.published_history_from_native_items(&native_items, is_fixed_prefix_item);
+        publish_history(published_history, true).await?;
         let spine_tree_snapshot = finalize_after_publish(published_variable_history_len).await?;
         after_installed().await?;
         Ok(spine_tree_snapshot)
@@ -412,30 +404,6 @@ impl SpineRootCompactHostPublish {
             .collect::<Vec<_>>();
         published.extend_from_slice(&self.publication.materialized);
         published
-    }
-}
-
-impl SpineRootCompactPublishedHistory {
-    fn new(
-        host_publish: SpineRootCompactHostPublish,
-        native_items: &[ResponseItem],
-        is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
-    ) -> Self {
-        let materialized_len = host_publish.materialized_len();
-        let published_history =
-            host_publish.published_history_from_native_items(native_items, is_fixed_prefix_item);
-        Self {
-            published_history,
-            materialized_len,
-        }
-    }
-
-    fn materialized_len(&self) -> usize {
-        self.materialized_len
-    }
-
-    fn into_published_history(self) -> Vec<ResponseItem> {
-        self.published_history
     }
 }
 
