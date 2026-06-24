@@ -342,12 +342,8 @@ fn apply_slice(text: &str, slice: &TrimSliceSpec) -> Option<String> {
     match slice {
         TrimSliceSpec::Head { head } => Some(text[..prefix_byte_index(text, *head)].to_string()),
         TrimSliceSpec::Tail { tail } => {
-            if *tail == 0 {
-                Some(String::new())
-            } else {
-                let keep_from = text.chars().count().saturating_sub(*tail);
-                Some(text[prefix_byte_index(text, keep_from)..].to_string())
-            }
+            let keep_from = text.chars().count().saturating_sub(*tail);
+            Some(text[prefix_byte_index(text, keep_from)..].to_string())
         }
         TrimSliceSpec::Anchor {
             anchor,
