@@ -721,13 +721,12 @@ impl Session {
         let expected_history = history.raw_items().to_vec();
         let reference_context_item = history.reference_context_item();
         let guard = spine_slot.lock().await;
-        guard
-            .materialized_history_host_effects_if_no_pending_tool_request(
-                raw_items,
-                expected_history,
-                reference_context_item,
-            )
-            .map(HostEffects::from_runtime)
+        hooks::materialized_history_host_effects_if_no_pending_tool_request(
+            &guard,
+            raw_items,
+            expected_history,
+            reference_context_item,
+        )
     }
 
     async fn apply_non_toolcall_msg_host_outcome(

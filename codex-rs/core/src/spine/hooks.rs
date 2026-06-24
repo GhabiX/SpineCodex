@@ -584,3 +584,18 @@ pub(crate) fn prepare_grouped_toolcall_output_recording(
         .prepare_grouped_toolcall_output_recording(output_items)
         .map(|inner| GroupedToolcallOutputRecordingPlan { inner })
 }
+
+pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request(
+    state: &SpineSessionState,
+    raw_items: &[Option<ResponseItem>],
+    expected_history: Vec<ResponseItem>,
+    reference_context_item: Option<TurnContextItem>,
+) -> Result<HostEffects, SpineError> {
+    state
+        .materialized_history_host_effects_if_no_pending_tool_request(
+            raw_items,
+            expected_history,
+            reference_context_item,
+        )
+        .map(HostEffects::from_runtime)
+}
