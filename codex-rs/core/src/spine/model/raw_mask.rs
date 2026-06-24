@@ -53,17 +53,6 @@ impl<'a> RawMask<'a> {
             .get(..end)
             .is_some_and(|prefix| hash_raw_live(prefix) == expected))
     }
-
-    pub(in crate::spine) fn optional_prefix_hash_matches(
-        self,
-        end: u64,
-        expected: Option<&str>,
-    ) -> Result<bool, SpineError> {
-        let Some(expected) = expected else {
-            return Ok(false);
-        };
-        self.prefix_hash_matches(end, expected)
-    }
 }
 
 fn raw_usize(value: u64, overflow_message: &str) -> Result<usize, SpineError> {
