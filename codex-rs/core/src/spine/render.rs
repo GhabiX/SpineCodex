@@ -448,16 +448,16 @@ fn read_memory_ref_body_with_staged(
     memory: &MemoryRef,
     staged_memory_body: Option<(&str, &str)>,
 ) -> Result<String, SpineError> {
-    if let Some((memory_id, body)) = staged_memory_body {
-        if memory_id == memory.compact_id {
-            let actual_hash = sha1_hex(body.as_bytes());
-            if actual_hash != memory.body_hash {
-                return Err(SpineError::InvalidStore(format!(
-                    "staged memory body hash mismatch for {memory_id}"
-                )));
-            }
-            return Ok(body.to_string());
+    if let Some((memory_id, body)) = staged_memory_body
+        && memory_id == memory.compact_id
+    {
+        let actual_hash = sha1_hex(body.as_bytes());
+        if actual_hash != memory.body_hash {
+            return Err(SpineError::InvalidStore(format!(
+                "staged memory body hash mismatch for {memory_id}"
+            )));
         }
+        return Ok(body.to_string());
     }
     read_memory_body(
         &memory.compact_id,
