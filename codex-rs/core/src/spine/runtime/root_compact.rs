@@ -214,11 +214,7 @@ fn reasoning_visible_text(
             }
         }
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n"))
-    }
+    (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
 fn function_call_output_visible_text(output: &FunctionCallOutputPayload) -> Option<String> {
