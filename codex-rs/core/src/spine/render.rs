@@ -488,10 +488,9 @@ fn memory_ref_is_live(
     raw_items: &[Option<ResponseItem>],
 ) -> Result<bool, SpineError> {
     let (start, end) = memory_source_raw_range_usize(memory)?;
-    if start > end || end > raw_items.len() {
-        return Ok(false);
-    }
-    Ok(raw_items[start..end].iter().all(Option::is_some))
+    Ok(raw_items
+        .get(start..end)
+        .is_some_and(|items| items.iter().all(Option::is_some)))
 }
 
 fn memory_source_raw_range_usize(memory: &MemoryRef) -> Result<(usize, usize), SpineError> {
