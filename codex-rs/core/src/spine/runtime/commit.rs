@@ -3,7 +3,6 @@ use codex_protocol::models::ResponseItem;
 use super::SpineError;
 use super::SpineRuntime;
 use super::close_family::CloseFamilyAfterClose;
-use super::close_family::CloseFamilyOpenPlan;
 use super::close_family::CloseFamilyPlan;
 use super::close_family::CloseFamilyTransaction;
 use super::close_family::CloseFamilyTransactionError;
@@ -29,7 +28,6 @@ use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ContextBaselineSource;
-use crate::spine::model::SpineCommitKindMarker;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::parser::ParserPublicationUpdate;
@@ -435,43 +433,21 @@ impl SpineRuntime {
         let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
         let plan = self.close_family_plan(&prepared, after_close)?;
         let mut events = vec![prepared.close_event.clone()];
-        if let Some(open) = plan.open.as_ref() {
-            events.extend(open.lexed.events().iter().cloned());
-        }
-        let completed_toolcall = completed_toolcall
-            .ok_or_else(|| SpineError::InvalidEvent(plan.missing_toolcall_error.to_string()))?;
+        plan.append_open_events(&mut events);
+        let completed_toolcall = plan.require_completed_toolcall(completed_toolcall)?;
         let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
-        let toolcall_context_index = match plan.toolcall_context_index {
-            Some(index) => index,
-            None => prepared
-                .suffix_start
-                .checked_add(prepared.replacement.len())
-                .ok_or_else(|| {
-                    SpineError::InvalidEvent(
-                        "spine.close toolcall context index overflow".to_string(),
-                    )
-                })?,
-        };
+        let toolcall_context_index = plan.toolcall_context_index(&prepared)?;
         let completed_toolcall = self
             .remap_completed_toolcall_context_indices(completed_toolcall, toolcall_context_index)?;
         let toolcall_lexed = self.completed_toolcall_batch(&completed_toolcall)?;
         events.extend(toolcall_lexed.events().iter().cloned());
-        let event_count = u64::try_from(events.len())
-            .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?;
-        let toolcall_seq = self
-            .ledger
-            .next_event_seq
-            .checked_add(event_count.checked_sub(1).ok_or_else(|| {
-                SpineError::InvalidEvent(plan.event_count_underflow_error.to_string())
-            })?)
-            .ok_or_else(|| {
-                SpineError::InvalidEvent(plan.toolcall_seq_overflow_error.to_string())
-            })?;
+        let event_count = plan.event_count(events.len())?;
+        let toolcall_seq = plan.toolcall_seq(self.ledger.next_event_seq, event_count)?;
         let (pending_parser_install, parser_install) =
             self.parser.close_family_staged_parse_stacks(
                 prepared.memory.clone(),
                 prepared.task_tree_reduction,
-                plan.open.as_ref().map(|open| &open.lexed),
+                plan.open_lexed(),
                 &toolcall_lexed,
                 &self.archive(),
             )?;
@@ -480,7 +456,7 @@ impl SpineRuntime {
             memory_body: &prepared.memory_body,
             archive_writes: &prepared.archive_writes,
             events,
-            marker_kind: plan.marker_kind,
+            marker_kind: plan.marker_kind(),
             close_event: &prepared.close_event,
             event_count,
         }) {
@@ -494,9 +470,9 @@ impl SpineRuntime {
             }
         }
         Ok(SpinePreparedCommit::close_family(
-            plan.kind,
+            plan.kind(),
             self.parser.close_family_publication_plan(
-                plan.operation,
+                plan.operation(),
                 prepared.suffix_start,
                 prepared.replacement,
                 toolcall_start,
@@ -515,16 +491,7 @@ impl SpineRuntime {
         after_close: CloseFamilyAfterClose,
     ) -> Result<CloseFamilyPlan, SpineError> {
         match after_close {
-            CloseFamilyAfterClose::None => Ok(CloseFamilyPlan {
-                operation: "spine.close",
-                missing_toolcall_error: "spine.close commit requires completed toolcall evidence",
-                event_count_underflow_error: "spine close event count underflow",
-                toolcall_seq_overflow_error: "spine.close toolcall seq overflow",
-                marker_kind: SpineCommitKindMarker::Close,
-                kind: SpineCommitKind::Close,
-                toolcall_context_index: None,
-                open: None,
-            }),
+            CloseFamilyAfterClose::None => Ok(CloseFamilyPlan::close()),
             CloseFamilyAfterClose::Open { summary } => {
                 let child = self.parser.close_reduced_next_child_id(
                     prepared.memory.clone(),
@@ -552,16 +519,7 @@ impl SpineRuntime {
                     None,
                     None,
                 )?;
-                Ok(CloseFamilyPlan {
-                    operation: "spine.next",
-                    missing_toolcall_error: "spine.next commit requires completed toolcall evidence",
-                    event_count_underflow_error: "spine next event count underflow",
-                    toolcall_seq_overflow_error: "spine.next toolcall seq overflow",
-                    marker_kind: SpineCommitKindMarker::CloseThenOpen,
-                    kind: SpineCommitKind::CloseThenOpen { open_index },
-                    toolcall_context_index: Some(open_index),
-                    open: Some(CloseFamilyOpenPlan { lexed }),
-                })
+                Ok(CloseFamilyPlan::next(open_index, lexed))
             }
         }
     }

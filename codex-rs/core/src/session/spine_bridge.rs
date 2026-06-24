@@ -562,7 +562,8 @@ impl Session {
         else {
             return Ok(());
         };
-        spine_slot.lock().await.ensure_runtime(&rollout_path)
+        let mut guard = spine_slot.lock().await;
+        hooks::ensure_runtime(&mut guard, &rollout_path)
     }
 
     pub(super) async fn invalidate_spine_runtime(&self, reason: String) {
@@ -757,8 +758,7 @@ impl Session {
             ));
         };
         let mut guard = spine_slot.lock().await;
-        guard.ensure_valid()?;
-        guard.ensure_runtime(&rollout_path)?;
+        hooks::ensure_runtime(&mut guard, &rollout_path)?;
         drop(guard);
         Ok(spine_slot)
     }

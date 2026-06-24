@@ -2,6 +2,7 @@ use codex_protocol::models::ResponseItem;
 
 use super::SpineCommitKind;
 use super::SpineError;
+use super::pending::CompletedToolCall;
 use crate::spine::archive::StagedArchiveWrite;
 use crate::spine::lexer::LexedTokenBatch;
 use crate::spine::model::MemRecord;
@@ -27,18 +28,18 @@ pub(super) enum CloseFamilyAfterClose {
 }
 
 pub(super) struct CloseFamilyOpenPlan {
-    pub(super) lexed: LexedTokenBatch,
+    lexed: LexedTokenBatch,
 }
 
 pub(super) struct CloseFamilyPlan {
-    pub(super) operation: &'static str,
-    pub(super) missing_toolcall_error: &'static str,
-    pub(super) event_count_underflow_error: &'static str,
-    pub(super) toolcall_seq_overflow_error: &'static str,
-    pub(super) marker_kind: SpineCommitKindMarker,
-    pub(super) kind: SpineCommitKind,
-    pub(super) toolcall_context_index: Option<usize>,
-    pub(super) open: Option<CloseFamilyOpenPlan>,
+    operation: &'static str,
+    missing_toolcall_error: &'static str,
+    event_count_underflow_error: &'static str,
+    toolcall_seq_overflow_error: &'static str,
+    marker_kind: SpineCommitKindMarker,
+    kind: SpineCommitKind,
+    toolcall_context_index: Option<usize>,
+    open: Option<CloseFamilyOpenPlan>,
 }
 
 pub(super) struct CloseFamilyTransaction<'a> {
@@ -54,4 +55,104 @@ pub(super) struct CloseFamilyTransaction<'a> {
 pub(super) enum CloseFamilyTransactionError {
     PreparedSideEffect(SpineError),
     CommitProof(SpineError),
+}
+
+impl CloseFamilyOpenPlan {
+    pub(super) fn new(lexed: LexedTokenBatch) -> Self {
+        Self { lexed }
+    }
+
+    fn lexed(&self) -> &LexedTokenBatch {
+        &self.lexed
+    }
+}
+
+impl CloseFamilyPlan {
+    pub(super) fn close() -> Self {
+        Self {
+            operation: "spine.close",
+            missing_toolcall_error: "spine.close commit requires completed toolcall evidence",
+            event_count_underflow_error: "spine close event count underflow",
+            toolcall_seq_overflow_error: "spine.close toolcall seq overflow",
+            marker_kind: SpineCommitKindMarker::Close,
+            kind: SpineCommitKind::Close,
+            toolcall_context_index: None,
+            open: None,
+        }
+    }
+
+    pub(super) fn next(open_index: usize, open_lexed: LexedTokenBatch) -> Self {
+        Self {
+            operation: "spine.next",
+            missing_toolcall_error: "spine.next commit requires completed toolcall evidence",
+            event_count_underflow_error: "spine next event count underflow",
+            toolcall_seq_overflow_error: "spine.next toolcall seq overflow",
+            marker_kind: SpineCommitKindMarker::CloseThenOpen,
+            kind: SpineCommitKind::CloseThenOpen { open_index },
+            toolcall_context_index: Some(open_index),
+            open: Some(CloseFamilyOpenPlan::new(open_lexed)),
+        }
+    }
+
+    pub(super) fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    pub(super) fn kind(&self) -> SpineCommitKind {
+        self.kind.clone()
+    }
+
+    pub(super) fn marker_kind(&self) -> SpineCommitKindMarker {
+        self.marker_kind
+    }
+
+    pub(super) fn open_lexed(&self) -> Option<&LexedTokenBatch> {
+        self.open.as_ref().map(CloseFamilyOpenPlan::lexed)
+    }
+
+    pub(super) fn append_open_events(&self, events: &mut Vec<SpineLedgerEvent>) {
+        if let Some(open) = self.open_lexed() {
+            events.extend(open.events().iter().cloned());
+        }
+    }
+
+    pub(super) fn require_completed_toolcall(
+        &self,
+        completed_toolcall: Option<CompletedToolCall>,
+    ) -> Result<CompletedToolCall, SpineError> {
+        completed_toolcall
+            .ok_or_else(|| SpineError::InvalidEvent(self.missing_toolcall_error.to_string()))
+    }
+
+    pub(super) fn toolcall_context_index(
+        &self,
+        prepared: &PreparedCloseCommit,
+    ) -> Result<usize, SpineError> {
+        if let Some(index) = self.toolcall_context_index {
+            return Ok(index);
+        }
+        prepared
+            .suffix_start
+            .checked_add(prepared.replacement.len())
+            .ok_or_else(|| {
+                SpineError::InvalidEvent("spine.close toolcall context index overflow".to_string())
+            })
+    }
+
+    pub(super) fn event_count(&self, events_len: usize) -> Result<u64, SpineError> {
+        u64::try_from(events_len)
+            .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))
+    }
+
+    pub(super) fn toolcall_seq(
+        &self,
+        next_event_seq: u64,
+        event_count: u64,
+    ) -> Result<u64, SpineError> {
+        next_event_seq
+            .checked_add(event_count.checked_sub(1).ok_or_else(|| {
+                SpineError::InvalidEvent(self.event_count_underflow_error.to_string())
+            })?)
+            .ok_or_else(|| SpineError::InvalidEvent(self.toolcall_seq_overflow_error.to_string()))
+    }
 }

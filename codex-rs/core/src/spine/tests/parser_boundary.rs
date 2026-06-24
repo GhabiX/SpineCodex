@@ -417,6 +417,36 @@ fn runtime_commit_delegates_parser_publication_plan_application() {
 }
 
 #[test]
+fn runtime_commit_does_not_interpret_close_family_plan_fields() {
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    let close_family_commit = commit
+        .split("fn commit_close_family_pending(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn close_family_plan(").next())
+        .expect("close-family commit section");
+    assert!(
+        !close_family_commit.contains("plan.operation,")
+            && !close_family_commit.contains("plan.marker_kind,")
+            && !close_family_commit.contains("plan.kind,")
+            && !close_family_commit.contains("plan.toolcall_context_index {")
+            && !close_family_commit.contains("plan.toolcall_context_index,")
+            && !close_family_commit.contains("plan.open.as_ref"),
+        "runtime close-family commit must consume CloseFamilyPlan through named methods"
+    );
+    assert!(
+        close_family_commit.contains("plan.append_open_events(")
+            && close_family_commit.contains("plan.require_completed_toolcall(")
+            && close_family_commit.contains("plan.toolcall_context_index(")
+            && close_family_commit.contains("plan.open_lexed()")
+            && close_family_commit.contains("plan.marker_kind()")
+            && close_family_commit.contains("plan.kind()")
+            && close_family_commit.contains("plan.operation()"),
+        "runtime close-family commit should keep close/next plan interpretation inside CloseFamilyPlan"
+    );
+}
+
+#[test]
 fn runtime_commit_does_not_construct_parser_publication_plans() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");

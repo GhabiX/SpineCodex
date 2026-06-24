@@ -101,6 +101,14 @@ pub(crate) fn new_session_state(jit_enabled: bool, trim_enabled: bool) -> SpineS
     SpineSessionState::new_with_features(jit_enabled, trim_enabled)
 }
 
+pub(crate) fn ensure_runtime(
+    state: &mut SpineSessionState,
+    rollout_path: &Path,
+) -> Result<(), SpineError> {
+    state.ensure_valid()?;
+    state.ensure_runtime(rollout_path)
+}
+
 enum ToolCallEvidenceKind<'a> {
     Single {
         item: &'a ResponseItem,
