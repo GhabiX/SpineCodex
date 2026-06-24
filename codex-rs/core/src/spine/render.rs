@@ -101,7 +101,7 @@ pub(super) fn project_raw_history_with_trim_projection(
             let Some(target) = trim_projection.target_for_raw_ordinal(raw_ordinal) else {
                 return Ok(item.clone());
             };
-            projected_tool_response_item(item, target)
+            projected_tool_response_item_with_state(item, target, &target.state)
         })
         .collect()
 }
@@ -258,7 +258,7 @@ fn render_visible_ref_to_context_item(
             } = source
                 && let Some(target) = trim_projection.target_for_raw_ordinal(*raw_ordinal)
             {
-                item = projected_tool_response_item(&item, target)?;
+                item = projected_tool_response_item_with_state(&item, target, &target.state)?;
             }
             if let VisibleItemSource::RawResponseItem {
                 from_user: true,
@@ -324,13 +324,6 @@ fn raw_ordinal_usize(raw_ordinal: u64) -> Result<usize, SpineError> {
         .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))
 }
 
-fn projected_tool_response_item(
-    item: &ResponseItem,
-    target: &TrimTarget,
-) -> Result<ResponseItem, SpineError> {
-    projected_tool_response_item_with_state(item, target, &target.state)
-}
-
 fn projected_tool_response_item_with_state(
     item: &ResponseItem,
     target: &TrimTarget,
@@ -342,21 +335,7 @@ fn projected_tool_response_item_with_state(
             matched_tool_output(item, target, "output payload")?
         }
     };
-    let body = match state {
-        TrimTargetState::Tagged => {
-            let text = output_payload
-                .text_content()
-                .map(str::to_string)
-                .ok_or_else(|| trim_body_error(target))?;
-            FunctionCallOutputBody::Text(format!("[TRIM_ID: {}]\n{text}", target.trim_id))
-        }
-        TrimTargetState::Snipped => {
-            FunctionCallOutputBody::Text(TOOL_RESULT_CLEARED_MESSAGE.to_string())
-        }
-        TrimTargetState::Sliced { visible_body } => {
-            FunctionCallOutputBody::Text(visible_body.clone())
-        }
-    };
+    let body = trim_replacement_body(output_payload, target, state)?;
     let output = FunctionCallOutputPayload {
         body,
         success: output_payload.success,
@@ -386,6 +365,23 @@ fn projected_tool_response_item_with_state(
             target.trim_id, target.call_id
         ))),
     }
+}
+
+fn trim_replacement_body(
+    output_payload: &FunctionCallOutputPayload,
+    target: &TrimTarget,
+    state: &TrimTargetState,
+) -> Result<FunctionCallOutputBody, SpineError> {
+    Ok(FunctionCallOutputBody::Text(match state {
+        TrimTargetState::Tagged => {
+            let body = output_payload
+                .text_content()
+                .ok_or_else(|| trim_body_error(target))?;
+            format!("[TRIM_ID: {}]\n{body}", target.trim_id)
+        }
+        TrimTargetState::Snipped => TOOL_RESULT_CLEARED_MESSAGE.to_string(),
+        TrimTargetState::Sliced { visible_body } => visible_body.clone(),
+    }))
 }
 
 pub(super) fn matched_tool_output<'a>(
