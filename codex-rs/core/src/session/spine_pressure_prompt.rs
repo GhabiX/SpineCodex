@@ -88,11 +88,14 @@ impl Session {
         let spine_slot = self.spine.as_ref()?;
         let signal = {
             let guard = spine_slot.lock().await;
-            if let Err(err) = guard.ensure_valid() {
-                tracing::debug!("skipping Spine status prompt signal: {err}");
-                return None;
-            }
-            let projection = guard.tree_snapshot_projection().ok().flatten()?;
+            let projection = match hooks::tree_snapshot_projection(&guard) {
+                Ok(Some(projection)) => projection,
+                Ok(None) => return None,
+                Err(err) => {
+                    tracing::debug!("skipping Spine status prompt signal: {err}");
+                    return None;
+                }
+            };
             match status_prompt_signal(projection, token_info.as_ref(), context_left_tokens) {
                 Ok(signal) => signal,
                 Err(err) => {
@@ -123,11 +126,14 @@ impl Session {
         let spine_slot = self.spine.as_ref()?;
         let inside_view = {
             let guard = spine_slot.lock().await;
-            if let Err(err) = guard.ensure_valid() {
-                tracing::debug!("skipping Spine pressure prompt signal: {err}");
-                return None;
-            }
-            let projection = guard.tree_snapshot_projection().ok().flatten()?;
+            let projection = match hooks::tree_snapshot_projection(&guard) {
+                Ok(Some(projection)) => projection,
+                Ok(None) => return None,
+                Err(err) => {
+                    tracing::debug!("skipping Spine pressure prompt signal: {err}");
+                    return None;
+                }
+            };
             build_spine_tree_pressure_view_from_projection(projection, Some(&token_info))
         };
 

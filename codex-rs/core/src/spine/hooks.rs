@@ -123,6 +123,18 @@ pub(crate) fn take_initial_tree_snapshot(
     state.take_initial_tree_snapshot()
 }
 
+pub(crate) fn tree_snapshot_projection(
+    state: &SpineSessionState,
+) -> Result<
+    Option<(
+        SpineTreeUpdateEvent,
+        Vec<super::runtime::SpineOpenNodeContextProjection>,
+    )>,
+    SpineError,
+> {
+    state.tree_snapshot_projection()
+}
+
 pub(crate) fn trim_projection_needs_rollout_raw_items(
     state: &SpineSessionState,
 ) -> Result<Option<bool>, SpineError> {
