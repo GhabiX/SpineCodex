@@ -237,7 +237,7 @@ impl SpineRuntime {
             SpineRootCompactTokenMetadata::default(),
             None,
         )?;
-        let result = prepared.publication_result().clone();
+        let result = prepared.clone_publication_result();
         self.install_prepared_root_compact(prepared);
         Ok(result.materialized)
     }
@@ -255,7 +255,7 @@ impl SpineRuntime {
             raw_items,
             token_metadata,
         )?;
-        let result = prepared.publication_result().clone();
+        let result = prepared.clone_publication_result();
         self.install_prepared_root_compact(prepared);
         Ok(result)
     }

@@ -667,8 +667,9 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         !prepared.contains("fn result(&self)")
             && prepared.contains("fn publication_history(&self) -> &[ResponseItem]")
-            && prepared.contains("fn publication_result(&self) -> &SpineRootCompactResult"),
-        "runtime root compact prepared carrier should expose publication/result intent without leaking borrowed parser materialization"
+            && prepared.contains("fn clone_publication_result(&self) -> SpineRootCompactResult")
+            && !prepared.contains("fn publication_result(&self) -> &SpineRootCompactResult"),
+        "runtime root compact prepared carrier should expose publication/result intent without leaking borrowed result internals"
     );
     assert!(
         !prepared.contains("SpinePreparedRootCompactInstall"),
@@ -981,6 +982,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     assert!(
         state_types.contains("self.prepared.publication_history()")
+            && state_types.contains("self.prepared.clone_publication_result()")
+            && !state_types.contains("self.prepared.publication_result()")
             && !state_types.contains("self.prepared.result().materialized"),
         "root compact host install should publish through prepared publication accessors, not parser result internals"
     );

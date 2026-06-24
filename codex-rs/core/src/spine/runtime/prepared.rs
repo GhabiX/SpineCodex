@@ -54,11 +54,11 @@ impl SpinePreparedRootCompact {
     }
 
     pub(crate) fn publication_history(&self) -> &[ResponseItem] {
-        &self.publication_result().materialized
+        &self.result.materialized
     }
 
-    pub(crate) fn publication_result(&self) -> &SpineRootCompactResult {
-        &self.result
+    pub(crate) fn clone_publication_result(&self) -> SpineRootCompactResult {
+        self.result.clone()
     }
 
     pub(crate) fn validate_published_history_len(
