@@ -360,9 +360,12 @@ fn runtime_commit_routes_open_with_toolcall_publication_through_prepared_commit(
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
     assert!(
-        publication_parts.contains("parser_install.materialize_final_context(")
-            && publication_parts.contains("ParserPublicationUpdate::new("),
+        publication_parts.contains("parser_install.full_context_publication_update("),
         "open-with-toolcall publication should materialize h(PS) from the prepared parser install"
+    );
+    assert!(
+        !publication_parts.contains("ParserPublicationUpdate::new("),
+        "runtime commit publication should not construct full-context parser publication updates directly"
     );
     assert!(
         publication_parts.contains("prepared_commit.and_then(SpinePreparedCommit::parser_install)")

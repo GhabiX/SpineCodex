@@ -689,17 +689,12 @@ impl SpineRuntime {
         let trim_projection = self.current_trim_projection()?;
         if let Some(parser_install) = prepared_commit.and_then(SpinePreparedCommit::parser_install)
         {
-            let materialized =
-                parser_install.materialize_final_context(raw_items, &trim_projection)?;
-            if materialized.as_slice() == history_items {
-                return Ok(None);
-            }
-            return Ok(Some(ParserPublicationUpdate::new(
+            return parser_install.full_context_publication_update(
                 "spine prepared commit projection",
-                0,
-                history_items.to_vec(),
-                materialized,
-            )));
+                raw_items,
+                &trim_projection,
+                history_items,
+            );
         }
         self.parser.full_variable_context_publication_update(
             "spine toolcall projection",

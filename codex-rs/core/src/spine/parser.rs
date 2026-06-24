@@ -253,20 +253,31 @@ impl ParserCommitInstall {
         Self { final_parse_stack }
     }
 
-    pub(super) fn materialize_final_context(
+    fn into_final_parse_stack(self) -> ParserPreparedState {
+        self.final_parse_stack
+    }
+
+    pub(super) fn full_context_publication_update(
         &self,
+        operation: &'static str,
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
-    ) -> Result<Vec<ResponseItem>, SpineError> {
-        render_parse_stack_to_context_with_trim_projection(
+        history_items: &[ResponseItem],
+    ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
+        let materialized = render_parse_stack_to_context_with_trim_projection(
             self.final_parse_stack.parse_stack(),
             raw_items,
             trim_projection,
-        )
-    }
-
-    fn into_final_parse_stack(self) -> ParserPreparedState {
-        self.final_parse_stack
+        )?;
+        if materialized.as_slice() == history_items {
+            return Ok(None);
+        }
+        Ok(Some(ParserPublicationUpdate::new(
+            operation,
+            0,
+            history_items.to_vec(),
+            materialized,
+        )))
     }
 }
 
