@@ -19,17 +19,19 @@ use completed_toolcall_session::SpineCommitAttempt;
 use completed_toolcall_session::SpineCommitAttemptKind;
 use state_types::CommittedSpineToolcall;
 pub(crate) use state_types::SpineCompactEvidence;
+pub(in crate::spine) use state_types::SpineGroupedToolcallOutputRecordingPlan;
 pub(crate) use state_types::SpineInitEvidence;
 pub(crate) use state_types::SpineMessageEvidence;
 pub(crate) use state_types::SpineNativeCompactEvidence;
 pub(crate) use state_types::SpineObservedContextItem;
 pub(crate) use state_types::SpineRootCompactHostInstall;
+pub(in crate::spine) use state_types::SpineSingleToolcallOutputRecordingPlan;
 pub(crate) use toolcall_host_commit::SpineCompletedToolCallHostOutcome;
 #[cfg(test)]
 pub(crate) use toolcall_host_commit::SpineToolOutputRecording;
-pub(crate) use toolcall_host_commit::SpineToolcallHostCommitAttempt;
 pub(crate) use toolcall_host_commit::SpineToolcallHostAttempt;
 pub(crate) use toolcall_host_commit::SpineToolcallHostCommit;
+pub(crate) use toolcall_host_commit::SpineToolcallHostCommitAttempt;
 
 #[derive(Debug)]
 pub(crate) struct SpineSessionState {

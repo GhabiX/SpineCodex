@@ -1091,8 +1091,7 @@ impl Session {
         };
         let output_raw_ordinals = {
             let guard = spine_slot.lock().await;
-            guard
-                .prepare_grouped_toolcall_output_recording(output_items)?
+            hooks::prepare_grouped_toolcall_output_recording(&guard, output_items)?
                 .into_raw_ordinals()
         };
         let output_context_start = self.clone_history().await.raw_items().len();
@@ -1130,7 +1129,7 @@ impl Session {
             let recording_plan = {
                 let guard = spine_slot.lock().await;
                 let Some(recording_plan) =
-                    guard.prepare_single_toolcall_output_recording(call_id, &raw_items)?
+                    hooks::prepare_single_toolcall_output_recording(&guard, call_id, &raw_items)?
                 else {
                     return Ok(None);
                 };

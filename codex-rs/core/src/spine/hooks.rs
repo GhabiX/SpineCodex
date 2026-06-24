@@ -31,6 +31,14 @@ pub(crate) struct ToolcallHostAttempt {
     inner: super::runtime::SpineToolcallHostAttempt,
 }
 
+pub(crate) struct SingleToolcallOutputRecordingPlan {
+    inner: super::runtime::SpineSingleToolcallOutputRecordingPlan,
+}
+
+pub(crate) struct GroupedToolcallOutputRecordingPlan {
+    inner: super::runtime::SpineGroupedToolcallOutputRecordingPlan,
+}
+
 pub(crate) struct InitEvidence<'a> {
     pub(crate) rollout_path: &'a Path,
 }
@@ -441,6 +449,22 @@ impl ToolcallHostAttempt {
     }
 }
 
+impl SingleToolcallOutputRecordingPlan {
+    pub(crate) fn raw_len(&self) -> u64 {
+        self.inner.raw_len()
+    }
+
+    pub(crate) fn prerecord_output_before_reduce(&self) -> bool {
+        self.inner.prerecord_output_before_reduce()
+    }
+}
+
+impl GroupedToolcallOutputRecordingPlan {
+    pub(crate) fn into_raw_ordinals(self) -> Vec<Option<u64>> {
+        self.inner.into_raw_ordinals()
+    }
+}
+
 impl HistoryHostEffect {
     pub(crate) fn apply_history_update_or_self(
         self,
@@ -540,4 +564,23 @@ pub(crate) fn observe_toolcall_context_items(
         })
         .collect::<Vec<_>>();
     state.observe_toolcall_context_items(&runtime_items, raw_items)
+}
+
+pub(crate) fn prepare_single_toolcall_output_recording(
+    state: &SpineSessionState,
+    call_id: &str,
+    raw_items: &[Option<ResponseItem>],
+) -> Result<Option<SingleToolcallOutputRecordingPlan>, SpineError> {
+    state
+        .prepare_single_toolcall_output_recording(call_id, raw_items)
+        .map(|plan| plan.map(|inner| SingleToolcallOutputRecordingPlan { inner }))
+}
+
+pub(crate) fn prepare_grouped_toolcall_output_recording(
+    state: &SpineSessionState,
+    output_items: &[ResponseItem],
+) -> Result<GroupedToolcallOutputRecordingPlan, SpineError> {
+    state
+        .prepare_grouped_toolcall_output_recording(output_items)
+        .map(|inner| GroupedToolcallOutputRecordingPlan { inner })
 }
