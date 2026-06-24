@@ -47,19 +47,48 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
         .expect("prepare close commit")
         .expect("prepared close commit");
     assert!(matches!(prepared.kind(), SpineCommitKind::Close { .. }));
-    let publication_plan = prepared
-        .publication_plan()
-        .expect("close commit should carry publication plan");
-    assert_eq!(publication_plan.operation(), "spine.close");
-    assert_eq!(publication_plan.suffix_start(), 0);
-    assert_eq!(publication_plan.replacement_prefix().len(), 1);
+    assert!(
+        prepared.has_publication_plan(),
+        "close commit should carry parser-owned publication plan"
+    );
+    let output_item = raw[output_raw as usize]
+        .as_ref()
+        .expect("output item")
+        .clone();
+    let host_history_before_output = raw
+        .iter()
+        .take(output_context)
+        .filter_map(Clone::clone)
+        .collect::<Vec<_>>();
+    let history_update = prepared
+        .publication_history_update(
+            "staged-close",
+            &output_item,
+            false,
+            &host_history_before_output,
+            |call_id, operation, suffix_start, expected_history, replacement| {
+                (
+                    call_id.to_string(),
+                    operation,
+                    suffix_start,
+                    expected_history,
+                    replacement,
+                )
+            },
+        )
+        .expect("publication update")
+        .expect("close commit should publish host history");
+    assert_eq!(history_update.0, "staged-close");
+    assert_eq!(history_update.1, "spine.close");
+    assert_eq!(history_update.2, 0);
     assert_eq!(
-        publication_plan.preserve_host_history_from(),
-        request_context
+        history_update.4.last(),
+        Some(&output_item),
+        "close publication should append current output when host has not recorded it"
     );
     assert!(
-        publication_plan.append_current_tool_response_if_missing(),
-        "close publication should append current output when host has not recorded it"
+        history_update.4.len() < history_update.3.len(),
+        "close publication should compact the closed suffix"
     );
     assert_eq!(
         runtime.render_tree().expect("render after prepared commit"),

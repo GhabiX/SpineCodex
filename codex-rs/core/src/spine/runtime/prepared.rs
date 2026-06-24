@@ -158,8 +158,28 @@ impl SpinePreparedCommit {
         Ok(())
     }
 
-    pub(crate) fn publication_plan(&self) -> Option<&ParserPublicationPlan> {
-        self.publication_plan.as_ref()
+    pub(crate) fn has_publication_plan(&self) -> bool {
+        self.publication_plan.is_some()
+    }
+
+    pub(crate) fn publication_history_update<T>(
+        &self,
+        call_id: &str,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        history_items: &[ResponseItem],
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, super::SpineError> {
+        let Some(plan) = self.publication_plan.as_ref() else {
+            return Ok(None);
+        };
+        let update = plan.history_update(
+            call_id,
+            tool_resp_item,
+            tool_resp_already_recorded,
+            history_items,
+        )?;
+        Ok(update.map(|update| update.into_history_update(call_id, build_update)))
     }
 
     pub(super) fn parser_install(&self) -> Option<&ParserCommitInstall> {

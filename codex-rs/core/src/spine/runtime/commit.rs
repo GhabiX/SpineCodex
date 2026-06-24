@@ -672,36 +672,38 @@ impl SpineRuntime {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        let update =
-            if let Some(plan) = prepared_commit.and_then(SpinePreparedCommit::publication_plan) {
-                plan.history_update(
-                    call_id,
-                    tool_resp_item,
-                    tool_resp_already_recorded,
-                    history_items,
-                )?
-            } else if !tool_resp_already_recorded {
-                return Ok(None);
-            } else {
-                let trim_projection = self.current_trim_projection()?;
-                if let Some(parser_install) =
-                    prepared_commit.and_then(SpinePreparedCommit::parser_install)
-                {
-                    parser_install.full_context_publication_update(
-                        "spine prepared commit projection",
-                        raw_items,
-                        &trim_projection,
-                        history_items,
-                    )?
-                } else {
-                    self.parser.full_variable_context_publication_update(
-                        "spine toolcall projection",
-                        raw_items,
-                        &trim_projection,
-                        history_items,
-                    )?
-                }
-            };
+        if let Some(prepared) = prepared_commit
+            && prepared.has_publication_plan()
+        {
+            return prepared.publication_history_update(
+                call_id,
+                tool_resp_item,
+                tool_resp_already_recorded,
+                history_items,
+                build_update,
+            );
+        }
+        if !tool_resp_already_recorded {
+            return Ok(None);
+        }
+        let trim_projection = self.current_trim_projection()?;
+        let update = if let Some(parser_install) =
+            prepared_commit.and_then(SpinePreparedCommit::parser_install)
+        {
+            parser_install.full_context_publication_update(
+                "spine prepared commit projection",
+                raw_items,
+                &trim_projection,
+                history_items,
+            )?
+        } else {
+            self.parser.full_variable_context_publication_update(
+                "spine toolcall projection",
+                raw_items,
+                &trim_projection,
+                history_items,
+            )?
+        };
         Ok(update.map(|update| update.into_history_update(call_id, build_update)))
     }
 
