@@ -28,11 +28,11 @@ impl NodeId {
     }
 
     pub(in crate::spine) fn is_root_epoch_child(&self) -> bool {
-        self.parent().is_some_and(|parent| parent.is_root_epoch())
+        self.0.len() == 2
     }
 
     pub(in crate::spine) fn is_first_root_epoch_child(&self) -> bool {
-        self.is_root_epoch_child() && self.0.last() == Some(&1)
+        matches!(self.0.as_slice(), [_, 1])
     }
 
     pub(in crate::spine) fn as_path(&self) -> String {
