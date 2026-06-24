@@ -6,20 +6,19 @@ use serde::Serialize;
 
 impl LoggedPressureEvent {
     pub(in crate::spine) fn allowed_by(&self, raw_live: &[bool]) -> bool {
-        match &self.event {
-            PressureEvent::OpenContextBaseline {
-                observed_raw_ordinal,
-                observed_raw_live_hash,
-                ..
-            } => usize::try_from(*observed_raw_ordinal)
-                .ok()
-                .and_then(|end| raw_live.get(..end))
-                .is_some_and(|raw_live_prefix| {
-                    observed_raw_live_hash
-                        .as_deref()
-                        .is_none_or(|hash| hash_raw_live(raw_live_prefix) == hash)
-                }),
-        }
+        let PressureEvent::OpenContextBaseline {
+            observed_raw_ordinal,
+            observed_raw_live_hash,
+            ..
+        } = &self.event;
+        usize::try_from(*observed_raw_ordinal)
+            .ok()
+            .and_then(|end| raw_live.get(..end))
+            .is_some_and(|raw_live_prefix| {
+                observed_raw_live_hash
+                    .as_deref()
+                    .is_none_or(|hash| hash_raw_live(raw_live_prefix) == hash)
+            })
     }
 }
 
