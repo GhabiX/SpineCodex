@@ -43,6 +43,7 @@ use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineError;
 use crate::spine::SpineSessionState;
+use crate::spine::hooks;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -3481,15 +3482,7 @@ impl Session {
         let Some(token_usage) = token_usage else {
             if let Some(spine_slot) = self.spine.as_ref() {
                 let mut guard = spine_slot.lock().await;
-                if guard.ensure_valid().is_ok()
-                    && let Some(runtime) = guard.runtime_mut()
-                    && let Err(err) =
-                        runtime.consume_closed_memory_context_accounting_without_provider_usage()
-                {
-                    guard.invalidate(format!(
-                        "failed to consume Spine closed memory context accounting without provider usage: {err}"
-                    ));
-                }
+                hooks::observe_provider_token_usage(&mut guard, None);
             }
             return;
         };
@@ -3502,33 +3495,7 @@ impl Session {
             if let Some(spine_slot) = self.spine.as_ref() {
                 let input_tokens = token_info.last_token_usage.input_tokens;
                 let mut guard = spine_slot.lock().await;
-                if guard.ensure_valid().is_ok()
-                    && let Some(runtime) = guard.runtime_mut()
-                {
-                    if input_tokens > 0 {
-                        if let Err(err) =
-                            runtime.capture_closed_memory_context_accounting(input_tokens)
-                        {
-                            guard.invalidate(format!(
-                                "failed to capture Spine closed memory context accounting from provider input tokens: {err}"
-                            ));
-                        } else {
-                            if let Err(err) =
-                                runtime.capture_current_open_provider_baseline(input_tokens)
-                            {
-                                guard.invalidate(format!(
-                                    "failed to capture Spine open context baseline from provider input tokens: {err}"
-                                ));
-                            }
-                        }
-                    } else if let Err(err) =
-                        runtime.consume_closed_memory_context_accounting_without_provider_usage()
-                    {
-                        guard.invalidate(format!(
-                            "failed to consume Spine closed memory context accounting without positive provider input tokens: {err}"
-                        ));
-                    }
-                }
+                hooks::observe_provider_token_usage(&mut guard, Some(input_tokens));
             }
             for contributor in self.services.extensions.token_usage_contributors() {
                 contributor.on_token_usage(
