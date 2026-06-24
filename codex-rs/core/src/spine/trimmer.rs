@@ -107,30 +107,24 @@ impl<'a> Trimmer<'a> {
         latest_live_completed_toolcall_seq: Option<u64>,
         current_structural_seq: u64,
     ) -> Result<SpineTrimOutcome, SpineError> {
-        let trim_id = trim_id.trim();
+        let trim_id = trim_id.trim().to_string();
         let Some(target) = self.target_in_latest_toolcall(
-            trim_id,
+            &trim_id,
             latest_live_completed_toolcall_seq,
             current_structural_seq,
         )?
         else {
-            return Ok(SpineTrimOutcome::Miss {
-                trim_id: trim_id.to_string(),
-            });
+            return Ok(SpineTrimOutcome::Miss { trim_id });
         };
         if matches!(target.state, TrimTargetState::Snipped) {
-            return Ok(SpineTrimOutcome::AlreadyCleared {
-                trim_id: trim_id.to_string(),
-            });
+            return Ok(SpineTrimOutcome::AlreadyCleared { trim_id });
         }
         self.append_event(TrimEvent::Snipped {
-            trim_id: trim_id.to_string(),
+            trim_id: trim_id.clone(),
             raw_boundary: self.raw_len,
             raw_live_hash: hash_raw_live(self.raw_live),
         })?;
-        Ok(SpineTrimOutcome::Cleared {
-            trim_id: trim_id.to_string(),
-        })
+        Ok(SpineTrimOutcome::Cleared { trim_id })
     }
 
     pub(super) fn slice(
@@ -141,33 +135,27 @@ impl<'a> Trimmer<'a> {
         current_structural_seq: u64,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineTrimOutcome, SpineError> {
-        let trim_id = trim_id.trim();
+        let trim_id = trim_id.trim().to_string();
         let Some(target) = self.target_in_latest_toolcall(
-            trim_id,
+            &trim_id,
             latest_live_completed_toolcall_seq,
             current_structural_seq,
         )?
         else {
-            return Ok(SpineTrimOutcome::Miss {
-                trim_id: trim_id.to_string(),
-            });
+            return Ok(SpineTrimOutcome::Miss { trim_id });
         };
         let current_body = current_visible_body(&target, raw_items)?;
         let Some(visible_body) = apply_slice(&current_body, &slice) else {
-            return Ok(SpineTrimOutcome::Miss {
-                trim_id: trim_id.to_string(),
-            });
+            return Ok(SpineTrimOutcome::Miss { trim_id });
         };
         self.append_event(TrimEvent::Sliced {
-            trim_id: trim_id.to_string(),
+            trim_id: trim_id.clone(),
             raw_boundary: self.raw_len,
             raw_live_hash: hash_raw_live(self.raw_live),
             slice,
             visible_body,
         })?;
-        Ok(SpineTrimOutcome::Sliced {
-            trim_id: trim_id.to_string(),
-        })
+        Ok(SpineTrimOutcome::Sliced { trim_id })
     }
 
     pub(super) fn current_projection(
