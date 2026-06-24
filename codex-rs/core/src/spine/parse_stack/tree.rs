@@ -110,8 +110,9 @@ pub(super) fn next_child_id(parse_stack: &ParseStack) -> Result<NodeId, SpineErr
 fn tree_rows(parse_stack: &ParseStack) -> Result<Vec<TreeRenderRow>, SpineError> {
     let mut rows = Vec::<TreeRenderRow>::new();
     collect_tree_render_rows(&parse_stack.symbols, &mut rows);
-    project_current_root_epoch_row(parse_stack.current_cursor_id()?, &mut rows);
-    mark_cursor_statuses(parse_stack.current_cursor_id()?, &mut rows);
+    let cursor = parse_stack.current_cursor_id()?;
+    project_current_root_epoch_row(&cursor, &mut rows);
+    mark_cursor_statuses(&cursor, &mut rows);
     Ok(rows)
 }
 
@@ -126,7 +127,7 @@ pub(super) fn root_epoch_from_node(node: &SpineTreeNode) -> Option<NodeId> {
     }
 }
 
-fn project_current_root_epoch_row(cursor: NodeId, rows: &mut Vec<TreeRenderRow>) {
+fn project_current_root_epoch_row(cursor: &NodeId, rows: &mut Vec<TreeRenderRow>) {
     let Some(root) = cursor.0.first().copied().map(NodeId::root_epoch) else {
         return;
     };
@@ -143,11 +144,11 @@ fn project_current_root_epoch_row(cursor: NodeId, rows: &mut Vec<TreeRenderRow>)
     });
 }
 
-fn mark_cursor_statuses(cursor: NodeId, rows: &mut [TreeRenderRow]) {
+fn mark_cursor_statuses(cursor: &NodeId, rows: &mut [TreeRenderRow]) {
     for row in rows {
-        if row.id == cursor {
+        if &row.id == cursor {
             row.status = NodeStatus::Live;
-        } else if row.status == NodeStatus::Live || node_is_ancestor_of(&row.id, &cursor) {
+        } else if row.status == NodeStatus::Live || node_is_ancestor_of(&row.id, cursor) {
             row.status = NodeStatus::Opened;
         }
     }
