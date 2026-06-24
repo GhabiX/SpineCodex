@@ -114,17 +114,23 @@ impl<'a> Trimmer<'a> {
             current_structural_seq,
         )?
         else {
-            return Ok(SpineTrimOutcome::miss(trim_id));
+            return Ok(SpineTrimOutcome::Miss {
+                trim_id: trim_id.to_string(),
+            });
         };
         if matches!(target.state, TrimTargetState::Snipped) {
-            return Ok(SpineTrimOutcome::already_cleared(trim_id));
+            return Ok(SpineTrimOutcome::AlreadyCleared {
+                trim_id: trim_id.to_string(),
+            });
         }
         self.append_event(TrimEvent::Snipped {
             trim_id: trim_id.to_string(),
             raw_boundary: self.raw_len,
             raw_live_hash: hash_raw_live(self.raw_live),
         })?;
-        Ok(SpineTrimOutcome::cleared(trim_id))
+        Ok(SpineTrimOutcome::Cleared {
+            trim_id: trim_id.to_string(),
+        })
     }
 
     pub(super) fn slice(
@@ -142,11 +148,15 @@ impl<'a> Trimmer<'a> {
             current_structural_seq,
         )?
         else {
-            return Ok(SpineTrimOutcome::miss(trim_id));
+            return Ok(SpineTrimOutcome::Miss {
+                trim_id: trim_id.to_string(),
+            });
         };
         let current_body = current_visible_body(&target, raw_items)?;
         let Some(visible_body) = apply_slice(&current_body, &slice) else {
-            return Ok(SpineTrimOutcome::miss(trim_id));
+            return Ok(SpineTrimOutcome::Miss {
+                trim_id: trim_id.to_string(),
+            });
         };
         self.append_event(TrimEvent::Sliced {
             trim_id: trim_id.to_string(),
@@ -155,7 +165,9 @@ impl<'a> Trimmer<'a> {
             slice,
             visible_body,
         })?;
-        Ok(SpineTrimOutcome::sliced(trim_id))
+        Ok(SpineTrimOutcome::Sliced {
+            trim_id: trim_id.to_string(),
+        })
     }
 
     pub(super) fn current_projection(

@@ -132,30 +132,6 @@ pub(crate) enum SpineTrimOutcome {
 }
 
 impl SpineTrimOutcome {
-    pub(in crate::spine) fn cleared(trim_id: &str) -> Self {
-        Self::Cleared {
-            trim_id: trim_id.to_string(),
-        }
-    }
-
-    pub(in crate::spine) fn already_cleared(trim_id: &str) -> Self {
-        Self::AlreadyCleared {
-            trim_id: trim_id.to_string(),
-        }
-    }
-
-    pub(in crate::spine) fn sliced(trim_id: &str) -> Self {
-        Self::Sliced {
-            trim_id: trim_id.to_string(),
-        }
-    }
-
-    pub(in crate::spine) fn miss(trim_id: &str) -> Self {
-        Self::Miss {
-            trim_id: trim_id.to_string(),
-        }
-    }
-
     pub(crate) fn model_response_message(&self) -> String {
         match self {
             Self::Cleared { trim_id } => format!("Trimmed tool response {trim_id}."),
