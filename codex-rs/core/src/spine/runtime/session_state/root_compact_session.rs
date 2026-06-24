@@ -17,18 +17,13 @@ impl SpineSessionState {
         published_history_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         self.ensure_valid()?;
+        prepared.validate_published_history_len(published_history_len)?;
         let Some(runtime) = self.runtime_mut() else {
             return Err(SpineError::InvalidStore(
                 "spine runtime missing before root compact PS install".to_string(),
             ));
         };
         runtime.install_prepared_root_compact(prepared.into_prepared());
-        let current_open_index = runtime.current_open_index()?;
-        if current_open_index != published_history_len {
-            return Err(SpineError::InvalidStore(format!(
-                "spine root compact open index {current_open_index} does not match materialized history length {published_history_len}"
-            )));
-        }
         runtime.build_tree_snapshot()
     }
 

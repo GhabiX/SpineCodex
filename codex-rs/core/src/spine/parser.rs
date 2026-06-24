@@ -424,6 +424,7 @@ impl ParserState {
         self.parse_stack.current_open_meta_opt().cloned()
     }
 
+    #[cfg(test)]
     pub(super) fn current_open_index(&self) -> Result<usize, SpineError> {
         Ok(self.parse_stack.current_open_meta()?.index)
     }

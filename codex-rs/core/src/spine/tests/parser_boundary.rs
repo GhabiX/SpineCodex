@@ -202,14 +202,19 @@ fn runtime_commit_routes_current_open_queries_through_parser_state() {
 fn runtime_routes_open_cursor_reads_through_parser_state() {
     let runtime = fs::read_to_string(spine_src("runtime.rs")).expect("read runtime source");
     let current_open_index = runtime
-        .split("pub(crate) fn current_open_index")
+        .split("#[cfg(test)]\n    pub(crate) fn current_open_index")
         .nth(1)
         .and_then(|tail| tail.split("#[cfg(test)]").next())
-        .expect("current_open_index section");
+        .expect("test-only current_open_index section");
     assert!(
         current_open_index.contains("self.parser.current_open_index()")
             && !current_open_index.contains(".parse_stack()"),
-        "runtime current_open_index should delegate parser cursor reads to ParserState"
+        "test-only runtime current_open_index should delegate parser cursor reads to ParserState"
+    );
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    assert!(
+        parser.contains("#[cfg(test)]\n    pub(super) fn current_open_index"),
+        "ParserState current_open_index should stay test-only; production publication checks should use prepared proofs"
     );
     let current_close_open_meta = runtime
         .split("fn current_close_open_meta")
@@ -736,5 +741,22 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         state_types.contains("struct SpineRootCompactHostInstall")
             && state_types.contains("prepared: SpinePreparedRootCompact"),
         "root compact host install should keep only the host-publication boundary wrapper"
+    );
+    let root_compact_session =
+        fs::read_to_string(spine_src("runtime/session_state/root_compact_session.rs"))
+            .expect("read root compact session source");
+    let apply_after_publish = root_compact_session
+        .split("pub(crate) fn apply_root_compact_after_history_publish(")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub(crate) fn take_pending_root_compact_after_history_publish")
+                .next()
+        })
+        .expect("apply root compact after publish section");
+    assert!(
+        apply_after_publish
+            .contains("prepared.validate_published_history_len(published_history_len)?")
+            && !apply_after_publish.contains("runtime.current_open_index()"),
+        "session must validate the prepared root compact publication length before installing live PS"
     );
 }

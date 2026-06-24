@@ -212,6 +212,7 @@ impl IntoSpineNodeMemory for String {
 }
 
 impl SpineRuntime {
+    #[cfg(test)]
     pub(crate) fn current_open_index(&self) -> Result<usize, SpineError> {
         self.ensure_jit_enabled("Spine current open index")?;
         self.parser.current_open_index()

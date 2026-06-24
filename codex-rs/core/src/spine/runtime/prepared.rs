@@ -57,6 +57,19 @@ impl SpinePreparedRootCompact {
         &self.result
     }
 
+    pub(crate) fn validate_published_history_len(
+        &self,
+        published_history_len: usize,
+    ) -> Result<(), super::SpineError> {
+        let current_open_index = self.result.materialized.len();
+        if current_open_index != published_history_len {
+            return Err(super::SpineError::InvalidStore(format!(
+                "spine root compact open index {current_open_index} does not match materialized history length {published_history_len}"
+            )));
+        }
+        Ok(())
+    }
+
     pub(super) fn into_parser_install(self) -> ParserRootCompactInstall {
         self.parser_install
     }

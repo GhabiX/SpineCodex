@@ -112,6 +112,14 @@ impl SpineRootCompactHostInstall {
         &self.prepared.result().materialized
     }
 
+    pub(crate) fn validate_published_history_len(
+        &self,
+        published_history_len: usize,
+    ) -> Result<(), super::super::SpineError> {
+        self.prepared
+            .validate_published_history_len(published_history_len)
+    }
+
     #[cfg(test)]
     pub(crate) fn result(&self) -> SpineRootCompactResult {
         self.prepared.result().clone()
