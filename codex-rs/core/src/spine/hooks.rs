@@ -42,6 +42,11 @@ pub(crate) struct CompactEvidence<'a> {
     pub(crate) close_provider_input_tokens: Option<i64>,
 }
 
+pub(crate) struct NativeCompactEvidence<'a> {
+    pub(crate) compacted_history: &'a [ResponseItem],
+    pub(crate) native_items: &'a [ResponseItem],
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct MessageEvidence<'a> {
     pub(crate) rollout_path: &'a Path,

@@ -8,7 +8,6 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineNativeCompactEvidence;
 use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
@@ -26,6 +25,7 @@ use crate::spine::hooks::CompletedToolCallOutputEvidence;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
+use crate::spine::hooks::NativeCompactEvidence;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
 use crate::spine::hooks::ToolcallHostCommitAttempt;
@@ -1441,7 +1441,7 @@ impl Session {
 
     pub(crate) async fn on_compact(
         &self,
-        evidence: SpineNativeCompactEvidence<'_>,
+        evidence: NativeCompactEvidence<'_>,
     ) -> CodexResult<HostEffects> {
         self.prepare_spine_root_compact_from_native_history(evidence)
             .await
@@ -1453,8 +1453,9 @@ impl Session {
 
     async fn prepare_spine_root_compact_from_native_history(
         &self,
-        evidence: SpineNativeCompactEvidence<'_>,
+        evidence: NativeCompactEvidence<'_>,
     ) -> Result<HostEffects, SpineError> {
+        let _native_items = evidence.native_items;
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(HostEffects::none());
         };
@@ -1506,7 +1507,7 @@ impl Session {
             }
         };
         let effects = self
-            .on_compact(SpineNativeCompactEvidence {
+            .on_compact(NativeCompactEvidence {
                 compacted_history: spine_root_compact_source,
                 native_items: &items,
             })
