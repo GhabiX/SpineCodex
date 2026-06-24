@@ -385,9 +385,6 @@ fn byte_index_before_chars(text: &str, byte_index: usize, count: usize) -> usize
 }
 
 fn byte_index_after_chars(text: &str, byte_index: usize, count: usize) -> usize {
-    if count == 0 {
-        return byte_index;
-    }
     let suffix = &text[byte_index..];
     match suffix.char_indices().nth(count) {
         Some((idx, _)) => byte_index + idx,
