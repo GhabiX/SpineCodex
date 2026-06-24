@@ -337,6 +337,24 @@ fn runtime_commit_delegates_parser_publication_plan_application() {
 }
 
 #[test]
+fn runtime_commit_does_not_construct_parser_publication_plans() {
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    assert!(
+        !commit.contains("use crate::spine::parser::ParserPublicationPlan"),
+        "runtime/commit.rs must not import parser publication plans just to construct their fields"
+    );
+    assert!(
+        !commit.contains("ParserPublicationPlan {"),
+        "runtime/commit.rs must not construct parser publication plans field-by-field"
+    );
+    assert!(
+        commit.contains(".close_family_publication_plan("),
+        "close/next publication plan construction should route through ParserState"
+    );
+}
+
+#[test]
 fn runtime_prepared_carriers_hold_parser_prepared_state() {
     let prepared =
         fs::read_to_string(spine_src("runtime/prepared.rs")).expect("read runtime prepared source");

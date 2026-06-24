@@ -32,7 +32,6 @@ use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::SpineCommitKindMarker;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
-use crate::spine::parser::ParserPublicationPlan;
 use crate::spine::render::memory_response_item;
 
 impl SpineRuntime {
@@ -512,13 +511,12 @@ impl SpineRuntime {
         }
         Ok(SpinePreparedCommit {
             kind: plan.kind,
-            publication_plan: Some(ParserPublicationPlan {
-                operation: plan.operation,
-                suffix_start: prepared.suffix_start,
-                replacement_prefix: prepared.replacement,
-                preserve_host_history_from: toolcall_start,
-                append_current_tool_response_if_missing: true,
-            }),
+            publication_plan: Some(self.parser.close_family_publication_plan(
+                plan.operation,
+                prepared.suffix_start,
+                prepared.replacement,
+                toolcall_start,
+            )),
             parser_install: Some(parser_install),
             completed_toolcall: Some(completed_toolcall),
             toolcall_seq: Some(toolcall_seq),

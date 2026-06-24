@@ -334,6 +334,22 @@ impl ParserState {
         self.parse_stack.current_root_epoch_id()
     }
 
+    pub(super) fn close_family_publication_plan(
+        &self,
+        operation: &'static str,
+        suffix_start: usize,
+        replacement_prefix: Vec<ResponseItem>,
+        preserve_host_history_from: usize,
+    ) -> ParserPublicationPlan {
+        ParserPublicationPlan {
+            operation,
+            suffix_start,
+            replacement_prefix,
+            preserve_host_history_from,
+            append_current_tool_response_if_missing: true,
+        }
+    }
+
     pub(super) fn root_compact_next_open_index_or_probe(
         &self,
         memory: &MemoryRef,
