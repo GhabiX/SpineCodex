@@ -377,8 +377,12 @@ fn runtime_commit_routes_open_with_toolcall_publication_through_prepared_commit(
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
     assert!(
-        publication_parts.contains("parser_install.full_context_publication_update("),
-        "open-with-toolcall publication should materialize h(PS) from the prepared parser install"
+        publication_parts.contains("parser_install.full_variable_context_publication_update("),
+        "open-with-toolcall publication should materialize variable h(PS) from the prepared parser install"
+    );
+    assert!(
+        !publication_parts.contains("parser_install.full_context_publication_update("),
+        "prepared commit publication should not use full-context naming that could include fixed prefix"
     );
     assert!(
         !publication_parts.contains("ParserPublicationUpdate::new("),
@@ -399,18 +403,22 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         .nth(1)
         .and_then(|tail| tail.split("impl ParserCommitPendingInstall").next())
         .expect("ParserCommitInstall impl block");
-    let full_context_publication_update = parser_commit_install
-        .split("fn full_context_publication_update(")
+    let full_variable_context_publication_update = parser_commit_install
+        .split("fn full_variable_context_publication_update(")
         .nth(1)
-        .expect("full context publication update method");
+        .expect("full variable context publication update method");
     assert!(
-        full_context_publication_update.contains(".materialize_variable_context("),
+        full_variable_context_publication_update.contains(".materialize_variable_context("),
         "prepared commit publication should materialize variable context through ParserPreparedState"
     );
     assert!(
-        !full_context_publication_update
+        !full_variable_context_publication_update
             .contains("render_parse_stack_to_context_with_trim_projection("),
         "prepared commit publication must not bypass the parser-owned variable context helper"
+    );
+    assert!(
+        !parser_commit_install.contains("fn full_context_publication_update("),
+        "prepared commit publication API should name variable context explicitly"
     );
     assert!(
         parser.contains("fn materialize_parse_stack_variable_context(")

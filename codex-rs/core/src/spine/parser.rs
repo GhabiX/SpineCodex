@@ -232,7 +232,7 @@ impl ParserCommitInstall {
         self.final_state
     }
 
-    pub(super) fn full_context_publication_update(
+    pub(super) fn full_variable_context_publication_update(
         &self,
         operation: &'static str,
         raw_items: &[Option<ResponseItem>],
