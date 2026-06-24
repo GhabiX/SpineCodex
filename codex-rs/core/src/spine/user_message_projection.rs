@@ -73,19 +73,15 @@ fn memory_content_part(item: &ContentItem) -> Option<String> {
         ContentItem::InputText { text } | ContentItem::OutputText { text } => {
             text.trim_matches('\n').to_string()
         }
-        ContentItem::InputImage { detail, .. } => match detail {
-            Some(detail) => format!("<image omitted detail={}>", image_detail_label(*detail)),
+        ContentItem::InputImage { detail, .. } => match detail.map(|detail| match detail {
+            ImageDetail::Auto => "auto",
+            ImageDetail::Low => "low",
+            ImageDetail::High => "high",
+            ImageDetail::Original => "original",
+        }) {
+            Some(detail) => format!("<image omitted detail={detail}>"),
             None => "<image omitted>".to_string(),
         },
     };
     (!part.is_empty()).then_some(part)
-}
-
-fn image_detail_label(detail: ImageDetail) -> &'static str {
-    match detail {
-        ImageDetail::Auto => "auto",
-        ImageDetail::Low => "low",
-        ImageDetail::High => "high",
-        ImageDetail::Original => "original",
-    }
 }
