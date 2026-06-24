@@ -8,7 +8,6 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineObservedContextItem;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
 #[cfg(test)]
@@ -26,6 +25,7 @@ use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::NativeCompactEvidence;
+use crate::spine::hooks::ObservedContextItem;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
 use crate::spine::hooks::ToolcallHostCommitAttempt;
@@ -668,7 +668,7 @@ impl Session {
                     .await?;
                 non_toolcall_msg_effects.extend(outcome);
             } else {
-                tool_items.push(SpineObservedContextItem {
+                tool_items.push(ObservedContextItem {
                     raw_ordinal,
                     context_index: append.context_index,
                     item,
@@ -677,7 +677,7 @@ impl Session {
         }
         if !tool_items.is_empty() {
             let mut guard = spine_slot.lock().await;
-            guard.observe_toolcall_context_items(&tool_items, &raw_items)?;
+            hooks::observe_toolcall_context_items(&mut guard, &tool_items, &raw_items)?;
         }
         non_toolcall_msg_effects
             .apply_after_batch_materialized_history_request(

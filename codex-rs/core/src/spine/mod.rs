@@ -43,7 +43,6 @@ pub(crate) use runtime::SpineCompactSourcePlan;
 pub(crate) use runtime::SpineCompactSourcePlanEntry;
 pub(crate) use runtime::SpineCurrentTrimTarget;
 pub(crate) use runtime::SpineError;
-pub(crate) use runtime::SpineObservedContextItem;
 pub(crate) use runtime::SpineOpenNodeContextProjection;
 #[cfg(test)]
 pub(crate) use runtime::SpinePendingCommit;
