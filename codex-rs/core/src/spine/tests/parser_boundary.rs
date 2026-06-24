@@ -147,6 +147,18 @@ fn runtime_accounting_routes_open_baseline_mutation_through_parser_state() {
             && accounting.contains(".set_live_open_context_baseline("),
         "runtime accounting should route live open baseline updates through ParserState"
     );
+    assert!(
+        !accounting.contains(".render_tree()")
+            && !accounting.contains(".render_tree_with_context_annotations(")
+            && !accounting.contains(".tree_snapshot_nodes(")
+            && !accounting.contains(".current_cursor_id()"),
+        "runtime/accounting.rs must not build tree render/snapshot output from raw ParseStack"
+    );
+    assert!(
+        accounting.contains(".render_tree_with_context_annotations_and_memory_context_accounting(")
+            && accounting.contains(".build_tree_snapshot_with_memory_context_accounting("),
+        "runtime accounting tree publication should route parser tree reads through ParserState"
+    );
 }
 
 #[test]

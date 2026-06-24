@@ -11,6 +11,7 @@
 //! enter through this facade.
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -384,6 +385,39 @@ impl ParserState {
         let mut parse_stack = self.parse_stack.clone();
         parse_stack.apply_memory_context_accounting(accounting);
         parse_stack
+    }
+
+    #[cfg(test)]
+    pub(super) fn render_tree_with_memory_context_accounting(
+        &self,
+        accounting: &BTreeMap<String, i64>,
+    ) -> Result<String, SpineError> {
+        self.parse_stack_with_memory_context_accounting(accounting)
+            .render_tree()
+    }
+
+    pub(super) fn render_tree_with_context_annotations_and_memory_context_accounting(
+        &self,
+        annotations: &BTreeMap<NodeId, String>,
+        accounting: &BTreeMap<String, i64>,
+    ) -> Result<String, SpineError> {
+        self.parse_stack_with_memory_context_accounting(accounting)
+            .render_tree_with_context_annotations(annotations)
+    }
+
+    pub(super) fn build_tree_snapshot_with_memory_context_accounting(
+        &self,
+        snapshot_seq: u64,
+        accounting: &BTreeMap<String, i64>,
+    ) -> Result<SpineTreeUpdateEvent, SpineError> {
+        let parse_stack = self.parse_stack_with_memory_context_accounting(accounting);
+        let nodes = parse_stack.tree_snapshot_nodes()?;
+        let active_node_id = parse_stack.current_cursor_id()?.as_path();
+        Ok(SpineTreeUpdateEvent {
+            snapshot_seq,
+            active_node_id,
+            nodes,
+        })
     }
 
     pub(super) fn current_open_meta_cloned(&self) -> Option<TreeMeta> {

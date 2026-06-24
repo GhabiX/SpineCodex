@@ -27,8 +27,9 @@ use crate::spine::store::SpineStore;
 impl SpineRuntime {
     #[cfg(test)]
     pub(crate) fn render_tree(&self) -> Result<String, SpineError> {
-        self.parse_stack_with_memory_context_accounting()?
-            .render_tree()
+        let accounting = self.memory_context_accounting_by_id()?;
+        self.parser
+            .render_tree_with_memory_context_accounting(&accounting)
     }
 
     pub(crate) fn render_tree_with_context_annotations(
@@ -36,29 +37,22 @@ impl SpineRuntime {
         annotations: &BTreeMap<NodeId, String>,
     ) -> Result<String, SpineError> {
         self.ensure_jit_enabled("Spine tree render")?;
-        self.parse_stack_with_memory_context_accounting()?
-            .render_tree_with_context_annotations(annotations)
+        let accounting = self.memory_context_accounting_by_id()?;
+        self.parser
+            .render_tree_with_context_annotations_and_memory_context_accounting(
+                annotations,
+                &accounting,
+            )
     }
 
     pub(crate) fn build_tree_snapshot(&self) -> Result<SpineTreeUpdateEvent, SpineError> {
         self.ensure_jit_enabled("Spine tree snapshot")?;
-        let parse_stack = self.parse_stack_with_memory_context_accounting()?;
-        let nodes = parse_stack.tree_snapshot_nodes()?;
-        let active_node_id = parse_stack.current_cursor_id()?.as_path();
-        Ok(SpineTreeUpdateEvent {
-            snapshot_seq: self.ledger.next_event_seq,
-            active_node_id,
-            nodes,
-        })
-    }
-
-    pub(super) fn parse_stack_with_memory_context_accounting(
-        &self,
-    ) -> Result<crate::spine::parse_stack::ParseStack, SpineError> {
         let accounting = self.memory_context_accounting_by_id()?;
-        Ok(self
-            .parser
-            .parse_stack_with_memory_context_accounting(&accounting))
+        self.parser
+            .build_tree_snapshot_with_memory_context_accounting(
+                self.ledger.next_event_seq,
+                &accounting,
+            )
     }
 
     pub(super) fn memory_context_accounting_by_id(
