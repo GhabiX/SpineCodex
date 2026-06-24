@@ -143,6 +143,13 @@ pub(crate) fn project_trim_projection_from_history(
     state.project_trim_projection_from_history(history_items)
 }
 
+pub(crate) fn current_trim_targets_for_prompt(
+    state: &SpineSessionState,
+    raw_items: &[Option<ResponseItem>],
+) -> Result<Option<Vec<super::runtime::SpineCurrentTrimTarget>>, SpineError> {
+    state.current_trim_targets_for_prompt(raw_items)
+}
+
 pub(crate) fn is_ready(state: &SpineSessionState) -> bool {
     state.is_ready()
 }

@@ -4,6 +4,7 @@ use super::spine_tree_inside::build_spine_tree_pressure_view_from_projection;
 use super::spine_tree_inside::node_context_tokens;
 use super::turn_context::TurnContext;
 use crate::spine::SpineCurrentTrimTarget;
+use crate::spine::hooks;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
@@ -170,7 +171,7 @@ impl Session {
         };
         let targets = {
             let guard = spine_slot.lock().await;
-            match guard.current_trim_targets_for_prompt(&raw_items) {
+            match hooks::current_trim_targets_for_prompt(&guard, &raw_items) {
                 Ok(Some(targets)) => targets,
                 Ok(None) => return None,
                 Err(err) => {
