@@ -109,6 +109,33 @@ pub(crate) fn ensure_runtime(
     state.ensure_runtime(rollout_path)
 }
 
+pub(crate) fn invalidate_runtime(state: &mut SpineSessionState, reason: String) {
+    state.invalidate(reason);
+}
+
+pub(crate) fn release_runtime_for_shutdown(state: &mut SpineSessionState) {
+    state.release_runtime_for_shutdown();
+}
+
+pub(crate) fn release_runtime_for_replay(state: &mut SpineSessionState) {
+    state.release_runtime_for_replay();
+}
+
+pub(crate) fn abort_pending_tool(
+    state: &mut SpineSessionState,
+    call_id: &str,
+) -> Result<bool, SpineError> {
+    state.ensure_valid()?;
+    Ok(state.abort_pending_tool(call_id))
+}
+
+pub(crate) fn abort_any_pending(
+    state: &mut SpineSessionState,
+) -> Result<Option<String>, SpineError> {
+    state.ensure_valid()?;
+    Ok(state.abort_any_pending())
+}
+
 enum ToolCallEvidenceKind<'a> {
     Single {
         item: &'a ResponseItem,

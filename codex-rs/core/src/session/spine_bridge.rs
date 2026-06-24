@@ -350,14 +350,16 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
         };
-        spine_slot.lock().await.release_runtime_for_shutdown();
+        let mut guard = spine_slot.lock().await;
+        hooks::release_runtime_for_shutdown(&mut guard);
     }
 
     pub(super) async fn release_spine_runtime_for_replay(&self) {
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
         };
-        spine_slot.lock().await.release_runtime_for_replay();
+        let mut guard = spine_slot.lock().await;
+        hooks::release_runtime_for_replay(&mut guard);
     }
 
     pub(super) async fn clone_spine_sidecar_for_fork(
@@ -570,7 +572,8 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
         };
-        spine_slot.lock().await.invalidate(reason);
+        let mut guard = spine_slot.lock().await;
+        hooks::invalidate_runtime(&mut guard, reason);
     }
 
     pub(crate) async fn abort_spine_pending_tool(&self, call_id: &str, reason: &str) -> bool {
@@ -578,10 +581,9 @@ impl Session {
             return false;
         };
         let mut guard = spine_slot.lock().await;
-        if guard.ensure_valid().is_err() {
+        let Ok(aborted) = hooks::abort_pending_tool(&mut guard, call_id) else {
             return false;
-        }
-        let aborted = guard.abort_pending_tool(call_id);
+        };
         if aborted {
             tracing::debug!(call_id, reason, "aborted pending Spine transition");
         }
@@ -599,10 +601,9 @@ impl Session {
             return None;
         };
         let mut guard = spine_slot.lock().await;
-        if guard.ensure_valid().is_err() {
+        let Ok(aborted) = hooks::abort_any_pending(&mut guard) else {
             return None;
-        }
-        let aborted = guard.abort_any_pending();
+        };
         if let Some(call_id) = aborted.as_deref() {
             tracing::debug!(call_id, reason, "aborted stale pending Spine transition");
         }
