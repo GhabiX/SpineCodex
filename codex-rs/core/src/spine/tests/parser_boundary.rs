@@ -445,6 +445,12 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
             && !commit.contains("fn parser_commit_publication_history_update"),
         "runtime publication helper should be named for host history update, not parser publication internals"
     );
+    assert!(
+        !commit.contains("fn commit_publication_history_update")
+            && !commit.contains("pub(crate) fn commit_install_publication_history_update")
+            && commit.contains("fn commit_install_host_history_update"),
+        "runtime should expose only prepare_commit_publication as its publication entrypoint and keep host-history helpers private"
+    );
 }
 
 #[test]

@@ -595,28 +595,7 @@ impl SpineRuntime {
         }
     }
 
-    pub(crate) fn commit_publication_history_update<T>(
-        &self,
-        call_id: &str,
-        prepared_commit: Option<&SpinePreparedCommit>,
-        tool_resp_item: &ResponseItem,
-        tool_resp_already_recorded: bool,
-        raw_items: &[Option<ResponseItem>],
-        history_items: &[ResponseItem],
-        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
-    ) -> Result<Option<T>, SpineError> {
-        self.commit_host_history_update(
-            call_id,
-            prepared_commit,
-            tool_resp_item,
-            tool_resp_already_recorded,
-            raw_items,
-            history_items,
-            build_update,
-        )
-    }
-
-    pub(crate) fn commit_install_publication_history_update<T>(
+    fn commit_install_host_history_update<T>(
         &self,
         call_id: &str,
         install: Option<&SpinePreparedCommitInstall>,
@@ -626,7 +605,7 @@ impl SpineRuntime {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        self.commit_publication_history_update(
+        self.commit_host_history_update(
             call_id,
             install.map(SpinePreparedCommitInstall::as_prepared_commit),
             tool_resp_item,
@@ -650,7 +629,7 @@ impl SpineRuntime {
         if let Some(install) = install.as_ref() {
             install.validate_against_host_history(call_id, history_items)?;
         }
-        let history_update = self.commit_install_publication_history_update(
+        let history_update = self.commit_install_host_history_update(
             call_id,
             install.as_ref(),
             tool_resp_item,
