@@ -54,8 +54,7 @@ pub(super) struct ParserState {
 pub(super) struct ParserRootCompactPreparedReduction {
     materialized: Vec<ResponseItem>,
     current_open_index: usize,
-    pending_install: ParserRootCompactPendingInstall,
-    parser_install: ParserRootCompactInstall,
+    prepared_install: ParserRootCompactPreparedInstall,
 }
 
 #[derive(Debug)]
@@ -87,6 +86,12 @@ pub(super) struct ParserCommitPendingInstall {
 #[derive(Debug)]
 pub(super) struct ParserRootCompactInstall {
     final_state: ParserPreparedState,
+}
+
+#[derive(Debug)]
+pub(super) struct ParserRootCompactPreparedInstall {
+    pending_install: ParserRootCompactPendingInstall,
+    final_install: ParserRootCompactInstall,
 }
 
 #[derive(Debug)]
@@ -188,14 +193,15 @@ impl ParserRootCompactPreparedReduction {
         Ok(())
     }
 
-    pub(super) fn into_materialized_and_install(
+    pub(super) fn into_publication_materialized_and_install(
         self,
     ) -> (
         Vec<ResponseItem>,
         ParserRootCompactPendingInstall,
         ParserRootCompactInstall,
     ) {
-        (self.materialized, self.pending_install, self.parser_install)
+        let (pending_install, final_install) = self.prepared_install.into_parts();
+        (self.materialized, pending_install, final_install)
     }
 
     pub(super) fn build_compact_checkpoint(
@@ -212,7 +218,7 @@ impl ParserRootCompactPreparedReduction {
             token_seq,
             raw_live,
             raw_items,
-            self.parser_install.final_state.parse_stack(),
+            self.prepared_install.final_state().parse_stack(),
             &self.materialized,
             &self.materialized,
         )
@@ -311,6 +317,26 @@ impl ParserRootCompactInstall {
 
     fn into_final_state(self) -> ParserPreparedState {
         self.final_state
+    }
+}
+
+impl ParserRootCompactPreparedInstall {
+    fn new(
+        pending_install: ParserRootCompactPendingInstall,
+        final_install: ParserRootCompactInstall,
+    ) -> Self {
+        Self {
+            pending_install,
+            final_install,
+        }
+    }
+
+    fn final_state(&self) -> &ParserPreparedState {
+        &self.final_install.final_state
+    }
+
+    fn into_parts(self) -> (ParserRootCompactPendingInstall, ParserRootCompactInstall) {
+        (self.pending_install, self.final_install)
     }
 }
 
@@ -718,12 +744,10 @@ impl ParserState {
         Ok(ParserRootCompactPreparedReduction {
             materialized,
             current_open_index,
-            pending_install: ParserRootCompactPendingInstall::new(ParserPreparedState::new(
-                pending,
-            )),
-            parser_install: ParserRootCompactInstall::new(ParserPreparedState::new(
-                final_parse_stack,
-            )),
+            prepared_install: ParserRootCompactPreparedInstall::new(
+                ParserRootCompactPendingInstall::new(ParserPreparedState::new(pending)),
+                ParserRootCompactInstall::new(ParserPreparedState::new(final_parse_stack)),
+            ),
         })
     }
 

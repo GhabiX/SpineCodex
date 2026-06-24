@@ -436,7 +436,7 @@ impl SpineRuntime {
             })
             .transpose()?;
         let (materialized, pending_parser_install, parser_install) =
-            prepared_reduction.into_materialized_and_install();
+            prepared_reduction.into_publication_materialized_and_install();
         let result = SpineRootCompactResult {
             materialized,
             raw_boundary: self.raw_len,

@@ -837,8 +837,16 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         root_compact.contains(".validate_current_open_matches_materialized_len()")
-            && root_compact.contains(".into_materialized_and_install()"),
-        "runtime root compact should consume parser prepared reduction through named parser methods"
+            && root_compact.contains(".into_publication_materialized_and_install()")
+            && !root_compact.contains(".into_materialized_and_install()"),
+        "runtime root compact should consume parser prepared reduction through publication/install intent methods"
+    );
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    assert!(
+        parser.contains("struct ParserRootCompactPreparedInstall")
+            && parser.contains("prepared_install: ParserRootCompactPreparedInstall")
+            && !parser.contains("pending_install: ParserRootCompactPendingInstall,\n    parser_install: ParserRootCompactInstall"),
+        "parser root compact prepared reduction should hold a named prepared install carrier, not parallel pending/final fields"
     );
 }
 
