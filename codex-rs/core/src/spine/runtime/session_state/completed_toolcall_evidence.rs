@@ -164,14 +164,6 @@ impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
         self.call_id
     }
 
-    pub(crate) fn single_output_item(&self) -> Option<&'a ResponseItem> {
-        matches!(
-            self.recording,
-            SpineToolCallOutputHostRecording::MaybePreRecordSingle
-        )
-        .then_some(self.commit_output_item)
-    }
-
     pub(crate) fn commit_output_item(&self) -> &'a ResponseItem {
         self.commit_output_item
     }
@@ -179,7 +171,12 @@ impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
     pub(crate) fn single_output_requiring_optional_prerecord(
         &self,
     ) -> Option<(&'a str, &'a ResponseItem)> {
-        self.single_output_item().map(|item| (self.call_id, item))
+        match self.recording {
+            SpineToolCallOutputHostRecording::MaybePreRecordSingle => {
+                Some((self.call_id, self.commit_output_item))
+            }
+            SpineToolCallOutputHostRecording::RecordGroupBeforeCommit => None,
+        }
     }
 
     pub(crate) fn output_group_to_record_before_commit(&self) -> Option<&'a [ResponseItem]> {
