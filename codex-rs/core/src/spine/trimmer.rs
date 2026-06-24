@@ -3,6 +3,7 @@ use crate::spine::io::hash_raw_live;
 use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::RawMask;
 use crate::spine::model::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES;
+use crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE;
 use crate::spine::model::TrimEvent;
 use crate::spine::model::TrimProjection;
 use crate::spine::model::TrimResponseKind;
@@ -285,9 +286,7 @@ pub(super) fn current_visible_body(
     match &target.state {
         TrimTargetState::Tagged => current_tagged_visible_body(target, raw_items),
         TrimTargetState::Sliced { visible_body } => Ok(visible_body.clone()),
-        TrimTargetState::Snipped => {
-            Ok(crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE.to_string())
-        }
+        TrimTargetState::Snipped => Ok(TOOL_RESULT_CLEARED_MESSAGE.to_string()),
     }
 }
 
