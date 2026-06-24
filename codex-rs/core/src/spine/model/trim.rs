@@ -143,28 +143,15 @@ impl LoggedTrimEvent {
 
 impl TrimEvent {
     pub(in crate::spine) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
+        if let Some((raw_boundary, raw_live_hash)) = self.raw_live_prefix_proof() {
+            return raw_mask.prefix_hash_matches(raw_boundary, raw_live_hash);
+        }
         match self {
-            TrimEvent::ToolCallBoundary {
-                raw_boundary,
-                raw_live_hash,
-                ..
-            }
-            | TrimEvent::Cleared {
-                raw_boundary,
-                raw_live_hash,
-                ..
-            }
-            | TrimEvent::Snipped {
-                raw_boundary,
-                raw_live_hash,
-                ..
-            }
-            | TrimEvent::Sliced {
-                raw_boundary,
-                raw_live_hash,
-                ..
-            } => raw_mask.prefix_hash_matches(*raw_boundary, raw_live_hash),
             TrimEvent::Candidate { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
+            TrimEvent::ToolCallBoundary { .. }
+            | TrimEvent::Cleared { .. }
+            | TrimEvent::Snipped { .. }
+            | TrimEvent::Sliced { .. } => unreachable!("raw-live proof events returned above"),
         }
     }
 
@@ -179,24 +166,15 @@ impl TrimEvent {
     }
 
     pub(in crate::spine) fn within_raw_boundary(&self, raw_boundary: u64) -> bool {
+        if let Some((event_boundary, _)) = self.raw_live_prefix_proof() {
+            return event_boundary <= raw_boundary;
+        }
         match self {
-            TrimEvent::ToolCallBoundary {
-                raw_boundary: event_boundary,
-                ..
-            }
-            | TrimEvent::Cleared {
-                raw_boundary: event_boundary,
-                ..
-            }
-            | TrimEvent::Snipped {
-                raw_boundary: event_boundary,
-                ..
-            }
-            | TrimEvent::Sliced {
-                raw_boundary: event_boundary,
-                ..
-            } => *event_boundary <= raw_boundary,
             TrimEvent::Candidate { raw_ordinal, .. } => *raw_ordinal < raw_boundary,
+            TrimEvent::ToolCallBoundary { .. }
+            | TrimEvent::Cleared { .. }
+            | TrimEvent::Snipped { .. }
+            | TrimEvent::Sliced { .. } => unreachable!("raw-live proof events returned above"),
         }
     }
 
@@ -204,6 +182,32 @@ impl TrimEvent {
         match self {
             TrimEvent::ToolCallBoundary { toolcall_seq, .. } => Some(*toolcall_seq),
             _ => None,
+        }
+    }
+
+    fn raw_live_prefix_proof(&self) -> Option<(u64, &str)> {
+        match self {
+            TrimEvent::ToolCallBoundary {
+                raw_boundary,
+                raw_live_hash,
+                ..
+            }
+            | TrimEvent::Cleared {
+                raw_boundary,
+                raw_live_hash,
+                ..
+            }
+            | TrimEvent::Snipped {
+                raw_boundary,
+                raw_live_hash,
+                ..
+            }
+            | TrimEvent::Sliced {
+                raw_boundary,
+                raw_live_hash,
+                ..
+            } => Some((*raw_boundary, raw_live_hash)),
+            TrimEvent::Candidate { .. } => None,
         }
     }
 }
