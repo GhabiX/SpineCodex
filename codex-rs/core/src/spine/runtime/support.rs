@@ -85,21 +85,19 @@ pub(crate) fn is_spine_context_observation_fixed_prefix_item(item: &ResponseItem
 }
 
 fn is_spine_runtime_contextual_user_fragment(content_item: &ContentItem) -> bool {
-    let ContentItem::InputText { text } = content_item else {
-        return false;
-    };
-    if TurnAborted::matches_text(text) {
-        return true;
-    }
-    let mut lines = text.trim().lines().map(str::trim);
-    matches!(
-        (lines.next(), lines.next(), lines.next(), lines.next()),
-        (Some(open), Some(cwd), Some(close), None)
-            if open == ENVIRONMENT_CONTEXT_OPEN_TAG
-                && cwd.starts_with("<cwd>")
-                && cwd.ends_with("</cwd>")
-                && close == ENVIRONMENT_CONTEXT_CLOSE_TAG
-    )
+    matches!(content_item, ContentItem::InputText { text } if {
+        TurnAborted::matches_text(text) || {
+            let mut lines = text.trim().lines().map(str::trim);
+            matches!(
+                (lines.next(), lines.next(), lines.next(), lines.next()),
+                (Some(open), Some(cwd), Some(close), None)
+                    if open == ENVIRONMENT_CONTEXT_OPEN_TAG
+                        && cwd.starts_with("<cwd>")
+                        && cwd.ends_with("</cwd>")
+                        && close == ENVIRONMENT_CONTEXT_CLOSE_TAG
+            )
+        }
+    })
 }
 
 pub(super) fn tool_request_call_id(item: &ResponseItem) -> Option<&str> {
