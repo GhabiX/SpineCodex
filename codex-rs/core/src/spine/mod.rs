@@ -15,8 +15,11 @@ mod trimmer;
 mod user_message_projection;
 
 pub(crate) use model::NodeId;
+#[cfg(test)]
 pub(crate) use model::ToolCallSegmentKind;
+#[cfg(test)]
 pub(crate) use runtime::CompletedToolCall;
+#[cfg(test)]
 pub(crate) use runtime::CompletedToolCallSegment;
 #[cfg(test)]
 pub(crate) use runtime::IntoSpineNodeMemory;
