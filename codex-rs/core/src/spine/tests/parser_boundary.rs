@@ -509,8 +509,15 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
     assert!(
         !publication_parts.contains("plan.history_update(")
             && !publication_parts.contains("prepared.publication_plan")
-            && !publication_parts.contains("publication_plan.as_ref()"),
-        "runtime commit publication must not borrow or apply parser publication plans directly"
+            && !publication_parts.contains("publication_plan.as_ref()")
+            && !publication_parts.contains(".has_publication_plan("),
+        "runtime commit publication must not borrow, query, or apply parser publication plans directly"
+    );
+    assert!(
+        publication_parts.contains("SpinePreparedPublicationUpdate::Applied")
+            && publication_parts
+                .contains("SpinePreparedPublicationUpdate::NoParserPublicationPlan"),
+        "runtime commit should branch only on the prepared carrier's publication update result, not parser plan internals"
     );
     assert!(
         !publication_parts.contains("plan.replacement_prefix")
@@ -595,7 +602,10 @@ fn runtime_commit_does_not_construct_parser_publication_plans() {
         "runtime/commit.rs must not import parser publication plans just to construct their fields"
     );
     assert!(
-        !commit.contains("ParserPublicationPlan {"),
+        !commit
+            .lines()
+            .any(|line| line.contains("ParserPublicationPlan {")
+                && !line.contains("NoParserPublicationPlan {")),
         "runtime/commit.rs must not construct parser publication plans field-by-field"
     );
     assert!(
@@ -713,9 +723,10 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     );
     assert!(
         !prepared.contains("fn publication_plan(&self)")
-            && prepared.contains("pub(crate) fn has_publication_plan(&self) -> bool")
-            && prepared.contains("pub(crate) fn publication_history_update"),
-        "runtime prepared carrier should apply parser publication plans without exposing borrowed plan internals"
+            && !prepared.contains("pub(crate) fn has_publication_plan(&self)")
+            && prepared.contains("pub(crate) fn publication_history_update")
+            && prepared.contains("enum SpinePreparedPublicationUpdate"),
+        "runtime prepared carrier should apply parser publication plans without exposing borrowed plan internals or plan-presence probes"
     );
     assert!(
         prepared.contains("struct SpinePreparedCommitInstall")

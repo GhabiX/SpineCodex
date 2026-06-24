@@ -15,6 +15,7 @@ use super::prepared::SpineCommitKind;
 use super::prepared::SpineCommitPublication;
 use super::prepared::SpinePreparedCommit;
 use super::prepared::SpinePreparedCommitInstall;
+use super::prepared::SpinePreparedPublicationUpdate;
 use super::support::close_commit_marker;
 use super::support::close_event_boundary;
 use super::support::completed_toolcall_first_segment;
@@ -650,18 +651,29 @@ impl SpineRuntime {
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
         history_items: &[ResponseItem],
-        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+        mut build_update: impl FnOnce(
+            &str,
+            &'static str,
+            usize,
+            Vec<ResponseItem>,
+            Vec<ResponseItem>,
+        ) -> T,
     ) -> Result<Option<T>, SpineError> {
-        if let Some(prepared) = prepared_commit
-            && prepared.has_publication_plan()
-        {
-            return prepared.publication_history_update(
+        if let Some(prepared) = prepared_commit {
+            match prepared.publication_history_update(
                 call_id,
                 tool_resp_item,
                 tool_resp_already_recorded,
                 history_items,
                 build_update,
-            );
+            )? {
+                SpinePreparedPublicationUpdate::Applied(update) => return Ok(update),
+                SpinePreparedPublicationUpdate::NoParserPublicationPlan {
+                    build_update: returned_build_update,
+                } => {
+                    build_update = returned_build_update;
+                }
+            }
         }
         if !tool_resp_already_recorded {
             return Ok(None);

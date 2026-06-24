@@ -47,10 +47,6 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
         .expect("prepare close commit")
         .expect("prepared close commit");
     assert!(matches!(prepared.kind(), SpineCommitKind::Close { .. }));
-    assert!(
-        prepared.has_publication_plan(),
-        "close commit should carry parser-owned publication plan"
-    );
     let output_item = raw[output_raw as usize]
         .as_ref()
         .expect("output item")
@@ -77,6 +73,7 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
             },
         )
         .expect("publication update")
+        .into_applied_for_test()
         .expect("close commit should publish host history");
     assert_eq!(history_update.0, "staged-close");
     assert_eq!(history_update.1, "spine.close");
