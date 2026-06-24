@@ -532,6 +532,31 @@ fn lifecycle_fork_routes_context_len_through_parser_state() {
 }
 
 #[test]
+fn session_state_materialization_uses_variable_context_api() {
+    for path in [
+        "runtime/session_state/lifecycle_session.rs",
+        "runtime/session_state/trim_session.rs",
+    ] {
+        let source = fs::read_to_string(spine_src(path)).expect("read session state source");
+        assert!(
+            !source.contains(".materialize_history("),
+            "{path} must not call the legacy runtime materialize_history facade"
+        );
+        assert!(
+            source.contains(".materialize_variable_context("),
+            "{path} should name parser-owned variable context materialization explicitly"
+        );
+    }
+
+    let runtime = fs::read_to_string(spine_src("runtime.rs")).expect("read runtime source");
+    let marker = "#[cfg(test)]\n    pub(crate) fn materialize_history";
+    assert!(
+        runtime.contains(marker),
+        "legacy runtime materialize_history facade should remain test-only"
+    );
+}
+
+#[test]
 fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     let root_compact = fs::read_to_string(spine_src("runtime/root_compact.rs"))
         .expect("read runtime root_compact source");

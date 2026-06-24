@@ -65,7 +65,7 @@ impl SpineSessionState {
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        self.with_runtime(|runtime| runtime.materialize_history(raw_items))
+        self.with_runtime(|runtime| runtime.materialize_variable_context(raw_items))
     }
 
     pub(crate) fn materialize_history_if_no_pending_tool_request(
@@ -79,7 +79,7 @@ impl SpineSessionState {
         if runtime.has_pending_tool_request() {
             return Ok(None);
         }
-        runtime.materialize_history(raw_items).map(Some)
+        runtime.materialize_variable_context(raw_items).map(Some)
     }
 
     pub(crate) fn project_trim_projection_from_history(

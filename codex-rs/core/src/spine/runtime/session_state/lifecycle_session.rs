@@ -100,7 +100,7 @@ impl SpineSessionState {
         }
         let materialized = runtime
             .as_ref()
-            .map(|runtime| runtime.materialize_history(raw_items))
+            .map(|runtime| runtime.materialize_variable_context(raw_items))
             .transpose()?;
         let live_root_compacts = runtime
             .as_ref()

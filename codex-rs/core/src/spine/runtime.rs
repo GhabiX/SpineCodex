@@ -366,7 +366,7 @@ impl SpineRuntime {
         Ok(())
     }
 
-    pub(crate) fn materialize_history(
+    pub(crate) fn materialize_variable_context(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
@@ -374,6 +374,14 @@ impl SpineRuntime {
         let trim_projection = self.current_trim_projection()?;
         self.parser
             .materialize_variable_context(raw_items, &trim_projection)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn materialize_history(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Vec<ResponseItem>, SpineError> {
+        self.materialize_variable_context(raw_items)
     }
 
     pub(crate) fn materialized_history_len(
