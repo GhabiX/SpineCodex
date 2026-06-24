@@ -230,15 +230,6 @@ impl SpineRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn abort_pending_and_observe_completed_toolcall(
-        &mut self,
-        call_id: &str,
-        toolcall: CompletedToolCall,
-    ) -> Result<bool, SpineError> {
-        self.abort_pending_and_observe_completed_toolcall_with_raw_items(call_id, toolcall, &[])
-    }
-
-    #[cfg(test)]
     pub(crate) fn abort_pending_and_observe_completed_toolcall_with_raw_items(
         &mut self,
         call_id: &str,
@@ -283,17 +274,6 @@ impl SpineRuntime {
         self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(&toolcall);
         Ok(false)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
-        &mut self,
-        tool_responses: &[(String, u64, usize)],
-    ) -> Result<(), SpineError> {
-        self.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
-            tool_responses,
-            &[],
-        )
     }
 
     pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(

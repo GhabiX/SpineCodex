@@ -235,31 +235,12 @@ impl SpineRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn record_open_tool_receipt(
-        &mut self,
-        call_id: String,
-        summary: String,
-    ) -> Result<(), SpineError> {
-        self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Open { summary })
-    }
-
-    #[cfg(test)]
     pub(crate) fn record_close_tool_receipt(
         &mut self,
         call_id: String,
         memory: String,
     ) -> Result<(), SpineError> {
         self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Close { memory })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn record_next_tool_receipt(
-        &mut self,
-        call_id: String,
-        summary: String,
-        memory: String,
-    ) -> Result<(), SpineError> {
-        self.record_control_tool_receipt(call_id, SpineControlToolReceipt::Next { summary, memory })
     }
 
     #[cfg(test)]
@@ -544,13 +525,6 @@ impl SpineRuntime {
         }
         #[cfg(not(test))]
         Ok(None)
-    }
-
-    pub(crate) fn has_close_like_pending_commit(&self, call_id: &str) -> Result<bool, SpineError> {
-        Ok(matches!(
-            self.pending_commit(call_id)?,
-            Some(SpinePendingCommit::Close { .. })
-        ))
     }
 
     #[cfg(test)]
