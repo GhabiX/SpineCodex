@@ -802,9 +802,20 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && state_types.contains("prepared: SpinePreparedRootCompact"),
         "root compact host install should keep only the host-publication boundary wrapper"
     );
+    assert!(
+        state_types.contains("fn publication_history(")
+            && state_types.contains("fn publication_history_len(")
+            && !state_types.contains("fn materialized("),
+        "root compact host install should expose publication-oriented accessors, not parser materialization internals"
+    );
     let root_compact_session =
         fs::read_to_string(spine_src("runtime/session_state/root_compact_session.rs"))
             .expect("read root compact session source");
+    assert!(
+        root_compact_session.contains(".publication_history().to_vec()")
+            && !root_compact_session.contains(".materialized().to_vec()"),
+        "root compact session should publish through the host-publication wrapper accessor"
+    );
     let apply_after_publish = root_compact_session
         .split("pub(crate) fn apply_root_compact_after_history_publish(")
         .nth(1)

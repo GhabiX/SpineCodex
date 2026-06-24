@@ -108,8 +108,13 @@ impl SpineRootCompactHostInstall {
         Self { prepared }
     }
 
-    pub(crate) fn materialized(&self) -> &[ResponseItem] {
+    pub(crate) fn publication_history(&self) -> &[ResponseItem] {
         &self.prepared.result().materialized
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publication_history_len(&self) -> usize {
+        self.publication_history().len()
     }
 
     pub(crate) fn validate_published_history_len(

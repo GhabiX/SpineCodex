@@ -131,7 +131,7 @@ impl SpineSessionState {
             evidence.raw_items,
             evidence.close_provider_input_tokens,
         )?;
-        let materialized = install.materialized().to_vec();
+        let materialized = install.publication_history().to_vec();
         self.pending_root_compact_install = Some(install);
         Ok(SpineHostEffects::root_compact_history_publication(
             materialized,
