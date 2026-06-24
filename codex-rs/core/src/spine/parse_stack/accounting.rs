@@ -53,7 +53,7 @@ fn apply_memory_context_accounting_to_memory(
     memory: &mut MemoryRef,
     accounting: &BTreeMap<String, i64>,
 ) {
-    if memory.closed_memory_context_tokens.is_none() {
-        memory.closed_memory_context_tokens = accounting.get(&memory.compact_id).copied();
-    }
+    memory.closed_memory_context_tokens = memory
+        .closed_memory_context_tokens
+        .or_else(|| accounting.get(&memory.compact_id).copied());
 }
