@@ -30,7 +30,6 @@ use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ContextBaselineSource;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
-use crate::spine::parser::ParserPublicationUpdate;
 use crate::spine::render::memory_response_item;
 
 impl SpineRuntime {
@@ -606,18 +605,15 @@ impl SpineRuntime {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        let Some(update) = self.parser_commit_publication_update(
+        self.parser_commit_publication_history_update(
             call_id,
             prepared_commit,
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
             history_items,
-        )?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(update.into_history_update(call_id, build_update)))
+            build_update,
+        )
     }
 
     pub(crate) fn commit_install_publication_history_update<T>(
@@ -666,7 +662,7 @@ impl SpineRuntime {
         Ok(SpineCommitPublication::new(install, history_update))
     }
 
-    fn parser_commit_publication_update(
+    fn parser_commit_publication_history_update<T>(
         &self,
         call_id: &str,
         prepared_commit: Option<&SpinePreparedCommit>,
@@ -674,34 +670,39 @@ impl SpineRuntime {
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
         history_items: &[ResponseItem],
-    ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
-        if let Some(plan) = prepared_commit.and_then(SpinePreparedCommit::publication_plan) {
-            return plan.history_update(
-                call_id,
-                tool_resp_item,
-                tool_resp_already_recorded,
-                history_items,
-            );
-        }
-        if !tool_resp_already_recorded {
-            return Ok(None);
-        }
-        let trim_projection = self.current_trim_projection()?;
-        if let Some(parser_install) = prepared_commit.and_then(SpinePreparedCommit::parser_install)
-        {
-            return parser_install.full_context_publication_update(
-                "spine prepared commit projection",
-                raw_items,
-                &trim_projection,
-                history_items,
-            );
-        }
-        self.parser.full_variable_context_publication_update(
-            "spine toolcall projection",
-            raw_items,
-            &trim_projection,
-            history_items,
-        )
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, SpineError> {
+        let update =
+            if let Some(plan) = prepared_commit.and_then(SpinePreparedCommit::publication_plan) {
+                plan.history_update(
+                    call_id,
+                    tool_resp_item,
+                    tool_resp_already_recorded,
+                    history_items,
+                )?
+            } else if !tool_resp_already_recorded {
+                return Ok(None);
+            } else {
+                let trim_projection = self.current_trim_projection()?;
+                if let Some(parser_install) =
+                    prepared_commit.and_then(SpinePreparedCommit::parser_install)
+                {
+                    parser_install.full_context_publication_update(
+                        "spine prepared commit projection",
+                        raw_items,
+                        &trim_projection,
+                        history_items,
+                    )?
+                } else {
+                    self.parser.full_variable_context_publication_update(
+                        "spine toolcall projection",
+                        raw_items,
+                        &trim_projection,
+                        history_items,
+                    )?
+                }
+            };
+        Ok(update.map(|update| update.into_history_update(call_id, build_update)))
     }
 
     fn prepare_close_commit(
