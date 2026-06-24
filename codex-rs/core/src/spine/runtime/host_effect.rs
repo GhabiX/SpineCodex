@@ -130,7 +130,7 @@ impl SpineHostEffects {
                 effect => Err(effect),
             },
         )?;
-        if !effects.is_empty() {
+        if !effects.effects.is_empty() {
             return Err("compact hook returned unsupported host effects".to_string());
         }
         Ok(publication)
@@ -218,7 +218,7 @@ impl SpineHostEffects {
         let (effects, host_commit) = self
             .into_toolcall_host_commit()
             .map_err(SpineError::Invariant)?;
-        if !effects.is_empty() {
+        if !effects.effects.is_empty() {
             return Err(SpineError::Invariant(
                 "toolcall hook returned unsupported host effects".to_string(),
             ));
