@@ -23,7 +23,7 @@ pub(in crate::spine::store::clone_sidecar) fn clone_boundary_for_rollout(
         trim_toolcall_seq_limit: if source.tree_path().exists() {
             structural_seq_limit
         } else {
-            trim_toolcall_seq_limit(&source, trim_seq_watermark)?
+            trim::toolcall_seq_limit_from_events(&source.trim_events()?, trim_seq_watermark)?
         },
     }))
 }
@@ -69,13 +69,6 @@ fn trim_only_clone_boundary_for_raw_ordinal(
             trim_seq_watermark,
         )?,
     }))
-}
-
-fn trim_toolcall_seq_limit(
-    source: &SpineStore,
-    trim_seq_watermark: Option<u64>,
-) -> Result<u64, SpineError> {
-    trim::toolcall_seq_limit_from_events(&source.trim_events()?, trim_seq_watermark)
 }
 
 fn event_seq_limit_for_clone(source: &SpineStore) -> Result<u64, SpineError> {
