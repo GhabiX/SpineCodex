@@ -6,7 +6,6 @@ use crate::spine::model::RootEpoch;
 use crate::spine::model::SegRef;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
-use crate::spine::model::TreeMeta;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -87,7 +86,7 @@ fn rewrite_checkpoint_control_for_target(
 ) -> Result<(), SpineError> {
     match control {
         ControlSymbol::Init(meta) | ControlSymbol::Open(meta) => {
-            rewrite_checkpoint_tree_meta_for_target(meta, target_root);
+            meta.node_dir = checkpoint_node_dir(target_root, &meta.id.as_path());
             Ok(())
         }
         ControlSymbol::End => Ok(()),
@@ -124,7 +123,7 @@ fn rewrite_checkpoint_node_for_target(
             trajs_path,
         } => {
             rewrite_checkpoint_memory_ref_for_target(memory, target_root, cloned_memory_paths)?;
-            rewrite_checkpoint_tree_meta_for_target(meta, target_root);
+            meta.node_dir = checkpoint_node_dir(target_root, &meta.id.as_path());
             for child in children {
                 rewrite_checkpoint_node_for_target(child, target_root, cloned_memory_paths)?;
             }
@@ -134,10 +133,6 @@ fn rewrite_checkpoint_node_for_target(
             Ok(())
         }
     }
-}
-
-fn rewrite_checkpoint_tree_meta_for_target(meta: &mut TreeMeta, target_root: &Path) {
-    meta.node_dir = checkpoint_node_dir(target_root, &meta.id.as_path());
 }
 
 fn rewrite_checkpoint_memory_ref_for_target(
