@@ -6,6 +6,7 @@ use crate::spine::model::ControlSymbol;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::RootEpoch;
+use crate::spine::model::SegRef;
 use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
@@ -59,6 +60,7 @@ impl ParseStack {
         archive: &SpineArchive,
     ) -> Result<(), SpineError> {
         self.reduce_fixpoint(archive)?;
+        let previous_visible_context_index = self.last_visible_response_context_index();
         let symbol = match token {
             SpineToken::Init { meta } => Symbol::Control(ControlSymbol::Init(meta)),
             SpineToken::End => Symbol::Control(ControlSymbol::End),
@@ -88,8 +90,24 @@ impl ParseStack {
                 Symbol::SpineTreeNode(SpineTreeNode::ToolCallAsLeafNode { segments })
             }
         };
+        validate_shifted_symbol_context_indices(previous_visible_context_index, &symbol)?;
         self.symbols.push(symbol);
         self.reduce_fixpoint(archive)
+    }
+
+    fn last_visible_response_context_index(&self) -> Option<usize> {
+        self.symbols
+            .iter()
+            .flat_map(symbol_response_context_indices)
+            .max()
+    }
+
+    #[cfg(test)]
+    pub(super) fn visible_response_context_refs_for_test(&self) -> Vec<(u64, usize)> {
+        self.symbols
+            .iter()
+            .flat_map(symbol_response_context_refs)
+            .collect()
     }
 
     pub(super) fn apply_memory_context_accounting(&mut self, accounting: &BTreeMap<String, i64>) {
@@ -722,5 +740,72 @@ impl ParseStack {
 
     pub(super) fn next_child_id(&self) -> Result<NodeId, SpineError> {
         tree::next_child_id(self)
+    }
+}
+
+fn validate_shifted_symbol_context_indices(
+    previous_visible_context_index: Option<usize>,
+    symbol: &Symbol,
+) -> Result<(), SpineError> {
+    let mut previous = previous_visible_context_index;
+    for context_index in symbol_response_context_indices(symbol) {
+        if let Some(previous_context_index) = previous
+            && context_index <= previous_context_index
+        {
+            return Err(SpineError::InvalidEvent(format!(
+                "spine parse stack visible context_index {context_index} is not strictly after previous visible context_index {previous_context_index}"
+            )));
+        }
+        previous = Some(context_index);
+    }
+    Ok(())
+}
+
+fn symbol_response_context_indices(symbol: &Symbol) -> Vec<usize> {
+    symbol_response_context_refs(symbol)
+        .into_iter()
+        .map(|(_, context_index)| context_index)
+        .collect()
+}
+
+fn symbol_response_context_refs(symbol: &Symbol) -> Vec<(u64, usize)> {
+    let mut out = Vec::new();
+    collect_symbol_response_context_refs(symbol, &mut out);
+    out
+}
+
+fn collect_symbol_response_context_refs(symbol: &Symbol, out: &mut Vec<(u64, usize)>) {
+    match symbol {
+        Symbol::Control(_) | Symbol::RootEpoches(_) => {}
+        Symbol::SpineTreeNode(node) => collect_node_response_context_refs(node, out),
+        Symbol::SpineTreeNodes(nodes) => {
+            for node in nodes {
+                collect_node_response_context_refs(node, out);
+            }
+        }
+    }
+}
+
+fn collect_node_response_context_refs(node: &SpineTreeNode, out: &mut Vec<(u64, usize)>) {
+    match node {
+        SpineTreeNode::MsgAsLeafNode { msg, .. } => {
+            collect_seg_ref_response_context_ref(msg, out);
+        }
+        SpineTreeNode::ToolCallAsLeafNode { segments } => {
+            for segment in segments {
+                collect_seg_ref_response_context_ref(&segment.seg, out);
+            }
+        }
+        SpineTreeNode::SpineTree { .. } => {}
+    }
+}
+
+fn collect_seg_ref_response_context_ref(seg: &SegRef, out: &mut Vec<(u64, usize)>) {
+    if let SegRef::ResponseItem {
+        raw_ordinal,
+        context_index,
+    } = seg
+    {
+        out.push((*raw_ordinal, *context_index));
     }
 }

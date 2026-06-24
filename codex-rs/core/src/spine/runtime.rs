@@ -252,6 +252,11 @@ impl SpineRuntime {
         self.parser.debug_for_test()
     }
 
+    #[cfg(test)]
+    pub(crate) fn visible_response_context_refs_for_test(&self) -> Vec<(u64, usize)> {
+        self.parse_stack().visible_response_context_refs_for_test()
+    }
+
     fn archive(&self) -> SpineArchive {
         SpineArchive::new(self.store.root.clone())
     }

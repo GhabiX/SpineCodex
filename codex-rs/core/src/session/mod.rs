@@ -3105,6 +3105,17 @@ impl Session {
         history
     }
 
+    pub(crate) fn spine_mutable_context_index_for_full_history_index(
+        history: &[ResponseItem],
+        full_history_index: usize,
+    ) -> usize {
+        history
+            .iter()
+            .take(full_history_index)
+            .filter(|item| !Self::is_spine_context_observation_fixed_prefix_item(item))
+            .count()
+    }
+
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
         let rollout_items: Vec<RolloutItem> = items
             .iter()

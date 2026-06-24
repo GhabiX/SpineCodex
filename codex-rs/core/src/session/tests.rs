@@ -292,6 +292,17 @@ fn user_message(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
 fn anchored_user_message(anchor: u64, text: &str) -> ResponseItem {
     user_message(&format!("[U{anchor}]\n{text}"))
 }
@@ -324,12 +335,37 @@ fn message_text_contains(item: &ResponseItem, expected: &str) -> bool {
     )
 }
 
+fn message_text_count(items: &[ResponseItem], expected: &str) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            ResponseItem::Message { content, .. } => content
+                .iter()
+                .map(|content| match content {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        text.matches(expected).count()
+                    }
+                    ContentItem::InputImage { .. } => 0,
+                })
+                .sum(),
+            _ => 0,
+        })
+        .sum()
+}
+
 fn variable_spine_items(items: &[ResponseItem]) -> Vec<ResponseItem> {
     items
         .iter()
         .filter(|item| !Session::is_spine_context_observation_fixed_prefix_item(item))
         .cloned()
         .collect()
+}
+
+fn fixed_spine_context_item_count(items: &[ResponseItem]) -> usize {
+    items
+        .iter()
+        .filter(|item| Session::is_spine_context_observation_fixed_prefix_item(item))
+        .count()
 }
 
 fn clone_spine_sidecar_for_test(source_rollout: &Path, target_rollout: &Path, raw_live: &[bool]) {
@@ -618,6 +654,40 @@ async fn assert_session_history_matches_spine_materialization(
         session.clone_history().await.raw_items(),
         materialized.as_slice()
     );
+}
+
+async fn assert_spine_visible_response_context_refs_strictly_increase(
+    session: &Session,
+    rollout_path: &Path,
+) -> Vec<(u64, usize)> {
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(rollout_path, &raw_items, &[])
+        .expect("load spine runtime from rollout")
+        .expect("spine sidecar should exist");
+    let refs = runtime.visible_response_context_refs_for_test();
+    for pair in refs.windows(2) {
+        let [previous, current] = pair else {
+            unreachable!("windows(2) yields pairs")
+        };
+        assert!(
+            current.1 > previous.1,
+            "visible PS context_index must strictly increase: previous raw {} ctx {}, current raw {} ctx {}, all refs: {:?}",
+            previous.0,
+            previous.1,
+            current.0,
+            current.1,
+            refs
+        );
+    }
+    refs
 }
 
 #[derive(Clone, Copy)]
@@ -13405,6 +13475,94 @@ async fn spine_native_compact_post_hook_ignores_stale_compacted_item_carrier() {
 }
 
 #[tokio::test]
+async fn spine_non_toolcall_full_h_ps_publication_preserves_fixed_context() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.developer_instructions =
+                Some("fixed developer context before h(PS) publication".to_string());
+            config.user_instructions =
+                Some("fixed AGENTS/user context before h(PS) publication".to_string());
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("initialize spine");
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await
+        .expect("record fixed context baseline");
+    assert!(
+        session.reference_context_item().await.is_some(),
+        "test setup must establish a fixed context baseline"
+    );
+
+    let user_prompt = user_message("current-turn user message that publishes full h(PS)");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&user_prompt))
+        .await
+        .expect("record user prompt");
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    let materialized = runtime
+        .materialize_history(&raw_items)
+        .expect("materialize h(PS)");
+    let host_history = session.clone_history().await.raw_items().to_vec();
+
+    assert_eq!(
+        variable_spine_items(&host_history),
+        materialized,
+        "full non-toolcall publication must leave variable context equal to h(PS)"
+    );
+    assert_eq!(
+        message_text_count(
+            &host_history,
+            "fixed developer context before h(PS) publication"
+        ),
+        1,
+        "developer fixed context must be preserved exactly once outside h(PS)"
+    );
+    assert_eq!(
+        message_text_count(
+            &host_history,
+            "fixed AGENTS/user context before h(PS) publication"
+        ),
+        1,
+        "AGENTS/user fixed context must be preserved exactly once outside h(PS)"
+    );
+    assert_eq!(
+        message_text_count(&host_history, "<environment_context>"),
+        1,
+        "environment fixed context must be preserved exactly once outside h(PS)"
+    );
+    assert!(
+        session.reference_context_item().await.is_some(),
+        "baseline remains valid only because fixed context is still visible"
+    );
+}
+
+#[tokio::test]
 async fn spine_mid_turn_native_compact_appends_cwd_only_environment_context_suffix() {
     let server = start_mock_server().await;
     let responses_mock = mount_sse_sequence(
@@ -16944,6 +17102,226 @@ async fn grouped_spine_open_after_close_uses_rollout_raw_evidence_for_projection
                     )
         )),
         "post-close user message must remain a user anchor, not be projected onto a tool output"
+    );
+    drop(rx);
+}
+
+#[tokio::test]
+async fn grouped_spine_open_output_and_followup_message_have_distinct_context_slots() {
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let prefix = user_message("prefix before grouped open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record prefix");
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "grouped-open-distinct");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record grouped open request");
+    session
+        .test_seed_spine_open_control_request(
+            "grouped-open-distinct".to_string(),
+            "grouped open distinct".to_string(),
+        )
+        .await
+        .expect("stage grouped open");
+
+    let open_output = function_output("grouped-open-distinct");
+    session
+        .test_on_toolcall(
+            &turn_context,
+            SpineToolCallEvidence::grouped(
+                "grouped-open-distinct",
+                &["grouped-open-distinct".to_string()],
+                std::slice::from_ref(&open_output),
+            ),
+        )
+        .await
+        .expect("grouped open should commit");
+
+    let followup = assistant_message("message after grouped open output");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&followup))
+        .await
+        .expect("record followup message");
+
+    let expected = vec![
+        anchored_user_message(1, "prefix before grouped open"),
+        open_request,
+        open_output,
+        followup,
+    ];
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        expected.as_slice(),
+        "grouped spine.open output must remain in host history before the followup message"
+    );
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(
+        variable_spine_items(session.clone_history().await.raw_items()),
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)"),
+        "host variable context must equal h(PS)"
+    );
+    let visible_refs =
+        assert_spine_visible_response_context_refs_strictly_increase(&session, &rollout_path).await;
+    let open_output_ctx = visible_refs
+        .iter()
+        .find_map(|(raw, ctx)| (*raw == 2).then_some(*ctx))
+        .expect("grouped open output raw ref should be visible");
+    let followup_ctx = visible_refs
+        .iter()
+        .find_map(|(raw, ctx)| (*raw == 3).then_some(*ctx))
+        .expect("followup message raw ref should be visible");
+    assert_ne!(
+        open_output_ctx, followup_ctx,
+        "grouped open output and next assistant message must not share a visible PS context_index"
+    );
+    drop(rx);
+}
+
+#[tokio::test]
+async fn grouped_spine_open_with_fixed_prefix_uses_mutable_context_indices() {
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config.user_instructions =
+                Some("fixed AGENTS/user prefix before mutable grouped open".to_string());
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("initialize spine");
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await
+        .expect("record fixed context baseline");
+
+    let fixed_prefix = developer_message("fixed developer prefix outside mutable grouped open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&fixed_prefix))
+        .await
+        .expect("record fixed developer prefix");
+
+    let prefix = user_message("mutable prefix before grouped open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&prefix))
+        .await
+        .expect("record mutable prefix");
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "grouped-open-fixed-prefix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record grouped open request");
+    session
+        .test_seed_spine_open_control_request(
+            "grouped-open-fixed-prefix".to_string(),
+            "grouped open with fixed prefix".to_string(),
+        )
+        .await
+        .expect("stage grouped open");
+
+    let open_output = function_output("grouped-open-fixed-prefix");
+    session
+        .test_on_toolcall(
+            &turn_context,
+            SpineToolCallEvidence::grouped(
+                "grouped-open-fixed-prefix",
+                &["grouped-open-fixed-prefix".to_string()],
+                std::slice::from_ref(&open_output),
+            ),
+        )
+        .await
+        .expect("grouped open should commit");
+
+    let followup = assistant_message("message after grouped open with fixed prefix");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&followup))
+        .await
+        .expect("record followup message");
+
+    let host_history = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(
+        variable_spine_items(&host_history),
+        vec![
+            anchored_user_message(1, "mutable prefix before grouped open"),
+            open_request,
+            open_output,
+            followup,
+        ],
+        "fixed prefix must stay outside h(PS), while mutable context equals h(PS)"
+    );
+    assert!(
+        fixed_spine_context_item_count(&host_history) > 0,
+        "test setup must include a fixed prefix outside h(PS)"
+    );
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let runtime = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime")
+        .expect("spine sidecar should exist");
+    assert_eq!(
+        variable_spine_items(session.clone_history().await.raw_items()),
+        runtime
+            .materialize_history(&raw_items)
+            .expect("materialize h(PS)"),
+        "host variable context must equal h(PS)"
+    );
+    let visible_refs =
+        assert_spine_visible_response_context_refs_strictly_increase(&session, &rollout_path).await;
+    assert_eq!(
+        visible_refs
+            .iter()
+            .map(|(_, context_index)| *context_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3],
+        "PS-visible context_index must be mutable Ctx coordinates, not full host history indices"
     );
     drop(rx);
 }

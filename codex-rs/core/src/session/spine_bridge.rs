@@ -212,9 +212,18 @@ impl Session {
     ) -> Result<(), String> {
         let _ = effects.apply_history_updates_or_keep(|effect| {
             let current_history = state.clone_history().raw_items().to_vec();
+            let fixed_context_source = current_history.clone();
             effect.apply_history_update_or_self(
                 &current_history,
                 |range, replacement, reference| {
+                    let replacement = if range.start == 0 {
+                        Session::merge_fixed_context_with_spine_history(
+                            fixed_context_source,
+                            replacement,
+                        )
+                    } else {
+                        replacement
+                    };
                     state
                         .replace_history_suffix(range, replacement, reference)
                         .map_err(|err| err.to_string())
@@ -631,6 +640,8 @@ impl Session {
             .await
             .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
         let raw_items = spine_raw_items_after_rollback(&rollout_history.get_rollout_items());
+        let history = self.clone_history().await;
+        let history_items = history.raw_items();
         let mut non_toolcall_msg_effects = HostEffects::none();
         let mut tool_items = Vec::new();
         for append in appends {
@@ -638,12 +649,16 @@ impl Session {
             if Self::is_spine_context_observation_fixed_prefix_item(item) {
                 continue;
             }
+            let context_index = Self::spine_mutable_context_index_for_full_history_index(
+                history_items,
+                append.context_index,
+            );
             if is_non_toolcall_msg(item) {
                 let outcome = self
                     .on_non_toolcall_msg(MessageEvidence {
                         rollout_path: &rollout_path,
                         raw_ordinal,
-                        context_index: append.context_index,
+                        context_index,
                         item,
                         raw_items: &raw_items,
                     })
@@ -652,7 +667,7 @@ impl Session {
             } else {
                 tool_items.push(ObservedContextItem {
                     raw_ordinal,
-                    context_index: append.context_index,
+                    context_index,
                     item,
                 });
             }
@@ -719,9 +734,18 @@ impl Session {
             let mut state = self.state.lock().await;
             effects.apply_history_updates_or_keep(|effect| {
                 let current_history = state.clone_history().raw_items().to_vec();
+                let fixed_context_source = current_history.clone();
                 effect.apply_history_update_or_self(
                     &current_history,
                     |range, replacement, reference| {
+                        let replacement = if range.start == 0 {
+                            Session::merge_fixed_context_with_spine_history(
+                                fixed_context_source.clone(),
+                                replacement,
+                            )
+                        } else {
+                            replacement
+                        };
                         state
                             .replace_history_suffix(range, replacement, reference)
                             .map_err(|err| err.to_string())
@@ -1030,7 +1054,11 @@ impl Session {
                 }
             }
         };
-        let output_context_start = self.clone_history().await.raw_items().len();
+        let history = self.clone_history().await;
+        let output_context_start = Self::spine_mutable_context_index_for_full_history_index(
+            history.raw_items(),
+            history.raw_items().len(),
+        );
         self.record_conversation_items_without_spine_observe(turn_context, output_items)
             .await
             .map_err(|err| {
@@ -1107,7 +1135,7 @@ impl Session {
         let history_items_for_output_anchor = history_for_output_anchor.raw_items();
         let tool_resp_already_recorded =
             history_items_for_output_anchor.last() == Some(item) && raw_len > 0;
-        let (tool_resp_raw_ordinal, tool_resp_context_index) = if tool_resp_already_recorded {
+        let (tool_resp_raw_ordinal, tool_resp_full_history_index) = if tool_resp_already_recorded {
             (
                 raw_len - 1,
                 history_items_for_output_anchor
@@ -1122,6 +1150,10 @@ impl Session {
         } else {
             (raw_len, history_items_for_output_anchor.len())
         };
+        let tool_resp_context_index = Self::spine_mutable_context_index_for_full_history_index(
+            history_items_for_output_anchor,
+            tool_resp_full_history_index,
+        );
         Ok(Some(SpineCompletedToolCallOutputAnchor {
             raw_ordinals: vec![Some(tool_resp_raw_ordinal)],
             context_start: tool_resp_context_index,

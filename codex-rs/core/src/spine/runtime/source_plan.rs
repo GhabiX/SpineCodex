@@ -8,6 +8,8 @@ use super::SpineError;
 use super::SpineRuntime;
 use super::support::collect_source_plan_entries_from_visible_refs;
 use super::support::is_real_user_message;
+use super::support::raw_context_item_for_spine_mutable_context_index;
+use super::support::spine_mutable_context_len;
 use super::support::validate_source_plan_context_index;
 use crate::spine::io::hash_response_items;
 use crate::spine::model::NodeId;
@@ -132,10 +134,11 @@ impl SpineRuntime {
                 "spine.close requires non-empty live suffix for node {node}"
             )));
         }
-        if suffix_start >= raw_context_items.len() {
+        let mutable_context_len = spine_mutable_context_len(raw_context_items);
+        if suffix_start >= mutable_context_len {
             return Err(SpineError::Operation(format!(
                 "spine.close suffix start {suffix_start} is outside history length {} for node {node}",
-                raw_context_items.len()
+                mutable_context_len
             )));
         }
 
@@ -175,14 +178,16 @@ fn validate_close_source_plan_entries(
             close_context_end,
             &mut previous_context_index,
         )?;
-        let host_item = raw_context_items.get(entry.context_index).ok_or_else(|| {
+        let host_item =
+            raw_context_item_for_spine_mutable_context_index(raw_context_items, entry.context_index)
+                .map_err(|_| {
             SpineError::CompactFailure(format!(
                 "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
                 entry.source_ordinal,
                 entry.context_index,
                 raw_context_items.len()
             ))
-        })?;
+                })?;
         let expected_item = entry.visible_response_item();
         let host_hash = hash_response_items(std::slice::from_ref(host_item))?;
         if host_item != &expected_item || host_hash != entry.source_hash {

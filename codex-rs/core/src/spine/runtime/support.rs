@@ -84,6 +84,43 @@ pub(crate) fn is_spine_context_observation_fixed_prefix_item(item: &ResponseItem
     }
 }
 
+pub(super) fn spine_mutable_context_len(history: &[ResponseItem]) -> usize {
+    history
+        .iter()
+        .filter(|item| !is_spine_context_observation_fixed_prefix_item(item))
+        .count()
+}
+
+pub(super) fn full_history_index_for_spine_mutable_context_index(
+    history: &[ResponseItem],
+    context_index: usize,
+) -> Result<usize, SpineError> {
+    history
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| !is_spine_context_observation_fixed_prefix_item(item))
+        .nth(context_index)
+        .map(|(index, _)| index)
+        .ok_or_else(|| {
+            SpineError::CompactFailure(format!(
+                "spine mutable context_index {context_index} exceeds mutable history length {}",
+                spine_mutable_context_len(history)
+            ))
+        })
+}
+
+pub(super) fn raw_context_item_for_spine_mutable_context_index(
+    history: &[ResponseItem],
+    context_index: usize,
+) -> Result<&ResponseItem, SpineError> {
+    let full_index = full_history_index_for_spine_mutable_context_index(history, context_index)?;
+    history.get(full_index).ok_or_else(|| {
+        SpineError::CompactFailure(format!(
+            "spine mutable context_index {context_index} mapped to missing host history index {full_index}"
+        ))
+    })
+}
+
 fn is_spine_runtime_contextual_user_fragment(content_item: &ContentItem) -> bool {
     matches!(content_item, ContentItem::InputText { text } if {
         TurnAborted::matches_text(text) || {
@@ -208,15 +245,8 @@ fn source_plan_entry_from_response_item(
     user_anchor: Option<u64>,
     raw_context_items: &[ResponseItem],
 ) -> Result<SpineCompactSourcePlanEntry, SpineError> {
-    let item = raw_context_items
-        .get(context_index)
-        .cloned()
-        .ok_or_else(|| {
-            SpineError::CompactFailure(format!(
-                "spine.close source plan raw item context_index {context_index} exceeds host history length {}",
-                raw_context_items.len()
-            ))
-        })?;
+    let item =
+        raw_context_item_for_spine_mutable_context_index(raw_context_items, context_index)?.clone();
     let source_hash = hash_response_items(std::slice::from_ref(&item))?;
     Ok(SpineCompactSourcePlanEntry {
         context_index,
