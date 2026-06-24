@@ -71,6 +71,46 @@ fn parser_state_does_not_expose_single_token_staging_api() {
 }
 
 #[test]
+fn parser_state_routes_live_batches_through_one_batch_helper() {
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    assert!(
+        parser.contains("fn stage_lexed_batches") && parser.contains("fn shift_lexed_batches"),
+        "ParserState should keep live token-batch staging behind one parser-owned helper"
+    );
+    let open_install = parser
+        .split("fn prepare_open_install(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn close_reduced_next_child_id").next())
+        .expect("prepare_open_install section");
+    assert!(
+        open_install.contains("stage_lexed_batches")
+            && !open_install.contains("single_lexed_token")
+            && !open_install.contains(".shift("),
+        "open parser transactions should consume lexed batches through the shared parser helper"
+    );
+    let close_family = parser
+        .split("fn close_family_staged_parse_stacks(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn prepare_root_compact_reduction").next())
+        .expect("close-family parser section");
+    assert!(
+        close_family.contains("shift_lexed_batches")
+            && !close_family.contains("single_lexed_token")
+            && !close_family.contains(".shift("),
+        "close/next parser transactions should consume final lexed batches through the shared parser helper"
+    );
+    let observe = parser
+        .split("fn prepare_observe_install(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn materialize_variable_context").next())
+        .expect("observe parser section");
+    assert!(
+        observe.contains("stage_lexed_batches") && !observe.contains("tokens.iter().cloned()"),
+        "observe parser transactions should stage the whole lexed batch instead of unpacking raw tokens at the callsite"
+    );
+}
+
+#[test]
 fn runtime_replay_routes_token_consumption_through_parser_state() {
     let replay =
         fs::read_to_string(spine_src("runtime/replay.rs")).expect("read runtime replay source");

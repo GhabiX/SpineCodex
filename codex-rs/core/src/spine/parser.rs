@@ -601,15 +601,13 @@ impl ParserState {
         self.install_prepared_state(install.into_final_state());
     }
 
-    pub(super) fn staged_after_tokens(
+    fn stage_lexed_batches<'a>(
         &self,
-        tokens: impl IntoIterator<Item = SpineToken>,
+        batches: impl IntoIterator<Item = &'a LexedTokenBatch>,
         archive: &SpineArchive,
     ) -> Result<ParserPreparedState, SpineError> {
         let mut staged = self.parse_stack.clone();
-        for token in tokens {
-            staged.shift(token, archive)?;
-        }
+        shift_lexed_batches(&mut staged, batches, archive)?;
         Ok(ParserPreparedState::new(staged))
     }
 
@@ -619,14 +617,9 @@ impl ParserState {
         toolcall_lexed: Option<&LexedTokenBatch>,
         archive: &SpineArchive,
     ) -> Result<ParserOpenInstall, SpineError> {
-        let mut staged = self.parse_stack.clone();
-        let open_token = single_lexed_token(open_lexed, "open")?;
-        staged.shift(open_token, archive)?;
-        if let Some(toolcall_lexed) = toolcall_lexed {
-            let toolcall_token = single_lexed_token(toolcall_lexed, "toolcall")?;
-            staged.shift(toolcall_token, archive)?;
-        }
-        Ok(ParserOpenInstall::new(ParserPreparedState::new(staged)))
+        let batches = std::iter::once(open_lexed).chain(toolcall_lexed);
+        let staged = self.stage_lexed_batches(batches, archive)?;
+        Ok(ParserOpenInstall::new(staged))
     }
 
     pub(super) fn close_reduced_next_child_id(
@@ -652,12 +645,10 @@ impl ParserState {
         let mut pending = self.parse_stack.clone();
         pending.shift_pending_close(memory, archive)?;
         let mut final_parse_stack = pending.task_tree_reduced(reduction)?;
-        if let Some(open_lexed) = open_lexed {
-            let open_token = single_lexed_token(open_lexed, "open")?;
-            final_parse_stack.shift(open_token, archive)?;
-        }
-        let toolcall_token = single_lexed_token(toolcall_lexed, "toolcall")?;
-        final_parse_stack.shift(toolcall_token, archive)?;
+        let final_batches = open_lexed
+            .into_iter()
+            .chain(std::iter::once(toolcall_lexed));
+        shift_lexed_batches(&mut final_parse_stack, final_batches, archive)?;
         Ok((
             ParserCommitPendingInstall::new(ParserPreparedState::new(pending)),
             ParserCommitInstall::new(ParserPreparedState::new(final_parse_stack)),
@@ -729,7 +720,7 @@ impl ParserState {
         lexed: &LexedTokenBatch,
         archive: &SpineArchive,
     ) -> Result<ParserObserveInstall, SpineError> {
-        let staged = self.staged_after_tokens(lexed.tokens.iter().cloned(), archive)?;
+        let staged = self.stage_lexed_batches(std::iter::once(lexed), archive)?;
         Ok(ParserObserveInstall::new(staged))
     }
 
@@ -941,17 +932,17 @@ fn apply_replay_metadata_event(
     }
 }
 
-fn single_lexed_token(lexed: &LexedTokenBatch, label: &str) -> Result<SpineToken, SpineError> {
-    let mut tokens = lexed.tokens.iter().cloned();
-    let token = tokens
-        .next()
-        .ok_or_else(|| SpineError::Invariant(format!("{label} lexer produced no token")))?;
-    if tokens.next().is_some() {
-        return Err(SpineError::Invariant(format!(
-            "{label} lexer produced multiple tokens"
-        )));
+fn shift_lexed_batches<'a>(
+    parse_stack: &mut ParseStack,
+    batches: impl IntoIterator<Item = &'a LexedTokenBatch>,
+    archive: &SpineArchive,
+) -> Result<(), SpineError> {
+    for batch in batches {
+        for token in batch.tokens.iter().cloned() {
+            parse_stack.shift(token, archive)?;
+        }
     }
-    Ok(token)
+    Ok(())
 }
 
 fn materialize_parse_stack_variable_context(
