@@ -81,13 +81,9 @@ pub(in crate::spine::store::clone_sidecar) fn add_required_memory_refs(
     ids.extend(
         compact_checkpoints
             .iter()
-            .flat_map(|checkpoint| &checkpoint.memory_refs)
-            .map(|memory| memory.compact_id.clone()),
-    );
-    ids.extend(
-        checkpoints
-            .iter()
-            .flat_map(|checkpoint| &checkpoint.memory_refs)
+            .map(|checkpoint| &checkpoint.memory_refs)
+            .chain(checkpoints.iter().map(|checkpoint| &checkpoint.memory_refs))
+            .flat_map(|memory_refs| memory_refs.iter())
             .map(|memory| memory.compact_id.clone()),
     );
     ids.extend(
