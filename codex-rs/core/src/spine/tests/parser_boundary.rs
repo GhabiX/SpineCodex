@@ -342,12 +342,19 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     );
     assert!(
         prepared.contains("use crate::spine::parser::ParserPreparedState"),
-        "runtime prepared carriers should hold parser-owned prepared states"
+        "runtime close prepared carriers should hold parser-owned prepared states"
     );
     assert!(
-        prepared.contains("final_parse_stack: Option<ParserPreparedState>")
-            && prepared.contains("final_parse_stack: ParserPreparedState"),
-        "runtime prepared final parser states should be typed as ParserPreparedState"
+        prepared.contains("final_parse_stack: Option<ParserPreparedState>"),
+        "runtime close prepared final parser states should be typed as ParserPreparedState"
+    );
+    assert!(
+        !prepared.contains("pub(super) final_parse_stack: ParserPreparedState"),
+        "runtime root compact prepared carrier must not expose final parser state directly"
+    );
+    assert!(
+        prepared.contains("parser_install: ParserRootCompactInstall"),
+        "runtime root compact prepared carrier should hold a parser-owned install handle"
     );
     assert!(
         !prepared.contains("struct HistoryPublicationPlan"),
@@ -478,7 +485,11 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     assert!(
         root_compact.contains(".install_pending_root_compact_after_side_effect_failure(")
-            && root_compact.contains(".install_prepared_root_compact_final_parse_stack("),
+            && root_compact.contains(".install_prepared_root_compact("),
         "runtime root compact should install pending/final parser states through named ParserState methods"
+    );
+    assert!(
+        !root_compact.contains(".install_prepared_root_compact_final_parse_stack("),
+        "runtime root compact final install should use the parser-owned root compact install handle"
     );
 }

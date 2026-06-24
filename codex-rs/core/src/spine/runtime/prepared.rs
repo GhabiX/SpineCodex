@@ -5,6 +5,7 @@ use super::SpineRootCompactResult;
 use crate::spine::model::MemRecord;
 use crate::spine::parser::ParserPreparedState;
 use crate::spine::parser::ParserPublicationPlan;
+use crate::spine::parser::ParserRootCompactInstall;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
@@ -39,7 +40,7 @@ pub(crate) struct SpineCommitPublication<T> {
 #[derive(Debug)]
 pub(crate) struct SpinePreparedRootCompact {
     pub(super) result: SpineRootCompactResult,
-    pub(super) final_parse_stack: ParserPreparedState,
+    pub(super) parser_install: ParserRootCompactInstall,
 }
 
 #[derive(Debug)]

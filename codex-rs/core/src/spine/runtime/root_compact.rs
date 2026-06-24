@@ -326,7 +326,7 @@ impl SpineRuntime {
             token_metadata,
             checkpoint_rollout_path,
         )?;
-        let (pending_compact_parse_stack, final_parse_stack) =
+        let (pending_compact_parse_stack, parser_install) =
             self.parser.root_compact_staged_parse_stacks(
                 prepared.memory.clone(),
                 prepared.next_open_index,
@@ -352,13 +352,13 @@ impl SpineRuntime {
         self.pending = None;
         Ok(SpinePreparedRootCompact {
             result: prepared.result,
-            final_parse_stack,
+            parser_install,
         })
     }
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
         self.parser
-            .install_prepared_root_compact_final_parse_stack(prepared.final_parse_stack);
+            .install_prepared_root_compact(prepared.parser_install);
     }
 
     pub(crate) fn install_prepared_root_compact_install(

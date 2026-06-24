@@ -58,6 +58,11 @@ pub(super) struct ParserRootCompactPreparedReduction {
     pub(super) current_open_index: usize,
 }
 
+#[derive(Debug)]
+pub(super) struct ParserRootCompactInstall {
+    final_parse_stack: ParserPreparedState,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ParserPublicationPlan {
     pub(super) operation: &'static str,
@@ -148,6 +153,16 @@ impl ParserRootCompactPreparedReduction {
             &self.materialized,
             replacement_history,
         )
+    }
+}
+
+impl ParserRootCompactInstall {
+    fn new(final_parse_stack: ParserPreparedState) -> Self {
+        Self { final_parse_stack }
+    }
+
+    fn into_final_parse_stack(self) -> ParserPreparedState {
+        self.final_parse_stack
     }
 }
 
@@ -384,11 +399,8 @@ impl ParserState {
         self.replace_parse_stack_for_runtime_transition(state);
     }
 
-    pub(super) fn install_prepared_root_compact_final_parse_stack(
-        &mut self,
-        state: ParserPreparedState,
-    ) {
-        self.replace_parse_stack_for_runtime_transition(state);
+    pub(super) fn install_prepared_root_compact(&mut self, install: ParserRootCompactInstall) {
+        self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
     }
 
     pub(super) fn staged_after_tokens(
@@ -504,7 +516,7 @@ impl ParserState {
         next_open_context_tokens: Option<i64>,
         reduction: PreparedRootEpochReduction,
         archive: &SpineArchive,
-    ) -> Result<(ParserPreparedState, ParserPreparedState), SpineError> {
+    ) -> Result<(ParserPreparedState, ParserRootCompactInstall), SpineError> {
         let mut pending = self.parse_stack.clone();
         pending.shift_pending_compact(
             memory,
@@ -516,7 +528,7 @@ impl ParserState {
         let final_parse_stack = pending.root_epoch_reduced(reduction)?;
         Ok((
             ParserPreparedState::new(pending),
-            ParserPreparedState::new(final_parse_stack),
+            ParserRootCompactInstall::new(ParserPreparedState::new(final_parse_stack)),
         ))
     }
 
