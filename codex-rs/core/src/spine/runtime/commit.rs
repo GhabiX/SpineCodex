@@ -442,14 +442,13 @@ impl SpineRuntime {
         events.extend(toolcall_lexed.events().iter().cloned());
         let event_count = plan.event_count(events.len())?;
         let toolcall_seq = plan.toolcall_seq(self.ledger.next_event_seq, event_count)?;
-        let (pending_parser_install, parser_install) =
-            self.parser.close_family_staged_parse_stacks(
-                prepared.memory.clone(),
-                prepared.task_tree_reduction,
-                plan.open_lexed(),
-                &toolcall_lexed,
-                &self.archive(),
-            )?;
+        let parser_install = self.parser.close_family_staged_parse_stacks(
+            prepared.memory.clone(),
+            prepared.task_tree_reduction,
+            plan.open_lexed(),
+            &toolcall_lexed,
+            &self.archive(),
+        )?;
         if let Err(err) = self.commit_close_family_transaction(CloseFamilyTransaction {
             mem: &prepared.mem,
             memory_body: &prepared.memory_body,
@@ -461,8 +460,9 @@ impl SpineRuntime {
         }) {
             match err {
                 CloseFamilyTransactionError::PreparedSideEffect(err) => {
-                    self.parser
-                        .install_pending_close_after_side_effect_failure(pending_parser_install);
+                    self.parser.install_pending_close_after_side_effect_failure(
+                        parser_install.pending_install(),
+                    );
                     return Err(err);
                 }
                 CloseFamilyTransactionError::CommitProof(err) => return Err(err),
@@ -476,7 +476,7 @@ impl SpineRuntime {
                 prepared.replacement,
                 toolcall_start,
             ),
-            parser_install,
+            parser_install.into_final_install(),
             completed_toolcall,
             toolcall_seq,
             raw_items.to_vec(),

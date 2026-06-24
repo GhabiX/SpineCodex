@@ -372,9 +372,16 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
     assert!(
         parser.contains("ParserCommitPendingInstall")
+            && parser.contains("ParserCommitPreparedInstall")
             && parser.contains("fn install_pending_close_after_side_effect_failure")
             && parser.contains("ParserCommitInstall"),
-        "parser should expose parser-owned pending and final close/next install handles"
+        "parser should expose parser-owned close/next prepared, pending, and final install handles"
+    );
+    assert!(
+        commit.contains(".pending_install()")
+            && commit.contains(".into_final_install()")
+            && !commit.contains("let (pending_parser_install, parser_install)"),
+        "runtime close/next commit should consume parser prepared installs through named accessors, not tuple order"
     );
     assert!(
         parser.contains("final_state: ParserPreparedState")

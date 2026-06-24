@@ -74,6 +74,12 @@ pub(super) struct ParserCommitInstall {
 }
 
 #[derive(Debug)]
+pub(super) struct ParserCommitPreparedInstall {
+    pending_install: ParserCommitPendingInstall,
+    final_install: ParserCommitInstall,
+}
+
+#[derive(Debug)]
 pub(super) struct ParserCommitPendingInstall {
     pending_state: ParserPreparedState,
 }
@@ -261,6 +267,26 @@ impl ParserCommitPendingInstall {
 
     fn into_pending_state(self) -> ParserPreparedState {
         self.pending_state
+    }
+}
+
+impl ParserCommitPreparedInstall {
+    fn new(
+        pending_install: ParserCommitPendingInstall,
+        final_install: ParserCommitInstall,
+    ) -> Self {
+        Self {
+            pending_install,
+            final_install,
+        }
+    }
+
+    pub(super) fn pending_install(&self) -> &ParserCommitPendingInstall {
+        &self.pending_install
+    }
+
+    pub(super) fn into_final_install(self) -> ParserCommitInstall {
+        self.final_install
     }
 }
 
@@ -573,9 +599,9 @@ impl ParserState {
 
     pub(super) fn install_pending_close_after_side_effect_failure(
         &mut self,
-        install: ParserCommitPendingInstall,
+        install: &ParserCommitPendingInstall,
     ) {
-        self.install_prepared_state(install.into_pending_state());
+        self.parse_stack = install.pending_state.parse_stack.clone();
     }
 
     pub(super) fn install_prepared_commit(&mut self, install: ParserCommitInstall) {
@@ -641,7 +667,7 @@ impl ParserState {
         open_lexed: Option<&LexedTokenBatch>,
         toolcall_lexed: &LexedTokenBatch,
         archive: &SpineArchive,
-    ) -> Result<(ParserCommitPendingInstall, ParserCommitInstall), SpineError> {
+    ) -> Result<ParserCommitPreparedInstall, SpineError> {
         let mut pending = self.parse_stack.clone();
         pending.shift_pending_close(memory, archive)?;
         let mut final_parse_stack = pending.task_tree_reduced(reduction)?;
@@ -649,7 +675,7 @@ impl ParserState {
             .into_iter()
             .chain(std::iter::once(toolcall_lexed));
         shift_lexed_batches(&mut final_parse_stack, final_batches, archive)?;
-        Ok((
+        Ok(ParserCommitPreparedInstall::new(
             ParserCommitPendingInstall::new(ParserPreparedState::new(pending)),
             ParserCommitInstall::new(ParserPreparedState::new(final_parse_stack)),
         ))
