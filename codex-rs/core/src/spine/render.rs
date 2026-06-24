@@ -329,12 +329,11 @@ fn projected_tool_response_item_with_state(
     target: &TrimTarget,
     state: &TrimTargetState,
 ) -> Result<ResponseItem, SpineError> {
-    let output_payload = match state {
-        TrimTargetState::Tagged => matched_tool_output(item, target, "text body item")?,
-        TrimTargetState::Snipped | TrimTargetState::Sliced { .. } => {
-            matched_tool_output(item, target, "output payload")?
-        }
+    let mismatch_label = match state {
+        TrimTargetState::Tagged => "text body item",
+        TrimTargetState::Snipped | TrimTargetState::Sliced { .. } => "output payload",
     };
+    let output_payload = matched_tool_output(item, target, mismatch_label)?;
     let body = trim_replacement_body(output_payload, target, state)?;
     let output = FunctionCallOutputPayload {
         body,
