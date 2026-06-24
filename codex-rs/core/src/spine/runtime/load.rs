@@ -74,15 +74,11 @@ impl SpineRuntime {
         raw_items: &[Option<ResponseItem>],
         rollback_cuts: &[usize],
     ) -> Result<Option<Self>, SpineError> {
-        if !SpineStore::has_for_rollout(rollout_path)? {
+        let Some(store) = existing_rollout_store(rollout_path)? else {
             return Ok(None);
-        }
-        let runtime = Self::load_for_rollout_items_from_store(
-            SpineStore::for_rollout(rollout_path)?,
-            rollout_path,
-            raw_items,
-            rollback_cuts,
-        )?;
+        };
+        let runtime =
+            Self::load_for_rollout_items_from_store(store, rollout_path, raw_items, rollback_cuts)?;
         Ok(Some(runtime))
     }
 
@@ -105,9 +101,9 @@ impl SpineRuntime {
         rollback_cuts: &[usize],
         jit_enabled: bool,
     ) -> Result<Option<Self>, SpineError> {
-        if !SpineStore::has_for_rollout(rollout_path)? {
+        let Some(store) = existing_rollout_store(rollout_path)? else {
             return Ok(None);
-        }
+        };
         if !jit_enabled {
             if !rollback_cuts.is_empty() {
                 return Err(SpineError::InvalidStore(
@@ -115,13 +111,13 @@ impl SpineRuntime {
                 ));
             }
             let runtime = Self::load_trim_only(
-                SpineStore::for_rollout(rollout_path)?.with_writer_lock()?,
+                store.with_writer_lock()?,
                 raw_live_from_rollout_items(raw_items),
             )?;
             return Ok(Some(runtime));
         }
         let runtime = Self::load_for_rollout_items_from_store(
-            SpineStore::for_rollout(rollout_path)?.with_writer_lock()?,
+            store.with_writer_lock()?,
             rollout_path,
             raw_items,
             rollback_cuts,
@@ -151,10 +147,10 @@ impl SpineRuntime {
         rollout_path: &Path,
         raw_len: u64,
     ) -> Result<Option<Self>, SpineError> {
-        if !SpineStore::has_for_rollout(rollout_path)? {
+        let Some(store) = existing_rollout_store(rollout_path)? else {
             return Ok(None);
-        }
-        Self::load(SpineStore::for_rollout(rollout_path)?, raw_len).map(Some)
+        };
+        Self::load(store, raw_len).map(Some)
     }
 
     pub(crate) fn load(store: SpineStore, raw_len: u64) -> Result<Self, SpineError> {
@@ -343,6 +339,13 @@ fn live_raw_prefix(raw_len: u64) -> Result<Vec<bool>, SpineError> {
 
 fn raw_live_from_rollout_items(raw_items: &[Option<ResponseItem>]) -> Vec<bool> {
     raw_items.iter().map(Option::is_some).collect()
+}
+
+fn existing_rollout_store(rollout_path: &Path) -> Result<Option<SpineStore>, SpineError> {
+    if !SpineStore::has_for_rollout(rollout_path)? {
+        return Ok(None);
+    }
+    SpineStore::for_rollout(rollout_path).map(Some)
 }
 
 fn build_jit_runtime(
