@@ -13,9 +13,14 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
 ) -> Result<(), SpineError> {
     let shape = commit_marker_event_shape(marker.kind);
     validate_commit_marker_width(marker, shape.width)?;
-    if shape.requires_close_prefix {
-        let (node, boundary) = close_event_at_marker_start(marker, events_by_seq)?;
-        validate_close_marker_fields(marker, node, *boundary)?;
+    match shape.start {
+        CommitMarkerStartEvent::Close => {
+            let (node, boundary) = close_event_at_marker_start(marker, events_by_seq)?;
+            validate_close_marker_fields(marker, node, *boundary)?;
+        }
+        CommitMarkerStartEvent::RootCompact => {
+            validate_root_compact_shape(marker, events_by_seq)?;
+        }
     }
     if let Some(offset) = shape.synthetic_open_offset {
         validate_required_synthetic_open(marker, events_by_seq, marker_shape_seq(marker, offset)?)?;
@@ -26,9 +31,6 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
             events_by_seq,
             marker_shape_seq(marker, offset)?,
         )?;
-    }
-    if shape.requires_root_compact {
-        validate_root_compact_shape(marker, events_by_seq)?;
     }
     Ok(())
 }
@@ -102,34 +104,36 @@ fn validate_root_compact_shape(
 #[derive(Clone, Copy)]
 struct CommitMarkerEventShape {
     width: u64,
-    requires_close_prefix: bool,
+    start: CommitMarkerStartEvent,
     synthetic_open_offset: Option<u64>,
     trailing_toolcall_offset: Option<u64>,
-    requires_root_compact: bool,
+}
+
+#[derive(Clone, Copy)]
+enum CommitMarkerStartEvent {
+    Close,
+    RootCompact,
 }
 
 fn commit_marker_event_shape(kind: SpineCommitKindMarker) -> CommitMarkerEventShape {
     match kind {
         SpineCommitKindMarker::Close => CommitMarkerEventShape {
             width: 2,
-            requires_close_prefix: true,
+            start: CommitMarkerStartEvent::Close,
             synthetic_open_offset: None,
             trailing_toolcall_offset: Some(1),
-            requires_root_compact: false,
         },
         SpineCommitKindMarker::CloseThenOpen => CommitMarkerEventShape {
             width: 3,
-            requires_close_prefix: true,
+            start: CommitMarkerStartEvent::Close,
             synthetic_open_offset: Some(1),
             trailing_toolcall_offset: Some(2),
-            requires_root_compact: false,
         },
         SpineCommitKindMarker::RootCompact => CommitMarkerEventShape {
             width: 1,
-            requires_close_prefix: false,
+            start: CommitMarkerStartEvent::RootCompact,
             synthetic_open_offset: None,
             trailing_toolcall_offset: None,
-            requires_root_compact: true,
         },
     }
 }
