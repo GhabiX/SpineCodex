@@ -350,18 +350,7 @@ impl ParseStack {
 
         let root_epoch = RootEpoch { memory };
         let boundary = self.symbols[boundary_idx].clone();
-        match boundary {
-            Symbol::Control(ControlSymbol::Init(_)) => {
-                self.symbols.truncate(boundary_idx + 1);
-                self.symbols.push(Symbol::RootEpoches(vec![root_epoch]));
-            }
-            Symbol::RootEpoches(mut root_epochs) => {
-                self.symbols.truncate(boundary_idx);
-                root_epochs.push(root_epoch);
-                self.symbols.push(Symbol::RootEpoches(root_epochs));
-            }
-            _ => unreachable!("root epoch boundary was checked before mutate"),
-        }
+        self.apply_root_epoch_boundary(boundary_idx, boundary, root_epoch);
         self.symbols.push(next_open);
         Ok(true)
     }
@@ -474,20 +463,32 @@ impl ParseStack {
             self.validate_pending_root_epoch_reduction(&reduction)
                 .is_ok()
         );
-        match reduction.boundary {
+        self.apply_root_epoch_boundary(
+            reduction.boundary_idx,
+            reduction.boundary,
+            reduction.root_epoch,
+        );
+        self.symbols.push(reduction.next_open);
+    }
+
+    fn apply_root_epoch_boundary(
+        &mut self,
+        boundary_idx: usize,
+        boundary: Symbol,
+        root_epoch: RootEpoch,
+    ) {
+        match boundary {
             Symbol::Control(ControlSymbol::Init(_)) => {
-                self.symbols.truncate(reduction.boundary_idx + 1);
-                self.symbols
-                    .push(Symbol::RootEpoches(vec![reduction.root_epoch]));
+                self.symbols.truncate(boundary_idx + 1);
+                self.symbols.push(Symbol::RootEpoches(vec![root_epoch]));
             }
             Symbol::RootEpoches(mut root_epochs) => {
-                self.symbols.truncate(reduction.boundary_idx);
-                root_epochs.push(reduction.root_epoch);
+                self.symbols.truncate(boundary_idx);
+                root_epochs.push(root_epoch);
                 self.symbols.push(Symbol::RootEpoches(root_epochs));
             }
-            _ => unreachable!("root epoch boundary was checked before prepare"),
+            _ => unreachable!("root epoch boundary was checked before apply"),
         }
-        self.symbols.push(reduction.next_open);
     }
 
     pub(super) fn root_epoch_reduced(
