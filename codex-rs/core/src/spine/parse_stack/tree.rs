@@ -300,41 +300,49 @@ fn format_tree_rows(
         if !visible.contains(&id) {
             continue;
         }
-        let marker = match row.status {
-            NodeStatus::Live => "Current",
-            NodeStatus::Opened => "Open",
-            NodeStatus::Closed => "Done",
-        };
-        let mut detail = String::new();
-        if let Some(memory_path) = row.memory_path.as_ref() {
-            detail.push_str(&format!(" memory={}", memory_path.display()));
-        }
-        if let Some(trajs_path) = row.trajs_path.as_ref() {
-            detail.push_str(&format!(" trajs={}", trajs_path.display()));
-        }
-        if let Some(accounting) = row.accounting.as_ref().map(format_node_accounting) {
-            detail.push_str(&format!(" {accounting}"));
-        }
-        let summary = visible_summary(&row)
-            .map(|summary| format!(" {summary}"))
-            .unwrap_or_default();
-        let annotation = context_annotations
-            .get(&id)
-            .map(|annotation| annotation.trim())
-            .filter(|annotation| !annotation.is_empty())
-            .map(|annotation| format!(" {annotation}"))
-            .unwrap_or_default();
-        lines.push(format!(
-            "{}- [{}] {}{}{}{}",
-            "  ".repeat(id.0.len().saturating_sub(1)),
-            id,
-            marker,
-            summary,
-            detail,
-            annotation
-        ));
+        lines.push(format_tree_row_line(&id, &row, context_annotations));
     }
     lines.join("\n")
+}
+
+fn format_tree_row_line(
+    id: &NodeId,
+    row: &TreeRenderRow,
+    context_annotations: &BTreeMap<NodeId, String>,
+) -> String {
+    let marker = match row.status {
+        NodeStatus::Live => "Current",
+        NodeStatus::Opened => "Open",
+        NodeStatus::Closed => "Done",
+    };
+    let mut detail = String::new();
+    if let Some(memory_path) = row.memory_path.as_ref() {
+        detail.push_str(&format!(" memory={}", memory_path.display()));
+    }
+    if let Some(trajs_path) = row.trajs_path.as_ref() {
+        detail.push_str(&format!(" trajs={}", trajs_path.display()));
+    }
+    if let Some(accounting) = row.accounting.as_ref().map(format_node_accounting) {
+        detail.push_str(&format!(" {accounting}"));
+    }
+    let summary = visible_summary(row)
+        .map(|summary| format!(" {summary}"))
+        .unwrap_or_default();
+    let annotation = context_annotations
+        .get(id)
+        .map(|annotation| annotation.trim())
+        .filter(|annotation| !annotation.is_empty())
+        .map(|annotation| format!(" {annotation}"))
+        .unwrap_or_default();
+    format!(
+        "{}- [{}] {}{}{}{}",
+        "  ".repeat(id.0.len().saturating_sub(1)),
+        id,
+        marker,
+        summary,
+        detail,
+        annotation
+    )
 }
 
 fn tree_rows_by_id(rows: Vec<TreeRenderRow>) -> BTreeMap<NodeId, TreeRenderRow> {
