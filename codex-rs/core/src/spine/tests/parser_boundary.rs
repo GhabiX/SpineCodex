@@ -52,12 +52,12 @@ fn parser_state_documents_spine_ownership_chain() {
 }
 
 #[test]
-fn parser_state_mutable_runtime_transition_handle_is_test_only() {
+fn parser_state_mutable_parse_stack_handle_is_test_only() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
-    let marker = "#[cfg(test)]\n    pub(super) fn parse_stack_mut_for_runtime_transition";
     assert!(
-        parser.contains(marker),
-        "mutable ParserState runtime transition handle must remain test-only"
+        parser.contains("#[cfg(test)]\n    pub(super) fn parse_stack_mut_for_test")
+            && !parser.contains("fn parse_stack_mut_for_runtime_transition"),
+        "mutable ParserState ParseStack handle must remain test-only and not be exposed as a runtime transition API"
     );
 }
 

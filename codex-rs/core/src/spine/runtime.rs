@@ -233,7 +233,7 @@ impl SpineRuntime {
 
     #[cfg(test)]
     fn parse_stack_mut_for_test(&mut self) -> &mut ParseStack {
-        self.parser.parse_stack_mut_for_runtime_transition()
+        self.parser.parse_stack_mut_for_test()
     }
 
     #[cfg(test)]
