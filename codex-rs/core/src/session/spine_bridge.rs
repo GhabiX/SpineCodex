@@ -1300,24 +1300,15 @@ impl Session {
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
         let token_info = state.token_info();
-        let pre_compact_provider_input_tokens = input.attempt.pre_compact_provider_input_tokens();
-        let current_turn_provider_input_tokens = input.attempt.current_turn_provider_input_tokens();
-        let attempt = guard.attempt_completed_toolcall_commit_with_host_effects(
-            input.attempt.into_commit_evidence(),
+        input.attempt.attempt_completed_toolcall_commit(
+            &mut guard,
             input.tool_resp_item,
             input.tool_resp_already_recorded,
             input.raw_items,
             history.raw_items(),
             input.expected_history,
             reference_context_item,
-            pre_compact_provider_input_tokens,
-            current_turn_provider_input_tokens,
-            |host_effects| {
-                Self::apply_spine_host_effects_to_locked_state(
-                    &mut state,
-                    HostEffects::from_runtime(host_effects),
-                )
-            },
+            |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
             |projection| {
                 if let Some(projection) = projection {
                     Ok(Some(build_annotated_tree_snapshot(
@@ -1328,8 +1319,7 @@ impl Session {
                     Ok(None)
                 }
             },
-        )?;
-        Ok(ToolcallHostAttempt::from_runtime(attempt))
+        )
     }
 
     async fn spine_raw_items_from_rollout_for_commit(

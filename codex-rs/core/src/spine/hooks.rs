@@ -390,16 +390,39 @@ impl CompletedToolCallHostOutcome {
 }
 
 impl ToolcallHostCommitAttempt {
-    pub(crate) fn into_commit_evidence(self) -> super::runtime::SpineToolcallCommitEvidence {
-        self.inner.into_commit_evidence()
-    }
-
-    pub(crate) fn pre_compact_provider_input_tokens(&self) -> Option<i64> {
-        self.inner.pre_compact_provider_input_tokens()
-    }
-
-    pub(crate) fn current_turn_provider_input_tokens(&self) -> Option<i64> {
-        self.inner.current_turn_provider_input_tokens()
+    pub(crate) fn attempt_completed_toolcall_commit(
+        self,
+        state: &mut SpineSessionState,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
+        history_items: &[ResponseItem],
+        expected_history: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+        apply_host_effects: impl FnOnce(HostEffects) -> Result<(), String>,
+        build_snapshot: impl FnOnce(
+            Option<(
+                SpineTreeUpdateEvent,
+                Vec<super::runtime::SpineOpenNodeContextProjection>,
+            )>,
+        ) -> Result<Option<SpineTreeUpdateEvent>, SpineError>,
+    ) -> Result<ToolcallHostAttempt, SpineError> {
+        let pre_compact_provider_input_tokens = self.inner.pre_compact_provider_input_tokens();
+        let current_turn_provider_input_tokens = self.inner.current_turn_provider_input_tokens();
+        let attempt = state.attempt_completed_toolcall_commit_with_host_effects(
+            self.inner.into_commit_evidence(),
+            tool_resp_item,
+            tool_resp_already_recorded,
+            raw_items,
+            history_items,
+            expected_history,
+            reference_context_item,
+            pre_compact_provider_input_tokens,
+            current_turn_provider_input_tokens,
+            |host_effects| apply_host_effects(HostEffects::from_runtime(host_effects)),
+            build_snapshot,
+        )?;
+        Ok(ToolcallHostAttempt { inner: attempt })
     }
 }
 
@@ -408,10 +431,6 @@ impl ToolcallHostAttempt {
         Self {
             inner: super::runtime::SpineToolcallHostAttempt::host_lock_busy(),
         }
-    }
-
-    pub(crate) fn from_runtime(inner: super::runtime::SpineToolcallHostAttempt) -> Self {
-        Self { inner }
     }
 }
 
