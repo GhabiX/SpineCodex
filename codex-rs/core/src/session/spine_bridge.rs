@@ -1018,8 +1018,17 @@ impl Session {
         };
         let output_raw_ordinals = {
             let guard = spine_slot.lock().await;
-            hooks::prepare_grouped_toolcall_output_recording(&guard, output_items)?
-                .into_raw_ordinals()
+            match hooks::prepare_toolcall_output_recording(
+                &guard,
+                hooks::ToolcallOutputRecordingRequest::Grouped { output_items },
+            )? {
+                hooks::ToolcallOutputRecordingPlan::Grouped(plan) => plan.into_raw_ordinals(),
+                hooks::ToolcallOutputRecordingPlan::Single(_) => {
+                    return Err(SpineError::Invariant(
+                        "grouped toolcall output recording requested single plan".to_string(),
+                    ));
+                }
+            }
         };
         let output_context_start = self.clone_history().await.raw_items().len();
         self.record_conversation_items_without_spine_observe(turn_context, output_items)
@@ -1055,12 +1064,21 @@ impl Session {
             let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
             let recording_plan = {
                 let guard = spine_slot.lock().await;
-                let Some(recording_plan) =
-                    hooks::prepare_single_toolcall_output_recording(&guard, call_id, &raw_items)?
-                else {
-                    return Ok(None);
-                };
-                recording_plan
+                match hooks::prepare_toolcall_output_recording(
+                    &guard,
+                    hooks::ToolcallOutputRecordingRequest::Single {
+                        call_id,
+                        raw_items: &raw_items,
+                    },
+                )? {
+                    hooks::ToolcallOutputRecordingPlan::Single(Some(plan)) => plan,
+                    hooks::ToolcallOutputRecordingPlan::Single(None) => return Ok(None),
+                    hooks::ToolcallOutputRecordingPlan::Grouped(_) => {
+                        return Err(SpineError::Invariant(
+                            "single toolcall output recording requested grouped plan".to_string(),
+                        ));
+                    }
+                }
             };
             raw_len = recording_plan.raw_len();
             let tool_resp_already_recorded =

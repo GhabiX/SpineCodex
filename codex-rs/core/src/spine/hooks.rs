@@ -42,6 +42,21 @@ pub(crate) struct GroupedToolcallOutputRecordingPlan {
     inner: super::runtime::SpineGroupedToolcallOutputRecordingPlan,
 }
 
+pub(crate) enum ToolcallOutputRecordingRequest<'a> {
+    Single {
+        call_id: &'a str,
+        raw_items: &'a [Option<ResponseItem>],
+    },
+    Grouped {
+        output_items: &'a [ResponseItem],
+    },
+}
+
+pub(crate) enum ToolcallOutputRecordingPlan {
+    Single(Option<SingleToolcallOutputRecordingPlan>),
+    Grouped(GroupedToolcallOutputRecordingPlan),
+}
+
 pub(crate) struct ReplayRuntime {
     raw_len: u64,
     runtime: Option<super::runtime::SpineRuntime>,
@@ -842,23 +857,24 @@ pub(crate) fn observe_toolcall_context_items(
     state.observe_toolcall_context_items(&runtime_items, raw_items)
 }
 
-pub(crate) fn prepare_single_toolcall_output_recording(
+pub(crate) fn prepare_toolcall_output_recording(
     state: &SpineSessionState,
-    call_id: &str,
-    raw_items: &[Option<ResponseItem>],
-) -> Result<Option<SingleToolcallOutputRecordingPlan>, SpineError> {
-    state
-        .prepare_single_toolcall_output_recording(call_id, raw_items)
-        .map(|plan| plan.map(|inner| SingleToolcallOutputRecordingPlan { inner }))
-}
-
-pub(crate) fn prepare_grouped_toolcall_output_recording(
-    state: &SpineSessionState,
-    output_items: &[ResponseItem],
-) -> Result<GroupedToolcallOutputRecordingPlan, SpineError> {
-    state
-        .prepare_grouped_toolcall_output_recording(output_items)
-        .map(|inner| GroupedToolcallOutputRecordingPlan { inner })
+    request: ToolcallOutputRecordingRequest<'_>,
+) -> Result<ToolcallOutputRecordingPlan, SpineError> {
+    match request {
+        ToolcallOutputRecordingRequest::Single { call_id, raw_items } => state
+            .prepare_single_toolcall_output_recording(call_id, raw_items)
+            .map(|plan| {
+                ToolcallOutputRecordingPlan::Single(
+                    plan.map(|inner| SingleToolcallOutputRecordingPlan { inner }),
+                )
+            }),
+        ToolcallOutputRecordingRequest::Grouped { output_items } => state
+            .prepare_grouped_toolcall_output_recording(output_items)
+            .map(|inner| {
+                ToolcallOutputRecordingPlan::Grouped(GroupedToolcallOutputRecordingPlan { inner })
+            }),
+    }
 }
 
 pub(crate) fn prepare_jit_replay_from_rollout_items(
