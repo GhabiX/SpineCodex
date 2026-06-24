@@ -1,7 +1,6 @@
 use super::super::memory_body;
 use super::super::sidecar_store_path;
 use crate::spine::SpineError;
-use crate::spine::io::hash_raw_live;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
@@ -20,7 +19,7 @@ pub(in crate::spine::store) fn commit_marker_allowed_by_source_live(
         return Ok(false);
     }
     if let Some(raw_live_hash) = marker.raw_live_hash.as_deref()
-        && !raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
+        && !commit_raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
     {
         return Ok(false);
     }
@@ -53,7 +52,7 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
         memory_body::read_body_with_hash(&body_path, &memory.compact_id, &memory.body_hash)?;
     }
     if let Some(raw_live_hash) = marker.raw_live_hash.as_deref()
-        && !raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
+        && !commit_raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
     {
         return Err(SpineError::InvalidStore(format!(
             "Spine commit marker {} raw boundary {} is not proved by durable raw live state",
@@ -102,23 +101,23 @@ fn commit_memory_ref_allowed_by_source_live(
     memory: &SpineCommitMemoryRef,
     raw_live: &[bool],
 ) -> Result<bool, SpineError> {
+    let raw_mask = RawMask::new(raw_live);
     match memory.kind {
-        MemKind::Suffix => RawMask::new(raw_live).span_live(memory.raw_start, memory.raw_end),
+        MemKind::Suffix => raw_mask.span_live(memory.raw_start, memory.raw_end),
         MemKind::RootEpoch => memory.raw_live_hash.as_deref().map_or(Ok(false), |hash| {
-            raw_live_prefix_hash_matches(raw_live, memory.raw_end, hash)
+            commit_raw_live_prefix_hash_matches(raw_live, memory.raw_end, hash)
         }),
     }
 }
 
-fn raw_live_prefix_hash_matches(
+fn commit_raw_live_prefix_hash_matches(
     raw_live: &[bool],
     boundary: u64,
     expected: &str,
 ) -> Result<bool, SpineError> {
-    let boundary = usize::try_from(boundary)
-        .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
-    if boundary > raw_live.len() {
-        return Ok(false);
-    }
-    Ok(hash_raw_live(&raw_live[..boundary]) == expected)
+    RawMask::new(raw_live).prefix_hash_matches_with_overflow(
+        boundary,
+        expected,
+        "raw boundary overflow",
+    )
 }

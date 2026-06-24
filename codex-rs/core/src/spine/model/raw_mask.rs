@@ -38,7 +38,16 @@ impl<'a> RawMask<'a> {
         end: u64,
         expected: &str,
     ) -> Result<bool, SpineError> {
-        let end = raw_usize(end, "raw end overflow")?;
+        self.prefix_hash_matches_with_overflow(end, expected, "raw end overflow")
+    }
+
+    pub(in crate::spine) fn prefix_hash_matches_with_overflow(
+        self,
+        end: u64,
+        expected: &str,
+        overflow_message: &str,
+    ) -> Result<bool, SpineError> {
+        let end = raw_usize(end, overflow_message)?;
         Ok(self
             .live
             .get(..end)
