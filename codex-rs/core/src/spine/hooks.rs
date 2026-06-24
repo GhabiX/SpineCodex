@@ -110,6 +110,13 @@ pub(crate) fn ensure_runtime(
     state.ensure_runtime(rollout_path)
 }
 
+pub(crate) fn observe_raw_items(
+    state: &mut SpineSessionState,
+    count: usize,
+) -> Result<(), SpineError> {
+    state.observe_raw_items(count)
+}
+
 pub(crate) fn is_ready(state: &SpineSessionState) -> bool {
     state.is_ready()
 }

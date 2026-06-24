@@ -515,7 +515,8 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        spine_slot.lock().await.observe_raw_items(count)
+        let mut guard = spine_slot.lock().await;
+        hooks::observe_raw_items(&mut guard, count)
     }
 
     pub(super) async fn emit_spine_tree_snapshot_cache_only_if_available(&self) {
