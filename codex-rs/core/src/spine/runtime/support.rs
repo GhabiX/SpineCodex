@@ -154,24 +154,24 @@ pub(super) fn collect_source_plan_entries_from_visible_refs(
                 raw_ordinal,
                 from_user,
                 user_anchor,
-            } => collect_source_plan_entry_from_response_item(
+            } => entries.push(source_plan_entry_from_response_item(
+                entries.len(),
                 *raw_ordinal,
                 visible_ref.context_index,
                 *from_user,
                 *user_anchor,
                 raw_context_items,
-                &mut entries,
-            )?,
+            )?),
             VisibleItemSource::ToolCallSegment { raw_ordinal, kind } => {
                 let _ = kind;
-                collect_source_plan_entry_from_response_item(
+                entries.push(source_plan_entry_from_response_item(
+                    entries.len(),
                     *raw_ordinal,
                     visible_ref.context_index,
                     false,
                     None,
                     raw_context_items,
-                    &mut entries,
-                )?;
+                )?);
             }
             VisibleItemSource::MemoryRef { memory, .. } => {
                 let source_ordinal = entries.len();
@@ -201,15 +201,14 @@ pub(super) fn collect_source_plan_entries_from_visible_refs(
     Ok(entries)
 }
 
-fn collect_source_plan_entry_from_response_item(
+fn source_plan_entry_from_response_item(
+    source_ordinal: usize,
     raw_ordinal: u64,
     context_index: usize,
     from_user: bool,
     user_anchor: Option<u64>,
     raw_context_items: &[ResponseItem],
-    entries: &mut Vec<SpineCompactSourcePlanEntry>,
-) -> Result<(), SpineError> {
-    let source_ordinal = entries.len();
+) -> Result<SpineCompactSourcePlanEntry, SpineError> {
     let item = raw_context_items
         .get(context_index)
         .cloned()
@@ -220,7 +219,7 @@ fn collect_source_plan_entry_from_response_item(
             ))
         })?;
     let source_hash = hash_response_items(std::slice::from_ref(&item))?;
-    entries.push(SpineCompactSourcePlanEntry {
+    Ok(SpineCompactSourcePlanEntry {
         context_index,
         source_ordinal,
         source_hash,
@@ -230,8 +229,7 @@ fn collect_source_plan_entry_from_response_item(
             from_user,
             user_anchor,
         },
-    });
-    Ok(())
+    })
 }
 
 pub(super) fn validate_model_node_memory(memory: &str) -> Result<(), SpineError> {
