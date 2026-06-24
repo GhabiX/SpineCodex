@@ -66,13 +66,9 @@ impl SpineArchive {
     }
 
     fn staged_memory_body(&self, memory_id: &str) -> Option<String> {
-        self.staging.as_ref().and_then(|staging| {
-            staging
-                .borrow()
-                .memory_bodies
-                .get(memory_id)
-                .map(ToString::to_string)
-        })
+        self.staging
+            .as_ref()
+            .and_then(|staging| staging.borrow().memory_bodies.get(memory_id).cloned())
     }
 
     fn stage_archive_file(&self, path: PathBuf, content: String) -> Result<(), SpineError> {

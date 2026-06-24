@@ -54,15 +54,7 @@ pub(super) fn build_checkpoint(
             "checkpoint raw ordinal exceeds raw boundary".to_string(),
         ));
     }
-    let mut tree_meta = Vec::new();
-    let mut memory_refs = Vec::new();
-    let mut trajs_refs = Vec::new();
-    collect_checkpoint_refs(
-        &parse_stack.symbols,
-        &mut tree_meta,
-        &mut memory_refs,
-        &mut trajs_refs,
-    );
+    let checkpoint_refs = collect_checkpoint_refs(&parse_stack.symbols);
     Ok(SpineCheckpoint {
         version: CHECKPOINT_VERSION,
         checkpoint_id: format!("pre-user-{raw_ordinal:020}"),
@@ -76,9 +68,9 @@ pub(super) fn build_checkpoint(
         cursor: parse_stack.current_cursor_id()?.to_string(),
         parse_stack: parse_stack.clone(),
         parse_stack_symbols: parse_stack_symbol_debug_strings(&parse_stack.symbols),
-        tree_meta,
-        memory_refs,
-        trajs_refs,
+        tree_meta: checkpoint_refs.tree_meta,
+        memory_refs: checkpoint_refs.memory_refs,
+        trajs_refs: checkpoint_refs.trajs_refs,
         h_ps_hash: hash_response_items(context)?,
     })
 }
@@ -133,34 +125,45 @@ pub(super) struct CheckpointTrajsRef {
     pub(super) trajs_path: String,
 }
 
-pub(super) fn collect_checkpoint_refs(
-    symbols: &[Symbol],
-    tree_meta: &mut Vec<CheckpointTreeMeta>,
-    memory_refs: &mut Vec<CheckpointMemoryRef>,
-    trajs_refs: &mut Vec<CheckpointTrajsRef>,
-) {
+pub(super) struct CheckpointRefs {
+    pub(super) tree_meta: Vec<CheckpointTreeMeta>,
+    pub(super) memory_refs: Vec<CheckpointMemoryRef>,
+    pub(super) trajs_refs: Vec<CheckpointTrajsRef>,
+}
+
+pub(super) fn collect_checkpoint_refs(symbols: &[Symbol]) -> CheckpointRefs {
+    let mut refs = CheckpointRefs {
+        tree_meta: Vec::new(),
+        memory_refs: Vec::new(),
+        trajs_refs: Vec::new(),
+    };
+    collect_checkpoint_refs_into(symbols, &mut refs);
+    refs
+}
+
+fn collect_checkpoint_refs_into(symbols: &[Symbol], refs: &mut CheckpointRefs) {
     for symbol in symbols {
         match symbol {
             Symbol::Control(ControlSymbol::Init(meta))
             | Symbol::Control(ControlSymbol::Open(meta)) => {
-                tree_meta.push(checkpoint_tree_meta(meta));
+                refs.tree_meta.push(checkpoint_tree_meta(meta));
             }
             Symbol::Control(ControlSymbol::End) => {}
             Symbol::Control(ControlSymbol::Close(memory))
             | Symbol::Control(ControlSymbol::Compact(memory, _, _, _)) => {
-                memory_refs.push(checkpoint_memory_ref(memory));
+                refs.memory_refs.push(checkpoint_memory_ref(memory));
             }
             Symbol::SpineTreeNode(node) => {
-                collect_checkpoint_node_refs(node, tree_meta, memory_refs, trajs_refs);
+                collect_checkpoint_node_refs(node, refs);
             }
             Symbol::SpineTreeNodes(nodes) => {
                 for node in nodes {
-                    collect_checkpoint_node_refs(node, tree_meta, memory_refs, trajs_refs);
+                    collect_checkpoint_node_refs(node, refs);
                 }
             }
             Symbol::RootEpoches(root_epochs) => {
                 for RootEpoch { memory } in root_epochs {
-                    memory_refs.push(checkpoint_memory_ref(memory));
+                    refs.memory_refs.push(checkpoint_memory_ref(memory));
                 }
             }
         }
@@ -171,12 +174,7 @@ pub(in crate::spine) fn parse_stack_symbol_debug_strings(symbols: &[Symbol]) -> 
     symbols.iter().map(|symbol| format!("{symbol:?}")).collect()
 }
 
-fn collect_checkpoint_node_refs(
-    node: &SpineTreeNode,
-    tree_meta: &mut Vec<CheckpointTreeMeta>,
-    memory_refs: &mut Vec<CheckpointMemoryRef>,
-    trajs_refs: &mut Vec<CheckpointTrajsRef>,
-) {
+fn collect_checkpoint_node_refs(node: &SpineTreeNode, refs: &mut CheckpointRefs) {
     match node {
         SpineTreeNode::MsgAsLeafNode { .. } | SpineTreeNode::ToolCallAsLeafNode { .. } => {}
         SpineTreeNode::SpineTree {
@@ -186,14 +184,14 @@ fn collect_checkpoint_node_refs(
             trajs_path,
             ..
         } => {
-            tree_meta.push(checkpoint_tree_meta(meta));
-            memory_refs.push(checkpoint_memory_ref(memory));
-            trajs_refs.push(CheckpointTrajsRef {
+            refs.tree_meta.push(checkpoint_tree_meta(meta));
+            refs.memory_refs.push(checkpoint_memory_ref(memory));
+            refs.trajs_refs.push(CheckpointTrajsRef {
                 node_id: meta.id.to_string(),
                 trajs_path: trajs_path.display().to_string(),
             });
             for child in children {
-                collect_checkpoint_node_refs(child, tree_meta, memory_refs, trajs_refs);
+                collect_checkpoint_node_refs(child, refs);
             }
         }
     }

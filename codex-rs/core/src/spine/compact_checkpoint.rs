@@ -59,15 +59,7 @@ pub(super) fn build_compact_checkpoint(
             "compact raw boundary exceeds raw live length".to_string(),
         ));
     }
-    let mut tree_meta = Vec::new();
-    let mut memory_refs = Vec::new();
-    let mut trajs_refs = Vec::new();
-    collect_checkpoint_refs(
-        &parse_stack.symbols,
-        &mut tree_meta,
-        &mut memory_refs,
-        &mut trajs_refs,
-    );
+    let checkpoint_refs = collect_checkpoint_refs(&parse_stack.symbols);
     let (response_item_refs, memory_item_refs) =
         collect_visible_item_refs(parse_stack, raw_boundary_usize, raw_items, context)?;
     Ok(SpineCompactCheckpoint {
@@ -81,7 +73,7 @@ pub(super) fn build_compact_checkpoint(
         replacement_history_hash: hash_response_items(replacement_history)?,
         response_item_refs,
         memory_item_refs,
-        memory_refs,
+        memory_refs: checkpoint_refs.memory_refs,
     })
 }
 
