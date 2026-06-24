@@ -465,13 +465,7 @@ impl SpineRuntime {
             &trim_projection,
             &self.archive(),
         )?;
-        if prepared_reduction.current_open_index != prepared_reduction.materialized.len() {
-            return Err(SpineError::Invariant(format!(
-                "spine root compact open index {} does not match materialized history length {}",
-                prepared_reduction.current_open_index,
-                prepared_reduction.materialized.len()
-            )));
-        }
+        prepared_reduction.validate_current_open_matches_materialized_len()?;
         let token_seq_after = seq.checked_add(1).ok_or_else(|| {
             SpineError::InvalidEvent("root compact token seq overflow".to_string())
         })?;
@@ -483,12 +477,14 @@ impl SpineRuntime {
                     token_seq_after,
                     &self.raw_live,
                     raw_items,
-                    &prepared_reduction.materialized,
+                    prepared_reduction.materialized(),
                 )
             })
             .transpose()?;
+        let (materialized, root_epoch_reduction) =
+            prepared_reduction.into_materialized_and_reduction();
         let result = SpineRootCompactResult {
-            materialized: prepared_reduction.materialized,
+            materialized,
             raw_boundary: self.raw_len,
             token_seq_after,
         };
@@ -509,7 +505,7 @@ impl SpineRuntime {
             compact_checkpoint,
             root_compact_event,
             memory,
-            root_epoch_reduction: prepared_reduction.root_epoch_reduction,
+            root_epoch_reduction,
             next_open_index: next_open_index_usize,
         })
     }

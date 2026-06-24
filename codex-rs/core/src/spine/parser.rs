@@ -52,10 +52,10 @@ pub(super) struct ParserState {
 }
 
 pub(super) struct ParserRootCompactPreparedReduction {
-    pub(super) final_parse_stack: ParserPreparedState,
-    pub(super) root_epoch_reduction: PreparedRootEpochReduction,
-    pub(super) materialized: Vec<ResponseItem>,
-    pub(super) current_open_index: usize,
+    final_parse_stack: ParserPreparedState,
+    root_epoch_reduction: PreparedRootEpochReduction,
+    materialized: Vec<ResponseItem>,
+    current_open_index: usize,
 }
 
 #[derive(Debug)]
@@ -139,6 +139,27 @@ impl ParserPublicationPlan {
 }
 
 impl ParserRootCompactPreparedReduction {
+    pub(super) fn validate_current_open_matches_materialized_len(&self) -> Result<(), SpineError> {
+        if self.current_open_index != self.materialized.len() {
+            return Err(SpineError::Invariant(format!(
+                "spine root compact open index {} does not match materialized history length {}",
+                self.current_open_index,
+                self.materialized.len()
+            )));
+        }
+        Ok(())
+    }
+
+    pub(super) fn materialized(&self) -> &[ResponseItem] {
+        &self.materialized
+    }
+
+    pub(super) fn into_materialized_and_reduction(
+        self,
+    ) -> (Vec<ResponseItem>, PreparedRootEpochReduction) {
+        (self.materialized, self.root_epoch_reduction)
+    }
+
     pub(super) fn build_compact_checkpoint(
         &self,
         rollout_path: &Path,

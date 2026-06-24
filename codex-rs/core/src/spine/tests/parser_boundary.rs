@@ -463,6 +463,17 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
         root_compact.contains(".build_compact_checkpoint("),
         "runtime root compact checkpoint construction should route through parser prepared reduction"
     );
+    assert!(
+        !root_compact.contains("prepared_reduction.current_open_index")
+            && !root_compact.contains("prepared_reduction.materialized.len()")
+            && !root_compact.contains("prepared_reduction.root_epoch_reduction"),
+        "runtime root compact must not inspect parser prepared reduction internals"
+    );
+    assert!(
+        root_compact.contains(".validate_current_open_matches_materialized_len()")
+            && root_compact.contains(".into_materialized_and_reduction()"),
+        "runtime root compact should consume parser prepared reduction through named parser methods"
+    );
 }
 
 #[test]
