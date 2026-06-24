@@ -423,6 +423,23 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && prepared.contains("publication_plan: Option<ParserPublicationPlan>"),
         "runtime prepared carriers should hold parser-owned publication plans"
     );
+    assert!(
+        prepared.contains("struct SpinePreparedCommitInstall")
+            && prepared.contains("install: Option<SpinePreparedCommitInstall>")
+            && !prepared.contains("SpinePreparedCommitApplication")
+            && !prepared.contains("application: Option"),
+        "runtime commit publication should name the parser install carrier directly, not as an application wrapper"
+    );
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    assert!(
+        commit.contains("SpinePreparedCommitInstall")
+            && !commit.contains("SpinePreparedCommitApplication")
+            && !commit.contains("commit_application_publication_history_update")
+            && !commit.contains(".application()")
+            && !commit.contains(".into_application()"),
+        "runtime commit should name parser-install intent directly instead of the old application wrapper"
+    );
 }
 
 #[test]

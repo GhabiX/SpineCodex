@@ -26,13 +26,13 @@ pub(crate) struct SpinePreparedCommit {
 }
 
 #[derive(Debug)]
-pub(crate) struct SpinePreparedCommitApplication {
+pub(crate) struct SpinePreparedCommitInstall {
     prepared: SpinePreparedCommit,
 }
 
 #[derive(Debug)]
 pub(crate) struct SpineCommitPublication<T> {
-    application: Option<SpinePreparedCommitApplication>,
+    install: Option<SpinePreparedCommitInstall>,
     history_update: Option<T>,
 }
 
@@ -49,8 +49,8 @@ impl SpinePreparedRootCompact {
 }
 
 impl SpinePreparedCommit {
-    pub(super) fn into_application(self) -> SpinePreparedCommitApplication {
-        SpinePreparedCommitApplication { prepared: self }
+    pub(super) fn into_install(self) -> SpinePreparedCommitInstall {
+        SpinePreparedCommitInstall { prepared: self }
     }
 
     #[cfg(test)]
@@ -87,7 +87,7 @@ impl SpinePreparedCommit {
     }
 }
 
-impl SpinePreparedCommitApplication {
+impl SpinePreparedCommitInstall {
     pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
         self.prepared.defer_tree_update_until_raw_output()
     }
@@ -112,30 +112,30 @@ impl SpinePreparedCommitApplication {
 
 impl<T> SpineCommitPublication<T> {
     pub(super) fn new(
-        application: Option<SpinePreparedCommitApplication>,
+        install: Option<SpinePreparedCommitInstall>,
         history_update: Option<T>,
     ) -> Self {
         Self {
-            application,
+            install,
             history_update,
         }
     }
 
     pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
-        self.application
+        self.install
             .as_ref()
-            .is_some_and(SpinePreparedCommitApplication::defer_tree_update_until_raw_output)
+            .is_some_and(SpinePreparedCommitInstall::defer_tree_update_until_raw_output)
     }
 
     pub(crate) fn take_history_update(&mut self) -> Option<T> {
         self.history_update.take()
     }
 
-    pub(super) fn application(&self) -> Option<&SpinePreparedCommitApplication> {
-        self.application.as_ref()
+    pub(super) fn install(&self) -> Option<&SpinePreparedCommitInstall> {
+        self.install.as_ref()
     }
 
-    pub(super) fn into_application(self) -> Option<SpinePreparedCommitApplication> {
-        self.application
+    pub(super) fn into_install(self) -> Option<SpinePreparedCommitInstall> {
+        self.install
     }
 }

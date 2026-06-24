@@ -15,7 +15,7 @@ use super::pending::PendingTransition;
 use super::prepared::SpineCommitKind;
 use super::prepared::SpineCommitPublication;
 use super::prepared::SpinePreparedCommit;
-use super::prepared::SpinePreparedCommitApplication;
+use super::prepared::SpinePreparedCommitInstall;
 use super::support::close_commit_marker;
 use super::support::close_event_boundary;
 use super::support::completed_toolcall_first_segment;
@@ -178,7 +178,7 @@ impl SpineRuntime {
         current_turn_provider_input_tokens: Option<i64>,
         completed_toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<SpinePreparedCommitApplication>, SpineError> {
+    ) -> Result<Option<SpinePreparedCommitInstall>, SpineError> {
         let pending_commit = self.pending_commit(call_id)?;
         let pre_compact_token_baselines =
             pre_compact_provider_input_tokens.map(|tokens| SpineTokenBaselines {
@@ -202,7 +202,7 @@ impl SpineRuntime {
             completed_toolcall,
             raw_items,
         )
-        .map(|prepared| prepared.map(SpinePreparedCommit::into_application))
+        .map(|prepared| prepared.map(SpinePreparedCommit::into_install))
     }
 
     pub(crate) fn validate_close_expected_history_for_commit(
@@ -627,8 +627,8 @@ impl SpineRuntime {
         &mut self,
         publication: &SpineCommitPublication<T>,
     ) -> Result<(), SpineError> {
-        if let Some(application) = publication.application() {
-            self.persist_prepared_commit_side_effects(application.as_prepared_commit())?;
+        if let Some(install) = publication.install() {
+            self.persist_prepared_commit_side_effects(install.as_prepared_commit())?;
         }
         Ok(())
     }
@@ -646,8 +646,8 @@ impl SpineRuntime {
         &mut self,
         publication: SpineCommitPublication<T>,
     ) -> bool {
-        if let Some(application) = publication.into_application() {
-            self.install_prepared_commit(application.into_prepared_commit());
+        if let Some(install) = publication.into_install() {
+            self.install_prepared_commit(install.into_prepared_commit());
             true
         } else {
             false
@@ -685,10 +685,10 @@ impl SpineRuntime {
         )))
     }
 
-    pub(crate) fn commit_application_publication_history_update<T>(
+    pub(crate) fn commit_install_publication_history_update<T>(
         &self,
         call_id: &str,
-        application: Option<&SpinePreparedCommitApplication>,
+        install: Option<&SpinePreparedCommitInstall>,
         tool_resp_item: &ResponseItem,
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
@@ -697,7 +697,7 @@ impl SpineRuntime {
     ) -> Result<Option<T>, SpineError> {
         self.commit_publication_history_update(
             call_id,
-            application.map(SpinePreparedCommitApplication::as_prepared_commit),
+            install.map(SpinePreparedCommitInstall::as_prepared_commit),
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
@@ -709,26 +709,26 @@ impl SpineRuntime {
     pub(crate) fn prepare_commit_publication<T>(
         &self,
         call_id: &str,
-        application: Option<SpinePreparedCommitApplication>,
+        install: Option<SpinePreparedCommitInstall>,
         tool_resp_item: &ResponseItem,
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<SpineCommitPublication<T>, SpineError> {
-        if let Some(application) = application.as_ref() {
-            application.validate_against_host_history(call_id, history_items)?;
+        if let Some(install) = install.as_ref() {
+            install.validate_against_host_history(call_id, history_items)?;
         }
-        let history_update = self.commit_application_publication_history_update(
+        let history_update = self.commit_install_publication_history_update(
             call_id,
-            application.as_ref(),
+            install.as_ref(),
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
             history_items,
             build_update,
         )?;
-        Ok(SpineCommitPublication::new(application, history_update))
+        Ok(SpineCommitPublication::new(install, history_update))
     }
 
     fn commit_publication_history_update_parts(
