@@ -167,4 +167,43 @@ impl TrimEvent {
             TrimEvent::Candidate { raw_ordinal, .. } => raw_mask.raw_index_live(*raw_ordinal),
         }
     }
+
+    pub(in crate::spine) fn within_toolcall_boundary(&self, toolcall_seq_limit: u64) -> bool {
+        match self {
+            TrimEvent::ToolCallBoundary { toolcall_seq, .. }
+            | TrimEvent::Candidate { toolcall_seq, .. } => *toolcall_seq < toolcall_seq_limit,
+            TrimEvent::Cleared { .. } | TrimEvent::Snipped { .. } | TrimEvent::Sliced { .. } => {
+                true
+            }
+        }
+    }
+
+    pub(in crate::spine) fn within_raw_boundary(&self, raw_boundary: u64) -> bool {
+        match self {
+            TrimEvent::ToolCallBoundary {
+                raw_boundary: event_boundary,
+                ..
+            }
+            | TrimEvent::Cleared {
+                raw_boundary: event_boundary,
+                ..
+            }
+            | TrimEvent::Snipped {
+                raw_boundary: event_boundary,
+                ..
+            }
+            | TrimEvent::Sliced {
+                raw_boundary: event_boundary,
+                ..
+            } => *event_boundary <= raw_boundary,
+            TrimEvent::Candidate { raw_ordinal, .. } => *raw_ordinal < raw_boundary,
+        }
+    }
+
+    pub(in crate::spine) fn toolcall_boundary_seq(&self) -> Option<u64> {
+        match self {
+            TrimEvent::ToolCallBoundary { toolcall_seq, .. } => Some(*toolcall_seq),
+            _ => None,
+        }
+    }
 }
