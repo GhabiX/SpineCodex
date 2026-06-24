@@ -140,6 +140,14 @@ pub(crate) fn abort_any_pending(
     Ok(state.abort_any_pending())
 }
 
+pub(crate) fn is_control_output_call_id(
+    state: &SpineSessionState,
+    call_id: &str,
+) -> Result<bool, SpineError> {
+    state.ensure_valid()?;
+    Ok(state.is_control_output_call_id(call_id))
+}
+
 enum ToolCallEvidenceKind<'a> {
     Single {
         item: &'a ResponseItem,

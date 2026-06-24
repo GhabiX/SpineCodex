@@ -1312,8 +1312,7 @@ impl Session {
             return Ok(false);
         };
         let guard = spine_slot.lock().await;
-        guard.ensure_valid()?;
-        Ok(guard.is_control_output_call_id(call_id))
+        hooks::is_control_output_call_id(&guard, call_id)
     }
 
     #[cfg(test)]
