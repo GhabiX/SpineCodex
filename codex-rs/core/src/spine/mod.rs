@@ -32,7 +32,9 @@ pub(crate) use runtime::SPINE_TOOL_TRIM;
 pub(crate) use runtime::SpineCloseMemoryAssembly;
 #[cfg(test)]
 pub(crate) use runtime::SpineCommitKind;
+#[cfg(test)]
 pub(crate) use runtime::SpineCompactSourceEntryKind;
+#[cfg(test)]
 pub(crate) use runtime::SpineCompactSourcePlan;
 #[cfg(test)]
 pub(crate) use runtime::SpineCompactSourcePlanEntry;
