@@ -117,6 +117,12 @@ pub(crate) fn observe_raw_items(
     state.observe_raw_items(count)
 }
 
+pub(crate) fn take_initial_tree_snapshot(
+    state: &mut SpineSessionState,
+) -> Result<Option<SpineTreeUpdateEvent>, SpineError> {
+    state.take_initial_tree_snapshot()
+}
+
 pub(crate) fn trim_projection_needs_rollout_raw_items(
     state: &SpineSessionState,
 ) -> Result<Option<bool>, SpineError> {

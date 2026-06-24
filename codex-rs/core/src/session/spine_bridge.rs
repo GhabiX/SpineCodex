@@ -236,7 +236,7 @@ impl Session {
         };
         let snapshot = {
             let mut guard = spine_slot.lock().await;
-            guard.take_initial_tree_snapshot()?
+            hooks::take_initial_tree_snapshot(&mut guard)?
         };
         if let Some(snapshot) = snapshot {
             self.send_spine_tree_update(turn_context, snapshot).await;
