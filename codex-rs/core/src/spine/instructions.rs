@@ -198,9 +198,7 @@ pub(crate) fn spine_scaling_prompt_block(
     override_contents: Option<&str>,
 ) -> Option<String> {
     let tag = spine_scaling_override_tag(spine_scaling)?;
-    override_contents
-        .and_then(|contents| extract_spine_instruction_section_body(contents, tag))
-        .or_else(|| default_spine_scaling_prompt_block(spine_scaling).map(str::to_string))
+    override_contents.and_then(|contents| extract_spine_instruction_section_body(contents, tag))
 }
 
 fn spine_scaling_override_tag(spine_scaling: SpineScalingLevel) -> Option<&'static str> {
@@ -209,13 +207,6 @@ fn spine_scaling_override_tag(spine_scaling: SpineScalingLevel) -> Option<&'stat
         SpineScalingLevel::Medium => Some("spine_scaling_medium"),
         SpineScalingLevel::High => Some("spine_scaling_high"),
         SpineScalingLevel::Auto => Some("spine_scaling_auto"),
-    }
-}
-
-fn default_spine_scaling_prompt_block(spine_scaling: SpineScalingLevel) -> Option<&'static str> {
-    match spine_scaling {
-        SpineScalingLevel::Low => None,
-        SpineScalingLevel::Medium | SpineScalingLevel::High | SpineScalingLevel::Auto => None,
     }
 }
 
