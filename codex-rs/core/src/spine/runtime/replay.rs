@@ -100,7 +100,7 @@ pub(super) fn replay_from_events(
     replay_event_seqs: &MarkerReplayEventSeqs,
     initial: Option<&ParseStack>,
     min_seq: Option<u64>,
-) -> Result<ParseStack, SpineError> {
+) -> Result<ParserState, SpineError> {
     let raw_mask = RawMask::new(raw_live);
     let Some(initial) = initial else {
         let events = events
@@ -115,8 +115,7 @@ pub(super) fn replay_from_events(
             raw_mask,
             &replay_event_seqs.forced,
             &replay_event_seqs.marker_structural,
-        )
-        .map(ParserState::into_parse_stack);
+        );
     };
     let mem_map = mems
         .iter()
@@ -138,7 +137,7 @@ pub(super) fn replay_from_events(
             parser.apply_replay_event(event, archive, &mem_map, raw_mask)?;
         }
     }
-    Ok(parser.into_parse_stack())
+    Ok(parser)
 }
 
 pub(super) struct MarkerReplayEventSeqs {

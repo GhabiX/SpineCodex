@@ -16,7 +16,6 @@ use crate::spine::checkpoint::validate_checkpoint;
 use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineCommitMarker;
-use crate::spine::parse_stack::ParseStack;
 use crate::spine::parser::ParserState;
 use crate::spine::store::SpineStore;
 
@@ -253,7 +252,7 @@ impl SpineRuntime {
             ledger.events.clone()
         };
         let archive = SpineArchive::new(store.root.clone());
-        let parse_stack = replay_from_events(
+        let parser = replay_from_events(
             &archive,
             &events,
             &mems,
@@ -267,7 +266,7 @@ impl SpineRuntime {
         build_jit_runtime(
             store,
             ledger,
-            parse_stack,
+            parser,
             raw_live,
             pending_memory_context_accounting,
             next_user_anchor,
@@ -309,7 +308,7 @@ impl SpineRuntime {
             &ledger, &archive, &mems, &markers, &raw_live, checkpoint,
         )?;
 
-        let parse_stack = replay_from_events(
+        let parser = replay_from_events(
             &archive,
             &ledger.events,
             &mems,
@@ -323,7 +322,7 @@ impl SpineRuntime {
         build_jit_runtime(
             store,
             ledger,
-            parse_stack,
+            parser,
             raw_live,
             pending_memory_context_accounting,
             next_user_anchor,
@@ -351,7 +350,7 @@ fn existing_rollout_store(rollout_path: &Path) -> Result<Option<SpineStore>, Spi
 fn build_jit_runtime(
     store: SpineStore,
     ledger: SpineLedgerCache,
-    parse_stack: ParseStack,
+    parser: ParserState,
     raw_live: Vec<bool>,
     pending_memory_context_accounting: Option<super::PendingMemoryContextAccounting>,
     next_user_anchor: u64,
@@ -359,7 +358,7 @@ fn build_jit_runtime(
     build_runtime(
         store,
         ledger,
-        ParserState::from_parse_stack(parse_stack),
+        parser,
         raw_live,
         true,
         pending_memory_context_accounting,

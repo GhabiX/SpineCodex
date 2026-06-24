@@ -127,6 +127,11 @@ fn runtime_replay_routes_token_consumption_through_parser_state() {
             && replay.contains("parser.apply_replay_event"),
         "runtime replay should route replay token consumption through ParserState"
     );
+    assert!(
+        replay.contains(") -> Result<ParserState, SpineError>")
+            && !replay.contains(") -> Result<ParseStack, SpineError>"),
+        "runtime replay should return parser-owned state instead of exposing raw ParseStack"
+    );
 }
 
 #[test]
@@ -167,6 +172,11 @@ fn runtime_load_checkpoint_replay_routes_through_parser_state() {
     assert!(
         load.contains("ParserState::from_replay_events_with_forced_events"),
         "checkpoint prefix replay should route through ParserState"
+    );
+    assert!(
+        !load.contains("let parse_stack = replay_from_events(")
+            && !load.contains("ParserState::from_parse_stack(parse_stack)"),
+        "runtime/load.rs should keep replay output as ParserState, not unwrap and rewrap ParseStack"
     );
 }
 
