@@ -67,8 +67,6 @@ pub(super) fn tree_snapshot_nodes(
         .into_iter()
         .filter(|(id, _)| projected_ids.contains(id))
         .map(|(_, row)| {
-            let status = row.snapshot_status();
-            let summary = visible_summary(&row).map(str::to_string);
             // Snapshot parents describe this projected forest, not hidden
             // ParseStack ancestors such as the root epoch holder.
             let parent_id = row
@@ -79,8 +77,8 @@ pub(super) fn tree_snapshot_nodes(
             SpineTreeNodeSnapshot {
                 parent_id,
                 node_id: row.id.as_path(),
-                summary,
-                status,
+                summary: visible_summary(&row).map(str::to_string),
+                status: row.snapshot_status(),
                 accounting: row.accounting.as_ref().map(snapshot_accounting),
             }
         })
@@ -388,16 +386,15 @@ fn visible_tree_row_ids(
 }
 
 fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
-    Some(NodeAccounting {
+    let accounting = NodeAccounting {
         closed_source_suffix_tokens: memory.closed_source_suffix_tokens,
         closed_memory_context_tokens: memory.closed_memory_context_tokens,
         memory_output_tokens: memory.memory_output_tokens.filter(|tokens| *tokens > 0),
-    })
-    .filter(|accounting| {
-        accounting.closed_source_suffix_tokens.is_some()
-            || accounting.closed_memory_context_tokens.is_some()
-            || accounting.memory_output_tokens.is_some()
-    })
+    };
+    (accounting.closed_source_suffix_tokens.is_some()
+        || accounting.closed_memory_context_tokens.is_some()
+        || accounting.memory_output_tokens.is_some())
+    .then_some(accounting)
 }
 
 fn snapshot_accounting(accounting: &NodeAccounting) -> SpineTreeNodeAccountingSnapshot {
