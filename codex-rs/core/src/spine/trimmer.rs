@@ -364,18 +364,10 @@ fn prefix_byte_index(text: &str, count: usize) -> usize {
 fn byte_index_before_chars(text: &str, byte_index: usize, count: usize) -> usize {
     let prefix = &text[..byte_index];
     let total = prefix.chars().count();
-    let keep = total.saturating_sub(count);
-    prefix
-        .char_indices()
-        .nth(keep)
-        .map(|(idx, _)| idx)
-        .unwrap_or(byte_index)
+    prefix_byte_index(prefix, total.saturating_sub(count))
 }
 
 fn byte_index_after_chars(text: &str, byte_index: usize, count: usize) -> usize {
     let suffix = &text[byte_index..];
-    match suffix.char_indices().nth(count) {
-        Some((idx, _)) => byte_index + idx,
-        None => text.len(),
-    }
+    byte_index + prefix_byte_index(suffix, count)
 }
