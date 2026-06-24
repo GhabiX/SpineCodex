@@ -73,13 +73,11 @@ fn memory_content_part(item: &ContentItem) -> Option<String> {
         ContentItem::InputText { text } | ContentItem::OutputText { text } => {
             text.trim_matches('\n').to_string()
         }
-        ContentItem::InputImage { detail, .. } => match detail.map(|detail| match detail {
-            ImageDetail::Auto => "auto",
-            ImageDetail::Low => "low",
-            ImageDetail::High => "high",
-            ImageDetail::Original => "original",
-        }) {
-            Some(detail) => format!("<image omitted detail={detail}>"),
+        ContentItem::InputImage { detail, .. } => match detail {
+            Some(ImageDetail::Auto) => "<image omitted detail=auto>".to_string(),
+            Some(ImageDetail::Low) => "<image omitted detail=low>".to_string(),
+            Some(ImageDetail::High) => "<image omitted detail=high>".to_string(),
+            Some(ImageDetail::Original) => "<image omitted detail=original>".to_string(),
             None => "<image omitted>".to_string(),
         },
     };
