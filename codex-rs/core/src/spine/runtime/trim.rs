@@ -9,7 +9,6 @@ use super::SpineTrimOutcome;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::ToolCallSegmentKind;
-use crate::spine::model::TrimEvent;
 use crate::spine::model::TrimProjection;
 use crate::spine::model::TrimSliceSpec;
 use crate::spine::model::TrimTargetState;
@@ -158,7 +157,7 @@ impl SpineRuntime {
     fn latest_live_trim_toolcall_seq(&self) -> Result<Option<u64>, SpineError> {
         let raw_mask = RawMask::new(&self.raw_live);
         for event in self.ledger.trim_events.iter().rev() {
-            let TrimEvent::ToolCallBoundary { toolcall_seq, .. } = event.event else {
+            let Some(toolcall_seq) = event.event.toolcall_boundary_seq() else {
                 continue;
             };
             if event.allowed_by(raw_mask)? {
