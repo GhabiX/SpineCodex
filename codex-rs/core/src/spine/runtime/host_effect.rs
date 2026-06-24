@@ -89,6 +89,10 @@ impl SpineHostEffects {
         self.effects.extend(effects.effects);
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.effects.is_empty()
+    }
+
     pub(crate) async fn apply_after_batch_materialized_history_request<
         E,
         ApplyEffects,
