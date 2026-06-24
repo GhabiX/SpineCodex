@@ -14,6 +14,7 @@ use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::TrimProjection;
 use crate::spine::model::commit_marker_structural_event_seqs;
+use crate::spine::model::next_seq_from;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parser::ParserState;
 use crate::spine::trimmer::trim_projection_from_events;
@@ -80,16 +81,6 @@ pub(super) fn next_trim_seq_from(events: &[LoggedTrimEvent]) -> Result<u64, Spin
         events.iter().map(|event| event.trim_seq),
         "spine trim seq overflow",
     )
-}
-
-fn next_seq_from(
-    seqs: impl Iterator<Item = u64>,
-    overflow_message: &str,
-) -> Result<u64, SpineError> {
-    seqs.max().map_or(Ok(0), |seq| {
-        seq.checked_add(1)
-            .ok_or_else(|| SpineError::InvalidEvent(overflow_message.to_string()))
-    })
 }
 
 pub(crate) fn trim_projection_from_events_for_checkpoint(

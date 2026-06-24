@@ -13,6 +13,7 @@ use crate::spine::model::MemoryContextAccountingWitnessRecord;
 use crate::spine::model::PressureEvent;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
+use crate::spine::model::next_seq_from;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -120,7 +121,7 @@ impl SpineStore {
         if !self.tree_path().exists() {
             return Ok(0);
         }
-        next_ledger_seq(
+        next_seq_from(
             self.events()?.into_iter().map(|event| event.seq),
             "spine event seq overflow",
         )
@@ -130,7 +131,7 @@ impl SpineStore {
         if !self.pressure_path().exists() {
             return Ok(0);
         }
-        next_ledger_seq(
+        next_seq_from(
             self.pressure_events()?
                 .into_iter()
                 .map(|event| event.pressure_seq),
@@ -139,7 +140,7 @@ impl SpineStore {
     }
 
     pub(in crate::spine) fn next_trim_seq(&self) -> Result<u64, SpineError> {
-        next_ledger_seq(
+        next_seq_from(
             self.trim_events()?.into_iter().map(|event| event.trim_seq),
             "spine trim seq overflow",
         )
@@ -179,14 +180,4 @@ fn read_optional_json_lines<T: for<'de> Deserialize<'de>>(
         return Ok(Vec::new());
     }
     read_json_lines(path)
-}
-
-fn next_ledger_seq(
-    seqs: impl Iterator<Item = u64>,
-    overflow_message: &str,
-) -> Result<u64, SpineError> {
-    seqs.max().map_or(Ok(0), |seq| {
-        seq.checked_add(1)
-            .ok_or_else(|| SpineError::InvalidEvent(overflow_message.to_string()))
-    })
 }

@@ -87,6 +87,16 @@ impl LoggedSpineLedgerEvent {
     }
 }
 
+pub(in crate::spine) fn next_seq_from(
+    seqs: impl Iterator<Item = u64>,
+    overflow_message: &str,
+) -> Result<u64, SpineError> {
+    seqs.max().map_or(Ok(0), |seq| {
+        seq.checked_add(1)
+            .ok_or_else(|| SpineError::InvalidEvent(overflow_message.to_string()))
+    })
+}
+
 impl SpineLedgerEvent {
     pub(in crate::spine) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         match self {
