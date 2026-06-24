@@ -135,22 +135,16 @@ impl SpineHostEffects {
         Ok(())
     }
 
-    fn into_root_compact_host_publish(
+    fn into_only_root_compact_host_publish(
         self,
-    ) -> Result<(Self, Option<SpineRootCompactHostPublish>), String> {
-        self.take_unique_effect(
+    ) -> Result<Option<SpineRootCompactHostPublish>, String> {
+        let (effects, publication) = self.take_unique_effect(
             "multiple Spine root compact history publications in one hook",
             |effect| match effect {
                 SpineHostEffect::RootCompactHistoryPublication(next) => Ok(next),
                 effect => Err(effect),
             },
-        )
-    }
-
-    fn into_only_root_compact_host_publish(
-        self,
-    ) -> Result<Option<SpineRootCompactHostPublish>, String> {
-        let (effects, publication) = self.into_root_compact_host_publish()?;
+        )?;
         if !effects.is_empty() {
             return Err("compact hook returned unsupported host effects".to_string());
         }
