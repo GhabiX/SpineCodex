@@ -22,7 +22,9 @@ pub(in crate::spine::store::clone_sidecar) fn select_cloned_commit_markers(
         commit_marker::validate_commit_marker_events(&marker, source_events_by_seq)?;
         let structural_event_seqs = commit_marker_structural_event_seqs(&marker)?;
         all_marker_structural_event_seqs.extend(structural_event_seqs.iter().copied());
-        if !marker_in_clone_boundary(&marker, boundary) {
+        if marker.token_seq_end > boundary.structural_seq_limit
+            || marker.raw_boundary > boundary.raw_ordinal_limit
+        {
             continue;
         }
         if !commit_marker::commit_marker_allowed_by_source_live(&marker, source_raw_live)? {
@@ -40,11 +42,6 @@ pub(in crate::spine::store::clone_sidecar) fn select_cloned_commit_markers(
         cloned_commit_markers.push(marker);
     }
     Ok((cloned_commit_markers, all_marker_structural_event_seqs))
-}
-
-fn marker_in_clone_boundary(marker: &SpineCommitMarker, boundary: &SpineCloneBoundary) -> bool {
-    marker.token_seq_end <= boundary.structural_seq_limit
-        && marker.raw_boundary <= boundary.raw_ordinal_limit
 }
 
 fn validate_raw_backed_marker_events(
