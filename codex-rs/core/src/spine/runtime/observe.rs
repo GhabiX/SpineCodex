@@ -224,8 +224,7 @@ impl SpineRuntime {
         }
         let lexed = self.completed_toolcall_batch(&toolcall)?;
         let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
-        self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
-        self.clear_completed_toolcall_anchors(&toolcall);
+        self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         Ok(())
     }
 
@@ -247,8 +246,7 @@ impl SpineRuntime {
         let lexed = self.completed_toolcall_batch(&toolcall)?;
         let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
         self.pending = None;
-        self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
-        self.clear_completed_toolcall_anchors(&toolcall);
+        self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         Ok(true)
     }
 
@@ -271,8 +269,7 @@ impl SpineRuntime {
         }
         let lexed = self.completed_toolcall_batch(&toolcall)?;
         let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
-        self.append_trim_candidates_for_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
-        self.clear_completed_toolcall_anchors(&toolcall);
+        self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         Ok(false)
     }
 
@@ -383,6 +380,17 @@ impl SpineRuntime {
         }
         self.tree_call_ids.remove(&toolcall.call_id);
         self.control_call_ids.remove(&toolcall.call_id);
+    }
+
+    fn finish_observed_completed_toolcall(
+        &mut self,
+        toolcall: &CompletedToolCall,
+        toolcall_seq: u64,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        self.append_trim_candidates_for_completed_toolcall(toolcall, toolcall_seq, raw_items)?;
+        self.clear_completed_toolcall_anchors(toolcall);
+        Ok(())
     }
 
     pub(super) fn remap_completed_toolcall_context_indices(
