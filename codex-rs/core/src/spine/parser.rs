@@ -52,9 +52,13 @@ pub(super) struct ParserState {
 }
 
 pub(super) struct ParserRootCompactPreparedReduction {
+    publication: ParserRootCompactPublication,
+    prepared_install: ParserRootCompactPreparedInstall,
+}
+
+pub(super) struct ParserRootCompactPublication {
     materialized: Vec<ResponseItem>,
     current_open_index: usize,
-    prepared_install: ParserRootCompactPreparedInstall,
 }
 
 #[derive(Debug)]
@@ -183,14 +187,8 @@ impl ParserPublicationPlan {
 
 impl ParserRootCompactPreparedReduction {
     pub(super) fn validate_current_open_matches_materialized_len(&self) -> Result<(), SpineError> {
-        if self.current_open_index != self.materialized.len() {
-            return Err(SpineError::Invariant(format!(
-                "spine root compact open index {} does not match materialized history length {}",
-                self.current_open_index,
-                self.materialized.len()
-            )));
-        }
-        Ok(())
+        self.publication
+            .validate_current_open_matches_materialized_len()
     }
 
     pub(super) fn into_publication_materialized_and_install(
@@ -201,7 +199,11 @@ impl ParserRootCompactPreparedReduction {
         ParserRootCompactInstall,
     ) {
         let (pending_install, final_install) = self.prepared_install.into_parts();
-        (self.materialized, pending_install, final_install)
+        (
+            self.publication.into_materialized(),
+            pending_install,
+            final_install,
+        )
     }
 
     pub(super) fn build_compact_checkpoint(
@@ -219,9 +221,37 @@ impl ParserRootCompactPreparedReduction {
             raw_live,
             raw_items,
             self.prepared_install.final_state().parse_stack(),
-            &self.materialized,
-            &self.materialized,
+            self.publication.materialized(),
+            self.publication.materialized(),
         )
+    }
+}
+
+impl ParserRootCompactPublication {
+    fn new(materialized: Vec<ResponseItem>, current_open_index: usize) -> Self {
+        Self {
+            materialized,
+            current_open_index,
+        }
+    }
+
+    fn materialized(&self) -> &[ResponseItem] {
+        &self.materialized
+    }
+
+    fn validate_current_open_matches_materialized_len(&self) -> Result<(), SpineError> {
+        if self.current_open_index != self.materialized.len() {
+            return Err(SpineError::Invariant(format!(
+                "spine root compact open index {} does not match materialized history length {}",
+                self.current_open_index,
+                self.materialized.len()
+            )));
+        }
+        Ok(())
+    }
+
+    fn into_materialized(self) -> Vec<ResponseItem> {
+        self.materialized
     }
 }
 
@@ -742,8 +772,7 @@ impl ParserState {
         )?;
         let current_open_index = final_parse_stack.current_open_meta()?.index;
         Ok(ParserRootCompactPreparedReduction {
-            materialized,
-            current_open_index,
+            publication: ParserRootCompactPublication::new(materialized, current_open_index),
             prepared_install: ParserRootCompactPreparedInstall::new(
                 ParserRootCompactPendingInstall::new(ParserPreparedState::new(pending)),
                 ParserRootCompactInstall::new(ParserPreparedState::new(final_parse_stack)),

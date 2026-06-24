@@ -849,6 +849,12 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !parser.contains("pending_install: ParserRootCompactPendingInstall,\n    parser_install: ParserRootCompactInstall"),
         "parser root compact prepared reduction should hold a named prepared install carrier, not parallel pending/final fields"
     );
+    assert!(
+        parser.contains("struct ParserRootCompactPublication")
+            && parser.contains("publication: ParserRootCompactPublication")
+            && !parser.contains("materialized: Vec<ResponseItem>,\n    current_open_index: usize,\n    prepared_install: ParserRootCompactPreparedInstall"),
+        "parser root compact prepared reduction should hold a named publication carrier instead of parallel publication fields"
+    );
 }
 
 #[test]
