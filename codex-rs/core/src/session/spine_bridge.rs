@@ -377,7 +377,9 @@ impl Session {
         else {
             return Ok(());
         };
-        spine_slot.lock().await.install_cloned_sidecar_for_fork(
+        let mut guard = spine_slot.lock().await;
+        hooks::install_cloned_sidecar_for_fork(
+            &mut *guard,
             boundary,
             &target_rollout_path,
             raw_items,
