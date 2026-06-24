@@ -98,6 +98,14 @@ pub(in crate::spine) fn next_seq_from(
 }
 
 impl SpineLedgerEvent {
+    pub(in crate::spine) fn is_root_epoch_open(&self) -> bool {
+        matches!(
+            self,
+            SpineLedgerEvent::Open { child, summary, .. }
+                if summary == "root" && child.is_root_epoch_child()
+        )
+    }
+
     pub(in crate::spine) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         match self {
             SpineLedgerEvent::Init { .. } => Ok(true),
@@ -107,11 +115,7 @@ impl SpineLedgerEvent {
                     Ok(live && raw_mask.raw_index_live(segment.raw_ordinal)?)
                 })
             }
-            SpineLedgerEvent::Open { child, summary, .. }
-                if summary == "root" && child.is_root_epoch_child() =>
-            {
-                Ok(true)
-            }
+            SpineLedgerEvent::Open { .. } if self.is_root_epoch_open() => Ok(true),
             SpineLedgerEvent::Open { boundary, .. } => raw_mask.raw_index_live(*boundary),
             SpineLedgerEvent::Close { boundary, .. } => raw_mask.boundary_live(*boundary),
             SpineLedgerEvent::RootCompact {

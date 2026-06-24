@@ -77,13 +77,8 @@ fn mark_raw_covered_by_event(
                 mark_raw_covered(covered, segment.raw_ordinal)?;
             }
         }
-        SpineLedgerEvent::Open {
-            child,
-            boundary,
-            summary,
-            ..
-        } => {
-            if !(summary == "root" && child.is_root_epoch_child()) {
+        SpineLedgerEvent::Open { boundary, .. } => {
+            if !event.is_root_epoch_open() {
                 mark_raw_covered(covered, *boundary)?;
             }
         }
