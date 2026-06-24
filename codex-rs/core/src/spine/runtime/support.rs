@@ -162,8 +162,7 @@ pub(super) fn collect_source_plan_entries_from_visible_refs(
                 *user_anchor,
                 raw_context_items,
             )?),
-            VisibleItemSource::ToolCallSegment { raw_ordinal, kind } => {
-                let _ = kind;
+            VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
                 entries.push(source_plan_entry_from_response_item(
                     entries.len(),
                     *raw_ordinal,
