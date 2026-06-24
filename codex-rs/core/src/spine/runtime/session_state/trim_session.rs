@@ -72,13 +72,14 @@ impl SpineSessionState {
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        self.with_runtime(|runtime| {
-            if runtime.has_pending_tool_request() {
-                return Ok(None);
-            }
-            runtime.materialize_history(raw_items).map(Some)
-        })
-        .map(Option::flatten)
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        if runtime.has_pending_tool_request() {
+            return Ok(None);
+        }
+        runtime.materialize_history(raw_items).map(Some)
     }
 
     pub(crate) fn project_trim_projection_from_history(
