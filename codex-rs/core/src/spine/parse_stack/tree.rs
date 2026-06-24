@@ -109,7 +109,7 @@ pub(super) fn next_child_id(parse_stack: &ParseStack) -> Result<NodeId, SpineErr
 
 fn tree_rows(parse_stack: &ParseStack) -> Result<Vec<TreeRenderRow>, SpineError> {
     let mut rows = Vec::<TreeRenderRow>::new();
-    collect_tree_render_rows(&parse_stack.symbols, &mut rows)?;
+    collect_tree_render_rows(&parse_stack.symbols, &mut rows);
     project_current_root_epoch_row(parse_stack.current_cursor_id()?, &mut rows);
     mark_cursor_statuses(parse_stack.current_cursor_id()?, &mut rows);
     Ok(rows)
@@ -170,10 +170,7 @@ impl TreeRenderRow {
     }
 }
 
-fn collect_tree_render_rows(
-    symbols: &[Symbol],
-    rows: &mut Vec<TreeRenderRow>,
-) -> Result<(), SpineError> {
+fn collect_tree_render_rows(symbols: &[Symbol], rows: &mut Vec<TreeRenderRow>) {
     for symbol in symbols {
         match symbol {
             Symbol::Control(ControlSymbol::Init(_))
@@ -191,11 +188,11 @@ fn collect_tree_render_rows(
                 });
             }
             Symbol::SpineTreeNode(node) => {
-                collect_tree_render_node(node, rows)?;
+                collect_tree_render_node(node, rows);
             }
             Symbol::SpineTreeNodes(nodes) => {
                 for node in nodes {
-                    collect_tree_render_node(node, rows)?;
+                    collect_tree_render_node(node, rows);
                 }
             }
             Symbol::RootEpoches(root_epochs) => {
@@ -212,14 +209,9 @@ fn collect_tree_render_rows(
             }
         }
     }
-
-    Ok(())
 }
 
-fn collect_tree_render_node(
-    node: &SpineTreeNode,
-    rows: &mut Vec<TreeRenderRow>,
-) -> Result<(), SpineError> {
+fn collect_tree_render_node(node: &SpineTreeNode, rows: &mut Vec<TreeRenderRow>) {
     match node {
         SpineTreeNode::MsgAsLeafNode { .. } | SpineTreeNode::ToolCallAsLeafNode { .. } => {}
         SpineTreeNode::SpineTree {
@@ -239,11 +231,10 @@ fn collect_tree_render_node(
                 accounting: memory_accounting(memory),
             });
             for child in children {
-                collect_tree_render_node(child, rows)?;
+                collect_tree_render_node(child, rows);
             }
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
