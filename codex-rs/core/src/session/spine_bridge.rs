@@ -268,7 +268,7 @@ impl Session {
         // ContextManager, ParseStack, or sidecar state.
         let snapshot = {
             let guard = spine_slot.lock().await;
-            let Some(projection) = guard.tree_snapshot_projection()? else {
+            let Some(projection) = hooks::tree_snapshot_projection(&guard)? else {
                 return Ok(());
             };
             build_annotated_tree_snapshot(projection, token_info.as_ref())?
@@ -529,18 +529,12 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let snapshot = {
             let guard = spine_slot.lock().await;
-            if let Err(err) = guard.ensure_valid() {
-                tracing::debug!("skipping Spine tree cache refresh: {err}");
-                return;
-            }
-            match guard
-                .tree_snapshot_projection()
-                .and_then(|projection| match projection {
-                    Some(projection) => {
-                        build_annotated_tree_snapshot(projection, token_info.as_ref()).map(Some)
-                    }
-                    None => Ok(None),
-                }) {
+            match hooks::tree_snapshot_projection(&guard).and_then(|projection| match projection {
+                Some(projection) => {
+                    build_annotated_tree_snapshot(projection, token_info.as_ref()).map(Some)
+                }
+                None => Ok(None),
+            }) {
                 Ok(Some(snapshot)) => snapshot,
                 Ok(None) => return,
                 Err(err) => {
@@ -772,15 +766,14 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let view = {
             let guard = spine.lock().await;
-            let Some(projection) = guard.tree_snapshot_projection()? else {
+            let Some(projection) = hooks::tree_snapshot_projection(&guard)? else {
                 return Err(SpineError::InvalidStore(
                     "spine runtime missing after initialization".to_string(),
                 ));
             };
             let annotations =
                 build_spine_tree_context_annotations(&projection, token_info.as_ref());
-            let rendered_tree = guard
-                .render_tree_with_context_annotations(&annotations)?
+            let rendered_tree = hooks::render_tree_with_context_annotations(&guard, &annotations)?
                 .ok_or_else(|| {
                     SpineError::InvalidStore(
                         "spine runtime missing after initialization".to_string(),
@@ -803,7 +796,7 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let snapshot = {
             let guard = spine.lock().await;
-            let Some(projection) = guard.tree_snapshot_projection()? else {
+            let Some(projection) = hooks::tree_snapshot_projection(&guard)? else {
                 return Err(SpineError::InvalidStore(
                     "spine runtime missing after initialization".to_string(),
                 ));

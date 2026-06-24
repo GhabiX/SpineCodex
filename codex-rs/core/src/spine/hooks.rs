@@ -135,6 +135,13 @@ pub(crate) fn tree_snapshot_projection(
     state.tree_snapshot_projection()
 }
 
+pub(crate) fn render_tree_with_context_annotations(
+    state: &SpineSessionState,
+    annotations: &std::collections::BTreeMap<super::model::NodeId, String>,
+) -> Result<Option<String>, SpineError> {
+    state.render_tree_with_context_annotations(annotations)
+}
+
 pub(crate) fn trim_projection_needs_rollout_raw_items(
     state: &SpineSessionState,
 ) -> Result<Option<bool>, SpineError> {
