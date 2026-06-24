@@ -1516,6 +1516,7 @@ impl Session {
         let after_installed_reference_context_item = reference_context_item.clone();
         let spine_tree_snapshot = effects
             .apply_root_compact_history_publication(
+                self.spine.as_ref(),
                 items,
                 Session::is_spine_fixed_prefix_item,
                 |reason| CodexErr::SpineTerminalFailure {
@@ -1547,21 +1548,14 @@ impl Session {
                         Ok(())
                     }
                 },
-                |published_variable_history_len| async move {
-                    match self
-                        .finalize_spine_root_compact_after_history_publish(
-                        published_variable_history_len,
-                    )
-                    .await
-                    {
-                        Ok(spine_tree_snapshot) => Ok(spine_tree_snapshot),
-                        Err(err) => {
-                            self.invalidate_spine_runtime(format!(
-                                "failed to install Spine root compact after host history publication: {err}"
-                            ))
-                            .await;
-                            Err(err)
-                        }
+                |reason| async move {
+                    self.invalidate_spine_runtime(format!(
+                        "failed to install Spine root compact after host history publication: {reason}"
+                    ))
+                    .await;
+                    CodexErr::SpineTerminalFailure {
+                        operation: "install Spine root compact".to_string(),
+                        reason,
                     }
                 },
                 || async move {
@@ -1582,26 +1576,6 @@ impl Session {
         Ok(ReplaceCompactedHistoryOutcome {
             spine_tree_snapshot,
         })
-    }
-
-    pub(crate) async fn finalize_spine_root_compact_after_history_publish(
-        &self,
-        published_variable_history_len: usize,
-    ) -> CodexResult<Option<SpineTreeUpdateEvent>> {
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return Err(CodexErr::SpineTerminalFailure {
-                operation: "install Spine root compact".to_string(),
-                reason: "spine runtime missing before root compact PS install".to_string(),
-            });
-        };
-        let mut guard = spine_slot.lock().await;
-        guard
-            .take_pending_root_compact_after_history_publish(published_variable_history_len)
-            .map(Some)
-            .map_err(|err| CodexErr::SpineTerminalFailure {
-                operation: "install Spine root compact".to_string(),
-                reason: err.to_string(),
-            })
     }
 }
 

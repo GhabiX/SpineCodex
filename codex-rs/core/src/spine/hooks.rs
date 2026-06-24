@@ -272,24 +272,25 @@ impl HostEffects {
         E,
         PublishHistory,
         PublishHistoryFuture,
-        FinalizeAfterPublish,
-        FinalizeAfterPublishFuture,
+        FinalizeInstallFailure,
+        FinalizeInstallFailureFuture,
         AfterInstalled,
         AfterInstalledFuture,
     >(
         self,
+        state: Option<&tokio::sync::Mutex<SpineSessionState>>,
         native_items: Vec<ResponseItem>,
         is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
         invariant_error: impl Fn(String) -> E,
         publish_history: PublishHistory,
-        finalize_after_publish: FinalizeAfterPublish,
+        finalize_install_failure: FinalizeInstallFailure,
         after_installed: AfterInstalled,
     ) -> Result<Option<SpineTreeUpdateEvent>, E>
     where
         PublishHistory: FnOnce(Vec<ResponseItem>, bool) -> PublishHistoryFuture,
         PublishHistoryFuture: Future<Output = Result<(), E>>,
-        FinalizeAfterPublish: FnOnce(usize) -> FinalizeAfterPublishFuture,
-        FinalizeAfterPublishFuture: Future<Output = Result<Option<SpineTreeUpdateEvent>, E>>,
+        FinalizeInstallFailure: FnOnce(String) -> FinalizeInstallFailureFuture,
+        FinalizeInstallFailureFuture: Future<Output = E>,
         AfterInstalled: FnOnce() -> AfterInstalledFuture,
         AfterInstalledFuture: Future<Output = Result<(), E>>,
     {
@@ -299,7 +300,26 @@ impl HostEffects {
                 is_fixed_prefix_item,
                 invariant_error,
                 publish_history,
-                finalize_after_publish,
+                |published_variable_history_len| async move {
+                    let install_result = match state {
+                        Some(state) => {
+                            let mut guard = state.lock().await;
+                            guard
+                                .take_pending_root_compact_after_history_publish(
+                                    published_variable_history_len,
+                                )
+                                .map(Some)
+                                .map_err(|err| err.to_string())
+                        }
+                        None => {
+                            Err("spine runtime missing before root compact PS install".to_string())
+                        }
+                    };
+                    match install_result {
+                        Ok(snapshot) => Ok(snapshot),
+                        Err(reason) => Err(finalize_install_failure(reason).await),
+                    }
+                },
                 after_installed,
             )
             .await
