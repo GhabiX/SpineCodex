@@ -173,6 +173,10 @@ pub(crate) fn is_ready(state: &SpineSessionState) -> bool {
     state.is_ready()
 }
 
+pub(crate) fn ensure_observable_context(state: &SpineSessionState) -> Result<(), SpineError> {
+    state.ensure_valid()
+}
+
 pub(crate) fn invalidate_runtime(state: &mut SpineSessionState, reason: String) {
     state.invalidate(reason);
 }

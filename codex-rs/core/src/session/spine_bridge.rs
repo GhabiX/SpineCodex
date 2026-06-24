@@ -616,7 +616,10 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        spine_slot.lock().await.ensure_valid()?;
+        {
+            let guard = spine_slot.lock().await;
+            hooks::ensure_observable_context(&guard)?;
+        }
         let rollout_path = self
             .current_rollout_path()
             .await
