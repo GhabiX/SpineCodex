@@ -12,7 +12,7 @@ pub(in crate::spine) enum MemKind {
     RootEpoch,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::spine) struct MemRecord {
     pub(in crate::spine) compact_id: String,
     pub(in crate::spine) kind: MemKind,

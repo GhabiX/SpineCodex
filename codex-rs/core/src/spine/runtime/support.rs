@@ -403,24 +403,7 @@ fn commit_memory_ref(mem: &MemRecord) -> SpineCommitMemoryRef {
 }
 
 pub(super) fn mem_record_matches(existing: &MemRecord, expected: &MemRecord) -> bool {
-    existing.compact_id == expected.compact_id
-        && existing.kind == expected.kind
-        && existing.node == expected.node
-        && existing.raw_start == expected.raw_start
-        && existing.raw_end == expected.raw_end
-        && existing.context_start == expected.context_start
-        && existing.context_end == expected.context_end
-        && existing.raw_live_hash == expected.raw_live_hash
-        && existing.open_input_tokens == expected.open_input_tokens
-        && existing.close_input_tokens == expected.close_input_tokens
-        && existing.open_context_tokens == expected.open_context_tokens
-        && existing.close_context_tokens == expected.close_context_tokens
-        && existing.closed_source_suffix_tokens == expected.closed_source_suffix_tokens
-        && existing.closed_memory_context_tokens == expected.closed_memory_context_tokens
-        && existing.open_context_source == expected.open_context_source
-        && existing.memory_output_tokens == expected.memory_output_tokens
-        && existing.body_path == expected.body_path
-        && existing.body_hash == expected.body_hash
+    existing == expected
 }
 
 pub(crate) fn is_user_message(item: &ResponseItem) -> bool {
