@@ -34,7 +34,6 @@ pub(crate) struct SpinePreparedCommitApplication {
 pub(crate) struct SpineCommitPublication<T> {
     application: Option<SpinePreparedCommitApplication>,
     history_update: Option<T>,
-    defer_tree_update_until_raw_output: bool,
 }
 
 #[derive(Debug)]
@@ -125,18 +124,16 @@ impl<T> SpineCommitPublication<T> {
         application: Option<SpinePreparedCommitApplication>,
         history_update: Option<T>,
     ) -> Self {
-        let defer_tree_update_until_raw_output = application
-            .as_ref()
-            .is_some_and(SpinePreparedCommitApplication::defer_tree_update_until_raw_output);
         Self {
             application,
             history_update,
-            defer_tree_update_until_raw_output,
         }
     }
 
     pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
-        self.defer_tree_update_until_raw_output
+        self.application
+            .as_ref()
+            .is_some_and(SpinePreparedCommitApplication::defer_tree_update_until_raw_output)
     }
 
     pub(crate) fn take_history_update(&mut self) -> Option<T> {
