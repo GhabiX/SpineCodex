@@ -60,32 +60,32 @@ pub(super) struct ParserRootCompactPreparedReduction {
 
 #[derive(Debug)]
 pub(super) struct ParserObserveInstall {
-    final_parse_stack: ParserPreparedState,
+    final_state: ParserPreparedState,
 }
 
 #[derive(Debug)]
 pub(super) struct ParserOpenInstall {
-    final_parse_stack: ParserPreparedState,
+    final_state: ParserPreparedState,
 }
 
 #[derive(Debug)]
 pub(super) struct ParserCommitInstall {
-    final_parse_stack: ParserPreparedState,
+    final_state: ParserPreparedState,
 }
 
 #[derive(Debug)]
 pub(super) struct ParserCommitPendingInstall {
-    pending_parse_stack: ParserPreparedState,
+    pending_state: ParserPreparedState,
 }
 
 #[derive(Debug)]
 pub(super) struct ParserRootCompactInstall {
-    final_parse_stack: ParserPreparedState,
+    final_state: ParserPreparedState,
 }
 
 #[derive(Debug)]
 pub(super) struct ParserRootCompactPendingInstall {
-    pending_parse_stack: ParserPreparedState,
+    pending_state: ParserPreparedState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -206,7 +206,7 @@ impl ParserRootCompactPreparedReduction {
             token_seq,
             raw_live,
             raw_items,
-            self.parser_install.final_parse_stack.parse_stack(),
+            self.parser_install.final_state.parse_stack(),
             &self.materialized,
             &self.materialized,
         )
@@ -214,22 +214,22 @@ impl ParserRootCompactPreparedReduction {
 }
 
 impl ParserObserveInstall {
-    fn new(final_parse_stack: ParserPreparedState) -> Self {
-        Self { final_parse_stack }
+    fn new(final_state: ParserPreparedState) -> Self {
+        Self { final_state }
     }
 
-    fn into_final_parse_stack(self) -> ParserPreparedState {
-        self.final_parse_stack
+    fn into_final_state(self) -> ParserPreparedState {
+        self.final_state
     }
 }
 
 impl ParserCommitInstall {
-    fn new(final_parse_stack: ParserPreparedState) -> Self {
-        Self { final_parse_stack }
+    fn new(final_state: ParserPreparedState) -> Self {
+        Self { final_state }
     }
 
-    fn into_final_parse_stack(self) -> ParserPreparedState {
-        self.final_parse_stack
+    fn into_final_state(self) -> ParserPreparedState {
+        self.final_state
     }
 
     pub(super) fn full_context_publication_update(
@@ -240,7 +240,7 @@ impl ParserCommitInstall {
         history_items: &[ResponseItem],
     ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
         let materialized = render_parse_stack_to_context_with_trim_projection(
-            self.final_parse_stack.parse_stack(),
+            self.final_state.parse_stack(),
             raw_items,
             trim_projection,
         )?;
@@ -257,50 +257,46 @@ impl ParserCommitInstall {
 }
 
 impl ParserCommitPendingInstall {
-    fn new(pending_parse_stack: ParserPreparedState) -> Self {
-        Self {
-            pending_parse_stack,
-        }
+    fn new(pending_state: ParserPreparedState) -> Self {
+        Self { pending_state }
     }
 
-    fn into_pending_parse_stack(self) -> ParserPreparedState {
-        self.pending_parse_stack
+    fn into_pending_state(self) -> ParserPreparedState {
+        self.pending_state
     }
 }
 
 impl ParserOpenInstall {
-    fn new(final_parse_stack: ParserPreparedState) -> Self {
-        Self { final_parse_stack }
+    fn new(final_state: ParserPreparedState) -> Self {
+        Self { final_state }
     }
 
-    fn into_final_parse_stack(self) -> ParserPreparedState {
-        self.final_parse_stack
+    fn into_final_state(self) -> ParserPreparedState {
+        self.final_state
     }
 
     pub(super) fn into_commit_install(self) -> ParserCommitInstall {
-        ParserCommitInstall::new(self.final_parse_stack)
+        ParserCommitInstall::new(self.final_state)
     }
 }
 
 impl ParserRootCompactInstall {
-    fn new(final_parse_stack: ParserPreparedState) -> Self {
-        Self { final_parse_stack }
+    fn new(final_state: ParserPreparedState) -> Self {
+        Self { final_state }
     }
 
-    fn into_final_parse_stack(self) -> ParserPreparedState {
-        self.final_parse_stack
+    fn into_final_state(self) -> ParserPreparedState {
+        self.final_state
     }
 }
 
 impl ParserRootCompactPendingInstall {
-    fn new(pending_parse_stack: ParserPreparedState) -> Self {
-        Self {
-            pending_parse_stack,
-        }
+    fn new(pending_state: ParserPreparedState) -> Self {
+        Self { pending_state }
     }
 
-    fn into_pending_parse_stack(self) -> ParserPreparedState {
-        self.pending_parse_stack
+    fn into_pending_state(self) -> ParserPreparedState {
+        self.pending_state
     }
 }
 
@@ -565,7 +561,7 @@ impl ParserState {
             .set_live_open_context_baseline(node, input_tokens, source)
     }
 
-    fn replace_parse_stack_for_runtime_transition(&mut self, state: ParserPreparedState) {
+    fn install_prepared_state(&mut self, state: ParserPreparedState) {
         self.parse_stack = state.into_parse_stack();
     }
 
@@ -573,30 +569,30 @@ impl ParserState {
         &mut self,
         install: ParserCommitPendingInstall,
     ) {
-        self.replace_parse_stack_for_runtime_transition(install.into_pending_parse_stack());
+        self.install_prepared_state(install.into_pending_state());
     }
 
     pub(super) fn install_prepared_commit(&mut self, install: ParserCommitInstall) {
-        self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
+        self.install_prepared_state(install.into_final_state());
     }
 
     pub(super) fn install_prepared_observe(&mut self, install: ParserObserveInstall) {
-        self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
+        self.install_prepared_state(install.into_final_state());
     }
 
     pub(super) fn install_prepared_open(&mut self, install: ParserOpenInstall) {
-        self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
+        self.install_prepared_state(install.into_final_state());
     }
 
     pub(super) fn install_pending_root_compact_after_side_effect_failure(
         &mut self,
         install: ParserRootCompactPendingInstall,
     ) {
-        self.replace_parse_stack_for_runtime_transition(install.into_pending_parse_stack());
+        self.install_prepared_state(install.into_pending_state());
     }
 
     pub(super) fn install_prepared_root_compact(&mut self, install: ParserRootCompactInstall) {
-        self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
+        self.install_prepared_state(install.into_final_state());
     }
 
     pub(super) fn staged_after_tokens(

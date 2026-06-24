@@ -337,6 +337,23 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         "parser should expose parser-owned pending and final close/next install handles"
     );
     assert!(
+        parser.contains("final_state: ParserPreparedState")
+            && parser.contains("pending_state: ParserPreparedState")
+            && !parser.contains("final_parse_stack: ParserPreparedState")
+            && !parser.contains("pending_parse_stack: ParserPreparedState"),
+        "parser install handles should name prepared parser state, not raw parse stack fields"
+    );
+    assert!(
+        parser.contains("fn install_prepared_state(&mut self, state: ParserPreparedState)")
+            && !parser.contains("fn replace_parse_stack_for_runtime_transition"),
+        "parser live state replacement should be a parser-owned install operation, not a runtime transition escape hatch"
+    );
+    assert!(
+        !parser.contains("fn into_final_parse_stack(")
+            && !parser.contains("fn into_pending_parse_stack("),
+        "parser install handles should not expose parse-stack-named consumers"
+    );
+    assert!(
         !commit.contains(".install_prepared_commit_final_parse_stack("),
         "runtime close/next final install should use the parser-owned commit install handle"
     );
