@@ -11,17 +11,14 @@ impl LoggedPressureEvent {
                 observed_raw_ordinal,
                 observed_raw_live_hash,
                 ..
-            } => {
-                let Ok(end) = usize::try_from(*observed_raw_ordinal) else {
-                    return false;
-                };
-                let Some(raw_live_prefix) = raw_live.get(..end) else {
-                    return false;
-                };
-                observed_raw_live_hash
-                    .as_deref()
-                    .is_none_or(|hash| hash_raw_live(raw_live_prefix) == hash)
-            }
+            } => usize::try_from(*observed_raw_ordinal)
+                .ok()
+                .and_then(|end| raw_live.get(..end))
+                .is_some_and(|raw_live_prefix| {
+                    observed_raw_live_hash
+                        .as_deref()
+                        .is_none_or(|hash| hash_raw_live(raw_live_prefix) == hash)
+                }),
         }
     }
 }
