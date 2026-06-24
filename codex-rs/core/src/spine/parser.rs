@@ -239,11 +239,9 @@ impl ParserCommitInstall {
         trim_projection: &TrimProjection,
         history_items: &[ResponseItem],
     ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
-        let materialized = render_parse_stack_to_context_with_trim_projection(
-            self.final_state.parse_stack(),
-            raw_items,
-            trim_projection,
-        )?;
+        let materialized = self
+            .final_state
+            .materialize_variable_context(raw_items, trim_projection)?;
         if materialized.as_slice() == history_items {
             return Ok(None);
         }
@@ -312,6 +310,14 @@ impl ParserPreparedState {
 
     pub(super) fn parse_stack(&self) -> &ParseStack {
         &self.parse_stack
+    }
+
+    fn materialize_variable_context(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+    ) -> Result<Vec<ResponseItem>, SpineError> {
+        materialize_parse_stack_variable_context(self.parse_stack(), raw_items, trim_projection)
     }
 
     fn into_parse_stack(self) -> ParseStack {
@@ -732,11 +738,7 @@ impl ParserState {
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        render_parse_stack_to_context_with_trim_projection(
-            &self.parse_stack,
-            raw_items,
-            trim_projection,
-        )
+        materialize_parse_stack_variable_context(&self.parse_stack, raw_items, trim_projection)
     }
 
     pub(super) fn full_variable_context_publication_update(
@@ -950,4 +952,12 @@ fn single_lexed_token(lexed: &LexedTokenBatch, label: &str) -> Result<SpineToken
         )));
     }
     Ok(token)
+}
+
+fn materialize_parse_stack_variable_context(
+    parse_stack: &ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    trim_projection: &TrimProjection,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    render_parse_stack_to_context_with_trim_projection(parse_stack, raw_items, trim_projection)
 }

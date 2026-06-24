@@ -392,6 +392,34 @@ fn runtime_commit_routes_open_with_toolcall_publication_through_prepared_commit(
 }
 
 #[test]
+fn parser_commit_install_materializes_publication_through_prepared_state() {
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let parser_commit_install = parser
+        .split("impl ParserCommitInstall")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ParserCommitPendingInstall").next())
+        .expect("ParserCommitInstall impl block");
+    let full_context_publication_update = parser_commit_install
+        .split("fn full_context_publication_update(")
+        .nth(1)
+        .expect("full context publication update method");
+    assert!(
+        full_context_publication_update.contains(".materialize_variable_context("),
+        "prepared commit publication should materialize variable context through ParserPreparedState"
+    );
+    assert!(
+        !full_context_publication_update
+            .contains("render_parse_stack_to_context_with_trim_projection("),
+        "prepared commit publication must not bypass the parser-owned variable context helper"
+    );
+    assert!(
+        parser.contains("fn materialize_parse_stack_variable_context(")
+            && parser.contains("render_parse_stack_to_context_with_trim_projection(parse_stack"),
+        "parser.rs should keep one internal helper for PS -> h(PS) variable context projection"
+    );
+}
+
+#[test]
 fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
