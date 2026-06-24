@@ -537,6 +537,7 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     assert!(
         !root_compact.contains("prepared_reduction.current_open_index")
             && !root_compact.contains("prepared_reduction.materialized.len()")
+            && !root_compact.contains("prepared_reduction.materialized()")
             && !root_compact.contains("prepared_reduction.root_epoch_reduction"),
         "runtime root compact must not inspect parser prepared reduction internals"
     );

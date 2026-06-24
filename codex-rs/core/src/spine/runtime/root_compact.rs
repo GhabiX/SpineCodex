@@ -432,7 +432,6 @@ impl SpineRuntime {
                     token_seq_after,
                     &self.raw_live,
                     raw_items,
-                    prepared_reduction.materialized(),
                 )
             })
             .transpose()?;

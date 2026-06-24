@@ -206,10 +206,6 @@ impl ParserRootCompactPreparedReduction {
         Ok(())
     }
 
-    pub(super) fn materialized(&self) -> &[ResponseItem] {
-        &self.materialized
-    }
-
     pub(super) fn into_materialized_and_install(
         self,
     ) -> (
@@ -227,7 +223,6 @@ impl ParserRootCompactPreparedReduction {
         token_seq: u64,
         raw_live: &[bool],
         raw_items: &[Option<ResponseItem>],
-        replacement_history: &[ResponseItem],
     ) -> Result<SpineCompactCheckpoint, SpineError> {
         build_compact_checkpoint(
             rollout_path,
@@ -237,7 +232,7 @@ impl ParserRootCompactPreparedReduction {
             raw_items,
             self.parser_install.final_parse_stack.parse_stack(),
             &self.materialized,
-            replacement_history,
+            &self.materialized,
         )
     }
 }
