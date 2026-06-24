@@ -23,12 +23,31 @@ use std::sync::RwLock;
 use toml::Value as TomlValue;
 use tracing::warn;
 
+/// Runtime-only invocation settings that should survive app-server config reloads.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RuntimeInvocationOverrides {
+    pub(crate) debug_capture_requests: bool,
+}
+
+impl RuntimeInvocationOverrides {
+    pub(crate) fn from_config(config: &Config) -> Self {
+        Self {
+            debug_capture_requests: config.debug_capture_requests,
+        }
+    }
+
+    fn apply_to_config(&self, config: &mut Config) {
+        config.debug_capture_requests = self.debug_capture_requests;
+    }
+}
+
 /// Shared app-server entry point for loading effective Codex configuration.
 #[derive(Clone)]
 pub(crate) struct ConfigManager {
     codex_home: PathBuf,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
+    runtime_invocation_overrides: RuntimeInvocationOverrides,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
@@ -46,10 +65,33 @@ impl ConfigManager {
         arg0_paths: Arg0DispatchPaths,
         thread_config_loader: Arc<dyn ThreadConfigLoader>,
     ) -> Self {
+        Self::new_with_runtime_invocation_overrides(
+            codex_home,
+            cli_overrides,
+            loader_overrides,
+            strict_config,
+            cloud_requirements,
+            arg0_paths,
+            thread_config_loader,
+            RuntimeInvocationOverrides::default(),
+        )
+    }
+
+    pub(crate) fn new_with_runtime_invocation_overrides(
+        codex_home: PathBuf,
+        cli_overrides: Vec<(String, TomlValue)>,
+        loader_overrides: LoaderOverrides,
+        strict_config: bool,
+        cloud_requirements: CloudRequirementsLoader,
+        arg0_paths: Arg0DispatchPaths,
+        thread_config_loader: Arc<dyn ThreadConfigLoader>,
+        runtime_invocation_overrides: RuntimeInvocationOverrides,
+    ) -> Self {
         Self {
             codex_home,
             cli_overrides: Arc::new(RwLock::new(cli_overrides)),
             runtime_feature_enablement: Arc::new(RwLock::new(BTreeMap::new())),
+            runtime_invocation_overrides,
             loader_overrides,
             strict_config,
             cloud_requirements: Arc::new(RwLock::new(cloud_requirements)),
@@ -157,8 +199,7 @@ impl ConfigManager {
         let mut config = thread_config
             .rebuild_preserving_session_layers(&refreshed_config)
             .await?;
-        self.apply_runtime_feature_enablement(&mut config);
-        self.apply_arg0_paths(&mut config);
+        self.apply_runtime_overrides(&mut config);
         Ok(config)
     }
 
@@ -178,8 +219,7 @@ impl ConfigManager {
                 TomlValue::Table(toml::map::Map::new()),
             );
         }
-        self.apply_runtime_feature_enablement(&mut config);
-        self.apply_arg0_paths(&mut config);
+        self.apply_runtime_overrides(&mut config);
         Ok(config)
     }
 
@@ -241,8 +281,7 @@ impl ConfigManager {
             .thread_config_loader(self.current_thread_config_loader())
             .build()
             .await?;
-        self.apply_runtime_feature_enablement(&mut config);
-        self.apply_arg0_paths(&mut config);
+        self.apply_runtime_overrides(&mut config);
         Ok(config)
     }
 
@@ -275,6 +314,12 @@ impl ConfigManager {
 
     fn apply_runtime_feature_enablement(&self, config: &mut Config) {
         apply_runtime_feature_enablement(config, &self.current_runtime_feature_enablement());
+    }
+
+    fn apply_runtime_overrides(&self, config: &mut Config) {
+        self.apply_runtime_feature_enablement(config);
+        self.runtime_invocation_overrides.apply_to_config(config);
+        self.apply_arg0_paths(config);
     }
 
     fn current_runtime_feature_enablement(&self) -> BTreeMap<String, bool> {
@@ -357,5 +402,60 @@ pub(crate) fn apply_runtime_feature_enablement(
                 "failed to apply runtime feature enablement"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn config_manager_with_debug_capture_requests(codex_home: PathBuf) -> ConfigManager {
+        ConfigManager::new_with_runtime_invocation_overrides(
+            codex_home,
+            Vec::new(),
+            LoaderOverrides::without_managed_config_for_tests(),
+            /*strict_config*/ false,
+            CloudRequirementsLoader::default(),
+            Arg0DispatchPaths::default(),
+            Arc::new(codex_config::NoopThreadConfigLoader),
+            RuntimeInvocationOverrides {
+                debug_capture_requests: true,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn runtime_invocation_overrides_survive_config_loads() {
+        let temp_dir = tempdir().expect("create temp codex home");
+        let config_manager =
+            config_manager_with_debug_capture_requests(temp_dir.path().to_path_buf());
+
+        let config = config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+            .expect("load config");
+        assert!(config.debug_capture_requests);
+    }
+
+    #[tokio::test]
+    async fn runtime_invocation_overrides_survive_thread_config_reload() {
+        let temp_dir = tempdir().expect("create temp codex home");
+        let config_manager =
+            config_manager_with_debug_capture_requests(temp_dir.path().to_path_buf());
+
+        let thread_config = Config::load_default_with_cli_overrides_for_codex_home(
+            temp_dir.path().to_path_buf(),
+            Vec::new(),
+        )
+        .await
+        .expect("load thread config");
+        assert!(!thread_config.debug_capture_requests);
+
+        let config = config_manager
+            .load_latest_config_for_thread(&thread_config)
+            .await
+            .expect("reload thread config");
+        assert!(config.debug_capture_requests);
     }
 }

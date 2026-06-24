@@ -52,6 +52,7 @@ use std::time::Duration;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
+use crate::config_manager::RuntimeInvocationOverrides;
 use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
@@ -407,7 +408,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         });
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
-        let config_manager = ConfigManager::new(
+        let config_manager = ConfigManager::new_with_runtime_invocation_overrides(
             args.config.codex_home.to_path_buf(),
             args.cli_overrides,
             args.loader_overrides,
@@ -415,6 +416,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             args.cloud_requirements,
             args.arg0_paths.clone(),
             args.thread_config_loader,
+            RuntimeInvocationOverrides::from_config(args.config.as_ref()),
         );
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
