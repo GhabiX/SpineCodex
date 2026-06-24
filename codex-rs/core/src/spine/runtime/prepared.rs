@@ -16,13 +16,13 @@ pub(crate) enum SpineCommitKind {
 
 #[derive(Debug)]
 pub(crate) struct SpinePreparedCommit {
-    pub(super) kind: SpineCommitKind,
+    kind: SpineCommitKind,
     publication_plan: Option<ParserPublicationPlan>,
-    pub(super) parser_install: Option<ParserCommitInstall>,
-    pub(super) completed_toolcall: Option<CompletedToolCall>,
-    pub(super) toolcall_seq: Option<u64>,
-    pub(super) raw_items: Vec<Option<ResponseItem>>,
-    pub(super) mem_for_accounting: Option<MemRecord>,
+    parser_install: Option<ParserCommitInstall>,
+    completed_toolcall: Option<CompletedToolCall>,
+    toolcall_seq: Option<u64>,
+    raw_items: Vec<Option<ResponseItem>>,
+    mem_for_accounting: Option<MemRecord>,
 }
 
 #[derive(Debug)]
@@ -134,7 +134,6 @@ impl SpinePreparedCommit {
         SpinePreparedCommitInstall { prepared: self }
     }
 
-    #[cfg(test)]
     pub(crate) fn kind(&self) -> &SpineCommitKind {
         &self.kind
     }
@@ -188,6 +187,26 @@ impl SpinePreparedCommit {
 
     pub(super) fn parser_install(&self) -> Option<&ParserCommitInstall> {
         self.parser_install.as_ref()
+    }
+
+    pub(super) fn trim_candidate_inputs(
+        &self,
+    ) -> Option<(&CompletedToolCall, u64, &[Option<ResponseItem>])> {
+        Some((
+            self.completed_toolcall.as_ref()?,
+            self.toolcall_seq?,
+            self.raw_items.as_slice(),
+        ))
+    }
+
+    pub(super) fn mem_for_accounting(&self) -> Option<&MemRecord> {
+        self.mem_for_accounting.as_ref()
+    }
+
+    pub(super) fn into_install_parts(
+        self,
+    ) -> (Option<ParserCommitInstall>, Option<CompletedToolCall>) {
+        (self.parser_install, self.completed_toolcall)
     }
 }
 

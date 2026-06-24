@@ -122,7 +122,7 @@ impl SpineRuntime {
         else {
             return Ok(None);
         };
-        let kind = prepared.kind.clone();
+        let kind = prepared.kind().clone();
         self.persist_prepared_commit_side_effects(&prepared)?;
         self.install_prepared_commit(prepared);
         Ok(Some(kind))
@@ -312,7 +312,7 @@ impl SpineRuntime {
         let Some(prepared) = prepared else {
             return Ok(None);
         };
-        let kind = prepared.kind.clone();
+        let kind = prepared.kind().clone();
         self.persist_prepared_commit_side_effects(&prepared)?;
         self.install_prepared_commit(prepared);
         Ok(Some(kind))
@@ -549,16 +549,16 @@ impl SpineRuntime {
         &mut self,
         prepared: &SpinePreparedCommit,
     ) -> Result<(), SpineError> {
-        if let (Some(completed_toolcall), Some(toolcall_seq)) =
-            (prepared.completed_toolcall.as_ref(), prepared.toolcall_seq)
+        if let Some((completed_toolcall, toolcall_seq, raw_items)) =
+            prepared.trim_candidate_inputs()
         {
             self.append_trim_candidates_for_completed_toolcall(
                 completed_toolcall,
                 toolcall_seq,
-                &prepared.raw_items,
+                raw_items,
             )?;
         }
-        if let Some(mem) = prepared.mem_for_accounting.as_ref() {
+        if let Some(mem) = prepared.mem_for_accounting() {
             self.register_pending_memory_context_accounting(mem)?;
         }
         Ok(())
@@ -575,10 +575,11 @@ impl SpineRuntime {
     }
 
     pub(crate) fn install_prepared_commit(&mut self, prepared: SpinePreparedCommit) {
-        if let Some(parser_install) = prepared.parser_install {
+        let (parser_install, completed_toolcall) = prepared.into_install_parts();
+        if let Some(parser_install) = parser_install {
             self.parser.install_prepared_commit(parser_install);
         }
-        if let Some(completed_toolcall) = prepared.completed_toolcall.as_ref() {
+        if let Some(completed_toolcall) = completed_toolcall.as_ref() {
             self.clear_completed_toolcall_anchors(completed_toolcall);
         }
     }

@@ -617,6 +617,33 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !prepared.contains("application: Option"),
         "runtime commit publication should name the parser install carrier directly, not as an application wrapper"
     );
+    let prepared_commit = prepared
+        .split("struct SpinePreparedCommit {")
+        .nth(1)
+        .and_then(|tail| tail.split("struct SpinePreparedCommitInstall").next())
+        .expect("SpinePreparedCommit definition");
+    for field in [
+        "kind",
+        "parser_install",
+        "completed_toolcall",
+        "toolcall_seq",
+        "raw_items",
+        "mem_for_accounting",
+        "publication_plan",
+    ] {
+        assert!(
+            !prepared_commit.contains(&format!("pub(super) {field}"))
+                && !prepared_commit.contains(&format!("pub(crate) {field}"))
+                && !prepared_commit.contains(&format!("pub(in crate::spine) {field}")),
+            "SpinePreparedCommit field {field} should stay private behind named accessors"
+        );
+    }
+    assert!(
+        prepared.contains("fn trim_candidate_inputs(")
+            && prepared.contains("fn mem_for_accounting(&self)")
+            && prepared.contains("fn into_install_parts("),
+        "SpinePreparedCommit should expose named side-effect/install accessors instead of public fields"
+    );
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
     assert!(
@@ -626,6 +653,25 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !commit.contains(".application()")
             && !commit.contains(".into_application()"),
         "runtime commit should name parser-install intent directly instead of the old application wrapper"
+    );
+    for direct_field_access in [
+        "prepared.parser_install",
+        "prepared.completed_toolcall",
+        "prepared.toolcall_seq",
+        "prepared.raw_items",
+        "prepared.mem_for_accounting.as_ref()",
+        "prepared.publication_plan",
+    ] {
+        assert!(
+            !commit.contains(direct_field_access),
+            "runtime commit should not read SpinePreparedCommit internals through {direct_field_access}"
+        );
+    }
+    assert!(
+        commit.contains("prepared.trim_candidate_inputs()")
+            && commit.contains("prepared.mem_for_accounting()")
+            && commit.contains("prepared.into_install_parts()"),
+        "runtime commit should use prepared commit carrier accessors for side effects and install"
     );
 }
 
