@@ -58,27 +58,15 @@ impl SpineRuntime {
     fn load_trim_only(store: SpineStore, raw_live: Vec<bool>) -> Result<Self, SpineError> {
         let ledger = SpineLedgerCache::new(Vec::new(), Vec::new(), store.trim_events()?)?;
         let next_user_anchor = next_user_anchor_from_events(&ledger.events)?;
-        Ok(Self {
+        build_runtime(
             store,
             ledger,
-            parser: ParserState::new(),
-            raw_len: u64::try_from(raw_live.len())
-                .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
+            ParserState::new(),
             raw_live,
-            jit_enabled: false,
-            trim_enabled: true,
-            open_requests: BTreeMap::new(),
-            control_call_ids: BTreeSet::new(),
-            tree_call_ids: BTreeSet::new(),
-            ordinary_tool_requests: BTreeMap::new(),
-            #[cfg(test)]
-            pending_tool_responses: BTreeMap::new(),
-            pending: None,
-            #[cfg(test)]
-            control_receipts: BTreeMap::new(),
-            pending_memory_context_accounting: None,
+            false,
+            None,
             next_user_anchor,
-        })
+        )
     }
 
     pub(crate) fn load_for_rollout_items(
@@ -365,14 +353,34 @@ fn build_jit_runtime(
     pending_memory_context_accounting: Option<super::PendingMemoryContextAccounting>,
     next_user_anchor: u64,
 ) -> Result<SpineRuntime, SpineError> {
+    build_runtime(
+        store,
+        ledger,
+        ParserState::from_parse_stack(parse_stack),
+        raw_live,
+        true,
+        pending_memory_context_accounting,
+        next_user_anchor,
+    )
+}
+
+fn build_runtime(
+    store: SpineStore,
+    ledger: SpineLedgerCache,
+    parser: ParserState,
+    raw_live: Vec<bool>,
+    jit_enabled: bool,
+    pending_memory_context_accounting: Option<super::PendingMemoryContextAccounting>,
+    next_user_anchor: u64,
+) -> Result<SpineRuntime, SpineError> {
     Ok(SpineRuntime {
         store,
         ledger,
-        parser: ParserState::from_parse_stack(parse_stack),
+        parser,
         raw_len: u64::try_from(raw_live.len())
             .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
         raw_live,
-        jit_enabled: true,
+        jit_enabled,
         trim_enabled: true,
         open_requests: BTreeMap::new(),
         control_call_ids: BTreeSet::new(),
