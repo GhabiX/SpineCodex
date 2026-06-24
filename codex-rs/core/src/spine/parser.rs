@@ -185,6 +185,22 @@ impl ParserPublicationPlan {
     }
 }
 
+fn full_variable_context_publication_update(
+    operation: &'static str,
+    materialized: Vec<ResponseItem>,
+    history_items: &[ResponseItem],
+) -> Option<ParserPublicationUpdate> {
+    if materialized.as_slice() == history_items {
+        return None;
+    }
+    Some(ParserPublicationUpdate::new(
+        operation,
+        0,
+        history_items.to_vec(),
+        materialized,
+    ))
+}
+
 impl ParserRootCompactPreparedReduction {
     pub(super) fn validate_current_open_matches_materialized_len(&self) -> Result<(), SpineError> {
         self.publication
@@ -284,15 +300,11 @@ impl ParserCommitInstall {
         let materialized = self
             .final_state
             .materialize_variable_context(raw_items, trim_projection)?;
-        if materialized.as_slice() == history_items {
-            return Ok(None);
-        }
-        Ok(Some(ParserPublicationUpdate::new(
+        Ok(full_variable_context_publication_update(
             operation,
-            0,
-            history_items.to_vec(),
             materialized,
-        )))
+            history_items,
+        ))
     }
 }
 
@@ -819,15 +831,11 @@ impl ParserState {
         history_items: &[ResponseItem],
     ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
         let materialized = self.materialize_variable_context(raw_items, trim_projection)?;
-        if materialized.as_slice() == history_items {
-            return Ok(None);
-        }
-        Ok(Some(ParserPublicationUpdate::new(
+        Ok(full_variable_context_publication_update(
             operation,
-            0,
-            history_items.to_vec(),
             materialized,
-        )))
+            history_items,
+        ))
     }
 
     pub(super) fn materialized_variable_context_len(

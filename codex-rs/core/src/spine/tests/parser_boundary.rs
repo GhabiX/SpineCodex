@@ -624,6 +624,24 @@ fn parser_publication_plan_fields_are_parser_private() {
             && !publication_plan.contains("pub(super) append_current_tool_response_if_missing"),
         "ParserPublicationPlan fields must stay parser-private so runtime cannot interpret publication internals"
     );
+    assert!(
+        parser.contains("fn full_variable_context_publication_update("),
+        "parser should centralize full h(PS) publication update construction in one helper"
+    );
+    assert_eq!(
+        parser.matches("ParserPublicationUpdate::new(").count(),
+        2,
+        "ParserPublicationUpdate construction should stay centralized in parser plan and full-context helpers"
+    );
+    let full_publication_helper = parser
+        .split("fn full_variable_context_publication_update(")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ParserRootCompactPreparedReduction").next())
+        .expect("full variable context publication helper");
+    assert!(
+        full_publication_helper.contains("ParserPublicationUpdate::new("),
+        "full h(PS) publication updates should be constructed by the parser helper"
+    );
 }
 
 #[test]
