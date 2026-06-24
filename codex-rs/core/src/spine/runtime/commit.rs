@@ -605,7 +605,7 @@ impl SpineRuntime {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        self.parser_commit_publication_history_update(
+        self.commit_host_history_update(
             call_id,
             prepared_commit,
             tool_resp_item,
@@ -662,7 +662,7 @@ impl SpineRuntime {
         Ok(SpineCommitPublication::new(install, history_update))
     }
 
-    fn parser_commit_publication_history_update<T>(
+    fn commit_host_history_update<T>(
         &self,
         call_id: &str,
         prepared_commit: Option<&SpinePreparedCommit>,

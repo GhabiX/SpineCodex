@@ -372,7 +372,7 @@ fn runtime_commit_routes_open_with_toolcall_publication_through_prepared_commit(
         "open-with-toolcall must not install parser state before publication side effects"
     );
     let publication_parts = commit
-        .split("fn parser_commit_publication_history_update")
+        .split("fn commit_host_history_update")
         .nth(1)
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
@@ -396,7 +396,7 @@ fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() 
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
     let publication_parts = commit
-        .split("fn parser_commit_publication_history_update")
+        .split("fn commit_host_history_update")
         .nth(1)
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
@@ -415,7 +415,7 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
     let publication_parts = commit
-        .split("fn parser_commit_publication_history_update")
+        .split("fn commit_host_history_update")
         .nth(1)
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
@@ -439,6 +439,11 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
         !commit.contains("use crate::spine::parser::ParserPublicationUpdate")
             && !publication_parts.contains("Result<Option<ParserPublicationUpdate>"),
         "runtime commit should not name the parser publication update carrier"
+    );
+    assert!(
+        commit.contains("fn commit_host_history_update")
+            && !commit.contains("fn parser_commit_publication_history_update"),
+        "runtime publication helper should be named for host history update, not parser publication internals"
     );
 }
 
