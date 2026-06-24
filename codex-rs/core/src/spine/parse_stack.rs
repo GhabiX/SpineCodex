@@ -167,27 +167,12 @@ impl ParseStack {
         archive: &SpineArchive,
         memory: MemoryRef,
     ) -> Result<PreparedTaskTreeReduction, SpineError> {
-        let len = self.symbols.len();
         let Some((meta, children)) = self.current_task_tree_suffix() else {
             return Err(SpineError::InvalidEvent(
                 "spine.close requires a live task tree suffix".to_string(),
             ));
         };
-        if self
-            .symbols
-            .get(len.saturating_sub(1))
-            .is_some_and(|symbol| matches!(symbol, Symbol::Control(ControlSymbol::Close(_))))
-        {
-            let Symbol::Control(ControlSymbol::Close(existing)) = &self.symbols[len - 1] else {
-                unreachable!("close suffix checked before match")
-            };
-            if existing != &memory {
-                return Err(SpineError::InvalidEvent(format!(
-                    "pending spine.close memory {} does not match prepared memory {}",
-                    existing.compact_id, memory.compact_id
-                )));
-            }
-        }
+        self.validate_pending_task_tree_reduction_memory(&memory)?;
         let (memory_path, trajs_path) = archive_task_tree(archive, meta, children, &memory)?;
         Ok(PreparedTaskTreeReduction {
             meta: meta.clone(),
@@ -699,12 +684,12 @@ impl ParseStack {
     }
 
     pub(super) fn current_root_epoch_id(&self) -> Result<NodeId, SpineError> {
-        let current = self.current_cursor_id()?;
-        let root = *current
+        self.current_cursor_id()?
             .0
             .first()
-            .ok_or_else(|| SpineError::InvalidEvent("current node id is empty".to_string()))?;
-        Ok(NodeId::root_epoch(root))
+            .copied()
+            .map(NodeId::root_epoch)
+            .ok_or_else(|| SpineError::InvalidEvent("current node id is empty".to_string()))
     }
 
     pub(super) fn current_cursor_id(&self) -> Result<NodeId, SpineError> {
