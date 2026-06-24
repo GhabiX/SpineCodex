@@ -77,7 +77,7 @@ impl SpineHostEffects {
 
     pub(crate) fn root_compact_history_publication(materialized: Vec<ResponseItem>) -> Self {
         Self::one(SpineHostEffect::RootCompactHistoryPublication(
-            SpineRootCompactHostPublish::new(materialized),
+            SpineRootCompactHostPublish { materialized },
         ))
     }
 
@@ -172,7 +172,7 @@ impl SpineHostEffects {
             publish_history(native_items, false).await?;
             return Ok(None);
         };
-        let published_variable_history_len = host_publish.materialized_len();
+        let published_variable_history_len = host_publish.materialized.len();
         let published_history =
             host_publish.published_history_from_native_items(&native_items, is_fixed_prefix_item);
         publish_history(published_history, true).await?;
@@ -281,7 +281,10 @@ impl SpineHostEffects {
     }
 
     pub(crate) fn into_tree_host_updates(self) -> SpineTreeHostUpdates {
-        let mut updates = SpineTreeHostUpdates::new();
+        let mut updates = SpineTreeHostUpdates {
+            immediate: Vec::new(),
+            after_raw_output_durable: Vec::new(),
+        };
         for effect in self.effects {
             updates.push_effect(effect);
         }
@@ -345,14 +348,6 @@ impl SpineHostEffect {
 }
 
 impl SpineRootCompactHostPublish {
-    fn new(materialized: Vec<ResponseItem>) -> Self {
-        Self { materialized }
-    }
-
-    pub(crate) fn materialized_len(&self) -> usize {
-        self.materialized.len()
-    }
-
     pub(crate) fn published_history_from_native_items(
         &self,
         native_items: &[ResponseItem],
@@ -374,13 +369,6 @@ pub(crate) enum SpineTreeUpdateDelivery {
 }
 
 impl SpineTreeHostUpdates {
-    fn new() -> Self {
-        Self {
-            immediate: Vec::new(),
-            after_raw_output_durable: Vec::new(),
-        }
-    }
-
     fn push_effect(&mut self, effect: SpineHostEffect) {
         let SpineHostEffect::TreeUpdate { snapshot, delivery } = effect else {
             return;
