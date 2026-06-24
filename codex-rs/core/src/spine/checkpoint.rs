@@ -75,11 +75,7 @@ pub(super) fn build_checkpoint(
         context_len: context.len(),
         cursor: parse_stack.current_cursor_id()?.to_string(),
         parse_stack: parse_stack.clone(),
-        parse_stack_symbols: parse_stack
-            .symbols
-            .iter()
-            .map(|symbol| format!("{symbol:?}"))
-            .collect(),
+        parse_stack_symbols: parse_stack_symbol_debug_strings(&parse_stack.symbols),
         tree_meta,
         memory_refs,
         trajs_refs,
@@ -169,6 +165,10 @@ pub(super) fn collect_checkpoint_refs(
             }
         }
     }
+}
+
+pub(in crate::spine) fn parse_stack_symbol_debug_strings(symbols: &[Symbol]) -> Vec<String> {
+    symbols.iter().map(|symbol| format!("{symbol:?}")).collect()
 }
 
 fn collect_checkpoint_node_refs(

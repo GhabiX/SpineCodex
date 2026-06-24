@@ -1,5 +1,6 @@
 use crate::spine::SpineError;
 use crate::spine::checkpoint::SpineCheckpoint;
+use crate::spine::checkpoint::parse_stack_symbol_debug_strings;
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::RootEpoch;
@@ -38,12 +39,8 @@ pub(in crate::spine::store) fn clone_checkpoint_for_target(
         target_root,
         cloned_memory_paths,
     )?;
-    checkpoint.parse_stack_symbols = checkpoint
-        .parse_stack
-        .symbols
-        .iter()
-        .map(|symbol| format!("{symbol:?}"))
-        .collect();
+    checkpoint.parse_stack_symbols =
+        parse_stack_symbol_debug_strings(&checkpoint.parse_stack.symbols);
     Ok(checkpoint)
 }
 
