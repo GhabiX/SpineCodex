@@ -195,7 +195,7 @@ impl<'a> Trimmer<'a> {
             return Ok(None);
         }
         let projection = self.current_projection(current_structural_seq)?;
-        let Some(target) = projection.target(trim_id) else {
+        let Some(target) = projection.targets_by_id.get(trim_id) else {
             return Ok(None);
         };
         if Some(target.toolcall_seq) != latest_live_completed_toolcall_seq {

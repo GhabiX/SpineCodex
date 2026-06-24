@@ -104,10 +104,6 @@ impl TrimProjection {
         self.targets_by_id.get(trim_id)
     }
 
-    pub(in crate::spine) fn target(&self, trim_id: &str) -> Option<&TrimTarget> {
-        self.targets_by_id.get(trim_id)
-    }
-
     pub(in crate::spine) fn insert_candidate(&mut self, target: TrimTarget) {
         self.trim_id_by_raw_ordinal
             .insert(target.raw_ordinal, target.trim_id.clone());
