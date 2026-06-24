@@ -73,6 +73,11 @@ pub(super) struct ParserCommitInstall {
 }
 
 #[derive(Debug)]
+pub(super) struct ParserCommitPendingInstall {
+    pending_parse_stack: ParserPreparedState,
+}
+
+#[derive(Debug)]
 pub(super) struct ParserRootCompactInstall {
     final_parse_stack: ParserPreparedState,
 }
@@ -217,6 +222,18 @@ impl ParserCommitInstall {
 
     fn into_final_parse_stack(self) -> ParserPreparedState {
         self.final_parse_stack
+    }
+}
+
+impl ParserCommitPendingInstall {
+    fn new(pending_parse_stack: ParserPreparedState) -> Self {
+        Self {
+            pending_parse_stack,
+        }
+    }
+
+    fn into_pending_parse_stack(self) -> ParserPreparedState {
+        self.pending_parse_stack
     }
 }
 
@@ -485,9 +502,9 @@ impl ParserState {
 
     pub(super) fn install_pending_close_after_side_effect_failure(
         &mut self,
-        state: ParserPreparedState,
+        install: ParserCommitPendingInstall,
     ) {
-        self.replace_parse_stack_for_runtime_transition(state);
+        self.replace_parse_stack_for_runtime_transition(install.into_pending_parse_stack());
     }
 
     pub(super) fn install_prepared_commit(&mut self, install: ParserCommitInstall) {
@@ -560,7 +577,7 @@ impl ParserState {
         open_lexed: Option<&LexedTokenBatch>,
         toolcall_lexed: &LexedTokenBatch,
         archive: &SpineArchive,
-    ) -> Result<(ParserPreparedState, ParserCommitInstall), SpineError> {
+    ) -> Result<(ParserCommitPendingInstall, ParserCommitInstall), SpineError> {
         let mut pending = self.parse_stack.clone();
         pending.shift_pending_close(memory, archive)?;
         let mut final_parse_stack = pending.task_tree_reduced(reduction)?;
@@ -571,7 +588,7 @@ impl ParserState {
         let toolcall_token = single_lexed_token(toolcall_lexed, "toolcall")?;
         final_parse_stack.shift(toolcall_token, archive)?;
         Ok((
-            ParserPreparedState::new(pending),
+            ParserCommitPendingInstall::new(ParserPreparedState::new(pending)),
             ParserCommitInstall::new(ParserPreparedState::new(final_parse_stack)),
         ))
     }

@@ -483,7 +483,7 @@ impl SpineRuntime {
             .ok_or_else(|| {
                 SpineError::InvalidEvent(plan.toolcall_seq_overflow_error.to_string())
             })?;
-        let (pending_close_parse_stack, parser_install) =
+        let (pending_parser_install, parser_install) =
             self.parser.close_family_staged_parse_stacks(
                 prepared.memory.clone(),
                 prepared.task_tree_reduction,
@@ -503,7 +503,7 @@ impl SpineRuntime {
             match err {
                 CloseFamilyTransactionError::PreparedSideEffect(err) => {
                     self.parser
-                        .install_pending_close_after_side_effect_failure(pending_close_parse_stack);
+                        .install_pending_close_after_side_effect_failure(pending_parser_install);
                     return Err(err);
                 }
                 CloseFamilyTransactionError::CommitProof(err) => return Err(err),

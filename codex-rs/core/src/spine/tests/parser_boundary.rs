@@ -295,6 +295,17 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         "runtime close/next commit should install pending/final parser states through named ParserState methods"
     );
     assert!(
+        !commit.contains("pending_close_parse_stack"),
+        "runtime close/next commit should not name or hold pending raw parser state"
+    );
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    assert!(
+        parser.contains("ParserCommitPendingInstall")
+            && parser.contains("fn install_pending_close_after_side_effect_failure")
+            && parser.contains("ParserCommitInstall"),
+        "parser should expose parser-owned pending and final close/next install handles"
+    );
+    assert!(
         !commit.contains(".install_prepared_commit_final_parse_stack("),
         "runtime close/next final install should use the parser-owned commit install handle"
     );
