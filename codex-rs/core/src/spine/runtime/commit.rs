@@ -373,19 +373,11 @@ impl SpineRuntime {
                 raw_items,
             )?;
             self.clear_completed_toolcall_anchors(&completed_toolcall);
-            return Ok(SpinePreparedCommit {
-                kind: SpineCommitKind::Open {
-                    open_request_index: usize::try_from(index).map_err(|_| {
-                        SpineError::InvalidEvent("spine.open context index overflow".to_string())
-                    })?,
-                },
-                publication_plan: None,
-                parser_install: None,
-                completed_toolcall: None,
-                toolcall_seq: None,
-                raw_items: Vec::new(),
-                mem_for_accounting: None,
-            });
+            return Ok(SpinePreparedCommit::installed_open(SpineCommitKind::Open {
+                open_request_index: usize::try_from(index).map_err(|_| {
+                    SpineError::InvalidEvent("spine.open context index overflow".to_string())
+                })?,
+            }));
         }
         let parser_install =
             self.parser
@@ -393,19 +385,11 @@ impl SpineRuntime {
         let events = open_lexed.into_events();
         self.append_committed_events_no_marker(events)?;
         self.parser.install_prepared_open(parser_install);
-        Ok(SpinePreparedCommit {
-            kind: SpineCommitKind::Open {
-                open_request_index: usize::try_from(index).map_err(|_| {
-                    SpineError::InvalidEvent("spine.open context index overflow".to_string())
-                })?,
-            },
-            publication_plan: None,
-            parser_install: None,
-            completed_toolcall: None,
-            toolcall_seq: None,
-            raw_items: Vec::new(),
-            mem_for_accounting: None,
-        })
+        Ok(SpinePreparedCommit::installed_open(SpineCommitKind::Open {
+            open_request_index: usize::try_from(index).map_err(|_| {
+                SpineError::InvalidEvent("spine.open context index overflow".to_string())
+            })?,
+        }))
     }
 
     fn commit_close_pending(
@@ -510,20 +494,20 @@ impl SpineRuntime {
                 CloseFamilyTransactionError::CommitProof(err) => return Err(err),
             }
         }
-        Ok(SpinePreparedCommit {
-            kind: plan.kind,
-            publication_plan: Some(self.parser.close_family_publication_plan(
+        Ok(SpinePreparedCommit::close_family(
+            plan.kind,
+            self.parser.close_family_publication_plan(
                 plan.operation,
                 prepared.suffix_start,
                 prepared.replacement,
                 toolcall_start,
-            )),
-            parser_install: Some(parser_install),
-            completed_toolcall: Some(completed_toolcall),
-            toolcall_seq: Some(toolcall_seq),
-            raw_items: raw_items.to_vec(),
-            mem_for_accounting: Some(prepared.mem),
-        })
+            ),
+            parser_install,
+            completed_toolcall,
+            toolcall_seq,
+            raw_items.to_vec(),
+            prepared.mem,
+        ))
     }
 
     fn close_family_plan(
@@ -734,8 +718,7 @@ impl SpineRuntime {
         raw_items: &[Option<ResponseItem>],
         history_items: &[ResponseItem],
     ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
-        if let Some(plan) = prepared_commit.and_then(|prepared| prepared.publication_plan.as_ref())
-        {
+        if let Some(plan) = prepared_commit.and_then(SpinePreparedCommit::publication_plan) {
             return plan.history_update(
                 call_id,
                 tool_resp_item,

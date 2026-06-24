@@ -17,7 +17,7 @@ pub(crate) enum SpineCommitKind {
 #[derive(Debug)]
 pub(crate) struct SpinePreparedCommit {
     pub(super) kind: SpineCommitKind,
-    pub(super) publication_plan: Option<ParserPublicationPlan>,
+    publication_plan: Option<ParserPublicationPlan>,
     pub(super) parser_install: Option<ParserCommitInstall>,
     pub(super) completed_toolcall: Option<CompletedToolCall>,
     pub(super) toolcall_seq: Option<u64>,
@@ -49,6 +49,38 @@ impl SpinePreparedRootCompact {
 }
 
 impl SpinePreparedCommit {
+    pub(super) fn installed_open(kind: SpineCommitKind) -> Self {
+        Self {
+            kind,
+            publication_plan: None,
+            parser_install: None,
+            completed_toolcall: None,
+            toolcall_seq: None,
+            raw_items: Vec::new(),
+            mem_for_accounting: None,
+        }
+    }
+
+    pub(super) fn close_family(
+        kind: SpineCommitKind,
+        publication_plan: ParserPublicationPlan,
+        parser_install: ParserCommitInstall,
+        completed_toolcall: CompletedToolCall,
+        toolcall_seq: u64,
+        raw_items: Vec<Option<ResponseItem>>,
+        mem_for_accounting: MemRecord,
+    ) -> Self {
+        Self {
+            kind,
+            publication_plan: Some(publication_plan),
+            parser_install: Some(parser_install),
+            completed_toolcall: Some(completed_toolcall),
+            toolcall_seq: Some(toolcall_seq),
+            raw_items,
+            mem_for_accounting: Some(mem_for_accounting),
+        }
+    }
+
     pub(super) fn into_install(self) -> SpinePreparedCommitInstall {
         SpinePreparedCommitInstall { prepared: self }
     }
@@ -81,7 +113,6 @@ impl SpinePreparedCommit {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn publication_plan(&self) -> Option<&ParserPublicationPlan> {
         self.publication_plan.as_ref()
     }

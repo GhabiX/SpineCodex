@@ -357,6 +357,11 @@ fn runtime_commit_delegates_parser_publication_plan_application() {
         "runtime commit publication should delegate parser publication plan application to ParserPublicationPlan"
     );
     assert!(
+        !publication_parts.contains("prepared.publication_plan")
+            && !publication_parts.contains("publication_plan.as_ref()"),
+        "runtime commit publication must use the prepared commit accessor for parser publication plans"
+    );
+    assert!(
         !publication_parts.contains("plan.replacement_prefix")
             && !publication_parts.contains("plan.preserve_host_history_from")
             && !publication_parts.contains("plan.append_current_tool_response_if_missing"),
@@ -444,6 +449,15 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         prepared.contains("use crate::spine::parser::ParserPublicationPlan")
             && prepared.contains("publication_plan: Option<ParserPublicationPlan>"),
         "runtime prepared carriers should hold parser-owned publication plans"
+    );
+    assert!(
+        !prepared.contains("pub(super) publication_plan"),
+        "runtime prepared carrier must expose parser publication plans only through an accessor"
+    );
+    assert!(
+        prepared
+            .contains("pub(crate) fn publication_plan(&self) -> Option<&ParserPublicationPlan>"),
+        "runtime prepared carrier should expose a narrow parser publication plan accessor"
     );
     assert!(
         prepared.contains("struct SpinePreparedCommitInstall")
