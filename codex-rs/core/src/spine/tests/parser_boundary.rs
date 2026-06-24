@@ -33,8 +33,12 @@ fn observe_runtime_routes_token_shifts_through_parser_state() {
         "runtime/observe.rs must not import raw SpineToken"
     );
     assert!(
-        observe.contains("staged_after_lexed_batch_for_observe"),
-        "runtime/observe.rs should stage ordinary observations through ParserState batch API"
+        observe.contains("prepare_observe_install") && observe.contains("install_prepared_observe"),
+        "runtime/observe.rs should prepare and install observations through parser-owned install handles"
+    );
+    assert!(
+        !observe.contains("install_staged("),
+        "runtime/observe.rs should not install generic staged parser state"
     );
 }
 

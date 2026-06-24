@@ -58,6 +58,11 @@ pub(super) struct ParserRootCompactPreparedReduction {
 }
 
 #[derive(Debug)]
+pub(super) struct ParserObserveInstall {
+    final_parse_stack: ParserPreparedState,
+}
+
+#[derive(Debug)]
 pub(super) struct ParserOpenInstall {
     final_parse_stack: ParserPreparedState,
 }
@@ -191,6 +196,16 @@ impl ParserRootCompactPreparedReduction {
             &self.materialized,
             replacement_history,
         )
+    }
+}
+
+impl ParserObserveInstall {
+    fn new(final_parse_stack: ParserPreparedState) -> Self {
+        Self { final_parse_stack }
+    }
+
+    fn into_final_parse_stack(self) -> ParserPreparedState {
+        self.final_parse_stack
     }
 }
 
@@ -466,6 +481,10 @@ impl ParserState {
         self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
     }
 
+    pub(super) fn install_prepared_observe(&mut self, install: ParserObserveInstall) {
+        self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
+    }
+
     pub(super) fn install_prepared_open(&mut self, install: ParserOpenInstall) {
         self.replace_parse_stack_for_runtime_transition(install.into_final_parse_stack());
     }
@@ -588,10 +607,6 @@ impl ParserState {
         })
     }
 
-    pub(super) fn install_staged(&mut self, state: ParserPreparedState) {
-        self.parse_stack = state.into_parse_stack();
-    }
-
     pub(super) fn apply_replay_event(
         &mut self,
         event: &LoggedSpineLedgerEvent,
@@ -606,12 +621,13 @@ impl ParserState {
         Ok(())
     }
 
-    pub(super) fn staged_after_lexed_batch_for_observe(
+    pub(super) fn prepare_observe_install(
         &self,
         lexed: &LexedTokenBatch,
         archive: &SpineArchive,
-    ) -> Result<ParserPreparedState, SpineError> {
-        self.staged_after_tokens(lexed.tokens.iter().cloned(), archive)
+    ) -> Result<ParserObserveInstall, SpineError> {
+        let staged = self.staged_after_tokens(lexed.tokens.iter().cloned(), archive)?;
+        Ok(ParserObserveInstall::new(staged))
     }
 
     pub(super) fn materialize_variable_context(

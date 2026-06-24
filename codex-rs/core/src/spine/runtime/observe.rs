@@ -429,14 +429,14 @@ impl SpineRuntime {
     }
 
     fn append_and_shift_lexed_batch(&mut self, lexed: LexedTokenBatch) -> Result<u64, SpineError> {
-        let staged = self
+        let parser_install = self
             .parser
-            .staged_after_lexed_batch_for_observe(&lexed, &self.archive())?;
+            .prepare_observe_install(&lexed, &self.archive())?;
         let mut event_seq = None;
         for event in lexed.events {
             event_seq = Some(self.append_cached_event(event)?);
         }
-        self.parser.install_staged(staged);
+        self.parser.install_prepared_observe(parser_install);
         event_seq.ok_or_else(|| SpineError::Invariant("lexer produced no event".to_string()))
     }
 }
