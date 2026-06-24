@@ -207,7 +207,6 @@ impl ParseStack {
         &self,
         reduction: &PreparedTaskTreeReduction,
     ) -> Result<(), SpineError> {
-        let len = self.symbols.len();
         let Some(
             [
                 ..,
@@ -221,11 +220,6 @@ impl ParseStack {
                 "spine.close reduction requires a pending Close suffix".to_string(),
             ));
         };
-        if len < 3 {
-            return Err(SpineError::InvalidEvent(
-                "spine.close reduction suffix underflow".to_string(),
-            ));
-        }
         if meta != &reduction.meta || children != &reduction.children || memory != &reduction.memory
         {
             return Err(SpineError::InvalidEvent(
