@@ -110,136 +110,120 @@ pub(super) fn project_raw_history_with_trim_projection(
 pub(super) fn project_parse_stack_visible_items(
     ps: &ParseStack,
 ) -> Result<Vec<VisibleItemRef>, SpineError> {
-    let mut refs = Vec::new();
-    let mut next_context_index = 0usize;
-    project_symbols_to_visible_refs(&ps.symbols, &mut next_context_index, &mut refs)?;
-    Ok(refs)
+    VisibleRefProjection::new(0).project_symbols(&ps.symbols)
 }
 
 pub(super) fn project_spine_tree_nodes_visible_items(
     nodes: &[SpineTreeNode],
     context_start: usize,
 ) -> Result<Vec<VisibleItemRef>, SpineError> {
-    let mut refs = Vec::new();
-    let mut next_context_index = context_start;
-    for node in nodes {
-        project_node_to_visible_refs(node, &mut next_context_index, &mut refs)?;
-    }
-    Ok(refs)
+    VisibleRefProjection::new(context_start).project_nodes(nodes)
 }
 
-fn project_symbols_to_visible_refs(
-    symbols: &[Symbol],
-    next_context_index: &mut usize,
-    refs: &mut Vec<VisibleItemRef>,
-) -> Result<(), SpineError> {
-    for symbol in symbols {
-        match symbol {
-            Symbol::Control(ControlSymbol::Init(_))
-            | Symbol::Control(ControlSymbol::End)
-            | Symbol::Control(ControlSymbol::Open(_))
-            | Symbol::Control(ControlSymbol::Close(_))
-            | Symbol::Control(ControlSymbol::Compact(_, _, _, _)) => {}
-            Symbol::SpineTreeNode(node) => {
-                project_node_to_visible_refs(node, next_context_index, refs)?
-            }
-            Symbol::SpineTreeNodes(nodes) => {
-                for node in nodes {
-                    project_node_to_visible_refs(node, next_context_index, refs)?;
+struct VisibleRefProjection {
+    next_context_index: usize,
+    refs: Vec<VisibleItemRef>,
+}
+
+impl VisibleRefProjection {
+    fn new(context_start: usize) -> Self {
+        Self {
+            next_context_index: context_start,
+            refs: Vec::new(),
+        }
+    }
+
+    fn project_symbols(mut self, symbols: &[Symbol]) -> Result<Vec<VisibleItemRef>, SpineError> {
+        for symbol in symbols {
+            match symbol {
+                Symbol::Control(ControlSymbol::Init(_))
+                | Symbol::Control(ControlSymbol::End)
+                | Symbol::Control(ControlSymbol::Open(_))
+                | Symbol::Control(ControlSymbol::Close(_))
+                | Symbol::Control(ControlSymbol::Compact(_, _, _, _)) => {}
+                Symbol::SpineTreeNode(node) => self.project_node(node)?,
+                Symbol::SpineTreeNodes(nodes) => {
+                    self.project_nodes_in_place(nodes)?;
                 }
-            }
-            Symbol::RootEpoches(root_epochs) => {
-                if let Some(root_epoch) = root_epochs.last() {
-                    push_visible_ref(
-                        next_context_index,
-                        refs,
-                        VisibleItemSource::MemoryRef {
+                Symbol::RootEpoches(root_epochs) => {
+                    if let Some(root_epoch) = root_epochs.last() {
+                        self.push(VisibleItemSource::MemoryRef {
                             memory: root_epoch.memory.clone(),
                             require_live_raw: false,
-                        },
-                    )?;
+                        })?;
+                    }
                 }
             }
         }
+        Ok(self.refs)
     }
-    Ok(())
-}
 
-fn project_node_to_visible_refs(
-    node: &SpineTreeNode,
-    next_context_index: &mut usize,
-    refs: &mut Vec<VisibleItemRef>,
-) -> Result<(), SpineError> {
-    match node {
-        SpineTreeNode::MsgAsLeafNode {
-            msg,
-            from_user,
-            user_anchor,
-        } => match msg {
-            SegRef::ResponseItem { raw_ordinal, .. } => push_visible_ref(
-                next_context_index,
-                refs,
-                VisibleItemSource::RawResponseItem {
-                    raw_ordinal: *raw_ordinal,
-                    from_user: *from_user,
-                    user_anchor: *user_anchor,
-                },
-            ),
-            SegRef::Memory {
-                memory_id,
-                body_path,
-            } => push_visible_ref(
-                next_context_index,
-                refs,
-                VisibleItemSource::MemorySeg {
+    fn project_nodes(mut self, nodes: &[SpineTreeNode]) -> Result<Vec<VisibleItemRef>, SpineError> {
+        self.project_nodes_in_place(nodes)?;
+        Ok(self.refs)
+    }
+
+    fn project_nodes_in_place(&mut self, nodes: &[SpineTreeNode]) -> Result<(), SpineError> {
+        for node in nodes {
+            self.project_node(node)?;
+        }
+        Ok(())
+    }
+
+    fn project_node(&mut self, node: &SpineTreeNode) -> Result<(), SpineError> {
+        match node {
+            SpineTreeNode::MsgAsLeafNode {
+                msg,
+                from_user,
+                user_anchor,
+            } => match msg {
+                SegRef::ResponseItem { raw_ordinal, .. } => {
+                    self.push(VisibleItemSource::RawResponseItem {
+                        raw_ordinal: *raw_ordinal,
+                        from_user: *from_user,
+                        user_anchor: *user_anchor,
+                    })
+                }
+                SegRef::Memory {
+                    memory_id,
+                    body_path,
+                } => self.push(VisibleItemSource::MemorySeg {
                     memory_id: memory_id.clone(),
                     body_path: body_path.clone(),
-                },
-            ),
-        },
-        SpineTreeNode::ToolCallAsLeafNode { segments } => {
-            for segment in segments {
-                let SegRef::ResponseItem { raw_ordinal, .. } = &segment.seg else {
-                    return Err(SpineError::InvalidEvent(
-                        "visible toolcall segment must reference raw response item".to_string(),
-                    ));
-                };
-                push_visible_ref(
-                    next_context_index,
-                    refs,
-                    VisibleItemSource::ToolCallSegment {
+                }),
+            },
+            SpineTreeNode::ToolCallAsLeafNode { segments } => {
+                for segment in segments {
+                    let SegRef::ResponseItem { raw_ordinal, .. } = &segment.seg else {
+                        return Err(SpineError::InvalidEvent(
+                            "visible toolcall segment must reference raw response item".to_string(),
+                        ));
+                    };
+                    self.push(VisibleItemSource::ToolCallSegment {
                         kind: segment.kind,
                         raw_ordinal: *raw_ordinal,
-                    },
-                )?;
+                    })?;
+                }
+                Ok(())
             }
-            Ok(())
-        }
-        SpineTreeNode::SpineTree { memory, .. } => push_visible_ref(
-            next_context_index,
-            refs,
-            VisibleItemSource::MemoryRef {
+            SpineTreeNode::SpineTree { memory, .. } => self.push(VisibleItemSource::MemoryRef {
                 memory: memory.clone(),
                 require_live_raw: true,
-            },
-        ),
+            }),
+        }
     }
-}
 
-fn push_visible_ref(
-    next_context_index: &mut usize,
-    refs: &mut Vec<VisibleItemRef>,
-    source: VisibleItemSource,
-) -> Result<(), SpineError> {
-    let context_index = *next_context_index;
-    *next_context_index = next_context_index
-        .checked_add(1)
-        .ok_or_else(|| SpineError::InvalidEvent("visible context index overflow".to_string()))?;
-    refs.push(VisibleItemRef {
-        context_index,
-        source,
-    });
-    Ok(())
+    fn push(&mut self, source: VisibleItemSource) -> Result<(), SpineError> {
+        let context_index = self.next_context_index;
+        self.next_context_index = self.next_context_index.checked_add(1).ok_or_else(|| {
+            SpineError::InvalidEvent("visible context index overflow".to_string())
+        })?;
+        self.refs.push(VisibleItemRef {
+            context_index,
+            source,
+        });
+        Ok(())
+    }
 }
 
 fn render_visible_ref_to_context_item(
