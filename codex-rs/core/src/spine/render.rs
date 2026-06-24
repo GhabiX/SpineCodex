@@ -77,16 +77,17 @@ pub(super) fn render_parse_stack_to_context_with_memory_body_and_trim_projection
     trim_projection: &TrimProjection,
 ) -> Result<Vec<ResponseItem>, SpineError> {
     let visible_refs = project_parse_stack_visible_items(ps)?;
-    let mut out = Vec::with_capacity(visible_refs.len());
-    for visible_ref in &visible_refs {
-        out.push(render_visible_ref_to_context_item(
-            &visible_ref.source,
-            raw_items,
-            staged_memory_body,
-            trim_projection,
-        )?);
-    }
-    Ok(out)
+    visible_refs
+        .iter()
+        .map(|visible_ref| {
+            render_visible_ref_to_context_item(
+                &visible_ref.source,
+                raw_items,
+                staged_memory_body,
+                trim_projection,
+            )
+        })
+        .collect()
 }
 
 pub(super) fn project_raw_history_with_trim_projection(
