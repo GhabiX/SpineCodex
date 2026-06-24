@@ -400,12 +400,10 @@ pub(super) fn pending_memory_context_accounting_from_store(
             }
         }
     }
-    let mut pending = pending_by_id.into_values();
-    match (pending.next(), pending.next()) {
-        (None, _) => Ok(None),
-        (Some(record), None) => Ok(Some(record)),
-        (Some(_), Some(_)) => Err(SpineError::InvalidStore(
+    if pending_by_id.len() > 1 {
+        return Err(SpineError::InvalidStore(
             "multiple unconsumed Spine memory context accounting pending witnesses".to_string(),
-        )),
+        ));
     }
+    Ok(pending_by_id.into_values().next())
 }
