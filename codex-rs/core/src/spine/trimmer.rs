@@ -247,14 +247,20 @@ pub(super) fn trim_projection_from_events(
                 });
             }
             TrimEvent::Cleared { trim_id, .. } | TrimEvent::Snipped { trim_id, .. } => {
-                projection.mark_snipped(trim_id);
+                if let Some(target) = projection.targets_by_id.get_mut(trim_id) {
+                    target.state = TrimTargetState::Snipped;
+                }
             }
             TrimEvent::Sliced {
                 trim_id,
                 visible_body,
                 ..
             } => {
-                projection.mark_sliced(trim_id, visible_body.clone());
+                if let Some(target) = projection.targets_by_id.get_mut(trim_id) {
+                    target.state = TrimTargetState::Sliced {
+                        visible_body: visible_body.clone(),
+                    };
+                }
             }
         }
     }
