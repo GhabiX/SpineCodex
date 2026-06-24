@@ -75,6 +75,24 @@ impl SpinePreparedCommit {
         }
     }
 
+    pub(super) fn open_with_toolcall(
+        kind: SpineCommitKind,
+        parser_install: ParserCommitInstall,
+        completed_toolcall: CompletedToolCall,
+        toolcall_seq: u64,
+        raw_items: Vec<Option<ResponseItem>>,
+    ) -> Self {
+        Self {
+            kind,
+            publication_plan: None,
+            parser_install: Some(parser_install),
+            completed_toolcall: Some(completed_toolcall),
+            toolcall_seq: Some(toolcall_seq),
+            raw_items,
+            mem_for_accounting: None,
+        }
+    }
+
     pub(super) fn close_family(
         kind: SpineCommitKind,
         publication_plan: ParserPublicationPlan,
@@ -129,6 +147,10 @@ impl SpinePreparedCommit {
 
     pub(crate) fn publication_plan(&self) -> Option<&ParserPublicationPlan> {
         self.publication_plan.as_ref()
+    }
+
+    pub(super) fn parser_install(&self) -> Option<&ParserCommitInstall> {
+        self.parser_install.as_ref()
     }
 }
 

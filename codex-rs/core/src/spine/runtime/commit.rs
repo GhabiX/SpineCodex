@@ -366,18 +366,17 @@ impl SpineRuntime {
             let mut events = open_lexed.into_events();
             events.extend(toolcall_lexed.into_events());
             self.append_committed_events_no_marker(events)?;
-            self.parser.install_prepared_open(parser_install);
-            self.append_trim_candidates_for_completed_toolcall(
-                &completed_toolcall,
+            return Ok(SpinePreparedCommit::open_with_toolcall(
+                SpineCommitKind::Open {
+                    open_request_index: usize::try_from(index).map_err(|_| {
+                        SpineError::InvalidEvent("spine.open context index overflow".to_string())
+                    })?,
+                },
+                parser_install.into_commit_install(),
+                completed_toolcall,
                 toolcall_seq,
-                raw_items,
-            )?;
-            self.clear_completed_toolcall_anchors(&completed_toolcall);
-            return Ok(SpinePreparedCommit::installed_open(SpineCommitKind::Open {
-                open_request_index: usize::try_from(index).map_err(|_| {
-                    SpineError::InvalidEvent("spine.open context index overflow".to_string())
-                })?,
-            }));
+                raw_items.to_vec(),
+            ));
         }
         let parser_install =
             self.parser
@@ -730,6 +729,20 @@ impl SpineRuntime {
             return Ok(None);
         }
         let trim_projection = self.current_trim_projection()?;
+        if let Some(parser_install) = prepared_commit.and_then(SpinePreparedCommit::parser_install)
+        {
+            let materialized =
+                parser_install.materialize_final_context(raw_items, &trim_projection)?;
+            if materialized.as_slice() == history_items {
+                return Ok(None);
+            }
+            return Ok(Some(ParserPublicationUpdate::new(
+                "spine prepared commit projection",
+                0,
+                history_items.to_vec(),
+                materialized,
+            )));
+        }
         self.parser.full_variable_context_publication_update(
             "spine toolcall projection",
             raw_items,

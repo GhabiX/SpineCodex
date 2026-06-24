@@ -253,9 +253,10 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
         })
         .expect("open-with-toolcall install section");
     assert!(
-        open_with_toolcall_install.contains(".install_prepared_open(parser_install)")
+        open_with_toolcall_install.contains("SpinePreparedCommit::open_with_toolcall(")
+            && open_with_toolcall_install.contains("parser_install.into_commit_install()")
             && !open_with_toolcall_install.contains("replace_parse_stack_for_runtime_transition"),
-        "runtime open-with-toolcall should install parser-owned open handle through ParserState"
+        "runtime open-with-toolcall should return a parser-owned prepared commit install handle"
     );
     let open_without_toolcall_install = commit
         .split(".prepare_open_install(&open_lexed, None")
@@ -321,6 +322,35 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
     assert!(
         !commit.contains(".install_prepared_commit_final_parse_stack("),
         "runtime close/next final install should use the parser-owned commit install handle"
+    );
+}
+
+#[test]
+fn runtime_commit_routes_open_with_toolcall_publication_through_prepared_commit() {
+    let commit =
+        fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    assert!(
+        commit.contains("SpinePreparedCommit::open_with_toolcall("),
+        "open-with-toolcall should be represented as a prepared parser commit"
+    );
+    assert!(
+        !commit.contains("self.parser.install_prepared_open(parser_install);\n            self.append_trim_candidates_for_completed_toolcall"),
+        "open-with-toolcall must not install parser state before publication side effects"
+    );
+    let publication_parts = commit
+        .split("fn parser_commit_publication_update")
+        .nth(1)
+        .and_then(|tail| tail.split("fn prepare_close_commit").next())
+        .expect("commit publication history update function");
+    assert!(
+        publication_parts.contains("parser_install.materialize_final_context(")
+            && publication_parts.contains("ParserPublicationUpdate::new("),
+        "open-with-toolcall publication should materialize h(PS) from the prepared parser install"
+    );
+    assert!(
+        publication_parts.contains("prepared_commit.and_then(SpinePreparedCommit::parser_install)")
+            && !publication_parts.contains("commit.parser_install"),
+        "runtime commit publication should access parser install through the prepared commit accessor"
     );
 }
 

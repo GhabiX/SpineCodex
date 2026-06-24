@@ -105,7 +105,7 @@ pub(crate) struct ParserPublicationUpdate {
 }
 
 impl ParserPublicationUpdate {
-    fn new(
+    pub(crate) fn new(
         operation: &'static str,
         suffix_start: usize,
         expected_history: Vec<ResponseItem>,
@@ -252,6 +252,18 @@ impl ParserCommitInstall {
         Self { final_parse_stack }
     }
 
+    pub(super) fn materialize_final_context(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+    ) -> Result<Vec<ResponseItem>, SpineError> {
+        render_parse_stack_to_context_with_trim_projection(
+            self.final_parse_stack.parse_stack(),
+            raw_items,
+            trim_projection,
+        )
+    }
+
     fn into_final_parse_stack(self) -> ParserPreparedState {
         self.final_parse_stack
     }
@@ -276,6 +288,10 @@ impl ParserOpenInstall {
 
     fn into_final_parse_stack(self) -> ParserPreparedState {
         self.final_parse_stack
+    }
+
+    pub(super) fn into_commit_install(self) -> ParserCommitInstall {
+        ParserCommitInstall::new(self.final_parse_stack)
     }
 }
 
