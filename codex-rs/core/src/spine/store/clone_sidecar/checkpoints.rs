@@ -9,8 +9,7 @@ pub(in crate::spine::store::clone_sidecar) fn select_cloned_checkpoints(
     boundary: &SpineCloneBoundary,
     source_raw_live: &[bool],
 ) -> Result<Vec<SpineCheckpoint>, SpineError> {
-    let mut cloned = Vec::new();
-    for checkpoint in checkpoints {
+    select_cloned_checkpoint_items(checkpoints, |checkpoint| {
         let selected = checkpoint_selected_for_clone(
             checkpoint.token_seq,
             checkpoint.raw_ordinal,
@@ -19,11 +18,8 @@ pub(in crate::spine::store::clone_sidecar) fn select_cloned_checkpoints(
             boundary,
             source_raw_live,
         )?;
-        if checkpoint.checkpoint_id != "initial" && selected {
-            cloned.push(checkpoint);
-        }
-    }
-    Ok(cloned)
+        Ok(checkpoint.checkpoint_id != "initial" && selected)
+    })
 }
 
 pub(in crate::spine::store::clone_sidecar) fn select_cloned_compact_checkpoints(
@@ -31,16 +27,25 @@ pub(in crate::spine::store::clone_sidecar) fn select_cloned_compact_checkpoints(
     boundary: &SpineCloneBoundary,
     source_raw_live: &[bool],
 ) -> Result<Vec<SpineCompactCheckpoint>, SpineError> {
-    let mut cloned = Vec::new();
-    for checkpoint in checkpoints {
-        if checkpoint_selected_for_clone(
+    select_cloned_checkpoint_items(checkpoints, |checkpoint| {
+        checkpoint_selected_for_clone(
             checkpoint.token_seq,
             checkpoint.raw_boundary,
             &checkpoint.raw_live_hash,
             "compact checkpoint raw boundary overflow",
             boundary,
             source_raw_live,
-        )? {
+        )
+    })
+}
+
+fn select_cloned_checkpoint_items<T>(
+    checkpoints: Vec<T>,
+    mut selected: impl FnMut(&T) -> Result<bool, SpineError>,
+) -> Result<Vec<T>, SpineError> {
+    let mut cloned = Vec::new();
+    for checkpoint in checkpoints {
+        if selected(&checkpoint)? {
             cloned.push(checkpoint);
         }
     }
