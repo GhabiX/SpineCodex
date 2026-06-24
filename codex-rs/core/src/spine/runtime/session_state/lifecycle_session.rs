@@ -107,11 +107,11 @@ impl SpineSessionState {
             .map(|runtime| runtime.live_root_compacts())
             .transpose()?
             .unwrap_or_default();
-        Ok(PreparedSpineReplayRuntime::new(
+        Ok(PreparedSpineReplayRuntime {
             runtime,
             materialized,
             live_root_compacts,
-        ))
+        })
     }
 
     pub(crate) fn install_cloned_sidecar_for_fork(

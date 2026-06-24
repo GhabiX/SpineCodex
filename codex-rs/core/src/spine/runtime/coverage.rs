@@ -103,13 +103,11 @@ fn completed_raw_tool_call_ids(raw_items: &[Option<ResponseItem>]) -> BTreeSet<S
         .filter_map(Option::as_ref)
         .filter_map(tool_request_call_id)
         .collect::<BTreeSet<_>>();
-    let mut completed = BTreeSet::new();
-    for item in raw_items.iter().filter_map(Option::as_ref) {
-        if let Some(call_id) = tool_response_call_id(item)
-            && request_call_ids.contains(call_id)
-        {
-            completed.insert(call_id.to_string());
-        }
-    }
-    completed
+    raw_items
+        .iter()
+        .filter_map(Option::as_ref)
+        .filter_map(tool_response_call_id)
+        .filter(|call_id| request_call_ids.contains(*call_id))
+        .map(str::to_string)
+        .collect()
 }

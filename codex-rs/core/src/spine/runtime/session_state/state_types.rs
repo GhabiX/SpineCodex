@@ -66,20 +66,6 @@ pub(crate) struct CommittedSpineToolcall {
     pub(super) post_apply_effect_policy: SpinePostApplyEffectPolicy,
 }
 
-impl PreparedSpineReplayRuntime {
-    pub(super) fn new(
-        runtime: Option<SpineRuntime>,
-        materialized: Option<Vec<ResponseItem>>,
-        live_root_compacts: Vec<LiveRootCompact>,
-    ) -> Self {
-        Self {
-            runtime,
-            materialized,
-            live_root_compacts,
-        }
-    }
-}
-
 impl CommittedSpineToolcall {
     pub(super) fn installed_commit(&self) -> bool {
         self.installed_commit
