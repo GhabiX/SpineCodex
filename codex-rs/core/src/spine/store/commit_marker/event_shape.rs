@@ -52,12 +52,7 @@ fn validate_required_synthetic_open(
             marker.op_id, seq
         )));
     };
-    if *boundary != marker.raw_boundary {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} raw boundary {} does not match synthetic Open boundary {}",
-            marker.op_id, marker.raw_boundary, boundary
-        )));
-    }
+    validate_marker_raw_boundary(marker, *boundary, "synthetic Open")?;
     Ok(())
 }
 
@@ -79,12 +74,7 @@ fn validate_root_compact_shape(
             marker.op_id, marker.token_seq_start
         )));
     };
-    if *boundary != marker.raw_boundary {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} raw boundary {} does not match RootCompact boundary {}",
-            marker.op_id, marker.raw_boundary, boundary
-        )));
-    }
+    validate_marker_raw_boundary(marker, *boundary, "RootCompact")?;
     if marker.raw_live_hash.as_deref() != Some(raw_live_hash.as_str()) {
         return Err(SpineError::InvalidStore(format!(
             "Spine commit marker {} raw live hash does not match RootCompact",
@@ -169,6 +159,20 @@ fn validate_commit_marker_width(marker: &SpineCommitMarker, width: u64) -> Resul
     Ok(())
 }
 
+fn validate_marker_raw_boundary(
+    marker: &SpineCommitMarker,
+    boundary: u64,
+    event_label: &str,
+) -> Result<(), SpineError> {
+    if boundary != marker.raw_boundary {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} raw boundary {} does not match {} boundary {}",
+            marker.op_id, marker.raw_boundary, event_label, boundary
+        )));
+    }
+    Ok(())
+}
+
 fn validate_required_trailing_toolcall(
     marker: &SpineCommitMarker,
     events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
@@ -215,12 +219,7 @@ fn validate_close_marker_fields(
     node: &NodeId,
     boundary: u64,
 ) -> Result<(), SpineError> {
-    if boundary != marker.raw_boundary {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} raw boundary {} does not match Close boundary {}",
-            marker.op_id, marker.raw_boundary, boundary
-        )));
-    }
+    validate_marker_raw_boundary(marker, boundary, "Close")?;
     if marker.raw_live_hash.is_some() {
         return Err(SpineError::InvalidStore(format!(
             "Spine suffix commit marker {} must not carry a raw_live_hash",
