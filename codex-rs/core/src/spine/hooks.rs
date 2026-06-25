@@ -4,8 +4,6 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
 use std::path::Path;
 
-#[cfg(test)]
-use super::runtime::IntoSpineNodeMemory;
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
 
