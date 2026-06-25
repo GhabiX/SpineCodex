@@ -321,49 +321,7 @@ pub(crate) fn observe_provider_token_usage(
     state: &mut SpineSessionState,
     input_tokens: Option<i64>,
 ) {
-    if state.ensure_valid().is_err() {
-        return;
-    }
-    let result = {
-        let Some(runtime) = state.runtime_mut() else {
-            return;
-        };
-        match input_tokens {
-            Some(input_tokens) if input_tokens > 0 => runtime
-                .capture_closed_memory_context_accounting(input_tokens)
-                .map_err(|err| {
-                    format!(
-                        "failed to capture Spine closed memory context accounting from provider input tokens: {err}"
-                    )
-                })
-                .and_then(|_| {
-                    runtime
-                        .capture_current_open_provider_baseline(input_tokens)
-                        .map_err(|err| {
-                            format!(
-                                "failed to capture Spine open context baseline from provider input tokens: {err}"
-                            )
-                        })
-                }),
-            Some(_) => runtime
-                .consume_closed_memory_context_accounting_without_provider_usage()
-                .map_err(|err| {
-                    format!(
-                        "failed to consume Spine closed memory context accounting without positive provider input tokens: {err}"
-                    )
-                }),
-            None => runtime
-                .consume_closed_memory_context_accounting_without_provider_usage()
-                .map_err(|err| {
-                    format!(
-                        "failed to consume Spine closed memory context accounting without provider usage: {err}"
-                    )
-                }),
-        }
-    };
-    if let Err(reason) = result {
-        state.invalidate(reason);
-    }
+    state.observe_provider_token_usage(input_tokens);
 }
 
 enum ToolCallEvidenceKind<'a> {
