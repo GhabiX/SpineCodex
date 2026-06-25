@@ -68,7 +68,7 @@ impl SpinePreparedRootCompact {
         self.result.clone()
     }
 
-    pub(crate) fn validate_published_history_len(
+    pub(crate) fn validate_published_variable_history_len(
         &self,
         published_variable_history_len: usize,
     ) -> Result<(), super::SpineError> {

@@ -166,7 +166,7 @@ impl SpineRootCompactHostInstall {
         published_variable_history_len: usize,
     ) -> Result<(), super::super::SpineError> {
         self.prepared
-            .validate_published_history_len(published_variable_history_len)
+            .validate_published_variable_history_len(published_variable_history_len)
     }
 
     #[cfg(test)]
