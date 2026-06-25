@@ -238,7 +238,7 @@ impl SpineRuntime {
             None,
         )?;
         let result = self.install_prepared_root_compact_for_direct_result(prepared);
-        Ok(result.materialized)
+        Ok(result.into_publication_history())
     }
 
     pub(crate) fn root_compact_with_checkpoint(

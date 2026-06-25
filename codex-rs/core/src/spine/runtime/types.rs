@@ -123,6 +123,16 @@ pub(crate) struct SpineRootCompactResult {
     pub(crate) token_seq_after: u64,
 }
 
+impl SpineRootCompactResult {
+    pub(crate) fn publication_history(&self) -> &[ResponseItem] {
+        &self.materialized
+    }
+
+    pub(crate) fn into_publication_history(self) -> Vec<ResponseItem> {
+        self.materialized
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpineTrimOutcome {
     Cleared { trim_id: String },

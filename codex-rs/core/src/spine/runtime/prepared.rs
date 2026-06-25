@@ -60,7 +60,7 @@ impl SpinePreparedRootCompact {
     }
 
     pub(crate) fn publication_history(&self) -> &[ResponseItem] {
-        &self.result.materialized
+        self.result.publication_history()
     }
 
     #[cfg(test)]
