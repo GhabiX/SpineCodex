@@ -77,15 +77,13 @@ impl PendingTransition {
 #[cfg(test)]
 #[derive(Clone, Debug)]
 pub(super) enum SpineControlToolReceipt {
-    Open { summary: String },
     Close { memory: String },
-    Next { summary: String, memory: String },
 }
 
 #[cfg(test)]
 impl SpineControlToolReceipt {
     pub(super) fn is_close_like(&self) -> bool {
-        matches!(self, Self::Close { .. } | Self::Next { .. })
+        true
     }
 }
 
@@ -118,15 +116,7 @@ impl SpineRuntime {
         receipt: &SpineControlToolReceipt,
     ) -> Result<(), SpineError> {
         match receipt {
-            SpineControlToolReceipt::Open { summary } => {
-                validated_summary(summary, "spine.open")?;
-            }
             SpineControlToolReceipt::Close { memory } => {
-                validate_model_node_memory(memory)?;
-                self.validate_memory_user_anchor_refs(memory)?;
-            }
-            SpineControlToolReceipt::Next { summary, memory } => {
-                validated_summary(summary, "spine.next")?;
                 validate_model_node_memory(memory)?;
                 self.validate_memory_user_anchor_refs(memory)?;
             }
@@ -276,14 +266,8 @@ impl SpineRuntime {
             return Ok(());
         };
         match receipt {
-            SpineControlToolReceipt::Open { summary } => {
-                self.stage_open(call_id.to_string(), summary)?;
-            }
             SpineControlToolReceipt::Close { memory } => {
                 self.stage_close(call_id.to_string(), memory)?;
-            }
-            SpineControlToolReceipt::Next { summary, memory } => {
-                self.stage_next(call_id.to_string(), summary, memory)?;
             }
         };
         self.control_receipts.remove(call_id);
@@ -487,27 +471,14 @@ impl SpineRuntime {
                 .map(|receipt| {
                     self.validate_control_tool_receipt_pending_view(receipt)?;
                     match receipt {
-                        SpineControlToolReceipt::Open { .. } => {
-                            Ok::<SpinePendingCommit, SpineError>(SpinePendingCommit::Open)
-                        }
                         SpineControlToolReceipt::Close { memory } => {
                             let open_meta = self.current_close_open_meta()?;
-                            Ok(SpinePendingCommit::Close {
+                            Ok::<SpinePendingCommit, SpineError>(SpinePendingCommit::Close {
                                 action: SpinePendingCloseAction::Close,
                                 node: open_meta.id.clone(),
                                 suffix_start: open_meta.index,
                                 memory: memory.clone(),
                                 next_summary: None,
-                            })
-                        }
-                        SpineControlToolReceipt::Next { summary, memory } => {
-                            let open_meta = self.current_close_open_meta()?;
-                            Ok(SpinePendingCommit::Close {
-                                action: SpinePendingCloseAction::Next,
-                                node: open_meta.id.clone(),
-                                suffix_start: open_meta.index,
-                                memory: memory.clone(),
-                                next_summary: Some(summary.clone()),
                             })
                         }
                     }
