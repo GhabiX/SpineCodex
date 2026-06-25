@@ -125,6 +125,7 @@ pub(super) struct CheckpointTrajsRef {
     pub(super) trajs_path: String,
 }
 
+#[derive(Default)]
 pub(super) struct CheckpointRefs {
     pub(super) tree_meta: Vec<CheckpointTreeMeta>,
     pub(super) memory_refs: Vec<CheckpointMemoryRef>,
@@ -132,11 +133,7 @@ pub(super) struct CheckpointRefs {
 }
 
 pub(super) fn collect_checkpoint_refs(symbols: &[Symbol]) -> CheckpointRefs {
-    let mut refs = CheckpointRefs {
-        tree_meta: Vec::new(),
-        memory_refs: Vec::new(),
-        trajs_refs: Vec::new(),
-    };
+    let mut refs = CheckpointRefs::default();
     collect_checkpoint_refs_into(symbols, &mut refs);
     refs
 }
