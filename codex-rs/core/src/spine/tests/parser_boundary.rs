@@ -8,6 +8,21 @@ fn spine_src(path: &str) -> PathBuf {
         .join(path)
 }
 
+fn core_src(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join(path)
+}
+
+fn source_without_line_comments(path: PathBuf) -> String {
+    fs::read_to_string(path)
+        .expect("read source")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn observe_runtime_routes_token_shifts_through_parser_state() {
     let observe =
@@ -209,6 +224,45 @@ fn parse_stack_stays_out_of_host_publication_boundary() {
             assert!(
                 !source.contains(forbidden),
                 "{path} should remain a reducer/tree-read layer and must not depend on host publication or h(PS) materialization through {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn hook_and_session_bridge_stay_out_of_parser_token_boundary() {
+    for (label, source) in [
+        (
+            "session/spine_bridge.rs",
+            source_without_line_comments(core_src("session/spine_bridge.rs")),
+        ),
+        (
+            "spine/hooks.rs",
+            source_without_line_comments(spine_src("hooks.rs")),
+        ),
+    ] {
+        for forbidden in [
+            "use crate::spine::lexer",
+            "use crate::spine::model::SpineToken",
+            "LexedTokenBatch",
+            "ControlIntent",
+            "RootCompactPlan",
+            "SpineLedgerEvent",
+            "ParserState",
+            "ParserPublication",
+            "ParseStack",
+            "shift_pending_",
+            "apply_prevalidated",
+            "replace_parse_stack",
+            "render_parse_stack",
+            "materialize_parse_stack",
+            "parse_stack_mut",
+            ".parse_stack(",
+            ".shift(",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{label} must stay on the host bridge/hook side and must not consume parser tokens or mutate parser state through {forbidden}"
             );
         }
     }
