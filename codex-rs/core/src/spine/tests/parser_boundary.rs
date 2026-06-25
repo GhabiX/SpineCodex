@@ -1003,8 +1003,10 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     );
     assert!(
         prepared.contains("fn take_pre_apply_history_update(&mut self)")
+            && prepared.contains("pre_apply_history_update: Option<T>")
+            && !prepared.contains("history_update: Option<T>")
             && !prepared.contains("fn take_history_update(&mut self)"),
-        "SpineCommitPublication should expose pre-apply history intent, not a generic field-style take_history_update"
+        "SpineCommitPublication should expose pre-apply history intent, not a generic field-style history_update"
     );
     assert!(
         prepared.contains("fn apply_publication_history_update<T, F>(")

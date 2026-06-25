@@ -37,7 +37,7 @@ pub(crate) struct SpinePreparedCommitInstall {
 #[derive(Debug)]
 pub(crate) struct SpineCommitPublication<T> {
     install: Option<SpinePreparedCommitInstall>,
-    history_update: Option<T>,
+    pre_apply_history_update: Option<T>,
 }
 
 #[derive(Debug)]
@@ -306,11 +306,11 @@ fn validate_publication_boundaries_do_not_split_toolcall(
 impl<T> SpineCommitPublication<T> {
     pub(super) fn new(
         install: Option<SpinePreparedCommitInstall>,
-        history_update: Option<T>,
+        pre_apply_history_update: Option<T>,
     ) -> Self {
         Self {
             install,
-            history_update,
+            pre_apply_history_update,
         }
     }
 
@@ -321,7 +321,7 @@ impl<T> SpineCommitPublication<T> {
     }
 
     pub(crate) fn take_pre_apply_history_update(&mut self) -> Option<T> {
-        self.history_update.take()
+        self.pre_apply_history_update.take()
     }
 
     pub(super) fn install(&self) -> Option<&SpinePreparedCommitInstall> {
