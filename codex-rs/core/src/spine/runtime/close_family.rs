@@ -27,10 +27,6 @@ pub(super) enum CloseFamilyAfterClose {
     Open { summary: String },
 }
 
-pub(super) struct CloseFamilyOpenPlan {
-    lexed: LexedTokenBatch,
-}
-
 pub(super) struct CloseFamilyPlan {
     operation: &'static str,
     missing_toolcall_error: &'static str,
@@ -39,7 +35,7 @@ pub(super) struct CloseFamilyPlan {
     marker_kind: SpineCommitKindMarker,
     kind: SpineCommitKind,
     toolcall_context_index: Option<usize>,
-    open: Option<CloseFamilyOpenPlan>,
+    open: Option<LexedTokenBatch>,
 }
 
 pub(super) struct CloseFamilyTransaction<'a> {
@@ -55,16 +51,6 @@ pub(super) struct CloseFamilyTransaction<'a> {
 pub(super) enum CloseFamilyTransactionError {
     PreparedSideEffect(SpineError),
     CommitProof(SpineError),
-}
-
-impl CloseFamilyOpenPlan {
-    pub(super) fn new(lexed: LexedTokenBatch) -> Self {
-        Self { lexed }
-    }
-
-    fn lexed(&self) -> &LexedTokenBatch {
-        &self.lexed
-    }
 }
 
 impl CloseFamilyPlan {
@@ -90,7 +76,7 @@ impl CloseFamilyPlan {
             marker_kind: SpineCommitKindMarker::CloseThenOpen,
             kind: SpineCommitKind::CloseThenOpen { open_index },
             toolcall_context_index: Some(open_index),
-            open: Some(CloseFamilyOpenPlan::new(open_lexed)),
+            open: Some(open_lexed),
         }
     }
 
@@ -107,7 +93,7 @@ impl CloseFamilyPlan {
     }
 
     pub(super) fn open_lexed(&self) -> Option<&LexedTokenBatch> {
-        self.open.as_ref().map(CloseFamilyOpenPlan::lexed)
+        self.open.as_ref()
     }
 
     pub(super) fn append_open_events(&self, events: &mut Vec<SpineLedgerEvent>) {
