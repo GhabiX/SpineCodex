@@ -742,7 +742,7 @@ impl ParserState {
         reduced.next_child_id()
     }
 
-    pub(super) fn close_family_staged_parse_stacks(
+    pub(super) fn prepare_close_family_install(
         &self,
         memory: MemoryRef,
         reduction: PreparedTaskTreeReduction,

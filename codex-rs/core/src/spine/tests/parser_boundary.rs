@@ -109,7 +109,7 @@ fn parser_state_routes_live_batches_through_one_batch_helper() {
         "open parser transactions should consume lexed batches through the shared parser helper"
     );
     let close_family = parser
-        .split("fn close_family_staged_parse_stacks(")
+        .split("fn prepare_close_family_install(")
         .nth(1)
         .and_then(|tail| tail.split("fn prepare_root_compact_reduction").next())
         .expect("close-family parser section");
@@ -585,10 +585,19 @@ fn runtime_commit_routes_close_family_staging_through_parser_state() {
         "runtime/commit.rs must not directly shift close-family final parser tokens"
     );
     assert!(
-        commit.contains(".close_family_staged_parse_stacks(")
+        commit.contains(".prepare_close_family_install(")
             && commit.contains(".close_reduced_next_child_id(")
             && commit.contains(".prepare_current_task_tree_reduction("),
         "runtime close/next commit should route staged parser reductions through ParserState"
+    );
+    assert!(
+        !commit.contains(".close_family_staged_parse_stacks("),
+        "runtime close/next commit should not depend on parser APIs named after raw staged ParseStacks"
+    );
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    assert!(
+        !parser.contains("fn close_family_staged_parse_stacks("),
+        "parser close/next API should expose prepared install semantics, not raw staged ParseStack semantics"
     );
 }
 

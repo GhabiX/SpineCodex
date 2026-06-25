@@ -453,7 +453,7 @@ impl SpineRuntime {
         events.extend(toolcall_lexed.events().iter().cloned());
         let event_count = plan.event_count(events.len())?;
         let toolcall_seq = plan.toolcall_seq(self.ledger.next_event_seq, event_count)?;
-        let parser_install = self.parser.close_family_staged_parse_stacks(
+        let parser_install = self.parser.prepare_close_family_install(
             prepared.memory.clone(),
             prepared.task_tree_reduction,
             plan.open_lexed(),
