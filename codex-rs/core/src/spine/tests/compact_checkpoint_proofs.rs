@@ -55,32 +55,14 @@ fn replacement_history_memory_ref_span_hash_checked() {
     checkpoint.replacement_history_hash = replacement_history_hash;
     checkpoint
         .memory_item_refs
-        .push(CompactCheckpointMemoryItemRef {
-            compact_id: suffix_mem.compact_id.clone(),
-            context_index: 1,
-            item_hash: hash_response_items(&[memory_response_item(suffix_body)])
-                .expect("hash suffix memory item"),
-        });
-    checkpoint.memory_refs.push(CheckpointMemoryRef {
-        compact_id: suffix_mem.compact_id.clone(),
-        node_id: suffix_mem.node.to_string(),
-        body_path: suffix_body_path,
-        body_hash: suffix_mem.body_hash.clone(),
-        source_raw_start: suffix_mem.raw_start,
-        source_raw_end: suffix_mem.raw_end,
-        source_context_start: 0,
-        source_context_end: suffix_mem.context_end,
-        source_token_seq_start: 0,
-        source_token_seq_end: 1,
-        open_input_tokens: suffix_mem.open_input_tokens,
-        close_input_tokens: suffix_mem.close_input_tokens,
-        open_context_tokens: suffix_mem.open_context_tokens,
-        close_context_tokens: suffix_mem.close_context_tokens,
-        closed_source_suffix_tokens: suffix_mem.closed_source_suffix_tokens,
-        closed_memory_context_tokens: suffix_mem.closed_memory_context_tokens,
-        open_context_source: suffix_mem.open_context_source,
-        memory_output_tokens: suffix_mem.memory_output_tokens,
-    });
+        .push(memory_item_ref_for_body(&suffix_mem, 1, suffix_body));
+    checkpoint.memory_refs.push(checkpoint_memory_ref_for_mem(
+        &suffix_mem,
+        suffix_body_path,
+        0,
+        0,
+        1,
+    ));
     store
         .append_compact_checkpoint(&checkpoint)
         .expect("append corrupted compact checkpoint");
