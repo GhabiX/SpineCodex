@@ -445,7 +445,7 @@ impl SpineRuntime {
         let (variable_context, pending_parser_install, parser_install) =
             prepared_txn.into_variable_context_and_install();
         let result = SpineRootCompactResult {
-            materialized: variable_context,
+            variable_context,
             raw_boundary: self.raw_len,
             token_seq_after,
         };

@@ -1349,8 +1349,8 @@ impl Session {
         };
         let result = prepared.result();
         let mut guard = spine_slot.lock().await;
-        let snapshot =
-            guard.apply_root_compact_after_history_publish(prepared, result.materialized.len())?;
+        let snapshot = guard
+            .apply_root_compact_after_history_publish(prepared, result.variable_context().len())?;
         Ok(Some((result, snapshot)))
     }
 

@@ -1310,7 +1310,7 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         root_compact.contains("let (variable_context, pending_parser_install, parser_install)")
-            && root_compact.contains("materialized: variable_context"),
+            && root_compact.contains("SpineRootCompactResult {\n            variable_context,"),
         "runtime root compact should name the parser publication payload as variable context"
     );
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
@@ -1485,6 +1485,16 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !state_types.contains("self.prepared.publication_result()")
             && !state_types.contains("self.prepared.result().materialized"),
         "root compact host install should publish through prepared variable-context accessors, not parser result internals"
+    );
+    let runtime_types =
+        fs::read_to_string(spine_src("runtime/types.rs")).expect("read runtime types source");
+    assert!(
+        runtime_types.contains("struct SpineRootCompactResult")
+            && runtime_types.contains("variable_context: Vec<ResponseItem>")
+            && runtime_types.contains("fn variable_context(&self)")
+            && !runtime_types.contains("materialized: Vec<ResponseItem>")
+            && !runtime_types.contains("self.materialized"),
+        "SpineRootCompactResult should carry parser h(PS) as variable_context, not materialized history"
     );
     let root_compact_session =
         fs::read_to_string(spine_src("runtime/session_state/root_compact_session.rs"))

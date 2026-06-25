@@ -118,18 +118,18 @@ pub(crate) struct SpineCurrentTrimTarget {
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineRootCompactResult {
-    pub(crate) materialized: Vec<ResponseItem>,
+    pub(crate) variable_context: Vec<ResponseItem>,
     pub(crate) raw_boundary: u64,
     pub(crate) token_seq_after: u64,
 }
 
 impl SpineRootCompactResult {
     pub(crate) fn variable_context(&self) -> &[ResponseItem] {
-        &self.materialized
+        &self.variable_context
     }
 
     pub(crate) fn into_variable_context(self) -> Vec<ResponseItem> {
-        self.materialized
+        self.variable_context
     }
 }
 
