@@ -1426,6 +1426,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             "SpineRootCompactHostPublish {\n                publication_history,\n            }"
         ) && host_effect.contains("host_publish.publication_history.len()")
             && host_effect.contains("published.extend_from_slice(&self.publication_history)")
+            && host_effect.contains(".published_variable_history_from_native_items(")
+            && !host_effect.contains(".published_history_from_native_items(")
             && !host_effect.contains("host_publish.materialized.len()")
             && !host_effect.contains("published.extend_from_slice(&self.materialized)"),
         "root compact host publication should not expose parser materialization wording in host-effect internals"

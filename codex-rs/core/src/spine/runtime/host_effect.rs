@@ -169,8 +169,8 @@ impl SpineHostEffects {
             return Ok(None);
         };
         let published_variable_history_len = host_publish.publication_history.len();
-        let published_history =
-            host_publish.published_history_from_native_items(&native_items, is_fixed_prefix_item);
+        let published_history = host_publish
+            .published_variable_history_from_native_items(&native_items, is_fixed_prefix_item);
         publish_history(published_history, true).await?;
         let spine_tree_snapshot = finalize_after_publish(published_variable_history_len).await?;
         after_installed().await?;
@@ -348,7 +348,7 @@ impl SpineHostEffect {
 }
 
 impl SpineRootCompactHostPublish {
-    pub(crate) fn published_history_from_native_items(
+    pub(crate) fn published_variable_history_from_native_items(
         &self,
         native_items: &[ResponseItem],
         is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
