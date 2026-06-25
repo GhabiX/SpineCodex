@@ -327,8 +327,14 @@ impl<T> SpineCommitPublication<T> {
         self.pre_apply_history_update.take()
     }
 
-    pub(super) fn install_for_side_effects(&self) -> Option<&SpinePreparedCommitInstall> {
-        self.install.as_ref()
+    pub(super) fn apply_install_side_effects(
+        &self,
+        apply: impl FnOnce(&SpinePreparedCommitInstall) -> Result<(), super::SpineError>,
+    ) -> Result<(), super::SpineError> {
+        if let Some(install) = self.install.as_ref() {
+            apply(install)?;
+        }
+        Ok(())
     }
 
     pub(super) fn into_install(self) -> Option<SpinePreparedCommitInstall> {

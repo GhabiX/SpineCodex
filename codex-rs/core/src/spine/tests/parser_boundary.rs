@@ -1015,8 +1015,9 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         .expect("SpineCommitPublication impl block");
     assert!(
         commit_publication_impl.contains("fn into_install(self)")
+            && commit_publication_impl.contains("fn apply_install_side_effects")
             && !commit_publication_impl.contains("fn install(&self)"),
-        "SpineCommitPublication should consume parser installs through into_install and must not expose borrowed install access"
+        "SpineCommitPublication should consume parser installs through into_install and keep side-effect access behind a scoped callback"
     );
     assert!(
         prepared.contains("fn apply_publication_history_update<T, F>(")

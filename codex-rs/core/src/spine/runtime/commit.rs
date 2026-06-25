@@ -585,10 +585,9 @@ impl SpineRuntime {
         &mut self,
         publication: &SpineCommitPublication<T>,
     ) -> Result<(), SpineError> {
-        if let Some(install) = publication.install_for_side_effects() {
-            self.persist_prepared_commit_install_side_effects(install)?;
-        }
-        Ok(())
+        publication.apply_install_side_effects(|install| {
+            self.persist_prepared_commit_install_side_effects(install)
+        })
     }
 
     fn install_prepared_commit_install(&mut self, install: SpinePreparedCommitInstall) {
