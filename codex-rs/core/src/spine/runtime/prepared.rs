@@ -40,28 +40,28 @@ pub(crate) struct SpineCommitPublication<T> {
 
 #[derive(Debug)]
 pub(crate) struct SpinePreparedRootCompact {
-    result: SpineRootCompactResult,
+    publication: SpineRootCompactResult,
     parser_install: ParserRootCompactInstall,
 }
 
 impl SpinePreparedRootCompact {
     pub(super) fn new(
-        result: SpineRootCompactResult,
+        publication: SpineRootCompactResult,
         parser_install: ParserRootCompactInstall,
     ) -> Self {
         Self {
-            result,
+            publication,
             parser_install,
         }
     }
 
     pub(crate) fn variable_context(&self) -> &[ResponseItem] {
-        self.result.variable_context()
+        self.publication.variable_context()
     }
 
     #[cfg(test)]
     pub(crate) fn clone_publication_result_for_test(&self) -> SpineRootCompactResult {
-        self.result.clone()
+        self.publication.clone()
     }
 
     pub(crate) fn validate_published_variable_context_len(
@@ -87,7 +87,7 @@ impl SpinePreparedRootCompact {
         install: impl FnOnce(ParserRootCompactInstall),
     ) -> SpineRootCompactResult {
         install(self.parser_install);
-        self.result
+        self.publication
     }
 }
 

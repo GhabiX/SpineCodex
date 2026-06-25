@@ -1045,9 +1045,11 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "runtime root compact prepared carrier should hold a parser-owned install handle"
     );
     assert!(
-        !prepared.contains("pub(super) result: SpineRootCompactResult")
+        prepared.contains("publication: SpineRootCompactResult")
+            && !prepared.contains("result: SpineRootCompactResult")
+            && !prepared.contains("pub(super) result: SpineRootCompactResult")
             && !prepared.contains("pub(super) parser_install: ParserRootCompactInstall"),
-        "runtime root compact prepared carrier fields must stay private"
+        "runtime root compact prepared carrier should name parser h(PS) output as publication and keep fields private"
     );
     assert!(
         !prepared.contains("ParserPublicationToolcallSegment")
@@ -1057,7 +1059,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "runtime prepared carriers must not inspect parser publication toolcall boundary internals"
     );
     assert!(
-        prepared.contains("fn new(\n        result: SpineRootCompactResult,\n        parser_install: ParserRootCompactInstall,")
+        prepared.contains("fn new(\n        publication: SpineRootCompactResult,\n        parser_install: ParserRootCompactInstall,")
             && prepared.contains("fn install_parser_state(self, install: impl FnOnce(ParserRootCompactInstall))")
             && !prepared.contains("fn into_parser_install("),
         "runtime root compact prepared carrier should expose a constructor and scoped parser install consumer"
