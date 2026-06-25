@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn memory_assembly_with_context_range(
+pub(crate) fn memory_assembly_with_context_range(
     node_id: &str,
     source_context_range: Range<usize>,
 ) -> SpineCloseMemoryAssembly {
@@ -9,7 +9,7 @@ pub(super) fn memory_assembly_with_context_range(
     memory_assembly_with_ranges(node_id, source_context_range, source_raw_range)
 }
 
-pub(super) fn memory_assembly_with_ranges(
+pub(crate) fn memory_assembly_with_ranges(
     node_id: &str,
     source_context_range: Range<usize>,
     source_raw_range: Range<u64>,

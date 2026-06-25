@@ -13,7 +13,7 @@ fn materialize_history_requires_visible_msg_raw_item() {
         .expect("observe context item");
 
     let err = runtime
-        .materialize_history(&[None])
+        .materialize_history_for_test(&[None])
         .expect_err("h(PS) must render visible Msg from ParseStack, not raw gaps");
     assert!(
         err.to_string()

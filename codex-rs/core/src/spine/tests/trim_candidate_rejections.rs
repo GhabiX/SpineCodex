@@ -24,7 +24,7 @@ fn completed_toolcall_does_not_tag_content_items_tool_response_for_trim() {
         .expect("observe completed toolcall");
 
     assert_eq!(
-        runtime.materialize_history(&raw).expect("materialize"),
+        runtime.materialize_history_for_test(&raw).expect("materialize"),
         vec![request, output]
     );
     assert!(runtime.store.trim_events().expect("trim events").is_empty());

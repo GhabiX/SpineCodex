@@ -525,7 +525,7 @@ fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() 
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
     assert!(
-        !publication_parts.contains("self.materialize_history("),
+        !publication_parts.contains("self.materialize_history_for_test("),
         "runtime/commit.rs must not materialize h(PS) directly while preparing toolcall projection publication"
     );
     assert!(
@@ -969,7 +969,7 @@ fn runtime_root_compact_routes_source_context_len_through_parser_state() {
         .nth(1)
         .expect("root compact prepare function");
     assert!(
-        !prepare_commit.contains("self.materialize_history("),
+        !prepare_commit.contains("self.materialize_history_for_test("),
         "runtime/root_compact.rs must not materialize h(PS) directly while preparing root compact source bounds"
     );
     assert!(
@@ -987,7 +987,7 @@ fn lifecycle_fork_routes_context_len_through_parser_state() {
         .nth(1)
         .expect("fork clone install function");
     assert!(
-        !fork_install.contains("materialize_history(raw_items)?.len()"),
+        !fork_install.contains("materialize_history_for_test(raw_items)?.len()"),
         "fork clone append context index calculation must not materialize h(PS) directly"
     );
     assert!(
@@ -1004,8 +1004,8 @@ fn session_state_materialization_uses_variable_context_api() {
     ] {
         let source = fs::read_to_string(spine_src(path)).expect("read session state source");
         assert!(
-            !source.contains(".materialize_history("),
-            "{path} must not call the legacy runtime materialize_history facade"
+            !source.contains(".materialize_history_for_test("),
+            "{path} must not call the legacy runtime materialize_history_for_test facade"
         );
         assert!(
             source.contains(".materialize_variable_context("),
@@ -1014,10 +1014,10 @@ fn session_state_materialization_uses_variable_context_api() {
     }
 
     let runtime = fs::read_to_string(spine_src("runtime.rs")).expect("read runtime source");
-    let marker = "#[cfg(test)]\n    pub(crate) fn materialize_history";
+    let marker = "#[cfg(test)]\n    pub(crate) fn materialize_history_for_test";
     assert!(
         runtime.contains(marker),
-        "legacy runtime materialize_history facade should remain test-only"
+        "legacy runtime materialize_history_for_test facade should remain test-only"
     );
 }
 

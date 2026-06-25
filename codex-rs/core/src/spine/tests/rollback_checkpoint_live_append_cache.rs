@@ -29,7 +29,7 @@ fn rollback_checkpoint_rebuilds_cache_from_full_sidecar_before_new_append() {
     assert_eq!(replayed.ledger.next_event_seq, full_sidecar_next_seq);
     assert_eq!(
         replayed
-            .materialize_history(&raw_after_rollback)
+            .materialize_history_for_test(&raw_after_rollback)
             .expect("materialize before append"),
         vec![anchored_text_item(1, "kept")]
     );

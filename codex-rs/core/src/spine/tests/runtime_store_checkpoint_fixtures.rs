@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn root_compact_checkpoint_for_memory(
+pub(crate) fn root_compact_checkpoint_for_memory(
     rollout_path: &std::path::Path,
     mem: &MemRecord,
     body: &str,

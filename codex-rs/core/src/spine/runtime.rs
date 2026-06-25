@@ -385,7 +385,7 @@ impl SpineRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn materialize_history(
+    pub(crate) fn materialize_history_for_test(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {

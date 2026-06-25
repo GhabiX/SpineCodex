@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn source_entry(
+pub(crate) fn source_entry(
     context_index: usize,
     source_ordinal: usize,
     item: ResponseItem,
@@ -15,7 +15,7 @@ pub(super) fn source_entry(
     )
 }
 
-pub(super) fn source_entry_with_user_anchor(
+pub(crate) fn source_entry_with_user_anchor(
     context_index: usize,
     source_ordinal: usize,
     item: ResponseItem,
@@ -35,7 +35,7 @@ pub(super) fn source_entry_with_user_anchor(
     }
 }
 
-pub(super) fn child_memory_entry(
+pub(crate) fn child_memory_entry(
     context_index: usize,
     source_ordinal: usize,
     body: &str,

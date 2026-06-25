@@ -4,7 +4,7 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-pub(super) fn snapshot_nodes_by_id(
+pub(crate) fn snapshot_nodes_by_id(
     snapshot: &SpineTreeUpdateEvent,
 ) -> BTreeMap<&str, &SpineTreeNodeSnapshot> {
     snapshot
@@ -14,7 +14,7 @@ pub(super) fn snapshot_nodes_by_id(
         .collect()
 }
 
-pub(super) fn assert_snapshot_is_self_contained_forest(snapshot: &SpineTreeUpdateEvent) {
+pub(crate) fn assert_snapshot_is_self_contained_forest(snapshot: &SpineTreeUpdateEvent) {
     let ids = snapshot
         .nodes
         .iter()

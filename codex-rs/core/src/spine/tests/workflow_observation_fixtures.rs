@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn observe_spine_request(
+pub(crate) fn observe_spine_request(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     tool_name: &str,
@@ -17,7 +17,7 @@ pub(super) fn observe_spine_request(
     (request, request_ordinal, request_context_index)
 }
 
-pub(super) fn observe_function_output(
+pub(crate) fn observe_function_output(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     call_id: &str,
@@ -37,7 +37,7 @@ pub(super) fn observe_function_output(
     (output, output_ordinal, output_context_index)
 }
 
-pub(super) fn observe_item_at_context_index(
+pub(crate) fn observe_item_at_context_index(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     item: ResponseItem,

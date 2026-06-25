@@ -71,6 +71,6 @@ fn closed_memory_context_accounting_rejects_negative_memory_delta() {
             .is_empty()
     );
 
-    let materialized = runtime.materialize_history(&raw).expect("materialize");
+    let materialized = runtime.materialize_history_for_test(&raw).expect("materialize");
     assert_eq!(materialized.len(), 4);
 }

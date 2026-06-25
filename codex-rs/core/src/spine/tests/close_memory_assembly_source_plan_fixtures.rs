@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn source_plan(
+pub(crate) fn source_plan(
     entries: Vec<crate::spine::SpineCompactSourcePlanEntry>,
 ) -> SpineCompactSourcePlan {
     SpineCompactSourcePlan {
@@ -11,7 +11,7 @@ pub(super) fn source_plan(
     }
 }
 
-pub(super) fn source_plan_with_context_range(
+pub(crate) fn source_plan_with_context_range(
     source_context_range: std::ops::Range<usize>,
     entries: Vec<crate::spine::SpineCompactSourcePlanEntry>,
 ) -> SpineCompactSourcePlan {

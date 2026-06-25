@@ -1,14 +1,14 @@
 use super::*;
 
-pub(super) fn tool_req(raw_ordinal: u64, context_index: usize) -> ToolCallSegment {
+pub(crate) fn tool_req(raw_ordinal: u64, context_index: usize) -> ToolCallSegment {
     tool_segment(ToolCallSegmentKind::Request, raw_ordinal, context_index)
 }
 
-pub(super) fn tool_resp(raw_ordinal: u64, context_index: usize) -> ToolCallSegment {
+pub(crate) fn tool_resp(raw_ordinal: u64, context_index: usize) -> ToolCallSegment {
     tool_segment(ToolCallSegmentKind::Response, raw_ordinal, context_index)
 }
 
-pub(super) fn tool_segment(
+pub(crate) fn tool_segment(
     kind: ToolCallSegmentKind,
     raw_ordinal: u64,
     context_index: usize,
@@ -22,7 +22,7 @@ pub(super) fn tool_segment(
     }
 }
 
-pub(super) fn completed_toolcall(
+pub(crate) fn completed_toolcall(
     call_id: &str,
     segments: Vec<ToolCallSegment>,
 ) -> CompletedToolCall {
@@ -53,15 +53,15 @@ pub(super) fn completed_toolcall(
     }
 }
 
-pub(super) fn event_tool_req(raw_ordinal: u64, context_index: u64) -> ToolCallEventSegment {
+pub(crate) fn event_tool_req(raw_ordinal: u64, context_index: u64) -> ToolCallEventSegment {
     event_tool_segment(ToolCallSegmentKind::Request, raw_ordinal, context_index)
 }
 
-pub(super) fn event_tool_resp(raw_ordinal: u64, context_index: u64) -> ToolCallEventSegment {
+pub(crate) fn event_tool_resp(raw_ordinal: u64, context_index: u64) -> ToolCallEventSegment {
     event_tool_segment(ToolCallSegmentKind::Response, raw_ordinal, context_index)
 }
 
-pub(super) fn event_tool_segment(
+pub(crate) fn event_tool_segment(
     kind: ToolCallSegmentKind,
     raw_ordinal: u64,
     context_index: u64,
@@ -73,7 +73,7 @@ pub(super) fn event_tool_segment(
     }
 }
 
-pub(super) fn manual_toolcall_event(
+pub(crate) fn manual_toolcall_event(
     request_raw: u64,
     request_index: u64,
     response_raw: u64,

@@ -31,6 +31,6 @@ fn trim_slice_anchor_window_rewrites_visible_projection() {
     runtime
         .slice_tool_response_anchor("trim_0", "<needle>", 3, 3, &raw)
         .expect("slice succeeds");
-    let rendered = runtime.materialize_history(&raw).expect("materialize");
+    let rendered = runtime.materialize_history_for_test(&raw).expect("materialize");
     assert_eq!(function_output_text_content(&rendered[1]), "abc<needle>xyz");
 }

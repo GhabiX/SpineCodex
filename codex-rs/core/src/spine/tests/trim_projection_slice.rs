@@ -32,7 +32,7 @@ fn trim_slice_head_rewrites_visible_projection_and_preserves_raw_output() {
             trim_id: "trim_0".to_string()
         }
     );
-    let rendered = runtime.materialize_history(&raw).expect("materialize");
+    let rendered = runtime.materialize_history_for_test(&raw).expect("materialize");
     assert_eq!(function_output_text_content(&rendered[1]), "abcdefg");
     assert_eq!(function_output_text_content(&output), long_text);
     assert!(matches!(
@@ -53,7 +53,7 @@ fn trim_slice_head_rewrites_visible_projection_and_preserves_raw_output() {
         .expect("load replayed runtime")
         .expect("runtime exists");
     let replayed_rendered = replayed
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("materialize replay");
     assert_eq!(
         function_output_text_content(&replayed_rendered[1]),

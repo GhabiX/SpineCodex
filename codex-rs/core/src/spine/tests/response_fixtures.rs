@@ -2,15 +2,15 @@ use super::*;
 
 #[path = "response_toolcall_fixtures.rs"]
 mod response_toolcall_fixtures;
-pub(super) use response_toolcall_fixtures::*;
+pub(crate) use response_toolcall_fixtures::*;
 #[path = "response_output_fixtures.rs"]
 mod response_output_fixtures;
-pub(super) use response_output_fixtures::*;
+pub(crate) use response_output_fixtures::*;
 #[path = "response_item_fixtures.rs"]
 mod response_item_fixtures;
-pub(super) use response_item_fixtures::*;
+pub(crate) use response_item_fixtures::*;
 
-pub(super) fn response_item_trace_signature(item: &ResponseItem) -> String {
+pub(crate) fn response_item_trace_signature(item: &ResponseItem) -> String {
     match item {
         ResponseItem::Message { role, content, .. } => {
             let text = content
@@ -56,12 +56,12 @@ pub(super) fn response_item_trace_signature(item: &ResponseItem) -> String {
     }
 }
 
-pub(super) fn materialized_trace_signature(
+pub(crate) fn materialized_trace_signature(
     runtime: &SpineRuntime,
     raw: &[Option<ResponseItem>],
 ) -> Vec<String> {
     runtime
-        .materialize_history(raw)
+        .materialize_history_for_test(raw)
         .expect("materialize h(PS)")
         .iter()
         .map(response_item_trace_signature)

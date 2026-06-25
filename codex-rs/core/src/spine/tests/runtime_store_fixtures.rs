@@ -3,21 +3,21 @@ use std::path::PathBuf;
 
 #[path = "runtime_store_writer_fixtures.rs"]
 mod runtime_store_writer_fixtures;
-pub(super) use runtime_store_writer_fixtures::*;
+pub(crate) use runtime_store_writer_fixtures::*;
 #[path = "runtime_store_event_fixtures.rs"]
 mod runtime_store_event_fixtures;
-pub(super) use runtime_store_event_fixtures::*;
+pub(crate) use runtime_store_event_fixtures::*;
 #[path = "runtime_store_checkpoint_fixtures.rs"]
 mod runtime_store_checkpoint_fixtures;
-pub(super) use runtime_store_checkpoint_fixtures::*;
+pub(crate) use runtime_store_checkpoint_fixtures::*;
 
 // Shared raw/context fixtures.
 
-pub(super) fn rollout_path(dir: &tempfile::TempDir) -> PathBuf {
+pub(crate) fn rollout_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("rollout.jsonl")
 }
 
-pub(super) fn clone_for_rollout_with_raw_live(
+pub(crate) fn clone_for_rollout_with_raw_live(
     source_rollout: &std::path::Path,
     target_rollout: &std::path::Path,
     raw_live: &[bool],
@@ -32,9 +32,9 @@ pub(super) fn clone_for_rollout_with_raw_live(
         .expect("clone sidecar");
 }
 
-pub(super) fn current_context_len(runtime: &SpineRuntime, raw: &[Option<ResponseItem>]) -> usize {
+pub(crate) fn current_context_len(runtime: &SpineRuntime, raw: &[Option<ResponseItem>]) -> usize {
     runtime
-        .materialize_history(raw)
+        .materialize_history_for_test(raw)
         .expect("materialize current h(PS)")
         .len()
 }

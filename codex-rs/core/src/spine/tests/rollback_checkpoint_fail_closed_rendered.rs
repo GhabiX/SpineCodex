@@ -21,7 +21,7 @@ fn assert_rollback_does_not_parse_rendered_history() {
     close_task(&mut runtime, &mut raw, "rendered-close", "1.1.1");
 
     let rendered_history = runtime
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("materialize plausible rendered h(PS)");
     let rendered_memory = rendered_history
         .iter()

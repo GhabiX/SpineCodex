@@ -25,7 +25,7 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
         .root_compact("root epoch 1 memory".to_string(), &raw)
         .expect("root compact");
     let post_compact_len = runtime
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("post-compact h(PS)")
         .len();
     append_msg(&mut runtime, &mut raw, "2.1 work");
@@ -72,7 +72,7 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
         "closed descendants of a previous root epoch must stay folded: {tree}"
     );
 
-    let materialized = replayed.materialize_history(&raw).expect("materialize");
+    let materialized = replayed.materialize_history_for_test(&raw).expect("materialize");
     assert_eq!(materialized.len(), 2);
     assert!(matches!(
         &materialized[0],

@@ -21,7 +21,7 @@ fn ordinary_tool_transaction_observes_toolcall_leaf_and_replays() {
         .expect("observe request");
     assert_eq!(
         runtime
-            .materialize_history(&raw)
+            .materialize_history_for_test(&raw)
             .expect("request alone is not a completed toolcall"),
         Vec::<ResponseItem>::new()
     );
@@ -38,7 +38,7 @@ fn ordinary_tool_transaction_observes_toolcall_leaf_and_replays() {
         .expect("observe output raw/context");
     assert_eq!(
         runtime
-            .materialize_history(&raw)
+            .materialize_history_for_test(&raw)
             .expect("response alone still waits for completed toolcall hook"),
         Vec::<ResponseItem>::new()
     );
@@ -50,7 +50,7 @@ fn ordinary_tool_transaction_observes_toolcall_leaf_and_replays() {
         .expect("observe completed toolcall");
 
     let rendered = runtime
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("toolcall renders full transaction");
     assert_eq!(rendered, vec![request.clone(), output.clone()]);
     assert_eq!(runtime.parse_stack_msg_leaf_count_for_test(), 0);
@@ -66,7 +66,7 @@ fn ordinary_tool_transaction_observes_toolcall_leaf_and_replays() {
         .expect("runtime exists");
     assert_eq!(
         replayed
-            .materialize_history(&raw)
+            .materialize_history_for_test(&raw)
             .expect("replayed toolcall renders"),
         vec![request, output]
     );

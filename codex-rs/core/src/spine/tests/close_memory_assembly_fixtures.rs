@@ -22,7 +22,7 @@ mod close_memory_assembly_source_plan_fixtures;
 #[path = "close_memory_assembly_source_plan_validator.rs"]
 mod close_memory_assembly_source_plan_validator;
 
-pub(super) use close_memory_assembly_message_fixtures::*;
-pub(super) use close_memory_assembly_node_fixtures::*;
-pub(super) use close_memory_assembly_source_fixtures::*;
-pub(super) use close_memory_assembly_source_plan_fixtures::*;
+pub(crate) use close_memory_assembly_message_fixtures::*;
+pub(crate) use close_memory_assembly_node_fixtures::*;
+pub(crate) use close_memory_assembly_source_fixtures::*;
+pub(crate) use close_memory_assembly_source_plan_fixtures::*;

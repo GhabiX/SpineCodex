@@ -23,7 +23,7 @@ fn root_compact_separates_source_context_range_from_next_open_index() {
     }
 
     let before_len = runtime
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("pre-compact h(PS)")
         .len();
     assert_eq!(before_len, 3);

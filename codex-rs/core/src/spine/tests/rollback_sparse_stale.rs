@@ -36,7 +36,7 @@ fn rollback_skips_open_when_request_item_is_stale() {
     assert!(tree.contains("Cursor: 1.1"), "{tree}");
     assert!(tree.contains("- [1.1] Current"), "{tree}");
     assert_eq!(
-        replayed.materialize_history(&raw).expect("materialize"),
+        replayed.materialize_history_for_test(&raw).expect("materialize"),
         vec![anchored_text_item(1, "before")]
     );
 }

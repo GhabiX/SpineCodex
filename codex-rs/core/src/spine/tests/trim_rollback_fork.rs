@@ -40,7 +40,7 @@ fn rollback_before_trim_clear_restores_tagged_projection() {
     let replayed = SpineRuntime::load_for_rollout_items(&rollout, &raw, &[2])
         .expect("load rollback")
         .expect("sidecar exists");
-    let materialized = replayed.materialize_history(&raw).expect("materialize");
+    let materialized = replayed.materialize_history_for_test(&raw).expect("materialize");
     assert_eq!(materialized[0], request);
     let rolled_back_output = function_output_text_content(&materialized[1]);
     assert!(

@@ -30,7 +30,7 @@ fn close_source_plan_rejects_host_history_not_matching_hps_projection() {
         .expect("stage close");
 
     let mut host_history = runtime
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("materialize current h(PS)");
     host_history.insert(8, text_item("host item not represented by h(PS)"));
 

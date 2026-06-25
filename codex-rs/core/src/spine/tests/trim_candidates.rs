@@ -24,7 +24,7 @@ fn completed_toolcall_tags_long_text_tool_response_for_next_turn_trim() {
         )
         .expect("observe completed toolcall");
 
-    let rendered = runtime.materialize_history(&raw).expect("materialize");
+    let rendered = runtime.materialize_history_for_test(&raw).expect("materialize");
     assert_eq!(rendered[0], request);
     assert!(
         function_output_text_content(&rendered[1]).starts_with("[TRIM_ID: trim_0]\n"),

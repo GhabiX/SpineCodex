@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn assistant_message(text: &str) -> ResponseItem {
+pub(crate) fn assistant_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
@@ -11,7 +11,7 @@ pub(super) fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
-pub(super) fn user_message(text: &str) -> ResponseItem {
+pub(crate) fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
         role: "user".to_string(),

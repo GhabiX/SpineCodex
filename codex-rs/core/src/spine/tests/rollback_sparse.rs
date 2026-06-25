@@ -39,7 +39,7 @@ fn rollback_keeps_open_when_request_item_survives() {
     assert!(tree.contains("- [1.1] Open"), "{tree}");
     assert!(tree.contains("- [1.1.1] Current child task"), "{tree}");
     assert_eq!(
-        replayed.materialize_history(&raw).expect("materialize"),
+        replayed.materialize_history_for_test(&raw).expect("materialize"),
         vec![anchored_text_item(1, "before")]
     );
 }

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn close_memory_assembly_from_source_plan(
+pub(crate) fn close_memory_assembly_from_source_plan(
     runtime: &SpineRuntime,
     raw: &[Option<ResponseItem>],
     call_id: &str,
@@ -17,7 +17,7 @@ pub(super) fn close_memory_assembly_from_source_plan(
     };
     assert_eq!(node.to_string(), node_id);
     let host_history = runtime
-        .materialize_history(raw)
+        .materialize_history_for_test(raw)
         .expect("materialize host history before pending tool output");
     let toolcall_start = host_history.len();
     let source_plan = runtime
@@ -30,7 +30,7 @@ pub(super) fn close_memory_assembly_from_source_plan(
     )
 }
 
-pub(super) fn pending_close_source_plan(
+pub(crate) fn pending_close_source_plan(
     runtime: &SpineRuntime,
     host_history: &[ResponseItem],
     call_id: &str,

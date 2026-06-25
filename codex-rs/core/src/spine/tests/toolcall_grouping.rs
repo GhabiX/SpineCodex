@@ -45,7 +45,7 @@ fn completed_toolcall_groups_request_and_all_outputs() {
     );
     assert_eq!(
         runtime
-            .materialize_history(&raw)
+            .materialize_history_for_test(&raw)
             .expect("render multi-response toolcall"),
         vec![request, output_1, output_2]
     );

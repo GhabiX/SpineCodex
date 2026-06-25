@@ -58,7 +58,7 @@ fn trim_tool_response_only_matches_latest_completed_toolcall() {
             ..
         }] if trim_id == "trim_0"
     ));
-    let rendered = runtime.materialize_history(&raw).expect("materialize");
+    let rendered = runtime.materialize_history_for_test(&raw).expect("materialize");
     assert!(
         function_output_text_content(&rendered[1]).starts_with("[TRIM_ID: trim_0]\n"),
         "miss must not clear the old output"

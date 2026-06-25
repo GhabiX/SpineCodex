@@ -12,7 +12,7 @@ fn root_depth_open_after_native_compact_can_close_and_open_sibling() {
         .root_compact("root summary".to_string(), &raw)
         .expect("compact root");
     let _post_compact_len = runtime
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("materialize")
         .len();
 
@@ -26,7 +26,7 @@ fn root_depth_open_after_native_compact_can_close_and_open_sibling() {
     assert!(tree.contains("[2.1] Done"), "{tree}");
 
     let post_close_len = runtime
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("materialize after close")
         .len();
     open_task(&mut runtime, &mut raw, "open-2-2", "task 2.2");

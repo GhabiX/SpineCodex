@@ -63,7 +63,7 @@ pub(super) fn assert_rollback_uses_pre_user_checkpoint_to_restore_parse_stack() 
     );
     assert_eq!(
         replayed
-            .materialize_history(&raw_after_rollback)
+            .materialize_history_for_test(&raw_after_rollback)
             .expect("materialize"),
         vec![anchored_text_item(1, "kept")]
     );

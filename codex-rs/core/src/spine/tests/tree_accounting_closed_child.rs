@@ -94,12 +94,12 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
         "{tree}"
     );
     let materialized_before_snapshot = runtime
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("materialize before snapshot");
     let snapshot = runtime.build_tree_snapshot().expect("snapshot");
     assert_eq!(
         runtime
-            .materialize_history(&raw)
+            .materialize_history_for_test(&raw)
             .expect("materialize after snapshot"),
         materialized_before_snapshot,
         "tree snapshot accounting must remain projection-only and not change h(PS)"
@@ -131,7 +131,7 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
         replayed_nodes["1.1.1"].accounting,
         snapshot_nodes["1.1.1"].accounting
     );
-    let materialized = replayed.materialize_history(&raw).expect("materialize");
+    let materialized = replayed.materialize_history_for_test(&raw).expect("materialize");
     assert_eq!(materialized.len(), 3);
     assert!(matches!(
         &materialized[0],

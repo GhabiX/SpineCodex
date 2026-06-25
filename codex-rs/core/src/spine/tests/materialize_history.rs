@@ -65,7 +65,7 @@ fn open_close_replay_materializes_closed_child_memory() {
     assert!(tree.contains("[1.1.1] Done child task"));
 
     let materialized = replayed
-        .materialize_history(&raw)
+        .materialize_history_for_test(&raw)
         .expect("materialize history");
     assert_eq!(materialized.len(), 4);
     assert_eq!(materialized[0], anchored_text_item(1, "before"));

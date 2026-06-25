@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn open_task(
+pub(crate) fn open_task(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     call_id: &str,
@@ -17,7 +17,7 @@ pub(super) fn open_task(
         .expect("commit open");
 }
 
-pub(super) fn open_task_with_token_baselines(
+pub(crate) fn open_task_with_token_baselines(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     call_id: &str,
@@ -35,7 +35,7 @@ pub(super) fn open_task_with_token_baselines(
         .expect("commit open");
 }
 
-pub(super) fn append_msg(
+pub(crate) fn append_msg(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     text: &str,
@@ -50,7 +50,7 @@ pub(super) fn append_msg(
         .expect("observe msg");
 }
 
-pub(super) fn append_msg_with_context_index(
+pub(crate) fn append_msg_with_context_index(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     text: &str,
@@ -65,7 +65,7 @@ pub(super) fn append_msg_with_context_index(
         .expect("observe msg");
 }
 
-pub(super) fn close_task(
+pub(crate) fn close_task(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     call_id: &str,
@@ -83,7 +83,7 @@ pub(super) fn close_task(
         .expect("commit close");
 }
 
-pub(super) fn close_task_with_token_baselines(
+pub(crate) fn close_task_with_token_baselines(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     call_id: &str,
@@ -102,7 +102,7 @@ pub(super) fn close_task_with_token_baselines(
         .expect("commit close");
 }
 
-pub(super) fn next_task(
+pub(crate) fn next_task(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     call_id: &str,
@@ -127,7 +127,7 @@ pub(super) fn next_task(
         .expect("next should commit")
 }
 
-pub(super) fn next_task_with_token_baselines(
+pub(crate) fn next_task_with_token_baselines(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
     call_id: &str,

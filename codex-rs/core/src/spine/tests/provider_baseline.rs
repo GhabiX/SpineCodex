@@ -55,14 +55,14 @@ fn closed_child_tree_snapshot_preserves_zero_source_suffix_accounting() {
     );
 }
 
-pub(super) fn provider_token_baselines(provider_input_tokens: u64) -> SpineTokenBaselines {
+pub(super) fn provider_token_baselines(provider_input_tokens: i64) -> SpineTokenBaselines {
     SpineTokenBaselines {
         provider_input_tokens: Some(provider_input_tokens),
     }
 }
 
 pub(super) fn closed_child_accounting_with_source_suffix(
-    closed_source_suffix_tokens: u64,
+    closed_source_suffix_tokens: i64,
 ) -> Option<SpineTreeNodeAccountingSnapshot> {
     Some(SpineTreeNodeAccountingSnapshot {
         current_node_context_tokens: None,

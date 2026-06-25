@@ -2,7 +2,7 @@ use super::*;
 use std::time::Duration;
 use std::time::Instant;
 
-pub(super) fn eventually_load_or_create_writer(
+pub(crate) fn eventually_load_or_create_writer(
     rollout: &std::path::Path,
     raw_len: u64,
 ) -> SpineRuntime {
@@ -28,7 +28,7 @@ pub(super) fn eventually_load_or_create_writer(
     );
 }
 
-pub(super) fn eventually_set_replayed_writer(
+pub(crate) fn eventually_set_replayed_writer(
     state: &mut SpineSessionState,
     rollout: &std::path::Path,
     raw_len: u64,

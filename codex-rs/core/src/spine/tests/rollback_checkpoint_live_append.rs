@@ -36,7 +36,7 @@ fn rollback_checkpoint_replays_new_live_append_after_cut() {
 
     assert_eq!(
         replayed
-            .materialize_history(&raw_after_rollback)
+            .materialize_history_for_test(&raw_after_rollback)
             .expect("materialize"),
         vec![
             anchored_text_item(1, "kept"),

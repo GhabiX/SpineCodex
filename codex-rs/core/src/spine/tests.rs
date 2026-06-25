@@ -24,6 +24,7 @@ use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
 use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
 use serial_test::serial;
+use std::path::PathBuf;
 
 #[path = "tests/checkpoint_failures.rs"]
 mod checkpoint_failures;
@@ -136,7 +137,7 @@ mod m0_trace;
 #[path = "tests/m0_trace_grouped_close.rs"]
 mod m0_trace_grouped_close;
 #[path = "tests/materialize_history.rs"]
-mod materialize_history;
+mod materialize_history_for_test;
 #[path = "tests/materialize_projection.rs"]
 mod materialize_projection;
 #[path = "tests/materialize_projection_guards.rs"]
@@ -175,6 +176,8 @@ mod open_lifecycle;
 mod open_lifecycle_duplicates;
 #[path = "tests/open_lifecycle_failures.rs"]
 mod open_lifecycle_failures;
+#[path = "tests/parser_boundary.rs"]
+mod parser_boundary;
 #[path = "tests/pending_control.rs"]
 mod pending_control;
 #[path = "tests/pending_control_abort_stale.rs"]
@@ -189,8 +192,6 @@ mod pending_control_receipt_abort;
 mod pending_control_receipt_duplicates;
 #[path = "tests/pending_control_receipts.rs"]
 mod pending_control_receipts;
-#[path = "tests/parser_boundary.rs"]
-mod parser_boundary;
 #[path = "tests/prepared_commit.rs"]
 mod prepared_commit;
 #[path = "tests/prepared_commit_side_effect_failures.rs"]
@@ -213,7 +214,7 @@ mod provider_legacy_pressure_corrupt;
 mod raw_coverage;
 #[path = "tests/response_fixtures.rs"]
 mod response_fixtures;
-use response_fixtures::*;
+pub(crate) use response_fixtures::*;
 #[path = "tests/rollback_checkpoint_continuation.rs"]
 mod rollback_checkpoint_continuation;
 #[path = "tests/rollback_checkpoint_continuation_alias.rs"]
@@ -286,7 +287,7 @@ mod runtime_lifecycle_trim_ledger;
 mod runtime_lifecycle_writer_ownership;
 #[path = "tests/runtime_store_fixtures.rs"]
 mod runtime_store_fixtures;
-use runtime_store_fixtures::*;
+pub(crate) use runtime_store_fixtures::*;
 #[path = "tests/store_basics.rs"]
 mod store_basics;
 #[path = "tests/toolcall_grouping.rs"]
@@ -353,4 +354,4 @@ mod trim_targeting_ledger;
 mod trim_targeting_no_retry;
 #[path = "tests/workflow_fixtures.rs"]
 mod workflow_fixtures;
-use workflow_fixtures::*;
+pub(crate) use workflow_fixtures::*;
