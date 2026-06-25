@@ -4,9 +4,7 @@ use std::collections::BTreeSet;
 use super::LiveRootCompact;
 use super::SpineError;
 use super::SpineRuntime;
-use super::support::mark_raw_covered;
-use super::support::mark_raw_prefix_covered;
-use super::support::raw_item_requires_spine_coverage;
+use super::support::is_spine_context_observation_fixed_prefix_item;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
 use crate::spine::model::LoggedSpineLedgerEvent;
@@ -89,6 +87,37 @@ fn mark_raw_covered_by_event(
         SpineLedgerEvent::Init { .. } | SpineLedgerEvent::OpenContextBaseline { .. } => {}
     }
     Ok(())
+}
+
+fn mark_raw_covered(covered: &mut [bool], raw_ordinal: u64) -> Result<(), SpineError> {
+    let index = usize::try_from(raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+    if let Some(slot) = covered.get_mut(index) {
+        *slot = true;
+    }
+    Ok(())
+}
+
+fn mark_raw_prefix_covered(covered: &mut [bool], boundary: u64) -> Result<(), SpineError> {
+    let boundary = usize::try_from(boundary)
+        .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
+    for slot in covered.iter_mut().take(boundary) {
+        *slot = true;
+    }
+    Ok(())
+}
+
+fn raw_item_requires_spine_coverage(
+    item: &ResponseItem,
+    completed_tool_call_ids: &BTreeSet<String>,
+) -> bool {
+    match item {
+        ResponseItem::Other | ResponseItem::CompactionTrigger => false,
+        item if is_spine_context_observation_fixed_prefix_item(item) => false,
+        item => tool_response_call_id(item)
+            .or_else(|| tool_request_call_id(item))
+            .is_none_or(|call_id| completed_tool_call_ids.contains(call_id)),
+    }
 }
 
 fn completed_raw_tool_call_ids(raw_items: &[Option<ResponseItem>]) -> BTreeSet<String> {

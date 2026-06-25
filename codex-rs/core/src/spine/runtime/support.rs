@@ -26,46 +26,12 @@ use crate::spine::render::read_memory_ref_body;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 
-pub(super) fn mark_raw_covered(covered: &mut [bool], raw_ordinal: u64) -> Result<(), SpineError> {
-    let index = usize::try_from(raw_ordinal)
-        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-    if let Some(slot) = covered.get_mut(index) {
-        *slot = true;
-    }
-    Ok(())
-}
-
-pub(super) fn mark_raw_prefix_covered(
-    covered: &mut [bool],
-    boundary: u64,
-) -> Result<(), SpineError> {
-    let boundary = usize::try_from(boundary)
-        .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
-    for slot in covered.iter_mut().take(boundary) {
-        *slot = true;
-    }
-    Ok(())
-}
-
 pub(super) fn completed_toolcall_first_segment(
     toolcall: &CompletedToolCall,
 ) -> Result<&CompletedToolCallSegment, SpineError> {
     toolcall.segments.first().ok_or_else(|| {
         SpineError::InvalidEvent("completed toolcall must contain at least one segment".to_string())
     })
-}
-
-pub(super) fn raw_item_requires_spine_coverage(
-    item: &ResponseItem,
-    completed_tool_call_ids: &BTreeSet<String>,
-) -> bool {
-    match item {
-        ResponseItem::Other | ResponseItem::CompactionTrigger => false,
-        item if is_spine_context_observation_fixed_prefix_item(item) => false,
-        item => tool_response_call_id(item)
-            .or_else(|| tool_request_call_id(item))
-            .is_none_or(|call_id| completed_tool_call_ids.contains(call_id)),
-    }
 }
 
 pub(crate) fn is_spine_context_observation_fixed_prefix_item(item: &ResponseItem) -> bool {
