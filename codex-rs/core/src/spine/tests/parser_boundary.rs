@@ -313,6 +313,49 @@ fn lexer_and_token_model_stay_out_of_parser_publication_boundary() {
 }
 
 #[test]
+fn archive_and_store_stay_out_of_parser_publication_boundary() {
+    for (label, source) in [
+        (
+            "spine/archive.rs",
+            source_without_line_comments(spine_src("archive.rs")),
+        ),
+        (
+            "spine/store.rs",
+            source_without_line_comments(spine_src("store.rs")),
+        ),
+    ] {
+        for forbidden in [
+            "use crate::spine::parser",
+            "use crate::spine::parse_stack",
+            "use crate::spine::runtime",
+            "use crate::session",
+            "ParserState",
+            "ParserPublication",
+            "ParseStack",
+            "ContextManager",
+            "SpineHostEffect",
+            "SpineHostEffects",
+            "HistoryPublication",
+            "SpinePrepared",
+            "build_checkpoint",
+            "compact_checkpoint",
+            "materialize_variable_context",
+            "materialize_history",
+            "replace_parse_stack",
+            "shift_pending_",
+            "apply_prevalidated",
+            "session_bridge",
+            ".shift(",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{label} must remain an archive/store layer and must not depend on parser state, host publication, or runtime/session boundaries through {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
 fn runtime_load_checkpoint_replay_routes_through_parser_state() {
     let load = fs::read_to_string(spine_src("runtime/load.rs")).expect("read runtime load source");
     assert!(
