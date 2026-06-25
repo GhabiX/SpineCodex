@@ -397,7 +397,7 @@ impl ParserCommitInstall {
         self.final_state
     }
 
-    pub(super) fn full_variable_context_host_history_update<T>(
+    pub(super) fn full_variable_context_publication_update<T>(
         &self,
         call_id: &str,
         operation: &'static str,
@@ -406,7 +406,7 @@ impl ParserCommitInstall {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        self.final_state.full_variable_context_host_history_update(
+        self.final_state.full_variable_context_publication_update(
             call_id,
             operation,
             raw_items,
@@ -543,7 +543,7 @@ impl ParserPreparedState {
         &self.parse_stack
     }
 
-    fn full_variable_context_host_history_update<T>(
+    fn full_variable_context_publication_update<T>(
         &self,
         call_id: &str,
         operation: &'static str,
@@ -974,7 +974,7 @@ impl ParserState {
         materialize_parse_stack_variable_context(&self.parse_stack, raw_items, trim_projection)
     }
 
-    pub(super) fn full_variable_context_host_history_update<T>(
+    pub(super) fn full_variable_context_publication_update<T>(
         &self,
         call_id: &str,
         operation: &'static str,

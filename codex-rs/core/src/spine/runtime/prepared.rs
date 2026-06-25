@@ -236,7 +236,7 @@ impl SpinePreparedCommitInstall {
         let Some(parser_install) = self.prepared.parser_install.as_ref() else {
             return Ok(None);
         };
-        parser_install.full_variable_context_host_history_update(
+        parser_install.full_variable_context_publication_update(
             call_id,
             operation,
             raw_items,

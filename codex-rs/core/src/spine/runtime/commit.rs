@@ -717,7 +717,7 @@ impl SpineRuntime {
                 build_update,
             )
         } else {
-            self.parser.full_variable_context_host_history_update(
+            self.parser.full_variable_context_publication_update(
                 call_id,
                 "spine toolcall projection",
                 raw_items,

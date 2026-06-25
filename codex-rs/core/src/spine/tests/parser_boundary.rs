@@ -758,17 +758,17 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         .nth(1)
         .and_then(|tail| tail.split("impl ParserCommitPendingInstall").next())
         .expect("ParserCommitInstall impl block");
-    let full_variable_context_host_history_update = parser_commit_install
-        .split("fn full_variable_context_host_history_update")
+    let full_variable_context_publication_update = parser_commit_install
+        .split("fn full_variable_context_publication_update")
         .nth(1)
-        .expect("full variable context host history update method");
+        .expect("full variable context publication update method");
     assert!(
-        full_variable_context_host_history_update
-            .contains("self.final_state.full_variable_context_host_history_update("),
+        full_variable_context_publication_update
+            .contains("self.final_state.full_variable_context_publication_update("),
         "prepared commit publication should delegate full h(PS) publication through ParserPreparedState"
     );
     assert!(
-        !full_variable_context_host_history_update
+        !full_variable_context_publication_update
             .contains("render_parse_stack_to_context_with_trim_projection("),
         "prepared commit publication must not bypass the parser-owned variable context helper"
     );
@@ -784,7 +784,7 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
     assert!(
         parser.contains("fn full_variable_context_host_history_update_from_parse_stack")
             && parser
-                .matches("fn full_variable_context_publication_update(")
+                .matches("fn full_variable_context_host_history_update_from_parse_stack")
                 .count()
                 == 1
             && parser.contains("Ok(full_variable_context_publication_update("),
@@ -821,7 +821,7 @@ fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() 
         "runtime/commit.rs must not materialize h(PS) directly while preparing toolcall projection publication"
     );
     assert!(
-        publication_parts.contains(".full_variable_context_host_history_update("),
+        publication_parts.contains(".full_variable_context_publication_update("),
         "toolcall projection publication should route h(PS) host-history update construction through ParserState"
     );
 }
@@ -985,8 +985,9 @@ fn parser_publication_plan_fields_are_parser_private() {
         "parser should centralize full h(PS) publication update construction in one helper"
     );
     assert!(
-        parser.contains("fn full_variable_context_host_history_update"),
-        "parser should expose a full variable-context host-history update facade"
+        parser.contains("fn full_variable_context_publication_update")
+            && !parser.contains("fn full_variable_context_host_history_update<T>"),
+        "parser should expose a full variable-context publication facade, not a host-history helper"
     );
     assert!(
         parser.contains("fn validate_host_boundaries_do_not_split_toolcall")
