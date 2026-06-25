@@ -959,7 +959,6 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         !prepared.contains("fn result(&self)")
             && prepared.contains("fn variable_context(&self) -> &[ResponseItem]")
-            && prepared.contains("fn publication_history(&self) -> &[ResponseItem]")
             && prepared.contains(
                 "let publication_variable_history_len = self.variable_context().len();"
             )
@@ -993,7 +992,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         !prepared.contains("fn publication_plan(&self)")
             && !prepared.contains("pub(crate) fn has_publication_plan(&self)")
             && prepared.contains("pub(crate) fn apply_variable_context_publication_update")
-            && prepared.contains("pub(crate) fn apply_publication_history_update")
+            && !prepared.contains("pub(crate) fn apply_publication_history_update")
             && !prepared.contains("enum SpinePreparedPublicationUpdate"),
         "runtime prepared carrier should apply parser publication plans directly without exposing borrowed plan internals or plan-presence probes"
     );
@@ -1004,10 +1003,13 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !prepared.contains("application: Option"),
         "runtime commit publication should name the parser install carrier directly, not as an application wrapper"
     );
+    let has_generic_history_update_field = prepared
+        .lines()
+        .any(|line| line.trim_start().starts_with("history_update: Option<T>"));
     assert!(
         prepared.contains("fn take_pre_apply_history_update(&mut self)")
             && prepared.contains("pre_apply_history_update: Option<T>")
-            && !prepared.contains("history_update: Option<T>")
+            && !has_generic_history_update_field
             && !prepared.contains("fn take_history_update(&mut self)"),
         "SpineCommitPublication should expose pre-apply history intent, not a generic field-style history_update"
     );
@@ -1024,7 +1026,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     );
     assert!(
         prepared.contains("fn apply_variable_context_publication_update<T, F>(")
-            && prepared.contains("fn apply_publication_history_update<T, F>(")
+            && !prepared.contains("fn apply_publication_history_update<T, F>(")
             && prepared.contains("fn full_variable_context_publication_update(")
             && !prepared.contains("fn parser_install(&self) -> Option<&ParserCommitInstall>")
             && prepared.contains("fn trim_candidate_inputs(")
@@ -1062,8 +1064,9 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         .expect("SpinePreparedCommitInstall impl block");
     assert!(
         prepared_commit_install_impl.contains("fn validate_against_host_history")
-            && prepared_commit_install_impl.contains("fn apply_variable_context_publication_update")
-            && prepared_commit_install_impl.contains("fn apply_publication_history_update")
+            && prepared_commit_install_impl
+                .contains("fn apply_variable_context_publication_update")
+            && !prepared_commit_install_impl.contains("fn apply_publication_history_update")
             && prepared_commit_install_impl.contains("fn full_variable_context_publication_update")
             && prepared_commit_install_impl.contains("self.prepared.publication_plan.as_ref()")
             && prepared_commit_install_impl.contains("self.prepared.parser_install.as_ref()")
@@ -1419,9 +1422,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     assert!(
         state_types.contains("fn variable_context(")
-            && state_types.contains("fn publication_history(")
             && state_types.contains("fn variable_context_len(")
-            && state_types.contains("fn publication_variable_history_len(")
             && !state_types.contains("fn materialized("),
         "root compact host install should expose variable-context publication accessors, not parser materialization internals"
     );
@@ -1459,6 +1460,16 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !root_compact_host_publish.contains("materialized: Vec<ResponseItem>"),
         "root compact host publish carrier should name the payload as publication history"
     );
+    let message_session = fs::read_to_string(spine_src("runtime/session_state/message_session.rs"))
+        .expect("read message session source");
+    assert!(
+        message_session
+            .contains("pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(")
+            && message_session.contains(
+                "pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request("
+            ),
+        "message session should expose a variable-context named host-effect API while preserving the migration wrapper"
+    );
     assert!(
         host_effect.contains(
             "SpineRootCompactHostPublish {\n                publication_history,\n            }"
@@ -1484,9 +1495,9 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         })
         .expect("apply root compact after publish section");
     assert!(
-        apply_after_publish
-            .contains("prepared.validate_published_variable_history_len(published_variable_history_len)?")
-            && !apply_after_publish.contains("runtime.current_open_index()"),
+        apply_after_publish.contains(
+            "prepared.validate_published_variable_history_len(published_variable_history_len)?"
+        ) && !apply_after_publish.contains("runtime.current_open_index()"),
         "session must validate the prepared root compact publication length before installing live PS"
     );
 }

@@ -62,10 +62,6 @@ impl SpinePreparedRootCompact {
         self.result.variable_context()
     }
 
-    pub(crate) fn variable_context(&self) -> &[ResponseItem] {
-        self.variable_context()
-    }
-
     #[cfg(test)]
     pub(crate) fn clone_publication_result_for_test(&self) -> SpineRootCompactResult {
         self.result.clone()
