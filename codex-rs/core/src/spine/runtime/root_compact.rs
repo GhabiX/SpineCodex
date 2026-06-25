@@ -241,6 +241,7 @@ impl SpineRuntime {
         Ok(result.into_variable_context())
     }
 
+    #[cfg(test)]
     pub(crate) fn root_compact_with_checkpoint(
         &mut self,
         rollout_path: &Path,
@@ -322,6 +323,7 @@ impl SpineRuntime {
         });
     }
 
+    #[cfg(test)]
     fn install_prepared_root_compact_for_direct_result(
         &mut self,
         prepared: SpinePreparedRootCompact,

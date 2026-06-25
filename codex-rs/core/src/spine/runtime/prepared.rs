@@ -83,6 +83,7 @@ impl SpinePreparedRootCompact {
         install(self.parser_install);
     }
 
+    #[cfg(test)]
     pub(super) fn install_for_direct_result(
         self,
         install: impl FnOnce(ParserRootCompactInstall),

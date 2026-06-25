@@ -128,6 +128,7 @@ impl SpineRootCompactResult {
         &self.variable_context
     }
 
+    #[cfg(test)]
     pub(crate) fn into_variable_context(self) -> Vec<ResponseItem> {
         self.variable_context
     }
