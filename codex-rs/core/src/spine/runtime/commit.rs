@@ -692,10 +692,8 @@ impl SpineRuntime {
             return Ok(None);
         }
         let trim_projection = self.current_trim_projection()?;
-        let update = if let Some(parser_install) =
-            prepared_commit.and_then(SpinePreparedCommitInstall::parser_install)
-        {
-            parser_install.full_variable_context_publication_update(
+        let update = if let Some(prepared_commit) = prepared_commit {
+            prepared_commit.full_variable_context_publication_update(
                 "spine prepared commit projection",
                 raw_items,
                 &trim_projection,

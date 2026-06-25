@@ -6,10 +6,11 @@ use super::support::full_history_index_for_spine_mutable_context_boundary;
 use super::support::full_history_index_for_spine_mutable_context_index;
 use crate::spine::model::MemRecord;
 use crate::spine::model::ToolCallSegmentKind;
-use crate::spine::parser::ParserCommitInstall;
 use crate::spine::parser::ParserPublicationPlan;
 use crate::spine::parser::ParserPublicationToolcallSegment;
+use crate::spine::parser::ParserPublicationUpdate;
 use crate::spine::parser::ParserRootCompactInstall;
+use crate::spine::trimmer::TrimProjection;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
@@ -226,8 +227,22 @@ impl SpinePreparedCommitInstall {
         Ok(update.map(|update| update.into_history_update(call_id, build_update)))
     }
 
-    pub(super) fn parser_install(&self) -> Option<&ParserCommitInstall> {
-        self.prepared.parser_install.as_ref()
+    pub(super) fn full_variable_context_publication_update(
+        &self,
+        operation: &'static str,
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+        history_items: &[ResponseItem],
+    ) -> Result<Option<ParserPublicationUpdate>, super::SpineError> {
+        let Some(parser_install) = self.prepared.parser_install.as_ref() else {
+            return Ok(None);
+        };
+        parser_install.full_variable_context_publication_update(
+            operation,
+            raw_items,
+            trim_projection,
+            history_items,
+        )
     }
 
     pub(super) fn trim_candidate_inputs(
