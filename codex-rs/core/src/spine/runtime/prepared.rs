@@ -6,11 +6,12 @@ use super::support::full_history_index_for_spine_mutable_context_boundary;
 use super::support::full_history_index_for_spine_mutable_context_index;
 use crate::spine::model::MemRecord;
 use crate::spine::model::ToolCallSegmentKind;
+use crate::spine::model::TrimProjection;
+use crate::spine::parser::ParserCommitInstall;
 use crate::spine::parser::ParserPublicationPlan;
 use crate::spine::parser::ParserPublicationToolcallSegment;
 use crate::spine::parser::ParserPublicationUpdate;
 use crate::spine::parser::ParserRootCompactInstall;
-use crate::spine::trimmer::TrimProjection;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
