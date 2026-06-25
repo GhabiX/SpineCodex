@@ -71,7 +71,8 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
             )
         },
     );
-    let history_update = prepared
+    let install = prepared.into_install_for_test();
+    let history_update = install
         .apply_publication_history_update(
             "staged-close",
             &output_item,
@@ -108,7 +109,6 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
         "live tree must not expose closed-node publication before install"
     );
 
-    let install = prepared.into_install_for_test();
     runtime
         .persist_prepared_commit_install_side_effects_for_test(&install)
         .expect("persist prepared close side effects");
