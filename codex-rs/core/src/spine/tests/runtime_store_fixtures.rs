@@ -59,3 +59,26 @@ pub(crate) fn current_context_len(runtime: &SpineRuntime, raw: &[Option<Response
         .expect("materialize current h(PS)")
         .len()
 }
+
+pub(crate) fn root_epoch_mem_record(compact_id: &str, body: &str, body_path: String) -> MemRecord {
+    MemRecord {
+        compact_id: compact_id.to_string(),
+        kind: MemKind::RootEpoch,
+        node: NodeId::root_epoch(1),
+        raw_start: 0,
+        raw_end: 0,
+        context_start: 0,
+        context_end: 1,
+        raw_live_hash: Some(hash_raw_live(&[])),
+        open_input_tokens: None,
+        close_input_tokens: None,
+        open_context_tokens: None,
+        close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
+        open_context_source: None,
+        memory_output_tokens: None,
+        body_path,
+        body_hash: sha1_hex(body.as_bytes()),
+    }
+}

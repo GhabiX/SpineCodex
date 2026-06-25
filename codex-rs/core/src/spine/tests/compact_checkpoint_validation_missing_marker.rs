@@ -1,4 +1,3 @@
-use super::compact_checkpoint_validation::root_epoch_mem_record;
 use super::*;
 
 #[test]

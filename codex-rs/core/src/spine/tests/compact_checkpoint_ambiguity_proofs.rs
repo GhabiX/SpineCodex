@@ -12,26 +12,7 @@ fn compact_checkpoint_same_boundary_hash_token_seq_multiple_records_fails_closed
     let body_path = store
         .write_memory_body("root-1-0", body)
         .expect("write body");
-    let mem = MemRecord {
-        compact_id: "root-1-0".to_string(),
-        kind: MemKind::RootEpoch,
-        node: NodeId::root_epoch(1),
-        raw_start: 0,
-        raw_end: 0,
-        context_start: 0,
-        context_end: 1,
-        raw_live_hash: Some(hash_raw_live(&[])),
-        open_input_tokens: None,
-        close_input_tokens: None,
-        open_context_tokens: None,
-        close_context_tokens: None,
-        closed_source_suffix_tokens: None,
-        closed_memory_context_tokens: None,
-        open_context_source: None,
-        memory_output_tokens: None,
-        body_path: body_path.clone(),
-        body_hash: sha1_hex(body.as_bytes()),
-    };
+    let mem = root_epoch_mem_record("root-1-0", body, body_path.clone());
     store.append_mem(&mem).expect("append mem");
     store
         .append_event(&SpineLedgerEvent::RootCompact {

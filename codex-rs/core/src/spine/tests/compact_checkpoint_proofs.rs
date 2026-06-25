@@ -13,26 +13,7 @@ fn replacement_history_memory_ref_span_hash_checked() {
     let root_body_path = store
         .write_memory_body("root-1-0", root_body)
         .expect("write root body");
-    let root_mem = MemRecord {
-        compact_id: "root-1-0".to_string(),
-        kind: MemKind::RootEpoch,
-        node: NodeId::root_epoch(1),
-        raw_start: 0,
-        raw_end: 0,
-        context_start: 0,
-        context_end: 1,
-        raw_live_hash: Some(hash_raw_live(&[])),
-        open_input_tokens: None,
-        close_input_tokens: None,
-        open_context_tokens: None,
-        close_context_tokens: None,
-        closed_source_suffix_tokens: None,
-        closed_memory_context_tokens: None,
-        open_context_source: None,
-        memory_output_tokens: None,
-        body_path: root_body_path.clone(),
-        body_hash: sha1_hex(root_body.as_bytes()),
-    };
+    let root_mem = root_epoch_mem_record("root-1-0", root_body, root_body_path.clone());
     store.append_mem(&root_mem).expect("append root mem");
 
     let suffix_body = "suffix memory body";
