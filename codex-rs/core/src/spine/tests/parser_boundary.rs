@@ -759,7 +759,8 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
     assert!(
-        publication_parts.contains(".apply_publication_history_update("),
+        publication_parts.contains(".apply_variable_context_publication_update(")
+            && !publication_parts.contains(".apply_publication_history_update("),
         "runtime commit publication should delegate parser publication plan application to the prepared parser carrier"
     );
     assert!(
@@ -991,6 +992,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         !prepared.contains("fn publication_plan(&self)")
             && !prepared.contains("pub(crate) fn has_publication_plan(&self)")
+            && prepared.contains("pub(crate) fn apply_variable_context_publication_update")
             && prepared.contains("pub(crate) fn apply_publication_history_update")
             && !prepared.contains("enum SpinePreparedPublicationUpdate"),
         "runtime prepared carrier should apply parser publication plans directly without exposing borrowed plan internals or plan-presence probes"
@@ -1021,7 +1023,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "SpineCommitPublication should consume parser installs through into_install and keep side-effect access behind a scoped callback"
     );
     assert!(
-        prepared.contains("fn apply_publication_history_update<T, F>(")
+        prepared.contains("fn apply_variable_context_publication_update<T, F>(")
+            && prepared.contains("fn apply_publication_history_update<T, F>(")
             && prepared.contains("fn full_variable_context_publication_update(")
             && !prepared.contains("fn parser_install(&self) -> Option<&ParserCommitInstall>")
             && prepared.contains("fn trim_candidate_inputs(")
@@ -1059,6 +1062,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         .expect("SpinePreparedCommitInstall impl block");
     assert!(
         prepared_commit_install_impl.contains("fn validate_against_host_history")
+            && prepared_commit_install_impl.contains("fn apply_variable_context_publication_update")
             && prepared_commit_install_impl.contains("fn apply_publication_history_update")
             && prepared_commit_install_impl.contains("fn full_variable_context_publication_update")
             && prepared_commit_install_impl.contains("self.prepared.publication_plan.as_ref()")

@@ -678,7 +678,7 @@ impl SpineRuntime {
     ) -> Result<Option<T>, SpineError> {
         let mut build_update = Some(build_update);
         if let Some(prepared) = prepared_commit {
-            if let Some(update) = prepared.apply_publication_history_update(
+            if let Some(update) = prepared.apply_variable_context_publication_update(
                 call_id,
                 tool_resp_item,
                 tool_resp_already_recorded,

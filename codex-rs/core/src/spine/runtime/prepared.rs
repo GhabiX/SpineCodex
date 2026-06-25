@@ -188,7 +188,7 @@ impl SpinePreparedCommitInstall {
         Ok(())
     }
 
-    pub(crate) fn apply_publication_history_update<T, F>(
+    pub(crate) fn apply_variable_context_publication_update<T, F>(
         &self,
         call_id: &str,
         tool_resp_item: &ResponseItem,
@@ -230,6 +230,26 @@ impl SpinePreparedCommitInstall {
             history_items,
         )?;
         Ok(update.map(|update| update.into_history_update(call_id, build_update)))
+    }
+
+    pub(crate) fn apply_publication_history_update<T, F>(
+        &self,
+        call_id: &str,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        history_items: &[ResponseItem],
+        build_update: &mut Option<F>,
+    ) -> Result<Option<T>, super::SpineError>
+    where
+        F: FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    {
+        self.apply_variable_context_publication_update(
+            call_id,
+            tool_resp_item,
+            tool_resp_already_recorded,
+            history_items,
+            build_update,
+        )
     }
 
     pub(super) fn full_variable_context_publication_update(
