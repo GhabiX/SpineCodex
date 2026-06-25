@@ -81,13 +81,6 @@ pub(crate) struct CompletedToolCallOutputEvidence<'a> {
     inner: super::runtime::SpineCompletedToolCallOutputEvidence<'a>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ObservedContextItem<'a> {
-    pub(crate) raw_ordinal: u64,
-    pub(crate) context_index: usize,
-    pub(crate) item: &'a ResponseItem,
-}
-
 #[cfg(test)]
 pub(crate) fn is_ready_for_test_root_compact(
     state: &SpineSessionState,
@@ -555,19 +548,6 @@ pub(crate) fn on_toolcall(
             recorded_inside_reduce: evidence.recorded_inside_reduce,
         })
         .map(HostEffects::from_runtime)
-}
-
-pub(crate) fn observe_toolcall_context_items(
-    state: &mut SpineSessionState,
-    items: &[ObservedContextItem<'_>],
-    raw_items: &[Option<ResponseItem>],
-) -> Result<(), SpineError> {
-    state.observe_toolcall_context_item_facts(
-        items
-            .iter()
-            .map(|item| (item.raw_ordinal, item.context_index, item.item)),
-        raw_items,
-    )
 }
 
 pub(crate) fn prepare_toolcall_output_recording(

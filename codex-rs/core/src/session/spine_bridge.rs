@@ -23,7 +23,6 @@ use crate::spine::hooks::CompletedToolCallOutputEvidence;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
-use crate::spine::hooks::ObservedContextItem;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
 use crate::spine::hooks::ToolcallHostCommitAttempt;
@@ -652,7 +651,10 @@ impl Session {
             if is_non_toolcall_msg(item) {
                 if !tool_items.is_empty() {
                     let mut guard = spine_slot.lock().await;
-                    hooks::observe_toolcall_context_items(&mut guard, &tool_items, &raw_items)?;
+                    guard.observe_toolcall_context_item_facts(
+                        tool_items.iter().copied(),
+                        &raw_items,
+                    )?;
                     tool_items.clear();
                 }
                 let outcome = self
@@ -666,16 +668,12 @@ impl Session {
                     .await?;
                 non_toolcall_msg_effects.extend(outcome);
             } else {
-                tool_items.push(ObservedContextItem {
-                    raw_ordinal,
-                    context_index,
-                    item,
-                });
+                tool_items.push((raw_ordinal, context_index, item));
             }
         }
         if !tool_items.is_empty() {
             let mut guard = spine_slot.lock().await;
-            hooks::observe_toolcall_context_items(&mut guard, &tool_items, &raw_items)?;
+            guard.observe_toolcall_context_item_facts(tool_items.iter().copied(), &raw_items)?;
         }
         non_toolcall_msg_effects
             .apply_after_batch_materialized_history_request(
