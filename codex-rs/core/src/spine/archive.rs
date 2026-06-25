@@ -249,16 +249,24 @@ fn render_memory_archive(
     if wrote_optional {
         out.push('\n');
     }
-    out.push_str("## Body\n\n");
-    out.push_str(&body);
-    if !body.ends_with('\n') {
-        out.push('\n');
-    }
+    push_body_section(&mut out, &body);
     Ok(out)
 }
 
+fn push_body_section(out: &mut String, body: &str) {
+    out.push_str("## Body\n\n");
+    out.push_str(body);
+    if !body.ends_with('\n') {
+        out.push('\n');
+    }
+}
+
+fn push_line(out: &mut String, line: impl std::fmt::Display) {
+    out.push_str(&format!("{line}\n"));
+}
+
 fn push_field(out: &mut String, field: &str, value: impl std::fmt::Display) {
-    out.push_str(&format!("{field}: {value}\n"));
+    push_line(out, format_args!("{field}: {value}"));
 }
 
 fn push_optional_i64_field(out: &mut String, field: &str, value: Option<i64>) -> bool {
@@ -286,18 +294,24 @@ fn render_trajs_node(out: &mut String, node: &SpineTreeNode) {
                 raw_ordinal,
                 context_index,
             } => {
-                out.push_str(&format!(
-                    "- raw raw_ordinal={raw_ordinal} context_index={context_index} from_user={from_user}\n"
-                ));
+                push_line(
+                    out,
+                    format_args!(
+                        "- raw raw_ordinal={raw_ordinal} context_index={context_index} from_user={from_user}"
+                    ),
+                );
             }
             SegRef::Memory {
                 memory_id,
                 body_path,
             } => {
-                out.push_str(&format!(
-                    "- memory compact_id={memory_id} body_path={}\n",
-                    body_path.display()
-                ));
+                push_line(
+                    out,
+                    format_args!(
+                        "- memory compact_id={memory_id} body_path={}",
+                        body_path.display()
+                    ),
+                );
             }
         },
         SpineTreeNode::ToolCallAsLeafNode { segments } => {
@@ -318,16 +332,19 @@ fn render_trajs_node(out: &mut String, node: &SpineTreeNode) {
             trajs_path,
             ..
         } => {
-            out.push_str(&format!(
-                "- memory compact_id={} node_id={} index={} summary={} body_path={} memory_path={} trajs_path={}\n",
-                memory.compact_id,
-                meta.id,
-                meta.index,
-                meta.summary,
-                memory.body_path.display(),
-                memory_path.display(),
-                trajs_path.display()
-            ));
+            push_line(
+                out,
+                format_args!(
+                    "- memory compact_id={} node_id={} index={} summary={} body_path={} memory_path={} trajs_path={}",
+                    memory.compact_id,
+                    meta.id,
+                    meta.index,
+                    meta.summary,
+                    memory.body_path.display(),
+                    memory_path.display(),
+                    trajs_path.display()
+                ),
+            );
         }
     }
 }
