@@ -96,12 +96,6 @@ impl CloseFamilyPlan {
         self.open.as_ref()
     }
 
-    pub(super) fn append_open_events(&self, events: &mut Vec<SpineLedgerEvent>) {
-        if let Some(open) = self.open_lexed() {
-            events.extend(open.events().iter().cloned());
-        }
-    }
-
     pub(super) fn require_completed_toolcall(
         &self,
         completed_toolcall: Option<CompletedToolCall>,
@@ -123,11 +117,6 @@ impl CloseFamilyPlan {
             .ok_or_else(|| {
                 SpineError::InvalidEvent("spine.close toolcall context index overflow".to_string())
             })
-    }
-
-    pub(super) fn event_count(&self, events_len: usize) -> Result<u64, SpineError> {
-        u64::try_from(events_len)
-            .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))
     }
 
     pub(super) fn toolcall_seq(

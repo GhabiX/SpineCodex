@@ -440,7 +440,9 @@ impl SpineRuntime {
         let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
         let plan = self.close_family_plan(&prepared, after_close)?;
         let mut events = vec![prepared.close_event.clone()];
-        plan.append_open_events(&mut events);
+        if let Some(open) = plan.open_lexed() {
+            events.extend(open.events().iter().cloned());
+        }
         let completed_toolcall = plan.require_completed_toolcall(completed_toolcall)?;
         let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
         let atomic_mutable_context_segments = completed_toolcall
@@ -456,7 +458,8 @@ impl SpineRuntime {
             .remap_completed_toolcall_context_indices(completed_toolcall, toolcall_context_index)?;
         let toolcall_lexed = self.completed_toolcall_batch(&completed_toolcall)?;
         events.extend(toolcall_lexed.events().iter().cloned());
-        let event_count = plan.event_count(events.len())?;
+        let event_count = u64::try_from(events.len())
+            .map_err(|_| SpineError::InvalidEvent("spine event count overflow".to_string()))?;
         let toolcall_seq = plan.toolcall_seq(self.ledger.next_event_seq, event_count)?;
         let parser_install = self.parser.prepare_close_family_install(
             prepared.memory.clone(),
