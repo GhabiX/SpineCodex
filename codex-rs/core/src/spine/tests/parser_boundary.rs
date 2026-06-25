@@ -736,7 +736,7 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         .and_then(|tail| tail.split("impl ParserCommitPendingInstall").next())
         .expect("ParserCommitInstall impl block");
     let full_variable_context_host_history_update = parser_commit_install
-        .split("fn full_variable_context_host_history_update(")
+        .split("fn full_variable_context_host_history_update")
         .nth(1)
         .expect("full variable context host history update method");
     assert!(
@@ -759,11 +759,12 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         "parser.rs should keep one internal helper for PS -> h(PS) variable context projection"
     );
     assert!(
-        parser.contains("fn full_variable_context_host_history_update_from_parse_stack(")
+        parser.contains("fn full_variable_context_host_history_update_from_parse_stack")
             && parser
-                .matches("full_variable_context_publication_update(")
+                .matches("fn full_variable_context_publication_update(")
                 .count()
-                == 2,
+                == 1
+            && parser.contains("Ok(full_variable_context_publication_update("),
         "full h(PS) publication update construction should be centralized behind one parser-private helper"
     );
 }
@@ -945,7 +946,7 @@ fn parser_publication_plan_fields_are_parser_private() {
         "parser should centralize full h(PS) publication update construction in one helper"
     );
     assert!(
-        parser.contains("fn full_variable_context_host_history_update("),
+        parser.contains("fn full_variable_context_host_history_update"),
         "parser should expose a full variable-context host-history update facade"
     );
     assert_eq!(
@@ -1074,9 +1075,9 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "SpineCommitPublication should consume parser installs through into_install and keep side-effect access behind a scoped callback"
     );
     assert!(
-        prepared.contains("fn apply_variable_context_publication_update<T, F>(")
+        prepared.contains("fn apply_variable_context_publication_update<T, F>")
             && !prepared.contains("fn apply_publication_history_update<T, F>(")
-            && prepared.contains("fn full_variable_context_host_history_update(")
+            && prepared.contains("fn full_variable_context_host_history_update")
             && !prepared.contains("fn parser_install(&self) -> Option<&ParserCommitInstall>")
             && prepared.contains("fn trim_candidate_inputs(")
             && prepared.contains("fn mem_for_accounting(&self)")
@@ -1523,9 +1524,12 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "message session should expose a variable-context named host-effect API while preserving the migration wrapper"
     );
     assert!(
-        host_effect.contains(
-            "SpineRootCompactHostPublish {\n                variable_context,\n            }"
-        ) && host_effect.contains("host_publish.variable_context.len()")
+        host_effect.contains("SpineRootCompactHostPublish { variable_context }")
+            && host_effect.contains("fn root_compact_variable_context_publication(")
+            && !host_effect.contains("fn root_compact_variable_history_publication(")
+            && host_effect.contains("RootCompactVariableContextPublication")
+            && !host_effect.contains("RootCompactHistoryPublication")
+            && host_effect.contains("host_publish.variable_context.len()")
             && host_effect.contains("published.extend_from_slice(&self.variable_context)")
             && host_effect.contains(".published_variable_history_from_native_items(")
             && !host_effect.contains(".published_history_from_native_items(")

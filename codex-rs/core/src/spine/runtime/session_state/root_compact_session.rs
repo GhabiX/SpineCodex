@@ -133,7 +133,7 @@ impl SpineSessionState {
         )?;
         let variable_context = install.variable_context().to_vec();
         self.pending_root_compact_install = Some(install);
-        Ok(SpineHostEffects::root_compact_variable_history_publication(
+        Ok(SpineHostEffects::root_compact_variable_context_publication(
             variable_context,
         ))
     }

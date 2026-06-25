@@ -76,10 +76,10 @@ impl SpineHostEffects {
         Self::one(SpineHostEffect::PublishVariableHistoryAfterBatch)
     }
 
-    pub(crate) fn root_compact_variable_history_publication(
+    pub(crate) fn root_compact_variable_context_publication(
         variable_context: Vec<ResponseItem>,
     ) -> Self {
-        Self::one(SpineHostEffect::RootCompactHistoryPublication(
+        Self::one(SpineHostEffect::RootCompactVariableContextPublication(
             SpineRootCompactHostPublish { variable_context },
         ))
     }
@@ -126,7 +126,7 @@ impl SpineHostEffects {
         let (effects, publication) = self.take_unique_effect(
             "multiple Spine root compact history publications in one hook",
             |effect| match effect {
-                SpineHostEffect::RootCompactHistoryPublication(next) => Ok(next),
+                SpineHostEffect::RootCompactVariableContextPublication(next) => Ok(next),
                 effect => Err(effect),
             },
         )?;
@@ -295,7 +295,7 @@ pub(crate) enum SpineHostEffect {
         delivery: SpineTreeUpdateDelivery,
     },
     PublishVariableHistoryAfterBatch,
-    RootCompactHistoryPublication(SpineRootCompactHostPublish),
+    RootCompactVariableContextPublication(SpineRootCompactHostPublish),
     ToolcallHostCommit(SpineToolcallHostCommit),
 }
 
