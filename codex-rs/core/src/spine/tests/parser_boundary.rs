@@ -750,6 +750,20 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !prepared.contains("application: Option"),
         "runtime commit publication should name the parser install carrier directly, not as an application wrapper"
     );
+    assert!(
+        prepared.contains("fn take_pre_apply_history_update(&mut self)")
+            && !prepared.contains("fn take_history_update(&mut self)"),
+        "SpineCommitPublication should expose pre-apply history intent, not a generic field-style take_history_update"
+    );
+    let completed_toolcall_session = fs::read_to_string(spine_src(
+        "runtime/session_state/completed_toolcall_session.rs",
+    ))
+    .expect("read completed toolcall session source");
+    assert!(
+        completed_toolcall_session.contains(".take_pre_apply_history_update()")
+            && !completed_toolcall_session.contains(".take_history_update()"),
+        "session toolcall commit should consume publication through the named pre-apply history API"
+    );
     let prepared_commit = prepared
         .split("struct SpinePreparedCommit {")
         .nth(1)

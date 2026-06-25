@@ -75,7 +75,9 @@ impl PreparedSpineToolcallCommit {
     }
 
     pub(crate) fn take_pre_apply_host_effects(&mut self) -> SpineHostEffects {
-        SpineHostEffects::from_optional_history_update(self.publication.take_history_update())
+        SpineHostEffects::from_optional_history_update(
+            self.publication.take_pre_apply_history_update(),
+        )
     }
 
     pub(crate) fn post_apply_effect_policy(&self) -> SpinePostApplyEffectPolicy {

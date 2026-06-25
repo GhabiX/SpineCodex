@@ -261,7 +261,7 @@ impl<T> SpineCommitPublication<T> {
             .is_some_and(SpinePreparedCommitInstall::defer_tree_update_until_raw_output)
     }
 
-    pub(crate) fn take_history_update(&mut self) -> Option<T> {
+    pub(crate) fn take_pre_apply_history_update(&mut self) -> Option<T> {
         self.history_update.take()
     }
 
