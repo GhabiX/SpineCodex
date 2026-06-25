@@ -18,26 +18,13 @@ fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
     let body_path = source
         .write_memory_body("root-1-2", body)
         .expect("write source body");
-    let mem = MemRecord {
-        compact_id: "root-1-2".to_string(),
-        kind: MemKind::RootEpoch,
-        node: NodeId::root_epoch(1),
-        raw_start: 0,
-        raw_end: 2,
-        context_start: 0,
-        context_end: 1,
-        raw_live_hash: Some(raw_live_hash.clone()),
-        open_input_tokens: None,
-        close_input_tokens: None,
-        open_context_tokens: None,
-        close_context_tokens: None,
-        closed_source_suffix_tokens: None,
-        closed_memory_context_tokens: None,
-        open_context_source: None,
-        memory_output_tokens: None,
-        body_path: body_path,
-        body_hash: sha1_hex(body.as_bytes()),
-    };
+    let mem = root_epoch_mem_record_with_raw_live(
+        "root-1-2",
+        body,
+        body_path,
+        0..2,
+        raw_live_hash.clone(),
+    );
     source.append_mem(&mem).expect("append mem");
     source
         .append_event(&SpineLedgerEvent::RootCompact {

@@ -61,15 +61,25 @@ pub(crate) fn current_context_len(runtime: &SpineRuntime, raw: &[Option<Response
 }
 
 pub(crate) fn root_epoch_mem_record(compact_id: &str, body: &str, body_path: String) -> MemRecord {
+    root_epoch_mem_record_with_raw_live(compact_id, body, body_path, 0..0, hash_raw_live(&[]))
+}
+
+pub(crate) fn root_epoch_mem_record_with_raw_live(
+    compact_id: &str,
+    body: &str,
+    body_path: String,
+    raw_range: std::ops::Range<u64>,
+    raw_live_hash: String,
+) -> MemRecord {
     MemRecord {
         compact_id: compact_id.to_string(),
         kind: MemKind::RootEpoch,
         node: NodeId::root_epoch(1),
-        raw_start: 0,
-        raw_end: 0,
+        raw_start: raw_range.start,
+        raw_end: raw_range.end,
         context_start: 0,
         context_end: 1,
-        raw_live_hash: Some(hash_raw_live(&[])),
+        raw_live_hash: Some(raw_live_hash),
         open_input_tokens: None,
         close_input_tokens: None,
         open_context_tokens: None,
