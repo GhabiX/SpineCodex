@@ -311,10 +311,6 @@ impl ParserCommitPendingInstall {
     fn new(pending_state: ParserPreparedState) -> Self {
         Self { pending_state }
     }
-
-    fn into_pending_state(self) -> ParserPreparedState {
-        self.pending_state
-    }
 }
 
 impl ParserCommitPreparedInstall {
@@ -638,10 +634,6 @@ impl ParserState {
             )?
             .len(),
         )
-    }
-
-    pub(super) fn into_parse_stack(self) -> ParseStack {
-        self.parse_stack
     }
 
     #[cfg(test)]

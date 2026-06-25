@@ -68,6 +68,10 @@ fn parser_state_does_not_expose_single_token_staging_api() {
         !parser.contains("fn staged_after_token("),
         "ParserState should expose batch staging, not a single-token staging API"
     );
+    assert!(
+        !parser.contains("pub(super) fn into_parse_stack(self)"),
+        "ParserState must not expose a raw ParseStack escape hatch"
+    );
 }
 
 #[test]
@@ -112,7 +116,7 @@ fn parser_state_routes_live_batches_through_one_batch_helper() {
     let root_compact_probe = parser
         .split("fn root_compact_next_open_index_or_probe(")
         .nth(1)
-        .and_then(|tail| tail.split("fn into_parse_stack").next())
+        .and_then(|tail| tail.split("#[cfg(test)]").next())
         .expect("root compact probe parser section");
     assert!(
         root_compact_probe.contains("lex_compact_batch")
@@ -434,10 +438,16 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
             && !parser.contains("fn replace_parse_stack_for_runtime_transition"),
         "parser live state replacement should be a parser-owned install operation, not a runtime transition escape hatch"
     );
+    let parser_commit_pending_install = parser
+        .split("impl ParserCommitPendingInstall")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ParserCommitPreparedInstall").next())
+        .expect("ParserCommitPendingInstall impl block");
     assert!(
         !parser.contains("fn into_final_parse_stack(")
-            && !parser.contains("fn into_pending_parse_stack("),
-        "parser install handles should not expose parse-stack-named consumers"
+            && !parser.contains("fn into_pending_parse_stack(")
+            && !parser_commit_pending_install.contains("fn into_pending_state("),
+        "parser install handles should not expose raw-state consumers"
     );
     assert!(
         !commit.contains(".install_prepared_commit_final_parse_stack("),
