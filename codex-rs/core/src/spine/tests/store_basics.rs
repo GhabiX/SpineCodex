@@ -14,15 +14,7 @@ fn ledger_cache_uses_sparse_max_seq_on_load_and_append() {
     store
         .append_logged_event(&LoggedSpineLedgerEvent {
             seq: 7,
-            event: SpineLedgerEvent::Open {
-                child: NodeId::root_epoch(1).child(1),
-                boundary: 0,
-                index: 0,
-                summary: "root".to_string(),
-                open_input_tokens: None,
-                open_context_tokens: None,
-                open_context_source: None,
-            },
+            event: root_child_open_event("root"),
         })
         .expect("append sparse root open");
 
