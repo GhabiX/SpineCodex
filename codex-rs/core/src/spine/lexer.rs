@@ -159,7 +159,7 @@ impl RootCompactPlan {
         )
     }
 
-    pub(in crate::spine) fn lex_probe_batch(
+    pub(in crate::spine) fn lex_compact_batch(
         self,
         memory: MemoryRef,
         next_open_index: usize,

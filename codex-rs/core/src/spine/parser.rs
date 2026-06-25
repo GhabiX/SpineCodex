@@ -32,7 +32,6 @@ use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::model::SpineToken;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
@@ -623,7 +622,7 @@ impl ParserState {
 
         // Probe first because source_context_range records the pre-compact source
         // span, while next_open_index is the post-compact h(PS) materialized len.
-        let probe_batch = crate::spine::lexer::plan_root_compact().lex_probe_batch(
+        let probe_batch = crate::spine::lexer::plan_root_compact().lex_compact_batch(
             memory.clone(),
             0,
             next_open_input_tokens,
@@ -799,8 +798,9 @@ impl ParserState {
         raw_mask: RawMask<'_>,
     ) -> Result<(), SpineError> {
         if !apply_replay_metadata_event(&mut self.parse_stack, event)? {
-            let token = replay_event_to_token(event, archive, mems, raw_mask)?;
-            self.parse_stack.shift(token, archive)?;
+            let lexed = replay_event_to_lexed_batch(event, archive, mems, raw_mask)?;
+            let staged = self.stage_lexed_batches(std::iter::once(&lexed), archive)?;
+            self.install_prepared_state(staged);
         }
         Ok(())
     }
@@ -900,29 +900,22 @@ impl ParserState {
     }
 }
 
-fn replay_event_to_token(
+fn replay_event_to_lexed_batch(
     event: &LoggedSpineLedgerEvent,
     archive: &SpineArchive,
     mems: &BTreeMap<String, MemRecord>,
     raw_mask: RawMask<'_>,
-) -> Result<SpineToken, SpineError> {
+) -> Result<LexedTokenBatch, SpineError> {
     match &event.event {
-        SpineLedgerEvent::Init { raw_start } => {
-            crate::spine::lexer::lex_init_token(archive, *raw_start)
-        }
+        SpineLedgerEvent::Init { raw_start } => crate::spine::lexer::lex_init(archive, *raw_start),
         SpineLedgerEvent::Msg {
             raw_ordinal,
             context_index,
             from_user,
             user_anchor,
-        } => crate::spine::lexer::lex_msg_token(
-            *raw_ordinal,
-            *context_index,
-            *from_user,
-            *user_anchor,
-        ),
+        } => crate::spine::lexer::lex_msg(*raw_ordinal, *context_index, *from_user, *user_anchor),
         SpineLedgerEvent::ToolCall { segments } => {
-            crate::spine::lexer::lex_toolcall_event_as_token(segments.iter().cloned())
+            crate::spine::lexer::lex_toolcall_event(segments.iter().cloned())
         }
         SpineLedgerEvent::Open {
             child,
@@ -933,7 +926,7 @@ fn replay_event_to_token(
             open_context_tokens,
             open_context_source,
             ..
-        } => crate::spine::lexer::lex_open_token(
+        } => crate::spine::lexer::lex_open(
             archive,
             child.clone(),
             *boundary,
@@ -948,7 +941,24 @@ fn replay_event_to_token(
                 SpineError::InvalidEvent(format!("missing memory for close node {node}"))
             })?;
             validate_replay_memory_raw_evidence(mem, raw_mask)?;
-            crate::spine::lexer::lex_close_token(replay_memory_ref(archive, mem, event.seq))
+            let SpineLedgerEvent::Close {
+                node,
+                boundary,
+                summary,
+                close_input_tokens,
+                close_context_tokens,
+            } = &event.event
+            else {
+                unreachable!("close event was matched before replay close lexing")
+            };
+            crate::spine::lexer::lex_close(
+                node.clone(),
+                *boundary,
+                summary.clone(),
+                *close_input_tokens,
+                *close_context_tokens,
+                replay_memory_ref(archive, mem, event.seq),
+            )
         }
         SpineLedgerEvent::RootCompact {
             mem,
@@ -960,7 +970,7 @@ fn replay_event_to_token(
             })?;
             validate_replay_memory_raw_evidence(mem, raw_mask)?;
             let memory = replay_memory_ref(archive, mem, event.seq);
-            crate::spine::lexer::plan_root_compact().lex_compact_token(
+            crate::spine::lexer::plan_root_compact().lex_compact_batch(
                 memory,
                 usize::try_from(*next_open_index).map_err(|_| {
                     SpineError::InvalidEvent("root open index overflow".to_string())

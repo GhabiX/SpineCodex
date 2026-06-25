@@ -114,7 +114,7 @@ fn parser_state_routes_live_batches_through_one_batch_helper() {
         .and_then(|tail| tail.split("fn into_parse_stack").next())
         .expect("root compact probe parser section");
     assert!(
-        root_compact_probe.contains("lex_probe_batch")
+        root_compact_probe.contains("lex_compact_batch")
             && root_compact_probe.contains("stage_lexed_batches")
             && !root_compact_probe.contains("probe_parse_stack")
             && !root_compact_probe.contains(".shift("),
@@ -168,9 +168,20 @@ fn parse_stack_replay_is_not_a_token_consumer() {
     );
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser");
     assert!(
-        parser.contains("fn replay_event_to_token(")
+        parser.contains("fn replay_event_to_lexed_batch(")
             && parser.contains("fn apply_replay_metadata_event("),
-        "parser should own replay event-to-token and replay metadata adapters"
+        "parser should own replay event-to-lexed-batch and replay metadata adapters"
+    );
+    let replay_apply = parser
+        .split("fn apply_replay_event(")
+        .nth(1)
+        .and_then(|tail| tail.split("pub(super) fn consume_lexed_batch").next())
+        .expect("parser replay apply section");
+    assert!(
+        replay_apply.contains("replay_event_to_lexed_batch")
+            && replay_apply.contains("stage_lexed_batches")
+            && !replay_apply.contains(".shift("),
+        "parser replay should stage lexer batches instead of shifting raw replay tokens"
     );
 }
 
