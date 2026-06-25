@@ -1211,9 +1211,18 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         root_compact.contains(".validate_current_open_matches_materialized_len()")
-            && root_compact.contains(".into_publication_materialized_and_install()")
+            && root_compact.contains(".into_publication_history_and_install()")
             && !root_compact.contains(".into_materialized_and_install()"),
-        "runtime root compact should consume parser prepared txn through publication/install intent methods"
+        "runtime root compact should consume parser prepared txn through publication-history/install intent methods"
+    );
+    assert!(
+        !root_compact.contains(".into_publication_materialized_and_install()"),
+        "runtime root compact should not expose parser materialization wording at the publication/install boundary"
+    );
+    assert!(
+        root_compact.contains("let (publication_history, pending_parser_install, parser_install)")
+            && root_compact.contains("materialized: publication_history"),
+        "runtime root compact should name the parser publication payload as publication history"
     );
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
     assert!(

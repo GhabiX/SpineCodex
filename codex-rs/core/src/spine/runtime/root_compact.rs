@@ -441,10 +441,10 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let (materialized, pending_parser_install, parser_install) =
-            prepared_txn.into_publication_materialized_and_install();
+        let (publication_history, pending_parser_install, parser_install) =
+            prepared_txn.into_publication_history_and_install();
         let result = SpineRootCompactResult {
-            materialized,
+            materialized: publication_history,
             raw_boundary: self.raw_len,
             token_seq_after,
         };

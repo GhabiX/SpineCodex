@@ -228,7 +228,7 @@ impl ParserRootCompactPreparedTxn {
             .validate_current_open_matches_materialized_len()
     }
 
-    pub(super) fn into_publication_materialized_and_install(
+    pub(super) fn into_publication_history_and_install(
         self,
     ) -> (
         Vec<ResponseItem>,
