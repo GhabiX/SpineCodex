@@ -481,6 +481,34 @@ impl ReplayRuntime {
     pub(crate) fn into_materialized(self) -> Option<Vec<ResponseItem>> {
         self.inner.into_materialized()
     }
+
+    pub(crate) fn prepare_jit_replay_from_rollout_items(
+        state: &SpineSessionState,
+        rollout_path: &Path,
+        raw_len: u64,
+        raw_items: &[Option<ResponseItem>],
+        rollback_cuts: &[usize],
+    ) -> Result<Self, SpineError> {
+        state
+            .prepare_jit_replay_from_rollout_items(rollout_path, raw_len, raw_items, rollback_cuts)
+            .map(|inner| Self { inner })
+    }
+
+    pub(crate) fn prepare_trim_replay_from_history(
+        rollout_path: &Path,
+        raw_len: u64,
+        history_items: &[ResponseItem],
+    ) -> Result<Option<Self>, SpineError> {
+        SpineSessionState::prepare_trim_replay_from_history(rollout_path, raw_len, history_items)
+            .map(|replay| replay.map(|inner| Self { inner }))
+    }
+
+    pub(crate) fn install(
+        self,
+        state: &mut SpineSessionState,
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+        state.install_replay(self.inner)
+    }
 }
 
 impl HistoryHostEffect {
@@ -563,32 +591,4 @@ pub(crate) fn on_toolcall(
             recorded_inside_reduce: evidence.recorded_inside_reduce,
         })
         .map(HostEffects::from_runtime)
-}
-
-pub(crate) fn prepare_jit_replay_from_rollout_items(
-    state: &SpineSessionState,
-    rollout_path: &Path,
-    raw_len: u64,
-    raw_items: &[Option<ResponseItem>],
-    rollback_cuts: &[usize],
-) -> Result<ReplayRuntime, SpineError> {
-    state
-        .prepare_jit_replay_from_rollout_items(rollout_path, raw_len, raw_items, rollback_cuts)
-        .map(|inner| ReplayRuntime { inner })
-}
-
-pub(crate) fn prepare_trim_replay_from_history(
-    rollout_path: &Path,
-    raw_len: u64,
-    history_items: &[ResponseItem],
-) -> Result<Option<ReplayRuntime>, SpineError> {
-    SpineSessionState::prepare_trim_replay_from_history(rollout_path, raw_len, history_items)
-        .map(|replay| replay.map(|inner| ReplayRuntime { inner }))
-}
-
-pub(crate) fn install_replay(
-    state: &mut SpineSessionState,
-    replay: ReplayRuntime,
-) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-    state.install_replay(replay.inner)
 }

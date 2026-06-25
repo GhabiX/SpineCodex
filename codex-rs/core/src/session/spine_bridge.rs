@@ -417,7 +417,7 @@ impl Session {
         })?;
         let prepared_runtime = {
             let guard = spine_slot.lock().await;
-            hooks::prepare_jit_replay_from_rollout_items(
+            hooks::ReplayRuntime::prepare_jit_replay_from_rollout_items(
                 &guard,
                 &rollout_path,
                 raw_len,
@@ -484,8 +484,11 @@ impl Session {
         else {
             return Ok(None);
         };
-        let Some(replay) =
-            hooks::prepare_trim_replay_from_history(&rollout_path, raw_len, history)?
+        let Some(replay) = hooks::ReplayRuntime::prepare_trim_replay_from_history(
+            &rollout_path,
+            raw_len,
+            history,
+        )?
         else {
             return Ok(None);
         };
@@ -500,7 +503,7 @@ impl Session {
             return Ok(replay.replay.into_materialized());
         };
         let mut guard = spine_slot.lock().await;
-        hooks::install_replay(&mut *guard, replay.replay)
+        replay.replay.install(&mut *guard)
     }
 
     pub(crate) fn variable_spine_items_for_root_compact(
