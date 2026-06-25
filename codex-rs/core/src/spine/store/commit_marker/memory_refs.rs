@@ -35,21 +35,7 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
     raw_live: &[bool],
 ) -> Result<(), SpineError> {
     for memory in &marker.memory_refs {
-        let mem = unique_committed_memory_for_ref(marker, memory, mems)?;
-        if !commit_memory_ref_matches_record(memory, mem) {
-            return Err(SpineError::InvalidStore(format!(
-                "Spine commit marker {} memory ref {} does not match committed memory record",
-                marker.op_id, memory.compact_id
-            )));
-        }
-        if !mem.allowed_by(RawMask::new(raw_live))? {
-            return Err(SpineError::InvalidStore(format!(
-                "memory {} does not cover live raw evidence for Spine commit marker {}",
-                mem.compact_id, marker.op_id
-            )));
-        }
-        let body_path = sidecar_store_path(store_root, &memory.body_path);
-        memory_body::read_body_with_hash(&body_path, &memory.compact_id, &memory.body_hash)?;
+        validate_commit_marker_memory_ref(store_root, marker, memory, mems, raw_live)?;
     }
     if let Some(raw_live_hash) = marker.raw_live_hash.as_deref()
         && !commit_raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
@@ -59,6 +45,31 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
             marker.op_id, marker.raw_boundary
         )));
     }
+    Ok(())
+}
+
+fn validate_commit_marker_memory_ref(
+    store_root: &Path,
+    marker: &SpineCommitMarker,
+    memory: &SpineCommitMemoryRef,
+    mems: &[MemRecord],
+    raw_live: &[bool],
+) -> Result<(), SpineError> {
+    let mem = unique_committed_memory_for_ref(marker, memory, mems)?;
+    if !commit_memory_ref_matches_record(memory, mem) {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} memory ref {} does not match committed memory record",
+            marker.op_id, memory.compact_id
+        )));
+    }
+    if !mem.allowed_by(RawMask::new(raw_live))? {
+        return Err(SpineError::InvalidStore(format!(
+            "memory {} does not cover live raw evidence for Spine commit marker {}",
+            mem.compact_id, marker.op_id
+        )));
+    }
+    let body_path = sidecar_store_path(store_root, &memory.body_path);
+    memory_body::read_body_with_hash(&body_path, &memory.compact_id, &memory.body_hash)?;
     Ok(())
 }
 
