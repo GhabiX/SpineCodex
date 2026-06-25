@@ -192,22 +192,34 @@ fn render_memory_archive(
 
     let mut out = String::new();
     out.push_str("# Spine Memory Archive\n\n");
-    out.push_str(&format!("compact_id: {}\n", memory.compact_id));
-    out.push_str(&format!("node_id: {}\n", memory.node_id));
-    out.push_str(&format!("body_path: {}\n", memory.body_path.display()));
-    out.push_str(&format!("body_hash: {}\n", memory.body_hash));
-    out.push_str(&format!(
-        "source_raw_range: [{}..{})\n",
-        memory.source_raw_range.start, memory.source_raw_range.end
-    ));
-    out.push_str(&format!(
-        "source_context_range: [{}..{})\n",
-        memory.source_context_range.start, memory.source_context_range.end
-    ));
-    out.push_str(&format!(
-        "source_token_seq: [{}..{})\n",
-        memory.source_token_seq.start, memory.source_token_seq.end
-    ));
+    push_field(&mut out, "compact_id", &memory.compact_id);
+    push_field(&mut out, "node_id", &memory.node_id);
+    push_field(&mut out, "body_path", &memory.body_path.display());
+    push_field(&mut out, "body_hash", &memory.body_hash);
+    push_field(
+        &mut out,
+        "source_raw_range",
+        format_args!(
+            "[{}..{})",
+            memory.source_raw_range.start, memory.source_raw_range.end
+        ),
+    );
+    push_field(
+        &mut out,
+        "source_context_range",
+        format_args!(
+            "[{}..{})",
+            memory.source_context_range.start, memory.source_context_range.end
+        ),
+    );
+    push_field(
+        &mut out,
+        "source_token_seq",
+        format_args!(
+            "[{}..{})",
+            memory.source_token_seq.start, memory.source_token_seq.end
+        ),
+    );
     let mut wrote_optional = false;
     for (field, value) in [
         ("open_input_tokens", memory.open_input_tokens),
@@ -226,7 +238,7 @@ fn render_memory_archive(
         wrote_optional |= push_optional_i64_field(&mut out, field, value);
     }
     if let Some(source) = memory.open_context_source {
-        out.push_str(&format!("open_context_source: {source:?}\n"));
+        push_field(&mut out, "open_context_source", format_args!("{source:?}"));
         wrote_optional = true;
     }
     wrote_optional |= push_optional_i64_field(
@@ -245,9 +257,13 @@ fn render_memory_archive(
     Ok(out)
 }
 
+fn push_field(out: &mut String, field: &str, value: impl std::fmt::Display) {
+    out.push_str(&format!("{field}: {value}\n"));
+}
+
 fn push_optional_i64_field(out: &mut String, field: &str, value: Option<i64>) -> bool {
     if let Some(value) = value {
-        out.push_str(&format!("{field}: {value}\n"));
+        push_field(out, field, value);
         true
     } else {
         false
