@@ -1456,8 +1456,9 @@ fn lifecycle_fork_routes_context_len_through_parser_state() {
         "fork clone append context index calculation must not materialize h(PS) directly"
     );
     assert!(
-        fork_install.contains("materialized_history_len(raw_items)?"),
-        "fork clone append context index calculation should route h(PS) length through ParserState"
+        fork_install.contains("variable_context_len(raw_items)?")
+            && !fork_install.contains("materialized_history_len(raw_items)?"),
+        "fork clone append context index calculation should route h(PS) length through the parser variable-context boundary"
     );
 }
 

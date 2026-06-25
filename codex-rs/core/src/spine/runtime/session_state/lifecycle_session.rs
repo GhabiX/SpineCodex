@@ -178,7 +178,7 @@ impl SpineSessionState {
                 continue;
             };
             let context_index = if runtime.jit_enabled() {
-                runtime.materialized_history_len(raw_items)?
+                runtime.variable_context_len(raw_items)?
             } else {
                 raw_items
                     .iter()
