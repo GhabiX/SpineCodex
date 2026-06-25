@@ -96,6 +96,12 @@ impl CloseFamilyPlan {
         self.open.as_ref()
     }
 
+    pub(super) fn append_open_events(&self, events: &mut Vec<SpineLedgerEvent>) {
+        if let Some(open) = self.open_lexed() {
+            events.extend(open.events().iter().cloned());
+        }
+    }
+
     pub(super) fn require_completed_toolcall(
         &self,
         completed_toolcall: Option<CompletedToolCall>,

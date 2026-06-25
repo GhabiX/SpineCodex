@@ -440,9 +440,7 @@ impl SpineRuntime {
         let prepared = self.prepare_close_commit(memory_assembly, token_baselines)?;
         let plan = self.close_family_plan(&prepared, after_close)?;
         let mut events = vec![prepared.close_event.clone()];
-        if let Some(open) = plan.open_lexed() {
-            events.extend(open.events().iter().cloned());
-        }
+        plan.append_open_events(&mut events);
         let completed_toolcall = plan.require_completed_toolcall(completed_toolcall)?;
         let toolcall_start = completed_toolcall_first_segment(&completed_toolcall)?.context_index;
         let atomic_mutable_context_segments = completed_toolcall
