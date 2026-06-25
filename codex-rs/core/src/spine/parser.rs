@@ -980,7 +980,8 @@ fn replay_event_to_lexed_batch(
             )
         }
         SpineLedgerEvent::OpenContextBaseline { .. } => Err(SpineError::InvalidEvent(
-            "OpenContextBaseline is metadata and cannot be converted to a SpineToken".to_string(),
+            "OpenContextBaseline is metadata and cannot be converted to a LexedTokenBatch"
+                .to_string(),
         )),
     }
 }
