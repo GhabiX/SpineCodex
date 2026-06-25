@@ -1290,8 +1290,9 @@ fn runtime_root_compact_routes_source_context_len_through_parser_state() {
         "runtime/root_compact.rs must not materialize h(PS) directly while preparing root compact source bounds"
     );
     assert!(
-        prepare_commit.contains("materialized_variable_context_len("),
-        "root compact source context length should route through ParserState"
+        prepare_commit.contains("variable_context_len(")
+            && !prepare_commit.contains("materialized_variable_context_len("),
+        "root compact source context length should route through ParserState variable context API"
     );
 }
 

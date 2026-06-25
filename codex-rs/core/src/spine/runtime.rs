@@ -399,7 +399,7 @@ impl SpineRuntime {
         self.ensure_jit_enabled("Spine history materialization")?;
         let trim_projection = self.current_trim_projection()?;
         self.parser
-            .materialized_variable_context_len(raw_items, &trim_projection)
+            .variable_context_len(raw_items, &trim_projection)
     }
 
     pub(crate) fn materialized_history_len(

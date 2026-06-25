@@ -855,7 +855,7 @@ impl ParserState {
         ))
     }
 
-    pub(super) fn materialized_variable_context_len(
+    pub(super) fn variable_context_len(
         &self,
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
