@@ -223,6 +223,52 @@ impl SpineSessionState {
         Ok(())
     }
 
+    pub(crate) fn observe_provider_token_usage(&mut self, input_tokens: Option<i64>) {
+        if self.ensure_valid().is_err() {
+            return;
+        }
+        let result = {
+            let Some(runtime) = self.runtime_mut() else {
+                return;
+            };
+            match input_tokens {
+                Some(input_tokens) if input_tokens > 0 => runtime
+                    .capture_closed_memory_context_accounting(input_tokens)
+                    .map_err(|err| {
+                        format!(
+                            "failed to capture Spine closed memory context accounting from provider input tokens: {err}"
+                        )
+                    })
+                    .and_then(|_| {
+                        runtime
+                            .capture_current_open_provider_baseline(input_tokens)
+                            .map_err(|err| {
+                                format!(
+                                    "failed to capture Spine open context baseline from provider input tokens: {err}"
+                                )
+                            })
+                    }),
+                Some(_) => runtime
+                    .consume_closed_memory_context_accounting_without_provider_usage()
+                    .map_err(|err| {
+                        format!(
+                            "failed to consume Spine closed memory context accounting without positive provider input tokens: {err}"
+                        )
+                    }),
+                None => runtime
+                    .consume_closed_memory_context_accounting_without_provider_usage()
+                    .map_err(|err| {
+                        format!(
+                            "failed to consume Spine closed memory context accounting without provider usage: {err}"
+                        )
+                    }),
+            }
+        };
+        if let Err(reason) = result {
+            self.invalidate(reason);
+        }
+    }
+
     pub(crate) fn ensure_runtime(&mut self, rollout_path: &Path) -> Result<(), SpineError> {
         self.ensure_valid()?;
         if self.runtime.is_none() {
