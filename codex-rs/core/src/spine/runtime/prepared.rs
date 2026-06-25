@@ -73,7 +73,7 @@ impl SpinePreparedRootCompact {
         let publication_history_len = self.publication_history().len();
         if publication_history_len != published_history_len {
             return Err(super::SpineError::InvalidStore(format!(
-                "spine root compact publication history length {publication_history_len} does not match published history length {published_history_len}"
+                "spine root compact publication history length {publication_history_len} does not match materialized history length {published_history_len}"
             )));
         }
         Ok(())
@@ -325,6 +325,10 @@ impl<T> SpineCommitPublication<T> {
 
     pub(crate) fn take_pre_apply_history_update(&mut self) -> Option<T> {
         self.pre_apply_history_update.take()
+    }
+
+    pub(super) fn install_for_side_effects(&self) -> Option<&SpinePreparedCommitInstall> {
+        self.install.as_ref()
     }
 
     pub(super) fn into_install(self) -> Option<SpinePreparedCommitInstall> {
