@@ -426,7 +426,7 @@ impl SpineRuntime {
             &trim_projection,
             &self.archive(),
         )?;
-        prepared_txn.validate_current_open_matches_materialized_len()?;
+        prepared_txn.validate_current_open_matches_variable_context_len()?;
         let token_seq_after = seq.checked_add(1).ok_or_else(|| {
             SpineError::InvalidEvent("root compact token seq overflow".to_string())
         })?;
@@ -441,10 +441,10 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let (publication_history, pending_parser_install, parser_install) =
-            prepared_txn.into_publication_history_and_install();
+        let (variable_context, pending_parser_install, parser_install) =
+            prepared_txn.into_variable_context_and_install();
         let result = SpineRootCompactResult {
-            materialized: publication_history,
+            materialized: variable_context,
             raw_boundary: self.raw_len,
             token_seq_after,
         };

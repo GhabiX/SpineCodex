@@ -57,7 +57,7 @@ pub(super) struct ParserRootCompactPreparedTxn {
 }
 
 pub(super) struct ParserRootCompactPublication {
-    materialized: Vec<ResponseItem>,
+    variable_context: Vec<ResponseItem>,
     current_open_index: usize,
 }
 
@@ -223,12 +223,14 @@ fn full_variable_context_publication_update(
 }
 
 impl ParserRootCompactPreparedTxn {
-    pub(super) fn validate_current_open_matches_materialized_len(&self) -> Result<(), SpineError> {
+    pub(super) fn validate_current_open_matches_variable_context_len(
+        &self,
+    ) -> Result<(), SpineError> {
         self.publication
-            .validate_current_open_matches_materialized_len()
+            .validate_current_open_matches_variable_context_len()
     }
 
-    pub(super) fn into_publication_history_and_install(
+    pub(super) fn into_variable_context_and_install(
         self,
     ) -> (
         Vec<ResponseItem>,
@@ -237,7 +239,7 @@ impl ParserRootCompactPreparedTxn {
     ) {
         let (pending_install, final_install) = self.prepared_install.into_parts();
         (
-            self.publication.into_materialized(),
+            self.publication.into_variable_context(),
             pending_install,
             final_install,
         )
@@ -258,37 +260,37 @@ impl ParserRootCompactPreparedTxn {
             raw_live,
             raw_items,
             self.prepared_install.final_state().parse_stack(),
-            self.publication.materialized(),
-            self.publication.materialized(),
+            self.publication.variable_context(),
+            self.publication.variable_context(),
         )
     }
 }
 
 impl ParserRootCompactPublication {
-    fn new(materialized: Vec<ResponseItem>, current_open_index: usize) -> Self {
+    fn new(variable_context: Vec<ResponseItem>, current_open_index: usize) -> Self {
         Self {
-            materialized,
+            variable_context,
             current_open_index,
         }
     }
 
-    fn materialized(&self) -> &[ResponseItem] {
-        &self.materialized
+    fn variable_context(&self) -> &[ResponseItem] {
+        &self.variable_context
     }
 
-    fn validate_current_open_matches_materialized_len(&self) -> Result<(), SpineError> {
-        if self.current_open_index != self.materialized.len() {
+    fn validate_current_open_matches_variable_context_len(&self) -> Result<(), SpineError> {
+        if self.current_open_index != self.variable_context.len() {
             return Err(SpineError::Invariant(format!(
-                "spine root compact open index {} does not match materialized history length {}",
+                "spine root compact open index {} does not match variable context length {}",
                 self.current_open_index,
-                self.materialized.len()
+                self.variable_context.len()
             )));
         }
         Ok(())
     }
 
-    fn into_materialized(self) -> Vec<ResponseItem> {
-        self.materialized
+    fn into_variable_context(self) -> Vec<ResponseItem> {
+        self.variable_context
     }
 }
 
@@ -790,7 +792,7 @@ impl ParserState {
             next_open_context_tokens,
         )?;
         let final_parse_stack = pending.root_epoch_reduced(root_epoch_reduction.clone())?;
-        let materialized = render_parse_stack_to_context_with_memory_body_and_trim_projection(
+        let variable_context = render_parse_stack_to_context_with_memory_body_and_trim_projection(
             &final_parse_stack,
             raw_items,
             staged_memory_body,
@@ -798,7 +800,7 @@ impl ParserState {
         )?;
         let current_open_index = final_parse_stack.current_open_meta()?.index;
         Ok(ParserRootCompactPreparedTxn {
-            publication: ParserRootCompactPublication::new(materialized, current_open_index),
+            publication: ParserRootCompactPublication::new(variable_context, current_open_index),
             prepared_install: ParserRootCompactPreparedInstall::new(
                 ParserRootCompactPendingInstall::new(ParserPreparedState::new(pending)),
                 ParserRootCompactInstall::new(ParserPreparedState::new(final_parse_stack)),
