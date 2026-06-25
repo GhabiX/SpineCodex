@@ -80,8 +80,8 @@ impl SpinePreparedRootCompact {
         Ok(())
     }
 
-    pub(super) fn into_parser_install(self) -> ParserRootCompactInstall {
-        self.parser_install
+    pub(super) fn install_parser_state(self, install: impl FnOnce(ParserRootCompactInstall)) {
+        install(self.parser_install);
     }
 
     pub(super) fn install_for_direct_result(

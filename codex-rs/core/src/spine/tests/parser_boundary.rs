@@ -953,8 +953,9 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     );
     assert!(
         prepared.contains("fn new(\n        result: SpineRootCompactResult,\n        parser_install: ParserRootCompactInstall,")
-            && prepared.contains("fn into_parser_install(self) -> ParserRootCompactInstall"),
-        "runtime root compact prepared carrier should expose a constructor and parser install consumer"
+            && prepared.contains("fn install_parser_state(self, install: impl FnOnce(ParserRootCompactInstall))")
+            && !prepared.contains("fn into_parser_install("),
+        "runtime root compact prepared carrier should expose a constructor and scoped parser install consumer"
     );
     assert!(
         !prepared.contains("fn result(&self)")
@@ -1401,9 +1402,9 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         })
         .expect("install_prepared_root_compact section");
     assert!(
-        install_prepared_root_compact.contains(".into_parser_install()")
+        install_prepared_root_compact.contains(".install_parser_state(|parser_install|")
             && !install_prepared_root_compact.contains(".parser_install"),
-        "runtime root compact should construct and consume prepared root compact through named methods"
+        "runtime root compact should construct and consume prepared root compact through scoped parser install methods"
     );
     assert!(
         !root_compact.contains("prepare_root_compact_install_with_checkpoint")

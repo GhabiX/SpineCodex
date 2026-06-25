@@ -317,8 +317,9 @@ impl SpineRuntime {
     }
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
-        self.parser
-            .install_prepared_root_compact(prepared.into_parser_install());
+        prepared.install_parser_state(|parser_install| {
+            self.parser.install_prepared_root_compact(parser_install);
+        });
     }
 
     fn install_prepared_root_compact_for_direct_result(
