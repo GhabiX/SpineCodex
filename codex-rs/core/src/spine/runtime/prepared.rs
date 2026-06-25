@@ -258,13 +258,14 @@ impl SpinePreparedCommitInstall {
         self.prepared.mem_for_accounting.as_ref()
     }
 
-    pub(super) fn into_install_parts(
+    pub(super) fn install_parser_state(
         self,
-    ) -> (Option<ParserCommitInstall>, Option<CompletedToolCall>) {
-        (
-            self.prepared.parser_install,
-            self.prepared.completed_toolcall,
-        )
+        install: impl FnOnce(ParserCommitInstall),
+    ) -> Option<CompletedToolCall> {
+        if let Some(parser_install) = self.prepared.parser_install {
+            install(parser_install);
+        }
+        self.prepared.completed_toolcall
     }
 }
 

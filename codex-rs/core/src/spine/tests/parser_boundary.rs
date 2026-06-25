@@ -1033,7 +1033,9 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !prepared.contains("fn parser_install(&self) -> Option<&ParserCommitInstall>")
             && prepared.contains("fn trim_candidate_inputs(")
             && prepared.contains("fn mem_for_accounting(&self)")
-            && prepared.contains("fn into_install_parts(")
+            && prepared.contains("fn install_parser_state(")
+            && !prepared.contains("fn into_install_parts(")
+            && !prepared.contains("(Option<ParserCommitInstall>, Option<CompletedToolCall>)")
             && !prepared.contains("fn as_prepared_commit(&self)")
             && !prepared.contains("fn into_prepared_commit(self)"),
         "SpinePreparedCommitInstall should expose named install/publication accessors instead of returning the prepared carrier"
@@ -1108,7 +1110,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         prepared.contains("fn trim_candidate_inputs(")
             && prepared.contains("fn mem_for_accounting(&self)")
-            && prepared.contains("fn into_install_parts("),
+            && prepared.contains("fn install_parser_state(")
+            && !prepared.contains("fn into_install_parts("),
         "SpinePreparedCommit should expose named side-effect/install accessors instead of public fields"
     );
     let commit =
@@ -1151,7 +1154,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         commit.contains("install.trim_candidate_inputs()")
             && commit.contains("install.mem_for_accounting()")
-            && commit.contains("install.into_install_parts()")
+            && commit.contains("install.install_parser_state(")
+            && !commit.contains("install.into_install_parts()")
             && commit.contains("persist_prepared_commit_install_side_effects")
             && commit.contains("install_prepared_commit_install"),
         "runtime commit should use prepared install carrier accessors for side effects and install"
