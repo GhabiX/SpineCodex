@@ -181,16 +181,20 @@ impl SpineSessionState {
         self.set_replayed(raw_item_count(raw_items)?, Some(runtime))
     }
 
-    pub(crate) fn abort_pending_tool(&mut self, call_id: &str) -> bool {
+    pub(crate) fn abort_pending_tool(&mut self, call_id: &str) -> Result<bool, SpineError> {
+        self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
-            return false;
+            return Ok(false);
         };
-        runtime.abort_pending(call_id)
+        Ok(runtime.abort_pending(call_id))
     }
 
-    pub(crate) fn abort_any_pending(&mut self) -> Option<String> {
-        let runtime = self.runtime_mut()?;
-        runtime.abort_any_pending()
+    pub(crate) fn abort_any_pending(&mut self) -> Result<Option<String>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Ok(None);
+        };
+        Ok(runtime.abort_any_pending())
     }
 
     pub(super) fn runtime_mut_after_init(&mut self) -> Result<&mut SpineRuntime, SpineError> {

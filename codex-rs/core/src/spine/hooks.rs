@@ -252,23 +252,20 @@ pub(crate) fn abort_pending_tool(
     state: &mut SpineSessionState,
     call_id: &str,
 ) -> Result<bool, SpineError> {
-    state.ensure_valid()?;
-    Ok(state.abort_pending_tool(call_id))
+    state.abort_pending_tool(call_id)
 }
 
 pub(crate) fn abort_any_pending(
     state: &mut SpineSessionState,
 ) -> Result<Option<String>, SpineError> {
-    state.ensure_valid()?;
-    Ok(state.abort_any_pending())
+    state.abort_any_pending()
 }
 
 pub(crate) fn is_control_output_call_id(
     state: &SpineSessionState,
     call_id: &str,
 ) -> Result<bool, SpineError> {
-    state.ensure_valid()?;
-    Ok(state.is_control_output_call_id(call_id))
+    state.is_control_output_call_id(call_id)
 }
 
 #[cfg(test)]

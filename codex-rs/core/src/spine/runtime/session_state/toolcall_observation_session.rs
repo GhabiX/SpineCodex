@@ -76,11 +76,12 @@ impl SpineSessionState {
         })
     }
 
-    pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
+    pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> Result<bool, SpineError> {
+        self.ensure_valid()?;
         let Some(runtime) = self.runtime() else {
-            return false;
+            return Ok(false);
         };
-        runtime.is_control_output_call_id(call_id)
+        Ok(runtime.is_control_output_call_id(call_id))
     }
 
     pub(in crate::spine) fn prepare_completed_toolcall_for_commit(
