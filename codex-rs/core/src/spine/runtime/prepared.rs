@@ -324,10 +324,6 @@ impl<T> SpineCommitPublication<T> {
         self.pre_apply_history_update.take()
     }
 
-    pub(super) fn install(&self) -> Option<&SpinePreparedCommitInstall> {
-        self.install.as_ref()
-    }
-
     pub(super) fn into_install(self) -> Option<SpinePreparedCommitInstall> {
         self.install
     }

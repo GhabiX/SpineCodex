@@ -1008,6 +1008,16 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !prepared.contains("fn take_history_update(&mut self)"),
         "SpineCommitPublication should expose pre-apply history intent, not a generic field-style history_update"
     );
+    let commit_publication_impl = prepared
+        .split("impl<T> SpineCommitPublication<T> {")
+        .nth(1)
+        .and_then(|tail| tail.split("#[cfg(test)]").next())
+        .expect("SpineCommitPublication impl block");
+    assert!(
+        commit_publication_impl.contains("fn into_install(self)")
+            && !commit_publication_impl.contains("fn install(&self)"),
+        "SpineCommitPublication should consume parser installs through into_install and must not expose borrowed install access"
+    );
     assert!(
         prepared.contains("fn apply_publication_history_update<T, F>(")
             && prepared.contains("fn parser_install(&self) -> Option<&ParserCommitInstall>")
