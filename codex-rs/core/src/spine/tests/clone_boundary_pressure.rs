@@ -33,18 +33,7 @@ pub(super) fn assert_clone_boundary_excludes_future_structural_and_pressure_reco
         })
         .expect("append kept msg");
     source
-        .append_pressure_event(&PressureEvent::OpenContextBaseline {
-            node: NodeId::root_epoch(1).child(1),
-            open_structural_seq: Some(1),
-            observed_structural_seq: 3,
-            observed_raw_ordinal: 1,
-            observed_raw_live_hash: Some(hash_raw_live(&[true])),
-            observed_context_index: 1,
-            context_tokens: 7_000,
-            input_tokens: Some(7_500),
-            source: ContextBaselineSource::EstimatedFromLiveSuffix,
-            estimated_live_suffix_tokens: Some(500),
-        })
+        .append_pressure_event(&pressure_baseline_event(3, 7_000, 7_500))
         .expect("append checkpoint-visible pressure");
     let boundary = SpineCloneBoundary {
         source_rollout_path: source_rollout,
@@ -70,18 +59,7 @@ pub(super) fn assert_clone_boundary_excludes_future_structural_and_pressure_reco
         })
         .expect("append future structural event");
     source
-        .append_pressure_event(&PressureEvent::OpenContextBaseline {
-            node: NodeId::root_epoch(1).child(1),
-            open_structural_seq: Some(1),
-            observed_structural_seq: 4,
-            observed_raw_ordinal: 1,
-            observed_raw_live_hash: Some(hash_raw_live(&[true])),
-            observed_context_index: 1,
-            context_tokens: 11_000,
-            input_tokens: Some(11_500),
-            source: ContextBaselineSource::EstimatedFromLiveSuffix,
-            estimated_live_suffix_tokens: Some(500),
-        })
+        .append_pressure_event(&pressure_baseline_event(4, 11_000, 11_500))
         .expect("append future pressure");
 
     SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[true])
@@ -110,4 +88,23 @@ pub(super) fn assert_clone_boundary_excludes_future_structural_and_pressure_reco
             .expect("load target")
             .expect("target sidecar exists");
     assert_eq!(replayed.current_open_provider_input_tokens(), None);
+}
+
+fn pressure_baseline_event(
+    observed_structural_seq: u64,
+    context_tokens: i64,
+    input_tokens: i64,
+) -> PressureEvent {
+    PressureEvent::OpenContextBaseline {
+        node: NodeId::root_epoch(1).child(1),
+        open_structural_seq: Some(1),
+        observed_structural_seq,
+        observed_raw_ordinal: 1,
+        observed_raw_live_hash: Some(hash_raw_live(&[true])),
+        observed_context_index: 1,
+        context_tokens,
+        input_tokens: Some(input_tokens),
+        source: ContextBaselineSource::EstimatedFromLiveSuffix,
+        estimated_live_suffix_tokens: Some(500),
+    }
 }
