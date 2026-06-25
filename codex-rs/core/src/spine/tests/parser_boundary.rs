@@ -730,7 +730,8 @@ fn runtime_commit_routes_open_with_toolcall_publication_through_prepared_commit(
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
     assert!(
-        publication_parts.contains("prepared_commit.full_variable_context_host_history_update("),
+        publication_parts
+            .contains("prepared_commit.apply_full_variable_context_publication_update("),
         "open-with-toolcall publication should ask the prepared install carrier to build host-history updates from variable h(PS)"
     );
     assert!(
@@ -1128,7 +1129,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         prepared.contains("fn apply_variable_context_publication_update<T, F>")
             && !prepared.contains("fn apply_publication_history_update<T, F>(")
-            && prepared.contains("fn full_variable_context_host_history_update")
+            && prepared.contains("fn apply_full_variable_context_publication_update")
+            && !prepared.contains("fn full_variable_context_host_history_update")
             && !prepared.contains("fn parser_install(&self) -> Option<&ParserCommitInstall>")
             && prepared.contains("fn trim_candidate_inputs(")
             && prepared.contains("fn mem_for_accounting(&self)")
@@ -1171,6 +1173,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
                 .contains("fn apply_variable_context_publication_update")
             && !prepared_commit_install_impl.contains("fn apply_publication_history_update")
             && prepared_commit_install_impl
+                .contains("fn apply_full_variable_context_publication_update")
+            && !prepared_commit_install_impl
                 .contains("fn full_variable_context_host_history_update")
             && prepared_commit_install_impl.contains("self.prepared.publication_plan.as_ref()")
             && prepared_commit_install_impl.contains("self.prepared.parser_install.as_ref()")

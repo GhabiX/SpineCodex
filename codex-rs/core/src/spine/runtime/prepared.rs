@@ -224,7 +224,7 @@ impl SpinePreparedCommitInstall {
         Ok(update.map(|update| update.into_history_update(call_id, build_update)))
     }
 
-    pub(super) fn full_variable_context_host_history_update<T>(
+    pub(super) fn apply_full_variable_context_publication_update<T>(
         &self,
         call_id: &str,
         operation: &'static str,

@@ -708,7 +708,7 @@ impl SpineRuntime {
             )
         })?;
         if let Some(prepared_commit) = prepared_commit {
-            prepared_commit.full_variable_context_host_history_update(
+            prepared_commit.apply_full_variable_context_publication_update(
                 call_id,
                 "spine prepared commit projection",
                 raw_items,
