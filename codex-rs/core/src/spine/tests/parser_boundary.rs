@@ -1430,6 +1430,11 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !host_effect.contains("published.extend_from_slice(&self.materialized)"),
         "root compact host publication should not expose parser materialization wording in host-effect internals"
     );
+    assert!(
+        host_effect.contains("PublishVariableHistoryAfterBatch")
+            && !host_effect.contains("PublishMaterializedHistoryAfterBatch"),
+        "after-batch host publication effect should name variable h(PS), not parser materialization"
+    );
     let apply_after_publish = root_compact_session
         .split("pub(crate) fn apply_root_compact_after_history_publish(")
         .nth(1)

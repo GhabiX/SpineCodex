@@ -73,7 +73,7 @@ impl SpineHostEffects {
     }
 
     pub(crate) fn publish_materialized_history_after_batch() -> Self {
-        Self::one(SpineHostEffect::PublishMaterializedHistoryAfterBatch)
+        Self::one(SpineHostEffect::PublishVariableHistoryAfterBatch)
     }
 
     pub(crate) fn root_compact_history_publication(publication_history: Vec<ResponseItem>) -> Self {
@@ -111,10 +111,7 @@ impl SpineHostEffects {
     {
         let (publish_requests, remaining): (Vec<_>, Vec<_>) =
             self.effects.into_iter().partition(|effect| {
-                matches!(
-                    effect,
-                    SpineHostEffect::PublishMaterializedHistoryAfterBatch
-                )
+                matches!(effect, SpineHostEffect::PublishVariableHistoryAfterBatch)
             });
         apply_effects(Self::many(remaining)).await?;
         if !publish_requests.is_empty() {
@@ -297,7 +294,7 @@ pub(crate) enum SpineHostEffect {
         snapshot: SpineTreeUpdateEvent,
         delivery: SpineTreeUpdateDelivery,
     },
-    PublishMaterializedHistoryAfterBatch,
+    PublishVariableHistoryAfterBatch,
     RootCompactHistoryPublication(SpineRootCompactHostPublish),
     ToolcallHostCommit(SpineToolcallHostCommit),
 }
