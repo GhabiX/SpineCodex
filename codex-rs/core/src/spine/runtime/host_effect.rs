@@ -96,18 +96,18 @@ impl SpineHostEffects {
         E,
         ApplyEffects,
         ApplyEffectsFuture,
-        PublishMaterializedHistory,
-        PublishMaterializedHistoryFuture,
+        PublishVariableHistory,
+        PublishVariableHistoryFuture,
     >(
         self,
         apply_effects: ApplyEffects,
-        publish_materialized_history: PublishMaterializedHistory,
+        publish_variable_history: PublishVariableHistory,
     ) -> Result<(), E>
     where
         ApplyEffects: FnOnce(Self) -> ApplyEffectsFuture,
         ApplyEffectsFuture: Future<Output = Result<(), E>>,
-        PublishMaterializedHistory: FnOnce() -> PublishMaterializedHistoryFuture,
-        PublishMaterializedHistoryFuture: Future<Output = Result<(), E>>,
+        PublishVariableHistory: FnOnce() -> PublishVariableHistoryFuture,
+        PublishVariableHistoryFuture: Future<Output = Result<(), E>>,
     {
         let (publish_requests, remaining): (Vec<_>, Vec<_>) =
             self.effects.into_iter().partition(|effect| {
@@ -115,7 +115,7 @@ impl SpineHostEffects {
             });
         apply_effects(Self::many(remaining)).await?;
         if !publish_requests.is_empty() {
-            publish_materialized_history().await?;
+            publish_variable_history().await?;
         }
         Ok(())
     }
