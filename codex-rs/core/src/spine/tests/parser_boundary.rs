@@ -1370,6 +1370,20 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !parser.contains("pending_install: ParserRootCompactPendingInstall,\n    parser_install: ParserRootCompactInstall"),
         "parser root compact prepared txn should hold a named prepared install carrier, not parallel pending/final fields"
     );
+    assert!(
+        parser.contains("struct ParserPreparedInstallParts<PendingInstall, FinalInstall>")
+            && parser.contains(
+                "fn into_parts(self) -> ParserPreparedInstallParts<PendingInstall, FinalInstall>"
+            )
+            && parser.contains("let install_parts = self.prepared_install.into_parts();")
+            && parser.contains("pending_install: install_parts.pending_install,")
+            && parser.contains("final_install: install_parts.final_install,")
+            && !parser.contains(
+                "let (pending_install, final_install) = self.prepared_install.into_parts();"
+            )
+            && !parser.contains("fn into_parts(self) -> (PendingInstall, FinalInstall)"),
+        "parser prepared install pair should expose named install parts instead of a positional tuple"
+    );
     let root_compact_publication = parser
         .split("struct ParserRootCompactPublication")
         .nth(1)

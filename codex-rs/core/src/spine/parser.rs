@@ -114,6 +114,12 @@ struct ParserPreparedInstallPair<PendingInstall, FinalInstall> {
     final_install: FinalInstall,
 }
 
+#[derive(Debug)]
+struct ParserPreparedInstallParts<PendingInstall, FinalInstall> {
+    pending_install: PendingInstall,
+    final_install: FinalInstall,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ParserPublicationPlan {
     operation: &'static str,
@@ -261,11 +267,11 @@ impl ParserRootCompactPreparedTxn {
     }
 
     pub(super) fn into_variable_context_and_install(self) -> ParserRootCompactTxnParts {
-        let (pending_install, final_install) = self.prepared_install.into_parts();
+        let install_parts = self.prepared_install.into_parts();
         ParserRootCompactTxnParts {
             variable_context: self.publication.into_variable_context(),
-            pending_install,
-            final_install,
+            pending_install: install_parts.pending_install,
+            final_install: install_parts.final_install,
         }
     }
 
@@ -424,7 +430,9 @@ impl ParserRootCompactPreparedInstall {
         &self.install_pair.final_install().final_state
     }
 
-    fn into_parts(self) -> (ParserRootCompactPendingInstall, ParserRootCompactInstall) {
+    fn into_parts(
+        self,
+    ) -> ParserPreparedInstallParts<ParserRootCompactPendingInstall, ParserRootCompactInstall> {
         self.install_pair.into_parts()
     }
 }
@@ -459,8 +467,11 @@ impl<PendingInstall, FinalInstall> ParserPreparedInstallPair<PendingInstall, Fin
         self.final_install
     }
 
-    fn into_parts(self) -> (PendingInstall, FinalInstall) {
-        (self.pending_install, self.final_install)
+    fn into_parts(self) -> ParserPreparedInstallParts<PendingInstall, FinalInstall> {
+        ParserPreparedInstallParts {
+            pending_install: self.pending_install,
+            final_install: self.final_install,
+        }
     }
 }
 
