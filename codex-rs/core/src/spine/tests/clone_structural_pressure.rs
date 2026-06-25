@@ -10,31 +10,13 @@ fn clone_preserves_structural_seq_gaps_and_appends_after_max() {
         .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     source
-        .append_event(&SpineLedgerEvent::Open {
-            child: NodeId::root_epoch(1).child(1),
-            boundary: 0,
-            index: 0,
-            summary: "root".to_string(),
-            open_input_tokens: None,
-            open_context_tokens: None,
-            open_context_source: None,
-        })
+        .append_event(&root_child_open_event("root"))
         .expect("append root open");
     source
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 0,
-            context_index: 0,
-            from_user: true,
-            user_anchor: None,
-        })
+        .append_event(&user_msg_event(0, 0))
         .expect("append dropped msg");
     source
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 1,
-            context_index: 1,
-            from_user: true,
-            user_anchor: None,
-        })
+        .append_event(&user_msg_event(1, 1))
         .expect("append kept msg");
 
     clone_for_rollout_with_raw_live(&source_rollout, &target_rollout, &[false, true]);
@@ -49,12 +31,7 @@ fn clone_preserves_structural_seq_gaps_and_appends_after_max() {
     );
 
     let next_seq = target
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 2,
-            context_index: 2,
-            from_user: true,
-            user_anchor: None,
-        })
+        .append_event(&user_msg_event(2, 2))
         .expect("append after gapped clone");
     assert_eq!(next_seq, 4);
 }

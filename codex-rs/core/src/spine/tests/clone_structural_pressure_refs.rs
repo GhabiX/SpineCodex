@@ -10,31 +10,13 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
         .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     source
-        .append_event(&SpineLedgerEvent::Open {
-            child: NodeId::root_epoch(1).child(1),
-            boundary: 0,
-            index: 0,
-            summary: "root".to_string(),
-            open_input_tokens: None,
-            open_context_tokens: None,
-            open_context_source: None,
-        })
+        .append_event(&root_child_open_event("root"))
         .expect("append root open");
     source
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 0,
-            context_index: 0,
-            from_user: true,
-            user_anchor: None,
-        })
+        .append_event(&user_msg_event(0, 0))
         .expect("append dropped msg");
     source
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 1,
-            context_index: 1,
-            from_user: true,
-            user_anchor: None,
-        })
+        .append_event(&user_msg_event(1, 1))
         .expect("append kept msg");
     source
         .append_pressure_event(&pressure_baseline_event(3, 7_000, 7_500))

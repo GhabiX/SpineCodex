@@ -13,6 +13,27 @@ pub(crate) use runtime_store_checkpoint_fixtures::*;
 
 // Shared raw/context fixtures.
 
+pub(crate) fn root_child_open_event(summary: &str) -> SpineLedgerEvent {
+    SpineLedgerEvent::Open {
+        child: NodeId::root_epoch(1).child(1),
+        boundary: 0,
+        index: 0,
+        summary: summary.to_string(),
+        open_input_tokens: None,
+        open_context_tokens: None,
+        open_context_source: None,
+    }
+}
+
+pub(crate) fn user_msg_event(raw_ordinal: u64, context_index: u64) -> SpineLedgerEvent {
+    SpineLedgerEvent::Msg {
+        raw_ordinal,
+        context_index,
+        from_user: true,
+        user_anchor: None,
+    }
+}
+
 pub(crate) fn rollout_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("rollout.jsonl")
 }

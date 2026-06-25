@@ -14,23 +14,10 @@ pub(super) fn assert_clone_boundary_excludes_future_structural_and_pressure_reco
         .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     source
-        .append_event(&SpineLedgerEvent::Open {
-            child: NodeId::root_epoch(1).child(1),
-            boundary: 0,
-            index: 0,
-            summary: "root".to_string(),
-            open_input_tokens: None,
-            open_context_tokens: None,
-            open_context_source: None,
-        })
+        .append_event(&root_child_open_event("root"))
         .expect("append root open");
     source
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 0,
-            context_index: 0,
-            from_user: true,
-            user_anchor: None,
-        })
+        .append_event(&user_msg_event(0, 0))
         .expect("append kept msg");
     source
         .append_pressure_event(&pressure_baseline_event(3, 7_000, 7_500))
@@ -51,12 +38,7 @@ pub(super) fn assert_clone_boundary_excludes_future_structural_and_pressure_reco
     };
 
     source
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 0,
-            context_index: 0,
-            from_user: true,
-            user_anchor: None,
-        })
+        .append_event(&user_msg_event(0, 0))
         .expect("append future structural event");
     source
         .append_pressure_event(&pressure_baseline_event(4, 11_000, 11_500))
