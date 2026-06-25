@@ -1036,11 +1036,18 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         !prepared_commit_impl.contains("fn apply_publication_history_update")
             && !prepared_commit_impl.contains("fn validate_against_host_history")
+            && !prepared_commit_impl.contains("fn kind(&self)")
             && !prepared_commit_impl.contains("fn parser_install(&self)")
             && !prepared_commit_impl.contains("fn trim_candidate_inputs(")
             && !prepared_commit_impl.contains("fn mem_for_accounting(&self)")
             && !prepared_commit_impl.contains("fn into_install_parts("),
         "SpinePreparedCommit should construct prepared commits; publication and install access should live on SpinePreparedCommitInstall"
+    );
+    assert!(
+        prepared_commit_impl.contains("fn into_kind_and_install(self)")
+            && prepared_commit_impl.contains("fn into_kind_and_install_for_test(")
+            && !prepared_commit_impl.contains("fn into_install_for_test("),
+        "SpinePreparedCommit should expose commit kind only while consuming the prepared carrier into an install"
     );
     let prepared_commit_install_impl = prepared
         .split("impl SpinePreparedCommitInstall {")

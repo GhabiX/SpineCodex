@@ -123,8 +123,7 @@ impl SpineRuntime {
         else {
             return Ok(None);
         };
-        let kind = prepared.kind().clone();
-        let install = prepared.into_install();
+        let (kind, install) = prepared.into_kind_and_install();
         self.persist_prepared_commit_install_side_effects(&install)?;
         self.install_prepared_commit_install(install);
         Ok(Some(kind))
@@ -314,8 +313,7 @@ impl SpineRuntime {
         let Some(prepared) = prepared else {
             return Ok(None);
         };
-        let kind = prepared.kind().clone();
-        let install = prepared.into_install();
+        let (kind, install) = prepared.into_kind_and_install();
         self.persist_prepared_commit_install_side_effects(&install)?;
         self.install_prepared_commit_install(install);
         Ok(Some(kind))

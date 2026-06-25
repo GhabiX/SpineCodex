@@ -57,7 +57,8 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
         )
         .expect("prepare close commit")
         .expect("prepared close commit");
-    assert!(matches!(prepared.kind(), SpineCommitKind::Close { .. }));
+    let (kind, install) = prepared.into_kind_and_install_for_test();
+    assert!(matches!(kind, SpineCommitKind::Close { .. }));
     let output_item = raw[output_raw as usize]
         .as_ref()
         .expect("output item")
@@ -82,7 +83,6 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
             )
         },
     );
-    let install = prepared.into_install_for_test();
     let history_update = install
         .apply_publication_history_update(
             "staged-close",
@@ -209,7 +209,7 @@ fn close_publication_fixed_prefix_converts_mutable_toolcall_start_to_full_host()
             )
         },
     );
-    let install = prepared.into_install_for_test();
+    let (_kind, install) = prepared.into_kind_and_install_for_test();
     let history_update = install
         .apply_publication_history_update(
             "fixed-prefix-close",

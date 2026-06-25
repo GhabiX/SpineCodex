@@ -141,17 +141,20 @@ impl SpinePreparedCommit {
         }
     }
 
+    pub(super) fn into_kind_and_install(self) -> (SpineCommitKind, SpinePreparedCommitInstall) {
+        let kind = self.kind.clone();
+        (kind, SpinePreparedCommitInstall { prepared: self })
+    }
+
     pub(super) fn into_install(self) -> SpinePreparedCommitInstall {
-        SpinePreparedCommitInstall { prepared: self }
+        self.into_kind_and_install().1
     }
 
     #[cfg(test)]
-    pub(crate) fn into_install_for_test(self) -> SpinePreparedCommitInstall {
-        self.into_install()
-    }
-
-    pub(crate) fn kind(&self) -> &SpineCommitKind {
-        &self.kind
+    pub(crate) fn into_kind_and_install_for_test(
+        self,
+    ) -> (SpineCommitKind, SpinePreparedCommitInstall) {
+        self.into_kind_and_install()
     }
 }
 
@@ -322,6 +325,10 @@ impl<T> SpineCommitPublication<T> {
 
     pub(crate) fn take_pre_apply_history_update(&mut self) -> Option<T> {
         self.pre_apply_history_update.take()
+    }
+
+    pub(crate) fn install(&self) -> Option<&SpinePreparedCommitInstall> {
+        self.install.as_ref()
     }
 
     pub(super) fn into_install(self) -> Option<SpinePreparedCommitInstall> {

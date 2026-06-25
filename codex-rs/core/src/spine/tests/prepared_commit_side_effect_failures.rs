@@ -83,7 +83,7 @@ fn prepared_commit_side_effect_failure_leaves_parse_stack_unadvanced() {
     std::fs::rename(&trim_path, &parked_trim_path).expect("park trim ledger");
     std::fs::create_dir_all(&trim_path).expect("block trim append with directory");
 
-    let install = prepared.into_install_for_test();
+    let (_kind, install) = prepared.into_kind_and_install_for_test();
     let err = runtime
         .persist_prepared_commit_install_side_effects_for_test(&install)
         .expect_err("trim append failure should fail before install");
