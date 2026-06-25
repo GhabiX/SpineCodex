@@ -1420,6 +1420,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     assert!(
         state_types.contains("fn variable_context(")
             && state_types.contains("fn publication_history(")
+            && state_types.contains("fn variable_context_len(")
             && state_types.contains("fn publication_variable_history_len(")
             && !state_types.contains("fn materialized("),
         "root compact host install should expose variable-context publication accessors, not parser materialization internals"
