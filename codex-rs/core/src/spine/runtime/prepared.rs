@@ -221,7 +221,7 @@ impl SpinePreparedCommitInstall {
             &mut host_index_for_mutable_index,
             &mut host_index_for_mutable_boundary,
         )?;
-        Ok(update.map(|update| update.into_history_update(call_id, build_update)))
+        Ok(update.map(|update| update.into_host_history_update(call_id, build_update)))
     }
 
     pub(super) fn apply_full_variable_context_publication_update<T>(

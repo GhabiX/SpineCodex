@@ -900,6 +900,11 @@ fn parser_publication_update_constructor_is_parser_private() {
             && !publication_update_impl.contains("pub(in crate::spine) fn new("),
         "ParserPublicationUpdate construction must stay inside parser.rs"
     );
+    assert!(
+        publication_update_impl.contains("fn into_host_history_update<T>(")
+            && !publication_update_impl.contains("fn into_history_update<T>("),
+        "ParserPublicationUpdate should name the host-history conversion boundary explicitly"
+    );
 }
 
 #[test]

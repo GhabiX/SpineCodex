@@ -161,7 +161,7 @@ impl ParserPublicationUpdate {
         }
     }
 
-    pub(super) fn into_history_update<T>(
+    pub(super) fn into_host_history_update<T>(
         self,
         call_id: &str,
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
@@ -311,7 +311,7 @@ fn full_variable_context_host_history_update_from_parse_stack<T>(
         variable_context,
         history_items,
     ))
-    .map(|update| update.map(|update| update.into_history_update(call_id, build_update)))
+    .map(|update| update.map(|update| update.into_host_history_update(call_id, build_update)))
 }
 
 impl ParserRootCompactPreparedTxn {
