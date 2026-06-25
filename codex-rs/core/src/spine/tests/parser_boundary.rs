@@ -767,6 +767,21 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
             && parser.contains("Ok(full_variable_context_publication_update("),
         "full h(PS) publication update construction should be centralized behind one parser-private helper"
     );
+    let full_variable_context_publication_update = parser
+        .split("fn full_variable_context_publication_update(")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("fn full_variable_context_host_history_update_from_parse_stack")
+                .next()
+        })
+        .expect("full variable context publication helper");
+    assert!(
+        full_variable_context_publication_update.contains("variable_context: Vec<ResponseItem>")
+            && !full_variable_context_publication_update
+                .contains("materialized: Vec<ResponseItem>")
+            && !full_variable_context_publication_update.contains("if materialized.as_slice()"),
+        "parser full h(PS) publication helper should name its payload variable_context"
+    );
 }
 
 #[test]

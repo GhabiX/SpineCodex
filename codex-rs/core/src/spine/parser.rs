@@ -208,17 +208,17 @@ impl ParserPublicationPlan {
 
 fn full_variable_context_publication_update(
     operation: &'static str,
-    materialized: Vec<ResponseItem>,
+    variable_context: Vec<ResponseItem>,
     history_items: &[ResponseItem],
 ) -> Option<ParserPublicationUpdate> {
-    if materialized.as_slice() == history_items {
+    if variable_context.as_slice() == history_items {
         return None;
     }
     Some(ParserPublicationUpdate::new(
         operation,
         0,
         history_items.to_vec(),
-        materialized,
+        variable_context,
     ))
 }
 
@@ -231,11 +231,11 @@ fn full_variable_context_host_history_update_from_parse_stack<T>(
     history_items: &[ResponseItem],
     build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
 ) -> Result<Option<T>, SpineError> {
-    let materialized =
+    let variable_context =
         materialize_parse_stack_variable_context(parse_stack, raw_items, trim_projection)?;
     Ok(full_variable_context_publication_update(
         operation,
-        materialized,
+        variable_context,
         history_items,
     ))
     .map(|update| update.map(|update| update.into_history_update(call_id, build_update)))
@@ -680,7 +680,7 @@ impl ParserState {
         }
 
         // Probe first because source_context_range records the pre-compact source
-        // span, while next_open_index is the post-compact h(PS) materialized len.
+        // span, while next_open_index is the post-compact h(PS) variable context len.
         let probe_batch = crate::spine::lexer::plan_root_compact().lex_compact_batch(
             memory.clone(),
             0,
