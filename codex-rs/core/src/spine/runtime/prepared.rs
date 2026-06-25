@@ -70,10 +70,10 @@ impl SpinePreparedRootCompact {
         &self,
         published_history_len: usize,
     ) -> Result<(), super::SpineError> {
-        let current_open_index = self.result.materialized.len();
-        if current_open_index != published_history_len {
+        let publication_history_len = self.publication_history().len();
+        if publication_history_len != published_history_len {
             return Err(super::SpineError::InvalidStore(format!(
-                "spine root compact open index {current_open_index} does not match materialized history length {published_history_len}"
+                "spine root compact publication history length {publication_history_len} does not match published history length {published_history_len}"
             )));
         }
         Ok(())

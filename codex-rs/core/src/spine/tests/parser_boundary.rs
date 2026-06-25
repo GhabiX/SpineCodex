@@ -959,9 +959,11 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         !prepared.contains("fn result(&self)")
             && prepared.contains("fn publication_history(&self) -> &[ResponseItem]")
+            && prepared.contains("let publication_history_len = self.publication_history().len();")
+            && !prepared.contains("does not match materialized history length")
             && prepared.contains("#[cfg(test)]\n    pub(crate) fn clone_publication_result_for_test(&self) -> SpineRootCompactResult")
             && !prepared.contains("fn publication_result(&self) -> &SpineRootCompactResult"),
-        "runtime root compact prepared carrier should expose publication intent and keep cloned result access test-only"
+        "runtime root compact prepared carrier should expose publication intent and avoid parser materialization wording"
     );
     assert!(
         prepared.contains("fn into_publication_result_and_parser_install(")
