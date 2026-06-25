@@ -137,10 +137,6 @@ impl PreparedSpineReplayRuntime {
         &self.live_root_compacts
     }
 
-    pub(crate) fn variable_context(&self) -> Option<&[ResponseItem]> {
-        self.variable_context.as_deref()
-    }
-
     pub(crate) fn into_variable_context(self) -> Option<Vec<ResponseItem>> {
         self.variable_context
     }
