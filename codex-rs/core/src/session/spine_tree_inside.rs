@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug)]
 pub(crate) struct SpineTreeInsideView {
     pub(crate) rendered_tree: String,
-    pub(crate) snapshot: SpineTreeUpdateEvent,
 }
 
 #[derive(Clone, Debug)]
@@ -42,8 +41,7 @@ pub(crate) fn build_spine_tree_inside_view_from_projection(
     mut rendered_tree: String,
     token_info: Option<&TokenUsageInfo>,
 ) -> SpineTreeInsideView {
-    let (mut snapshot, open_node_projections) = projection;
-    annotate_open_node_contexts(&mut snapshot, token_info, &open_node_projections);
+    let (_snapshot, _open_node_projections) = projection;
 
     let context_window = context_window_inside(token_info);
     if let Some(line) = format_context_window_pressure(context_window.as_ref()) {
@@ -51,10 +49,7 @@ pub(crate) fn build_spine_tree_inside_view_from_projection(
         rendered_tree.push_str(&line);
     }
 
-    SpineTreeInsideView {
-        rendered_tree,
-        snapshot,
-    }
+    SpineTreeInsideView { rendered_tree }
 }
 
 pub(crate) fn build_spine_tree_context_annotations(
