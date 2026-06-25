@@ -652,8 +652,13 @@ impl Session {
             let context_index = Self::spine_mutable_context_index_for_full_history_index(
                 history_items,
                 append.context_index,
-            );
+            )?;
             if is_non_toolcall_msg(item) {
+                if !tool_items.is_empty() {
+                    let mut guard = spine_slot.lock().await;
+                    hooks::observe_toolcall_context_items(&mut guard, &tool_items, &raw_items)?;
+                    tool_items.clear();
+                }
                 let outcome = self
                     .on_non_toolcall_msg(MessageEvidence {
                         rollout_path: &rollout_path,
@@ -1055,10 +1060,10 @@ impl Session {
             }
         };
         let history = self.clone_history().await;
-        let output_context_start = Self::spine_mutable_context_index_for_full_history_index(
+        let output_context_start = Self::spine_mutable_context_index_for_full_history_boundary(
             history.raw_items(),
             history.raw_items().len(),
-        );
+        )?;
         self.record_conversation_items_without_spine_observe(turn_context, output_items)
             .await
             .map_err(|err| {
@@ -1150,10 +1155,10 @@ impl Session {
         } else {
             (raw_len, history_items_for_output_anchor.len())
         };
-        let tool_resp_context_index = Self::spine_mutable_context_index_for_full_history_index(
+        let tool_resp_context_index = Self::spine_mutable_context_index_for_full_history_boundary(
             history_items_for_output_anchor,
             tool_resp_full_history_index,
-        );
+        )?;
         Ok(Some(SpineCompletedToolCallOutputAnchor {
             raw_ordinals: vec![Some(tool_resp_raw_ordinal)],
             context_start: tool_resp_context_index,
@@ -1456,7 +1461,7 @@ impl Session {
 
     pub(crate) async fn replace_compacted_history_with_spine_hooks(
         &self,
-        turn_context: &TurnContext,
+        _turn_context: &TurnContext,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         mut compacted_item: CompactedItem,
@@ -1476,7 +1481,6 @@ impl Session {
             })
             .await?;
         let publish_reference_context_item = reference_context_item.clone();
-        let after_installed_reference_context_item = reference_context_item.clone();
         let spine_tree_snapshot = effects
             .apply_root_compact_history_publication(
                 self.spine.as_ref(),
@@ -1521,18 +1525,7 @@ impl Session {
                         reason,
                     }
                 },
-                || async move {
-                    if after_installed_reference_context_item.is_some() {
-                        let environment_context =
-                            Self::cwd_only_environment_context_item(turn_context);
-                        self.record_conversation_items(
-                            turn_context,
-                            std::slice::from_ref(&environment_context),
-                        )
-                        .await?;
-                    }
-                    Ok(())
-                },
+                || async move { Ok(()) },
             )
             .await?;
         self.services.model_client.advance_window_generation();
@@ -1647,338 +1640,6 @@ fn build_annotated_tree_snapshot(
         token_info,
         &open_node_projections,
     ))
-}
-
-fn render_spine_tree_for_model_with_plan(
-    mut rendered_tree: String,
-    planned_nodes: &[SpinePlannedNodeSnapshot],
-) -> String {
-    if planned_nodes.is_empty() {
-        return rendered_tree;
-    }
-    rendered_tree.push_str("\n\nPlanned future nodes:");
-    let planned_by_parent = planned_nodes_by_parent(planned_nodes);
-    append_planned_nodes_for_model(&mut rendered_tree, &planned_by_parent, None, 0);
-    rendered_tree
-}
-
-fn append_planned_nodes_for_model(
-    rendered_tree: &mut String,
-    planned_by_parent: &BTreeMap<Option<String>, Vec<&SpinePlannedNodeSnapshot>>,
-    parent_id: Option<&str>,
-    depth: usize,
-) {
-    let key = parent_id.map(str::to_string);
-    let Some(nodes) = planned_by_parent.get(&key) else {
-        return;
-    };
-    for node in nodes {
-        rendered_tree.push('\n');
-        rendered_tree.push_str(&"  ".repeat(depth));
-        rendered_tree.push_str("[planned] ");
-        rendered_tree.push_str(&node.node_id);
-        rendered_tree.push(' ');
-        rendered_tree.push_str(node.summary.trim());
-        append_planned_nodes_for_model(
-            rendered_tree,
-            planned_by_parent,
-            Some(&node.node_id),
-            depth + 1,
-        );
-    }
-}
-
-fn planned_nodes_by_parent(
-    planned_nodes: &[SpinePlannedNodeSnapshot],
-) -> BTreeMap<Option<String>, Vec<&SpinePlannedNodeSnapshot>> {
-    let planned_ids = planned_nodes
-        .iter()
-        .map(|node| node.node_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut out: BTreeMap<Option<String>, Vec<&SpinePlannedNodeSnapshot>> = BTreeMap::new();
-    for node in planned_nodes {
-        let parent = node
-            .parent_id
-            .as_deref()
-            .filter(|parent_id| planned_ids.contains(parent_id))
-            .map(str::to_string);
-        out.entry(parent).or_default().push(node);
-    }
-    out
-}
-
-fn retain_still_valid_planned_nodes(
-    snapshot: &SpineTreeUpdateEvent,
-    planned_nodes: &[SpinePlannedNodeSnapshot],
-) -> Vec<SpinePlannedNodeSnapshot> {
-    let committed_ids = snapshot
-        .nodes
-        .iter()
-        .map(|node| node.node_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let committed_nodes = snapshot
-        .nodes
-        .iter()
-        .map(|node| (node.node_id.as_str(), node))
-        .collect::<BTreeMap<_, _>>();
-    let active = match parse_spine_node_path(&snapshot.active_node_id) {
-        Ok(active) => active,
-        Err(_) => return Vec::new(),
-    };
-    let active_parent = parent_path(&active);
-    let active_index = match active.last().copied() {
-        Some(active_index) => active_index,
-        None => return Vec::new(),
-    };
-    let max_committed_child_by_parent = match max_committed_child_by_parent(&snapshot.nodes) {
-        Ok(max_committed_child_by_parent) => max_committed_child_by_parent,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut retained = planned_nodes
-        .iter()
-        .filter(|node| !committed_ids.contains(node.node_id.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    loop {
-        let before_len = retained.len();
-        let planned_ids = retained
-            .iter()
-            .map(|node| node.node_id.clone())
-            .collect::<BTreeSet<_>>();
-        let mut parsed_planned = BTreeMap::new();
-        let mut seen = BTreeSet::new();
-
-        retained.retain(|node| {
-            if node.summary.trim().is_empty() || !seen.insert(node.node_id.clone()) {
-                return false;
-            }
-            let Ok(path) = parse_spine_node_path(&node.node_id) else {
-                return false;
-            };
-            let parent = parent_path(&path);
-            let parent_id = parent.as_ref().map(|parent| path_to_string(parent));
-            if node.parent_id != parent_id {
-                return false;
-            }
-            if let Some(parent_id) = parent_id.as_deref()
-                && !committed_ids.contains(parent_id)
-                && !planned_ids.contains(parent_id)
-            {
-                return false;
-            }
-            parsed_planned.insert(node.node_id.clone(), path);
-            true
-        });
-
-        retained.retain(|node| {
-            let Some(path) = parsed_planned.get(node.node_id.as_str()) else {
-                return false;
-            };
-            let parent = parent_path(path);
-            if planned_parent_contains(&parsed_planned, parent.as_deref()) {
-                return true;
-            }
-            let Some(index) = path.last().copied() else {
-                return false;
-            };
-
-            if parent.as_deref() == Some(active.as_slice()) {
-                let max_existing = max_committed_child_by_parent
-                    .get(active.as_slice())
-                    .copied()
-                    .unwrap_or(0);
-                return index > max_existing;
-            }
-
-            if parent.as_deref() == active_parent.as_deref() && index > active_index {
-                return true;
-            }
-
-            let parent_id = parent.as_ref().map(|parent| path_to_string(parent));
-            if let Some(parent_id) = parent_id.as_deref()
-                && committed_nodes.contains_key(parent_id)
-            {
-                return false;
-            }
-
-            false
-        });
-
-        if retained.len() == before_len {
-            break;
-        }
-    }
-
-    debug_assert!(validate_planned_nodes(snapshot, retained.clone()).is_ok());
-    retained
-}
-
-fn validate_planned_nodes(
-    snapshot: &SpineTreeUpdateEvent,
-    planned_nodes: Vec<SpinePlannedNodeSnapshot>,
-) -> Result<Vec<SpinePlannedNodeSnapshot>, SpineError> {
-    let committed_ids = snapshot
-        .nodes
-        .iter()
-        .map(|node| node.node_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let committed_nodes = snapshot
-        .nodes
-        .iter()
-        .map(|node| (node.node_id.as_str(), node))
-        .collect::<BTreeMap<_, _>>();
-    let active = parse_spine_node_path(&snapshot.active_node_id)?;
-    let active_parent = parent_path(&active);
-    let active_index = *active
-        .last()
-        .ok_or_else(|| SpineError::InvalidEvent("active Spine node id is empty".to_string()))?;
-
-    let max_committed_child_by_parent = max_committed_child_by_parent(&snapshot.nodes)?;
-    let mut planned_ids = BTreeSet::new();
-    let mut parsed_planned = BTreeMap::new();
-    for node in &planned_nodes {
-        if node.summary.trim().is_empty() {
-            return Err(SpineError::InvalidEvent(format!(
-                "planned Spine node {} requires a non-empty summary",
-                node.node_id
-            )));
-        }
-        let path = parse_spine_node_path(&node.node_id)?;
-        if committed_ids.contains(node.node_id.as_str()) {
-            return Err(SpineError::InvalidEvent(format!(
-                "planned Spine node {} already exists in the committed tree",
-                node.node_id
-            )));
-        }
-        if !planned_ids.insert(node.node_id.as_str()) {
-            return Err(SpineError::InvalidEvent(format!(
-                "duplicate planned Spine node id {}",
-                node.node_id
-            )));
-        }
-        parsed_planned.insert(node.node_id.as_str(), path);
-    }
-
-    for node in &planned_nodes {
-        let path = parsed_planned
-            .get(node.node_id.as_str())
-            .expect("planned path was parsed");
-        let parent = parent_path(path);
-        let parent_id = parent.as_ref().map(|parent| path_to_string(parent));
-        if node.parent_id != parent_id {
-            return Err(SpineError::InvalidEvent(format!(
-                "planned Spine node {} parent_id must be {:?}",
-                node.node_id, parent_id
-            )));
-        }
-        let index = *path.last().ok_or_else(|| {
-            SpineError::InvalidEvent("planned Spine node id is empty".to_string())
-        })?;
-        if planned_parent_contains(&parsed_planned, parent.as_deref()) {
-            continue;
-        }
-
-        if parent.as_deref() == Some(active.as_slice()) {
-            let max_existing = max_committed_child_by_parent
-                .get(active.as_slice())
-                .copied()
-                .unwrap_or(0);
-            if index > max_existing {
-                continue;
-            }
-        }
-
-        if parent.as_deref() == active_parent.as_deref() && index > active_index {
-            continue;
-        }
-
-        let parent_key = parent_id.as_deref();
-        if let Some(parent_key) = parent_key
-            && committed_nodes.contains_key(parent_key)
-        {
-            return Err(SpineError::InvalidEvent(format!(
-                "planned Spine node {} is not on the right side of the current active frontier",
-                node.node_id
-            )));
-        }
-
-        return Err(SpineError::InvalidEvent(format!(
-            "planned Spine node {} must be a future child of the active node, a future sibling of the active node, or a descendant of another planned node",
-            node.node_id
-        )));
-    }
-
-    Ok(planned_nodes)
-}
-
-fn planned_parent_contains<K: Ord>(
-    parsed_planned: &BTreeMap<K, Vec<u32>>,
-    parent: Option<&[u32]>,
-) -> bool {
-    let Some(parent) = parent else {
-        return false;
-    };
-    parsed_planned
-        .values()
-        .any(|path| path.as_slice() == parent)
-}
-
-fn max_committed_child_by_parent(
-    nodes: &[SpineTreeNodeSnapshot],
-) -> Result<BTreeMap<Vec<u32>, u32>, SpineError> {
-    let mut out: BTreeMap<Vec<u32>, u32> = BTreeMap::new();
-    for node in nodes {
-        let path = parse_spine_node_path(&node.node_id)?;
-        let Some(parent) = parent_path(&path) else {
-            continue;
-        };
-        let Some(index) = path.last().copied() else {
-            continue;
-        };
-        out.entry(parent)
-            .and_modify(|existing| *existing = (*existing).max(index))
-            .or_insert(index);
-    }
-    Ok(out)
-}
-
-fn parse_spine_node_path(node_id: &str) -> Result<Vec<u32>, SpineError> {
-    let mut path = Vec::new();
-    for part in node_id.split('.') {
-        if part.is_empty() {
-            return Err(SpineError::InvalidEvent(format!(
-                "malformed Spine node id {node_id:?}"
-            )));
-        }
-        let index = part.parse::<u32>().map_err(|_| {
-            SpineError::InvalidEvent(format!("malformed Spine node id {node_id:?}"))
-        })?;
-        if index == 0 {
-            return Err(SpineError::InvalidEvent(format!(
-                "malformed Spine node id {node_id:?}: indexes are 1-based"
-            )));
-        }
-        path.push(index);
-    }
-    if path.is_empty() {
-        return Err(SpineError::InvalidEvent(
-            "malformed empty Spine node id".to_string(),
-        ));
-    }
-    Ok(path)
-}
-
-fn parent_path(path: &[u32]) -> Option<Vec<u32>> {
-    (path.len() > 1).then(|| path[..path.len() - 1].to_vec())
-}
-
-fn path_to_string(path: &[u32]) -> String {
-    path.iter()
-        .map(|part| part.to_string())
-        .collect::<Vec<_>>()
-        .join(".")
 }
 
 fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
