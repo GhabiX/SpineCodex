@@ -78,8 +78,7 @@ pub(super) struct ParserCommitInstall {
 
 #[derive(Debug)]
 pub(super) struct ParserCommitPreparedInstall {
-    pending_install: ParserCommitPendingInstall,
-    final_install: ParserCommitInstall,
+    install_pair: ParserPreparedInstallPair<ParserCommitPendingInstall, ParserCommitInstall>,
 }
 
 #[derive(Debug)]
@@ -94,13 +93,19 @@ pub(super) struct ParserRootCompactInstall {
 
 #[derive(Debug)]
 pub(super) struct ParserRootCompactPreparedInstall {
-    pending_install: ParserRootCompactPendingInstall,
-    final_install: ParserRootCompactInstall,
+    install_pair:
+        ParserPreparedInstallPair<ParserRootCompactPendingInstall, ParserRootCompactInstall>,
 }
 
 #[derive(Debug)]
 pub(super) struct ParserRootCompactPendingInstall {
     pending_state: ParserPreparedState,
+}
+
+#[derive(Debug)]
+struct ParserPreparedInstallPair<PendingInstall, FinalInstall> {
+    pending_install: PendingInstall,
+    final_install: FinalInstall,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -368,17 +373,16 @@ impl ParserCommitPreparedInstall {
         final_install: ParserCommitInstall,
     ) -> Self {
         Self {
-            pending_install,
-            final_install,
+            install_pair: ParserPreparedInstallPair::new(pending_install, final_install),
         }
     }
 
     pub(super) fn pending_install(&self) -> &ParserCommitPendingInstall {
-        &self.pending_install
+        self.install_pair.pending_install()
     }
 
     pub(super) fn into_final_install(self) -> ParserCommitInstall {
-        self.final_install
+        self.install_pair.into_final_install()
     }
 }
 
@@ -412,17 +416,16 @@ impl ParserRootCompactPreparedInstall {
         final_install: ParserRootCompactInstall,
     ) -> Self {
         Self {
-            pending_install,
-            final_install,
+            install_pair: ParserPreparedInstallPair::new(pending_install, final_install),
         }
     }
 
     fn final_state(&self) -> &ParserPreparedState {
-        &self.final_install.final_state
+        &self.install_pair.final_install().final_state
     }
 
     fn into_parts(self) -> (ParserRootCompactPendingInstall, ParserRootCompactInstall) {
-        (self.pending_install, self.final_install)
+        self.install_pair.into_parts()
     }
 }
 
@@ -433,6 +436,31 @@ impl ParserRootCompactPendingInstall {
 
     fn into_pending_state(self) -> ParserPreparedState {
         self.pending_state
+    }
+}
+
+impl<PendingInstall, FinalInstall> ParserPreparedInstallPair<PendingInstall, FinalInstall> {
+    fn new(pending_install: PendingInstall, final_install: FinalInstall) -> Self {
+        Self {
+            pending_install,
+            final_install,
+        }
+    }
+
+    fn pending_install(&self) -> &PendingInstall {
+        &self.pending_install
+    }
+
+    fn final_install(&self) -> &FinalInstall {
+        &self.final_install
+    }
+
+    fn into_final_install(self) -> FinalInstall {
+        self.final_install
+    }
+
+    fn into_parts(self) -> (PendingInstall, FinalInstall) {
+        (self.pending_install, self.final_install)
     }
 }
 

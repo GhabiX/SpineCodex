@@ -656,6 +656,13 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         "parser should expose parser-owned close/next prepared, pending, and final install handles"
     );
     assert!(
+        parser.contains("struct ParserPreparedInstallPair<PendingInstall, FinalInstall>")
+            && parser.contains(
+                "install_pair: ParserPreparedInstallPair<ParserCommitPendingInstall, ParserCommitInstall>"
+            ),
+        "parser close/next prepared install should use the shared pending/final install pair carrier"
+    );
+    assert!(
         commit.contains(".pending_install()")
             && commit.contains(".into_final_install()")
             && !commit.contains("let (pending_parser_install, parser_install)"),
@@ -1352,6 +1359,9 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     assert!(
         parser.contains("struct ParserRootCompactPreparedInstall")
             && parser.contains("prepared_install: ParserRootCompactPreparedInstall")
+            && parser.contains(
+                "ParserPreparedInstallPair<ParserRootCompactPendingInstall, ParserRootCompactInstall>"
+            )
             && !parser.contains("pending_install: ParserRootCompactPendingInstall,\n    parser_install: ParserRootCompactInstall"),
         "parser root compact prepared txn should hold a named prepared install carrier, not parallel pending/final fields"
     );
