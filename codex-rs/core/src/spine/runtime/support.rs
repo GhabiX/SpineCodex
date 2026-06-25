@@ -490,12 +490,8 @@ pub(super) fn user_anchor_refs_in_memory(memory: &str) -> Result<BTreeSet<u64>, 
     let mut refs = BTreeSet::new();
     let mut offset = 0usize;
     while let Some(relative_start) = memory[offset..].find("[U") {
-        let start = offset
-            .checked_add(relative_start)
-            .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))?;
-        let digits_start = start
-            .checked_add(2)
-            .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))?;
+        let start = checked_user_anchor_scan_add(offset, relative_start)?;
+        let digits_start = checked_user_anchor_scan_add(start, 2)?;
         let mut digits_end = digits_start;
         while digits_end < bytes.len() && bytes[digits_end].is_ascii_digit() {
             digits_end += 1;
@@ -509,16 +505,17 @@ pub(super) fn user_anchor_refs_in_memory(memory: &str) -> Result<BTreeSet<u64>, 
                     )
                 })?;
             refs.insert(anchor);
-            offset = digits_end
-                .checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))?;
+            offset = checked_user_anchor_scan_add(digits_end, 1)?;
         } else {
-            offset = start
-                .checked_add(2)
-                .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))?;
+            offset = checked_user_anchor_scan_add(start, 2)?;
         }
     }
     Ok(refs)
+}
+
+fn checked_user_anchor_scan_add(lhs: usize, rhs: usize) -> Result<usize, SpineError> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))
 }
 
 pub(super) fn validate_source_plan_context_index(
