@@ -43,7 +43,6 @@ use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineError;
 use crate::spine::SpineSessionState;
-use crate::spine::hooks;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -3493,7 +3492,7 @@ impl Session {
         let Some(token_usage) = token_usage else {
             if let Some(spine_slot) = self.spine.as_ref() {
                 let mut guard = spine_slot.lock().await;
-                hooks::observe_provider_token_usage(&mut guard, None);
+                guard.observe_provider_token_usage(None);
             }
             return;
         };
@@ -3506,7 +3505,7 @@ impl Session {
             if let Some(spine_slot) = self.spine.as_ref() {
                 let input_tokens = token_info.last_token_usage.input_tokens;
                 let mut guard = spine_slot.lock().await;
-                hooks::observe_provider_token_usage(&mut guard, Some(input_tokens));
+                guard.observe_provider_token_usage(Some(input_tokens));
             }
             for contributor in self.services.extensions.token_usage_contributors() {
                 contributor.on_token_usage(

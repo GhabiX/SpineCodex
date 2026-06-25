@@ -34,28 +34,14 @@ pub(crate) struct ToolcallHostAttempt {
     inner: super::runtime::SpineToolcallHostAttempt,
 }
 
-pub(crate) struct SingleToolcallOutputRecordingPlan {
-    inner: super::runtime::SpineSingleToolcallOutputRecordingPlan,
-}
+pub(crate) type ToolcallOutputRecordingRequest<'a> =
+    super::runtime::SpineToolcallOutputRecordingRequest<'a>;
 
-pub(crate) struct GroupedToolcallOutputRecordingPlan {
-    inner: super::runtime::SpineGroupedToolcallOutputRecordingPlan,
-}
-
-pub(crate) enum ToolcallOutputRecordingRequest<'a> {
-    Single {
-        call_id: &'a str,
-        raw_items: &'a [Option<ResponseItem>],
-    },
-    Grouped {
-        output_items: &'a [ResponseItem],
-    },
-}
-
-pub(crate) enum ToolcallOutputRecordingPlan {
-    Single(Option<SingleToolcallOutputRecordingPlan>),
-    Grouped(GroupedToolcallOutputRecordingPlan),
-}
+pub(crate) type SingleToolcallOutputRecordingPlan =
+    super::runtime::SpineSingleToolcallOutputRecordingPlan;
+pub(crate) type GroupedToolcallOutputRecordingPlan =
+    super::runtime::SpineGroupedToolcallOutputRecordingPlan;
+pub(crate) type ToolcallOutputRecordingPlan = super::runtime::SpineToolcallOutputRecordingPlan;
 
 pub(crate) struct ReplayRuntime {
     inner: super::runtime::PreparedSpineReplayRuntime,
@@ -599,48 +585,6 @@ impl ToolcallHostAttempt {
     }
 }
 
-impl SingleToolcallOutputRecordingPlan {
-    pub(crate) fn raw_len(&self) -> u64 {
-        self.inner.raw_len()
-    }
-
-    pub(crate) fn prerecord_output_before_reduce(&self) -> bool {
-        self.inner.prerecord_output_before_reduce()
-    }
-}
-
-impl GroupedToolcallOutputRecordingPlan {
-    pub(crate) fn into_raw_ordinals(self) -> Vec<Option<u64>> {
-        self.inner.into_raw_ordinals()
-    }
-}
-
-impl<'a> ToolcallOutputRecordingRequest<'a> {
-    fn into_runtime(self) -> super::runtime::SpineToolcallOutputRecordingRequest<'a> {
-        match self {
-            Self::Single { call_id, raw_items } => {
-                super::runtime::SpineToolcallOutputRecordingRequest::Single { call_id, raw_items }
-            }
-            Self::Grouped { output_items } => {
-                super::runtime::SpineToolcallOutputRecordingRequest::Grouped { output_items }
-            }
-        }
-    }
-}
-
-impl ToolcallOutputRecordingPlan {
-    fn from_runtime(inner: super::runtime::SpineToolcallOutputRecordingPlan) -> Self {
-        match inner {
-            super::runtime::SpineToolcallOutputRecordingPlan::Single(plan) => {
-                Self::Single(plan.map(|inner| SingleToolcallOutputRecordingPlan { inner }))
-            }
-            super::runtime::SpineToolcallOutputRecordingPlan::Grouped(inner) => {
-                Self::Grouped(GroupedToolcallOutputRecordingPlan { inner })
-            }
-        }
-    }
-}
-
 impl ReplayRuntime {
     pub(crate) fn has_runtime(&self) -> bool {
         self.inner.has_runtime()
@@ -754,9 +698,7 @@ pub(crate) fn prepare_toolcall_output_recording(
     state: &SpineSessionState,
     request: ToolcallOutputRecordingRequest<'_>,
 ) -> Result<ToolcallOutputRecordingPlan, SpineError> {
-    state
-        .prepare_toolcall_output_recording(request.into_runtime())
-        .map(ToolcallOutputRecordingPlan::from_runtime)
+    state.prepare_toolcall_output_recording(request)
 }
 
 pub(crate) fn prepare_jit_replay_from_rollout_items(
