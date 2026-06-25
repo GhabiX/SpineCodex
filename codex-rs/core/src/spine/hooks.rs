@@ -88,20 +88,6 @@ pub(crate) struct ObservedContextItem<'a> {
     pub(crate) item: &'a ResponseItem,
 }
 
-pub(crate) fn ensure_runtime(
-    state: &mut SpineSessionState,
-    rollout_path: &Path,
-) -> Result<(), SpineError> {
-    state.ensure_runtime(rollout_path)
-}
-
-pub(crate) fn observe_raw_items(
-    state: &mut SpineSessionState,
-    count: usize,
-) -> Result<(), SpineError> {
-    state.observe_raw_items(count)
-}
-
 pub(crate) fn take_initial_tree_snapshot(
     state: &mut SpineSessionState,
 ) -> Result<Option<SpineTreeUpdateEvent>, SpineError> {
@@ -147,10 +133,6 @@ pub(crate) fn project_trim_projection_from_history(
     state.project_trim_projection_from_history(history_items)
 }
 
-pub(crate) fn is_ready(state: &SpineSessionState) -> bool {
-    state.is_ready()
-}
-
 pub(crate) fn ensure_observable_context(state: &SpineSessionState) -> Result<(), SpineError> {
     state.ensure_observable_context()
 }
@@ -186,18 +168,6 @@ pub(crate) fn prepare_test_root_compact_apply_with_checkpoint(
         raw_items,
         close_provider_input_tokens,
     )
-}
-
-pub(crate) fn invalidate_runtime(state: &mut SpineSessionState, reason: String) {
-    state.invalidate(reason);
-}
-
-pub(crate) fn release_runtime_for_shutdown(state: &mut SpineSessionState) {
-    state.release_runtime_for_shutdown();
-}
-
-pub(crate) fn release_runtime_for_replay(state: &mut SpineSessionState) {
-    state.release_runtime_for_replay();
 }
 
 pub(crate) fn install_cloned_sidecar_for_fork(

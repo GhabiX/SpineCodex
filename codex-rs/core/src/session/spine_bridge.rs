@@ -315,7 +315,7 @@ impl Session {
             return false;
         };
         let guard = spine_slot.lock().await;
-        hooks::is_ready(&guard)
+        guard.is_ready()
     }
 
     pub(crate) async fn apply_spine_trim_projection_if_available(&self) -> Result<(), SpineError> {
@@ -359,7 +359,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        hooks::release_runtime_for_shutdown(&mut guard);
+        guard.release_runtime_for_shutdown();
     }
 
     pub(super) async fn release_spine_runtime_for_replay(&self) {
@@ -367,7 +367,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        hooks::release_runtime_for_replay(&mut guard);
+        guard.release_runtime_for_replay();
     }
 
     pub(super) async fn clone_spine_sidecar_for_fork(
@@ -524,7 +524,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        hooks::observe_raw_items(&mut guard, count)
+        guard.observe_raw_items(count)
     }
 
     pub(super) async fn emit_spine_tree_snapshot_cache_only_if_available(&self) {
@@ -570,7 +570,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        hooks::ensure_runtime(&mut guard, &rollout_path)
+        guard.ensure_runtime(&rollout_path)
     }
 
     pub(super) async fn invalidate_spine_runtime(&self, reason: String) {
@@ -578,7 +578,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        hooks::invalidate_runtime(&mut guard, reason);
+        guard.invalidate(reason);
     }
 
     pub(crate) async fn abort_spine_pending_tool(&self, call_id: &str, reason: &str) -> bool {
@@ -787,7 +787,7 @@ impl Session {
             ));
         };
         let mut guard = spine_slot.lock().await;
-        hooks::ensure_runtime(&mut guard, &rollout_path)?;
+        guard.ensure_runtime(&rollout_path)?;
         drop(guard);
         Ok(spine_slot)
     }
