@@ -237,8 +237,7 @@ impl SpineRuntime {
             SpineRootCompactTokenMetadata::default(),
             None,
         )?;
-        let (result, parser_install) = prepared.into_publication_result_and_parser_install();
-        self.parser.install_prepared_root_compact(parser_install);
+        let result = self.install_prepared_root_compact_for_direct_result(prepared);
         Ok(result.materialized)
     }
 
@@ -255,9 +254,7 @@ impl SpineRuntime {
             raw_items,
             token_metadata,
         )?;
-        let (result, parser_install) = prepared.into_publication_result_and_parser_install();
-        self.parser.install_prepared_root_compact(parser_install);
-        Ok(result)
+        Ok(self.install_prepared_root_compact_for_direct_result(prepared))
     }
 
     pub(crate) fn prepare_root_compact_with_checkpoint(
@@ -322,6 +319,15 @@ impl SpineRuntime {
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
         self.parser
             .install_prepared_root_compact(prepared.into_parser_install());
+    }
+
+    fn install_prepared_root_compact_for_direct_result(
+        &mut self,
+        prepared: SpinePreparedRootCompact,
+    ) -> SpineRootCompactResult {
+        let (result, parser_install) = prepared.into_publication_result_and_parser_install();
+        self.parser.install_prepared_root_compact(parser_install);
+        result
     }
 
     fn commit_root_compact_prepared_side_effects(

@@ -1035,8 +1035,9 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         root_compact
             .matches(".into_publication_result_and_parser_install()")
             .count()
-            == 2,
-        "runtime root compact direct install helpers should consume publication result and parser install together"
+            == 1
+            && root_compact.contains("fn install_prepared_root_compact_for_direct_result("),
+        "runtime root compact should centralize publication result/parser install extraction in one named helper"
     );
     let install_prepared_root_compact = root_compact
         .split("pub(crate) fn install_prepared_root_compact(")
