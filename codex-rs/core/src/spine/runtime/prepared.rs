@@ -2,8 +2,7 @@ use codex_protocol::models::ResponseItem;
 
 use super::CompletedToolCall;
 use super::SpineRootCompactResult;
-use super::support::full_history_index_for_spine_mutable_context_boundary;
-use super::support::full_history_index_for_spine_mutable_context_index;
+use super::support::HostHistoryLens;
 use crate::spine::model::MemRecord;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimProjection;
@@ -63,7 +62,7 @@ impl SpinePreparedRootCompact {
         self.result.variable_context()
     }
 
-    pub(crate) fn publication_history(&self) -> &[ResponseItem] {
+    pub(crate) fn variable_context(&self) -> &[ResponseItem] {
         self.variable_context()
     }
 
@@ -207,14 +206,11 @@ impl SpinePreparedCommitInstall {
                 "spine prepared publication update builder was already consumed".to_string(),
             )
         })?;
-        let host_suffix_start = full_history_index_for_spine_mutable_context_boundary(
-            history_items,
-            plan.suffix_start(),
-        )?;
-        let host_preserve_history_from = full_history_index_for_spine_mutable_context_boundary(
-            history_items,
-            plan.preserve_host_history_from(),
-        )?;
+        let host_history = HostHistoryLens::new(history_items);
+        let host_suffix_start =
+            host_history.full_index_for_mutable_boundary(plan.suffix_start())?;
+        let host_preserve_history_from =
+            host_history.full_index_for_mutable_boundary(plan.preserve_host_history_from())?;
         validate_publication_boundaries_do_not_split_toolcall(
             plan.atomic_mutable_context_segments(),
             host_suffix_start,
@@ -283,25 +279,22 @@ fn validate_publication_boundaries_do_not_split_toolcall(
     if atomic_mutable_context_segments.is_empty() {
         return Ok(());
     }
+    let host_history = HostHistoryLens::new(history_items);
     let mut full_start = usize::MAX;
     let mut full_end = 0usize;
     for segment in atomic_mutable_context_segments {
         match segment.kind {
             ToolCallSegmentKind::Request => {
-                let full_index = full_history_index_for_spine_mutable_context_index(
-                    history_items,
-                    segment.mutable_context_index,
-                )?;
+                let full_index =
+                    host_history.full_index_for_mutable_index(segment.mutable_context_index)?;
                 full_start = full_start.min(full_index);
                 full_end = full_end.max(full_index.checked_add(1).ok_or_else(|| {
                     super::SpineError::InvalidEvent("toolcall full host range overflow".to_string())
                 })?);
             }
             ToolCallSegmentKind::Response => {
-                let full_boundary = full_history_index_for_spine_mutable_context_boundary(
-                    history_items,
-                    segment.mutable_context_index,
-                )?;
+                let full_boundary =
+                    host_history.full_index_for_mutable_boundary(segment.mutable_context_index)?;
                 full_start = full_start.min(full_boundary);
                 let response_end = if full_boundary == history_items.len() {
                     full_boundary

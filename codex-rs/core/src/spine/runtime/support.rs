@@ -148,20 +148,6 @@ pub(crate) fn spine_mutable_context_index_for_full_history_boundary(
     HostHistoryLens::new(history).mutable_index_for_full_boundary(full_history_index)
 }
 
-pub(super) fn full_history_index_for_spine_mutable_context_index(
-    history: &[ResponseItem],
-    context_index: usize,
-) -> Result<usize, SpineError> {
-    HostHistoryLens::new(history).full_index_for_mutable_index(context_index)
-}
-
-pub(super) fn full_history_index_for_spine_mutable_context_boundary(
-    history: &[ResponseItem],
-    context_index: usize,
-) -> Result<usize, SpineError> {
-    HostHistoryLens::new(history).full_index_for_mutable_boundary(context_index)
-}
-
 fn is_spine_runtime_contextual_user_fragment(content_item: &ContentItem) -> bool {
     matches!(content_item, ContentItem::InputText { text } if {
         TurnAborted::matches_text(text) || {
