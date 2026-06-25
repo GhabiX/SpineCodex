@@ -235,25 +235,7 @@ fn render_visible_ref_to_context_item(
     match source {
         VisibleItemSource::RawResponseItem { raw_ordinal, .. }
         | VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
-            let item = visible_raw_item(source, *raw_ordinal, raw_items)?;
-            let mut item = item.clone();
-            if let VisibleItemSource::ToolCallSegment {
-                kind: ToolCallSegmentKind::Response,
-                raw_ordinal,
-            } = source
-                && let Some(target) = trim_projection.target_for_raw_ordinal(*raw_ordinal)
-            {
-                item = projected_tool_response_item_with_state(&item, target, &target.state)?;
-            }
-            if let VisibleItemSource::RawResponseItem {
-                from_user: true,
-                user_anchor: Some(user_anchor),
-                ..
-            } = source
-            {
-                item = anchored_user_message_item(&item, *user_anchor)?;
-            }
-            Ok(item)
+            render_raw_visible_ref(source, *raw_ordinal, raw_items, trim_projection)
         }
         VisibleItemSource::MemoryRef {
             memory,
@@ -276,6 +258,33 @@ fn render_visible_ref_to_context_item(
             Ok(memory_response_item(&body))
         }
     }
+}
+
+fn render_raw_visible_ref(
+    source: &VisibleItemSource,
+    raw_ordinal: u64,
+    raw_items: &[Option<ResponseItem>],
+    trim_projection: &TrimProjection,
+) -> Result<ResponseItem, SpineError> {
+    let item = visible_raw_item(source, raw_ordinal, raw_items)?;
+    let mut item = item.clone();
+    if let VisibleItemSource::ToolCallSegment {
+        kind: ToolCallSegmentKind::Response,
+        raw_ordinal,
+    } = source
+        && let Some(target) = trim_projection.target_for_raw_ordinal(*raw_ordinal)
+    {
+        item = projected_tool_response_item_with_state(&item, target, &target.state)?;
+    }
+    if let VisibleItemSource::RawResponseItem {
+        from_user: true,
+        user_anchor: Some(user_anchor),
+        ..
+    } = source
+    {
+        item = anchored_user_message_item(&item, *user_anchor)?;
+    }
+    Ok(item)
 }
 
 fn visible_raw_item<'a>(
