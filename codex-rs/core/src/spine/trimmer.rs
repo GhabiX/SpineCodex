@@ -71,33 +71,12 @@ impl<'a> Trimmer<'a> {
         })?;
         let existing_projection = self.current_projection(projection_seq)?;
         for segment in &toolcall.segments {
-            if segment.kind != crate::spine::model::ToolCallSegmentKind::Response
-                || existing_projection
-                    .contains_toolcall_raw_target(toolcall_seq, segment.raw_ordinal)
-            {
-                continue;
-            }
-            let raw_index = trim_raw_ordinal_usize(segment.raw_ordinal)?;
-            let Some(item) = raw_items.get(raw_index).and_then(Option::as_ref) else {
-                continue;
-            };
-            let Some((response_kind, call_id)) = trimmable_text_tool_response(item) else {
-                continue;
-            };
-            let original_visible_size = estimate_response_item_model_visible_bytes(item);
-            if original_visible_size <= TOOL_RESPONSE_TRIM_THRESHOLD_BYTES {
-                continue;
-            }
-            let trim_id = format!("trim_{}", *self.next_trim_seq);
-            self.append_event(TrimEvent::Candidate {
-                trim_id,
+            self.append_candidate_for_response_segment(
                 toolcall_seq,
-                raw_ordinal: segment.raw_ordinal,
-                context_index: segment.context_index,
-                call_id: call_id.to_string(),
-                response_kind,
-                original_visible_size,
-            })?;
+                segment,
+                raw_items,
+                &existing_projection,
+            )?;
         }
         Ok(())
     }
@@ -201,6 +180,42 @@ impl<'a> Trimmer<'a> {
         self.trim_events.push(logged);
         *self.next_trim_seq = next_trim_seq;
         Ok(trim_seq)
+    }
+
+    fn append_candidate_for_response_segment(
+        &mut self,
+        toolcall_seq: u64,
+        segment: &crate::spine::runtime::CompletedToolCallSegment,
+        raw_items: &[Option<ResponseItem>],
+        existing_projection: &TrimProjection,
+    ) -> Result<(), SpineError> {
+        if segment.kind != crate::spine::model::ToolCallSegmentKind::Response
+            || existing_projection.contains_toolcall_raw_target(toolcall_seq, segment.raw_ordinal)
+        {
+            return Ok(());
+        }
+        let raw_index = trim_raw_ordinal_usize(segment.raw_ordinal)?;
+        let Some(item) = raw_items.get(raw_index).and_then(Option::as_ref) else {
+            return Ok(());
+        };
+        let Some((response_kind, call_id)) = trimmable_text_tool_response(item) else {
+            return Ok(());
+        };
+        let original_visible_size = estimate_response_item_model_visible_bytes(item);
+        if original_visible_size <= TOOL_RESPONSE_TRIM_THRESHOLD_BYTES {
+            return Ok(());
+        }
+        let trim_id = format!("trim_{}", *self.next_trim_seq);
+        self.append_event(TrimEvent::Candidate {
+            trim_id,
+            toolcall_seq,
+            raw_ordinal: segment.raw_ordinal,
+            context_index: segment.context_index,
+            call_id: call_id.to_string(),
+            response_kind,
+            original_visible_size,
+        })?;
+        Ok(())
     }
 }
 
