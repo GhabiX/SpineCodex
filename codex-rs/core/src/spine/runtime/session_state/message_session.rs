@@ -38,7 +38,7 @@ impl SpineSessionState {
         Ok(SpineHostEffects::publish_variable_history_after_batch())
     }
 
-    pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request(
+    pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(
         &self,
         raw_items: &[Option<ResponseItem>],
         expected_history: Vec<ResponseItem>,
@@ -59,5 +59,18 @@ impl SpineSessionState {
             replacement,
             reference_context_item,
         }))
+    }
+
+    pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+        expected_history: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+    ) -> Result<SpineHostEffects, SpineError> {
+        self.variable_context_host_effects_if_no_pending_tool_request(
+            raw_items,
+            expected_history,
+            reference_context_item,
+        )
     }
 }
