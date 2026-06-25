@@ -232,7 +232,7 @@ impl HostEffects {
         PublishMaterializedHistoryFuture: Future<Output = Result<(), E>>,
     {
         self.inner
-            .apply_after_batch_materialized_history_request(
+            .apply_after_batch_variable_history_request(
                 |effects| apply_effects(Self::from_runtime(effects)),
                 publish_materialized_history,
             )
