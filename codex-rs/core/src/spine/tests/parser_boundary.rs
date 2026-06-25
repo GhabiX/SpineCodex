@@ -509,6 +509,35 @@ fn runtime_routes_open_cursor_reads_through_parser_state() {
 }
 
 #[test]
+fn parser_state_owns_visible_response_context_index_reads() {
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let parser_visible_index = parser
+        .split("fn last_visible_response_context_index(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn current_open_suffix_nodes_cloned").next())
+        .expect("ParserState visible response context index section");
+    assert!(
+        parser_visible_index.contains("self.parse_stack.last_visible_response_context_index()"),
+        "ParserState should be the facade for visible response context index reads"
+    );
+
+    for path in [
+        "runtime.rs",
+        "runtime/observe.rs",
+        "runtime/commit.rs",
+        "runtime/root_compact.rs",
+        "runtime/session_state.rs",
+    ] {
+        let source = fs::read_to_string(spine_src(path)).expect("read spine runtime source");
+        assert!(
+            !source.contains(".parse_stack().last_visible_response_context_index()")
+                && !source.contains("parse_stack.last_visible_response_context_index()"),
+            "{path} must route visible response context index reads through ParserState"
+        );
+    }
+}
+
+#[test]
 fn runtime_commit_routes_open_token_staging_through_parser_state() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");

@@ -563,6 +563,10 @@ impl ParserState {
             .collect()
     }
 
+    pub(super) fn last_visible_response_context_index(&self) -> Option<usize> {
+        self.parse_stack.last_visible_response_context_index()
+    }
+
     pub(super) fn current_open_suffix_nodes_cloned(
         &self,
     ) -> Result<Vec<SpineTreeNode>, SpineError> {
