@@ -8,6 +8,7 @@ use super::SpineError;
 use super::SpineToolcallHostAttempt;
 use super::SpineToolcallHostCommitAttempt;
 use super::session_state::SpineToolcallHostCommit;
+use super::support::validate_no_orphan_tool_outputs;
 
 #[derive(Debug)]
 pub(crate) struct SpineHistoryUpdate {
@@ -327,6 +328,10 @@ impl SpineHostEffect {
                 update.call_id
             ))
         } else {
+            let mut candidate_history = current_history[..update.suffix_start].to_vec();
+            candidate_history.extend_from_slice(&update.replacement);
+            validate_no_orphan_tool_outputs(update.operation, &update.call_id, &candidate_history)
+                .map_err(|err| err.to_string())?;
             replace_history_suffix(
                 update.suffix_start..current_history.len(),
                 update.replacement,

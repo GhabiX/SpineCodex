@@ -356,6 +356,38 @@ fn archive_and_store_stay_out_of_parser_publication_boundary() {
 }
 
 #[test]
+fn render_stays_out_of_host_publication_boundary() {
+    for (label, source) in [(
+        "spine/render.rs",
+        source_without_line_comments(spine_src("render.rs")),
+    )] {
+        for forbidden in [
+            "use crate::spine::runtime",
+            "use crate::session",
+            "ContextManager",
+            "SpineHostEffect",
+            "SpineHostEffects",
+            "SpineHistoryUpdate",
+            "HistoryPublication",
+            "ParserPublication",
+            "SpinePrepared",
+            "replace_history",
+            "install_prepared",
+            "session_bridge",
+            "host publication",
+            "runtime::",
+            "session::",
+            ".shift(",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{label} must remain a parser-side projection/checkpoint layer and must not depend on host publication or runtime/session boundaries through {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
 fn runtime_load_checkpoint_replay_routes_through_parser_state() {
     let load = fs::read_to_string(spine_src("runtime/load.rs")).expect("read runtime load source");
     assert!(

@@ -34,6 +34,7 @@ use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
+use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
@@ -109,6 +110,13 @@ pub(super) struct ParserPublicationPlan {
     replacement_prefix: Vec<ResponseItem>,
     preserve_host_history_from: usize,
     append_current_tool_response_if_missing: bool,
+    atomic_mutable_context_segments: Vec<ParserPublicationToolcallSegment>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ParserPublicationToolcallSegment {
+    pub(super) kind: ToolCallSegmentKind,
+    pub(super) mutable_context_index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,34 +158,48 @@ impl ParserPublicationUpdate {
 }
 
 impl ParserPublicationPlan {
-    pub(super) fn history_update(
+    pub(super) fn suffix_start(&self) -> usize {
+        self.suffix_start
+    }
+
+    pub(super) fn preserve_host_history_from(&self) -> usize {
+        self.preserve_host_history_from
+    }
+
+    pub(super) fn atomic_mutable_context_segments(&self) -> &[ParserPublicationToolcallSegment] {
+        &self.atomic_mutable_context_segments
+    }
+
+    pub(super) fn history_update_with_host_boundaries(
         &self,
         call_id: &str,
         tool_resp_item: &ResponseItem,
         tool_resp_already_recorded: bool,
+        host_suffix_start: usize,
+        host_preserve_history_from: usize,
         history_items: &[ResponseItem],
     ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
         let suffix_end = history_items.len();
-        if self.suffix_start > suffix_end {
+        if host_suffix_start > suffix_end {
             return Err(SpineError::Invariant(format!(
                 "{} suffix start {} exceeds history length {suffix_end} for call_id={call_id}",
-                self.operation, self.suffix_start
+                self.operation, host_suffix_start
             )));
         }
-        if self.preserve_host_history_from > suffix_end {
+        if host_preserve_history_from > suffix_end {
             return Err(SpineError::Invariant(format!(
                 "{} preserve-host-history index {} exceeds history length {suffix_end} for call_id={call_id}",
-                self.operation, self.preserve_host_history_from
+                self.operation, host_preserve_history_from
             )));
         }
         let mut replacement = self.replacement_prefix.clone();
-        replacement.extend_from_slice(&history_items[self.preserve_host_history_from..]);
+        replacement.extend_from_slice(&history_items[host_preserve_history_from..]);
         if self.append_current_tool_response_if_missing && !tool_resp_already_recorded {
             replacement.push(tool_resp_item.clone());
         }
         Ok(Some(ParserPublicationUpdate::new(
             self.operation,
-            self.suffix_start,
+            host_suffix_start,
             history_items.to_vec(),
             replacement,
         )))
@@ -588,6 +610,7 @@ impl ParserState {
         suffix_start: usize,
         replacement_prefix: Vec<ResponseItem>,
         preserve_host_history_from: usize,
+        atomic_mutable_context_segments: Vec<ParserPublicationToolcallSegment>,
     ) -> ParserPublicationPlan {
         ParserPublicationPlan {
             operation,
@@ -595,6 +618,7 @@ impl ParserState {
             replacement_prefix,
             preserve_host_history_from,
             append_current_tool_response_if_missing: true,
+            atomic_mutable_context_segments,
         }
     }
 
