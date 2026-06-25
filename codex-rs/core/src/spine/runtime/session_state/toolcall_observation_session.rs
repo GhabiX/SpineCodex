@@ -139,6 +139,24 @@ impl SpineSessionState {
         Ok(())
     }
 
+    pub(crate) fn observe_toolcall_context_item_facts<'a>(
+        &mut self,
+        items: impl IntoIterator<Item = (u64, usize, &'a ResponseItem)>,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        let runtime_items = items
+            .into_iter()
+            .map(
+                |(raw_ordinal, context_index, item)| SpineObservedContextItem {
+                    raw_ordinal,
+                    context_index,
+                    item,
+                },
+            )
+            .collect::<Vec<_>>();
+        self.observe_toolcall_context_items(&runtime_items, raw_items)
+    }
+
     pub(in crate::spine) fn single_completed_toolcall_evidence(
         &self,
         call_id: &str,

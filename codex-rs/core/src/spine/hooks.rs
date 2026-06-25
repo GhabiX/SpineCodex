@@ -804,15 +804,12 @@ pub(crate) fn observe_toolcall_context_items(
     items: &[ObservedContextItem<'_>],
     raw_items: &[Option<ResponseItem>],
 ) -> Result<(), SpineError> {
-    let runtime_items = items
-        .iter()
-        .map(|item| super::runtime::SpineObservedContextItem {
-            raw_ordinal: item.raw_ordinal,
-            context_index: item.context_index,
-            item: item.item,
-        })
-        .collect::<Vec<_>>();
-    state.observe_toolcall_context_items(&runtime_items, raw_items)
+    state.observe_toolcall_context_item_facts(
+        items
+            .iter()
+            .map(|item| (item.raw_ordinal, item.context_index, item.item)),
+        raw_items,
+    )
 }
 
 pub(crate) fn prepare_toolcall_output_recording(
