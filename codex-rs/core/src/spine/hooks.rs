@@ -88,55 +88,6 @@ pub(crate) struct ObservedContextItem<'a> {
     pub(crate) item: &'a ResponseItem,
 }
 
-pub(crate) fn take_initial_tree_snapshot(
-    state: &mut SpineSessionState,
-) -> Result<Option<SpineTreeUpdateEvent>, SpineError> {
-    state.take_initial_tree_snapshot()
-}
-
-pub(crate) fn tree_snapshot_projection(
-    state: &SpineSessionState,
-) -> Result<
-    Option<(
-        SpineTreeUpdateEvent,
-        Vec<super::runtime::SpineOpenNodeContextProjection>,
-    )>,
-    SpineError,
-> {
-    state.tree_snapshot_projection()
-}
-
-pub(crate) fn render_tree_with_context_annotations(
-    state: &SpineSessionState,
-    annotations: &std::collections::BTreeMap<super::model::NodeId, String>,
-) -> Result<Option<String>, SpineError> {
-    state.render_tree_with_context_annotations(annotations)
-}
-
-pub(crate) fn trim_projection_needs_rollout_raw_items(
-    state: &SpineSessionState,
-) -> Result<Option<bool>, SpineError> {
-    state.trim_projection_needs_rollout_raw_items()
-}
-
-pub(crate) fn materialize_trim_projection_from_raw_items(
-    state: &SpineSessionState,
-    raw_items: &[Option<ResponseItem>],
-) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-    state.materialize_trim_projection_from_raw_items(raw_items)
-}
-
-pub(crate) fn project_trim_projection_from_history(
-    state: &SpineSessionState,
-    history_items: &[ResponseItem],
-) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-    state.project_trim_projection_from_history(history_items)
-}
-
-pub(crate) fn ensure_observable_context(state: &SpineSessionState) -> Result<(), SpineError> {
-    state.ensure_observable_context()
-}
-
 #[cfg(test)]
 pub(crate) fn is_ready_for_test_root_compact(
     state: &SpineSessionState,
