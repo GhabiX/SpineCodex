@@ -1443,10 +1443,10 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     assert!(
         root_compact_session
-            .contains("let publication_history = install.variable_context().to_vec();")
+            .contains("let variable_context = install.variable_context().to_vec();")
             && !root_compact_session
                 .contains("let materialized = install.publication_history().to_vec();"),
-        "root compact host publication locals should keep publication naming instead of parser materialization naming"
+        "root compact host publication locals should keep variable-context naming instead of parser materialization naming"
     );
     let host_effect =
         fs::read_to_string(spine_src("runtime/host_effect.rs")).expect("read host effect source");
@@ -1456,9 +1456,9 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         .and_then(|tail| tail.split("impl SpineHostEffects").next())
         .expect("root compact host publish carrier");
     assert!(
-        root_compact_host_publish.contains("publication_history: Vec<ResponseItem>")
+        root_compact_host_publish.contains("variable_context: Vec<ResponseItem>")
             && !root_compact_host_publish.contains("materialized: Vec<ResponseItem>"),
-        "root compact host publish carrier should name the payload as publication history"
+        "root compact host publish carrier should name the payload as variable context"
     );
     let message_session = fs::read_to_string(spine_src("runtime/session_state/message_session.rs"))
         .expect("read message session source");
@@ -1472,9 +1472,9 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     assert!(
         host_effect.contains(
-            "SpineRootCompactHostPublish {\n                publication_history,\n            }"
-        ) && host_effect.contains("host_publish.publication_history.len()")
-            && host_effect.contains("published.extend_from_slice(&self.publication_history)")
+            "SpineRootCompactHostPublish {\n                variable_context,\n            }"
+        ) && host_effect.contains("host_publish.variable_context.len()")
+            && host_effect.contains("published.extend_from_slice(&self.variable_context)")
             && host_effect.contains(".published_variable_history_from_native_items(")
             && !host_effect.contains(".published_history_from_native_items(")
             && !host_effect.contains("host_publish.materialized.len()")

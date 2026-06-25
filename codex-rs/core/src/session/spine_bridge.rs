@@ -1420,7 +1420,6 @@ impl Session {
         &self,
         evidence: NativeCompactEvidence<'_>,
     ) -> Result<HostEffects, SpineError> {
-        let _native_items = evidence.native_items;
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(HostEffects::none());
         };
@@ -1474,7 +1473,6 @@ impl Session {
         let effects = self
             .on_compact(NativeCompactEvidence {
                 compacted_history: spine_root_compact_source,
-                native_items: &items,
             })
             .await?;
         let publish_reference_context_item = reference_context_item.clone();

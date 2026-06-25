@@ -30,7 +30,7 @@ pub(crate) struct SpineTreeHostUpdates {
 }
 
 pub(crate) struct SpineRootCompactHostPublish {
-    publication_history: Vec<ResponseItem>,
+    variable_context: Vec<ResponseItem>,
 }
 
 impl SpineHostEffects {
@@ -77,12 +77,10 @@ impl SpineHostEffects {
     }
 
     pub(crate) fn root_compact_variable_history_publication(
-        publication_history: Vec<ResponseItem>,
+        variable_context: Vec<ResponseItem>,
     ) -> Self {
         Self::one(SpineHostEffect::RootCompactHistoryPublication(
-            SpineRootCompactHostPublish {
-                publication_history,
-            },
+            SpineRootCompactHostPublish { variable_context },
         ))
     }
 
@@ -191,7 +189,7 @@ impl SpineHostEffects {
             publish_history(native_items, false).await?;
             return Ok(None);
         };
-        let published_variable_history_len = host_publish.publication_history.len();
+        let published_variable_history_len = host_publish.variable_context.len();
         let published_history = host_publish
             .published_variable_history_from_native_items(&native_items, is_fixed_prefix_item);
         publish_history(published_history, true).await?;
@@ -450,7 +448,7 @@ impl SpineRootCompactHostPublish {
             .filter(|item| is_fixed_prefix_item(item))
             .cloned()
             .collect::<Vec<_>>();
-        published.extend_from_slice(&self.publication_history);
+        published.extend_from_slice(&self.variable_context);
         published
     }
 }

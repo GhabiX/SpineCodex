@@ -56,7 +56,6 @@ pub(crate) struct CompactEvidence<'a> {
 
 pub(crate) struct NativeCompactEvidence<'a> {
     pub(crate) compacted_history: &'a [ResponseItem],
-    pub(crate) native_items: &'a [ResponseItem],
 }
 
 #[derive(Clone, Debug)]

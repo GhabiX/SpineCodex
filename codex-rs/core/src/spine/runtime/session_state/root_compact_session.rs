@@ -131,10 +131,10 @@ impl SpineSessionState {
             evidence.raw_items,
             evidence.close_provider_input_tokens,
         )?;
-        let publication_history = install.variable_context().to_vec();
+        let variable_context = install.variable_context().to_vec();
         self.pending_root_compact_install = Some(install);
         Ok(SpineHostEffects::root_compact_variable_history_publication(
-            publication_history,
+            variable_context,
         ))
     }
 }
