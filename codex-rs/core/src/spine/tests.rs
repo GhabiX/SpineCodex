@@ -136,7 +136,7 @@ mod fork_isolation_aliases;
 mod m0_trace;
 #[path = "tests/m0_trace_grouped_close.rs"]
 mod m0_trace_grouped_close;
-#[path = "tests/materialize_history.rs"]
+#[path = "tests/materialize_history_for_test.rs"]
 mod materialize_history_for_test;
 #[path = "tests/materialize_projection.rs"]
 mod materialize_projection;
