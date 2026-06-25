@@ -409,17 +409,20 @@ impl SpineRuntime {
     }
 
     fn append_and_shift_msg(&mut self, lexed: LexedTokenBatch) -> Result<(), SpineError> {
-        self.append_and_shift_lexed_batch(lexed).map(|_| ())
+        self.append_and_install_observed_batch(lexed).map(|_| ())
     }
 
     fn append_and_shift_toolcall(&mut self, lexed: LexedTokenBatch) -> Result<u64, SpineError> {
-        self.append_and_shift_lexed_batch(lexed)
+        self.append_and_install_observed_batch(lexed)
     }
 
-    fn append_and_shift_lexed_batch(&mut self, lexed: LexedTokenBatch) -> Result<u64, SpineError> {
+    fn append_and_install_observed_batch(
+        &mut self,
+        lexed: LexedTokenBatch,
+    ) -> Result<u64, SpineError> {
         let parser_install = self
             .parser
-            .prepare_observe_install(&lexed, &self.archive())?;
+            .consume_observe_lexed_batch(&lexed, &self.archive())?;
         let mut event_seq = None;
         for event in lexed.events {
             event_seq = Some(self.append_cached_event(event)?);

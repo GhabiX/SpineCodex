@@ -806,7 +806,7 @@ impl ParserState {
         Ok(())
     }
 
-    pub(super) fn prepare_observe_install(
+    pub(super) fn consume_observe_lexed_batch(
         &self,
         lexed: &LexedTokenBatch,
         archive: &SpineArchive,

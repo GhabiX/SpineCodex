@@ -33,8 +33,9 @@ fn observe_runtime_routes_token_shifts_through_parser_state() {
         "runtime/observe.rs must not import raw SpineToken"
     );
     assert!(
-        observe.contains("prepare_observe_install") && observe.contains("install_prepared_observe"),
-        "runtime/observe.rs should prepare and install observations through parser-owned install handles"
+        observe.contains("consume_observe_lexed_batch")
+            && observe.contains("install_prepared_observe"),
+        "runtime/observe.rs should consume lexed batches and install observations through parser-owned install handles"
     );
     assert!(
         !observe.contains("install_staged("),
@@ -100,7 +101,7 @@ fn parser_state_routes_live_batches_through_one_batch_helper() {
         "close/next parser transactions should consume final lexed batches through the shared parser helper"
     );
     let observe = parser
-        .split("fn prepare_observe_install(")
+        .split("fn consume_observe_lexed_batch(")
         .nth(1)
         .and_then(|tail| tail.split("fn materialize_variable_context").next())
         .expect("observe parser section");
