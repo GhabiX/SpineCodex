@@ -43,27 +43,21 @@ impl SpineStore {
 }
 
 fn unique_compact_checkpoint_for_boundary(
-    checkpoints: Vec<SpineCompactCheckpoint>,
+    mut checkpoints: Vec<SpineCompactCheckpoint>,
     raw_boundary: u64,
     replacement_history_hash: &str,
 ) -> Result<SpineCompactCheckpoint, SpineError> {
-    let checkpoints = checkpoints
-        .into_iter()
-        .filter(|checkpoint| checkpoint.raw_boundary == raw_boundary)
-        .collect::<Vec<_>>();
+    checkpoints.retain(|checkpoint| checkpoint.raw_boundary == raw_boundary);
     if checkpoints.is_empty() {
         return Err(SpineError::InvalidStore(format!(
             "missing spine compact checkpoint at raw boundary {raw_boundary}"
         )));
     }
 
-    let checkpoints = checkpoints
-        .into_iter()
-        .filter(|checkpoint| {
-            checkpoint.replacement_history_hash == replacement_history_hash
-                && checkpoint.h_ps_hash == replacement_history_hash
-        })
-        .collect::<Vec<_>>();
+    checkpoints.retain(|checkpoint| {
+        checkpoint.replacement_history_hash == replacement_history_hash
+            && checkpoint.h_ps_hash == replacement_history_hash
+    });
     if checkpoints.is_empty() {
         return Err(SpineError::InvalidStore(format!(
             "spine_jit replacement_history does not match sidecar h(PS) compact checkpoint at raw boundary {raw_boundary}"
