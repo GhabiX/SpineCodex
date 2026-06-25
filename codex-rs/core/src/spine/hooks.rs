@@ -311,7 +311,7 @@ impl HostEffects {
         Self::from_runtime(super::runtime::SpineHostEffects::none())
     }
 
-    pub(crate) fn from_runtime(inner: super::runtime::SpineHostEffects) -> Self {
+    fn from_runtime(inner: super::runtime::SpineHostEffects) -> Self {
         Self { inner }
     }
 
