@@ -96,7 +96,7 @@ impl SpineHostEffects {
         self.effects.extend(effects.effects);
     }
 
-    pub(crate) async fn apply_after_batch_materialized_history_request<
+    pub(crate) async fn apply_after_batch_variable_history_request<
         E,
         ApplyEffects,
         ApplyEffectsFuture,
@@ -122,6 +122,27 @@ impl SpineHostEffects {
             publish_variable_history().await?;
         }
         Ok(())
+    }
+
+    pub(crate) async fn apply_after_batch_materialized_history_request<
+        E,
+        ApplyEffects,
+        ApplyEffectsFuture,
+        PublishVariableHistory,
+        PublishVariableHistoryFuture,
+    >(
+        self,
+        apply_effects: ApplyEffects,
+        publish_variable_history: PublishVariableHistory,
+    ) -> Result<(), E>
+    where
+        ApplyEffects: FnOnce(Self) -> ApplyEffectsFuture,
+        ApplyEffectsFuture: Future<Output = Result<(), E>>,
+        PublishVariableHistory: FnOnce() -> PublishVariableHistoryFuture,
+        PublishVariableHistoryFuture: Future<Output = Result<(), E>>,
+    {
+        self.apply_after_batch_variable_history_request(apply_effects, publish_variable_history)
+            .await
     }
 
     fn into_only_root_compact_host_publish(
