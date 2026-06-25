@@ -1517,6 +1517,11 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "runtime root compact should construct prepared root compact through a named constructor"
     );
     assert!(
+        root_compact.contains("publication: SpineRootCompactResult")
+            && !root_compact.contains("result: SpineRootCompactResult"),
+        "runtime root compact prepared commit should name parser h(PS) payload as publication, not generic result"
+    );
+    assert!(
         !root_compact.contains("clone_publication_result"),
         "runtime root compact production paths should consume prepared result/install without cloning publication results"
     );

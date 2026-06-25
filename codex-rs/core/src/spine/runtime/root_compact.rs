@@ -21,7 +21,7 @@ use crate::spine::parser::ParserRootCompactPendingInstall;
 use crate::spine::store::BODY_DIR;
 
 struct PreparedRootCompactCommit {
-    result: SpineRootCompactResult,
+    publication: SpineRootCompactResult,
     mem: MemRecord,
     memory_body: String,
     compact_checkpoint: Option<crate::spine::compact_checkpoint::SpineCompactCheckpoint>,
@@ -312,7 +312,7 @@ impl SpineRuntime {
         self.append_committed_events(vec![prepared.root_compact_event], marker)?;
         self.pending = None;
         Ok(SpinePreparedRootCompact::new(
-            prepared.result,
+            prepared.publication,
             prepared.parser_install,
         ))
     }
@@ -445,7 +445,7 @@ impl SpineRuntime {
             })
             .transpose()?;
         let parser_txn = prepared_txn.into_variable_context_and_install();
-        let result = SpineRootCompactResult {
+        let publication = SpineRootCompactResult {
             variable_context: parser_txn.variable_context,
             raw_boundary: self.raw_len,
             token_seq_after,
@@ -461,7 +461,7 @@ impl SpineRuntime {
                 token_metadata.next_open_context_tokens,
             )?;
         Ok(PreparedRootCompactCommit {
-            result,
+            publication,
             mem,
             memory_body: body,
             compact_checkpoint,
