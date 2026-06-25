@@ -334,19 +334,11 @@ fn projected_tool_response_item_with_state(
         success: output_payload.success,
     };
     match item {
-        ResponseItem::FunctionCallOutput { call_id, .. }
-            if target.response_kind == TrimResponseKind::FunctionCallOutput
-                && call_id == &target.call_id =>
-        {
-            Ok(ResponseItem::FunctionCallOutput {
-                call_id: call_id.clone(),
-                output,
-            })
-        }
-        ResponseItem::CustomToolCallOutput { call_id, name, .. }
-            if target.response_kind == TrimResponseKind::CustomToolCallOutput
-                && call_id == &target.call_id =>
-        {
+        ResponseItem::FunctionCallOutput { call_id, .. } => Ok(ResponseItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output,
+        }),
+        ResponseItem::CustomToolCallOutput { call_id, name, .. } => {
             Ok(ResponseItem::CustomToolCallOutput {
                 call_id: call_id.clone(),
                 name: name.clone(),
