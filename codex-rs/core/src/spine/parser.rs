@@ -356,6 +356,10 @@ impl ParserCommitPendingInstall {
     fn new(pending_state: ParserPreparedState) -> Self {
         Self { pending_state }
     }
+
+    fn pending_state(&self) -> &ParserPreparedState {
+        &self.pending_state
+    }
 }
 
 impl ParserCommitPreparedInstall {
@@ -722,7 +726,7 @@ impl ParserState {
         &mut self,
         install: &ParserCommitPendingInstall,
     ) {
-        self.parse_stack = install.pending_state.parse_stack.clone();
+        self.install_prepared_state(install.pending_state().clone());
     }
 
     pub(super) fn install_prepared_commit(&mut self, install: ParserCommitInstall) {

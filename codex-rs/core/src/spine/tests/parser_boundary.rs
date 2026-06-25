@@ -685,6 +685,21 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         "parser install handles should not expose raw-state consumers"
     );
     assert!(
+        parser_commit_pending_install.contains("fn pending_state(&self) -> &ParserPreparedState"),
+        "close pending install should expose parser prepared state only to parser-owned install helpers"
+    );
+    let parser_install_methods = parser
+        .split("fn install_prepared_state(&mut self, state: ParserPreparedState)")
+        .nth(1)
+        .and_then(|tail| tail.split("fn stage_lexed_batches").next())
+        .expect("parser install methods section");
+    assert!(
+        parser_install_methods.matches("self.parse_stack =").count() == 1
+            && parser_install_methods
+                .contains("self.install_prepared_state(install.pending_state().clone());"),
+        "all parser pending/final installs should route live ParseStack assignment through install_prepared_state"
+    );
+    assert!(
         !commit.contains(".install_prepared_commit_final_parse_stack("),
         "runtime close/next final install should use the parser-owned commit install handle"
     );
