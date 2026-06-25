@@ -15,23 +15,10 @@ pub(super) fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_
         .expect("append init");
     let node = NodeId::root_epoch(1).child(1);
     source
-        .append_event(&SpineLedgerEvent::Open {
-            child: node.clone(),
-            boundary: 0,
-            index: 0,
-            summary: "root".to_string(),
-            open_input_tokens: None,
-            open_context_tokens: None,
-            open_context_source: None,
-        })
+        .append_event(&root_child_open_event("root"))
         .expect("append open");
     source
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 0,
-            context_index: 0,
-            from_user: true,
-            user_anchor: None,
-        })
+        .append_event(&user_msg_event(0, 0))
         .expect("append msg");
     let close_seq = source
         .append_event(&SpineLedgerEvent::Close {
