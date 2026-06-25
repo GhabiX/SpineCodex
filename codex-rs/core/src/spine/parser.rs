@@ -136,6 +136,8 @@ pub(super) struct ParserPublicationToolcallSegment {
     pub(super) mutable_context_index: usize,
 }
 
+type ParserPublicationToolcallSegmentEvidence = (ToolCallSegmentKind, usize);
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ParserPublicationUpdate {
     operation: &'static str,
@@ -746,7 +748,9 @@ impl ParserState {
         suffix_start: usize,
         replacement_prefix: Vec<ResponseItem>,
         preserve_host_history_from: usize,
-        atomic_mutable_context_segments: Vec<ParserPublicationToolcallSegment>,
+        atomic_mutable_context_segments: impl IntoIterator<
+            Item = ParserPublicationToolcallSegmentEvidence,
+        >,
     ) -> ParserPublicationPlan {
         ParserPublicationPlan {
             operation,
@@ -754,7 +758,15 @@ impl ParserState {
             replacement_prefix,
             preserve_host_history_from,
             append_current_tool_response_if_missing: true,
-            atomic_mutable_context_segments,
+            atomic_mutable_context_segments: atomic_mutable_context_segments
+                .into_iter()
+                .map(
+                    |(kind, mutable_context_index)| ParserPublicationToolcallSegment {
+                        kind,
+                        mutable_context_index,
+                    },
+                )
+                .collect(),
         }
     }
 

@@ -941,6 +941,11 @@ fn runtime_commit_does_not_construct_parser_publication_plans() {
         "runtime/commit.rs must not import parser publication plans just to construct their fields"
     );
     assert!(
+        !commit.contains("use crate::spine::parser::ParserPublicationToolcallSegment")
+            && !commit.contains("ParserPublicationToolcallSegment {"),
+        "runtime/commit.rs must not import or construct parser publication toolcall segments"
+    );
+    assert!(
         !commit
             .lines()
             .any(|line| line.contains("ParserPublicationPlan {")

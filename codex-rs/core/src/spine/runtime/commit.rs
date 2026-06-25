@@ -29,7 +29,6 @@ use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ContextBaselineSource;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
-use crate::spine::parser::ParserPublicationToolcallSegment;
 use crate::spine::render::memory_response_item;
 
 fn completed_toolcall_first_segment(
@@ -449,10 +448,7 @@ impl SpineRuntime {
         let atomic_mutable_context_segments = completed_toolcall
             .segments
             .iter()
-            .map(|segment| ParserPublicationToolcallSegment {
-                kind: segment.kind,
-                mutable_context_index: segment.context_index,
-            })
+            .map(|segment| (segment.kind, segment.context_index))
             .collect::<Vec<_>>();
         let toolcall_context_index = plan.toolcall_context_index(&prepared)?;
         let completed_toolcall = self
