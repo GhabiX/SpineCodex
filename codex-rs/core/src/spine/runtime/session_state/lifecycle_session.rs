@@ -14,6 +14,7 @@ use crate::spine::store::SpineCloneBoundary;
 use crate::spine::store::SpineStore;
 
 impl SpineSessionState {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::new_with_features(true, true)
     }

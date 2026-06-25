@@ -45,6 +45,7 @@ pub(super) enum VisibleItemSource {
     },
 }
 
+#[cfg(test)]
 pub(super) fn render_parse_stack_to_context(
     ps: &ParseStack,
     raw_items: &[Option<ResponseItem>],
