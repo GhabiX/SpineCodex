@@ -126,12 +126,6 @@ pub(super) fn validate_compact_checkpoint(
     Ok(())
 }
 
-pub(super) fn compact_checkpoint_replacement_history_hash(
-    replacement_history: &[ResponseItem],
-) -> Result<String, SpineError> {
-    hash_response_items(replacement_history)
-}
-
 fn collect_visible_item_refs(
     parse_stack: &ParseStack,
     raw_boundary: usize,

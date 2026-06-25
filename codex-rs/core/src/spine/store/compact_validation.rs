@@ -2,8 +2,8 @@ use super::SpineStore;
 use super::checkpoint_proof;
 use crate::spine::SpineError;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
-use crate::spine::compact_checkpoint::compact_checkpoint_replacement_history_hash;
 use crate::spine::compact_checkpoint::validate_compact_checkpoint;
+use crate::spine::io::hash_response_items;
 use std::path::Path;
 
 impl SpineStore {
@@ -15,8 +15,7 @@ impl SpineStore {
         raw_boundary: u64,
         replacement_history: &[codex_protocol::models::ResponseItem],
     ) -> Result<u64, SpineError> {
-        let replacement_history_hash =
-            compact_checkpoint_replacement_history_hash(replacement_history)?;
+        let replacement_history_hash = hash_response_items(replacement_history)?;
         let checkpoint = unique_compact_checkpoint_for_boundary(
             self.compact_checkpoints()?,
             raw_boundary,
