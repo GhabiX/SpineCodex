@@ -33,8 +33,7 @@ fn observe_runtime_routes_token_shifts_through_parser_state() {
         "runtime/observe.rs must not import raw SpineToken"
     );
     assert!(
-        observe.contains("consume_lexed_batch")
-            && observe.contains("install_prepared_observe"),
+        observe.contains("consume_lexed_batch") && observe.contains("install_prepared_observe"),
         "runtime/observe.rs should consume lexed batches and install observations through parser-owned install handles"
     );
     assert!(
@@ -108,6 +107,18 @@ fn parser_state_routes_live_batches_through_one_batch_helper() {
     assert!(
         observe.contains("stage_lexed_batches") && !observe.contains("tokens.iter().cloned()"),
         "observe parser transactions should stage the whole lexed batch instead of unpacking raw tokens at the callsite"
+    );
+    let root_compact_probe = parser
+        .split("fn root_compact_next_open_index_or_probe(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn into_parse_stack").next())
+        .expect("root compact probe parser section");
+    assert!(
+        root_compact_probe.contains("lex_probe_batch")
+            && root_compact_probe.contains("stage_lexed_batches")
+            && !root_compact_probe.contains("probe_parse_stack")
+            && !root_compact_probe.contains(".shift("),
+        "root compact parser probe should stage a lexer batch instead of shifting a raw compact token"
     );
 }
 

@@ -159,6 +159,28 @@ impl RootCompactPlan {
         )
     }
 
+    pub(in crate::spine) fn lex_probe_batch(
+        self,
+        memory: MemoryRef,
+        next_open_index: usize,
+        next_open_input_tokens: Option<i64>,
+        next_open_context_tokens: Option<i64>,
+    ) -> Result<LexedTokenBatch, SpineError> {
+        debug_assert_eq!(
+            self.token_sequence(),
+            &[LexedTokenKind::Compact, LexedTokenKind::Open]
+        );
+        Ok(LexedTokenBatch {
+            events: Vec::new(),
+            tokens: vec![lex_root_compact_token(
+                memory,
+                next_open_index,
+                next_open_input_tokens,
+                next_open_context_tokens,
+            )?],
+        })
+    }
+
     pub(in crate::spine) fn lex_event_token(
         self,
         node: NodeId,

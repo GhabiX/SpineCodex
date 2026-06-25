@@ -623,17 +623,16 @@ impl ParserState {
 
         // Probe first because source_context_range records the pre-compact source
         // span, while next_open_index is the post-compact h(PS) materialized len.
-        let mut probe_parse_stack = self.parse_stack.clone();
-        let token = crate::spine::lexer::plan_root_compact().lex_compact_token(
+        let probe_batch = crate::spine::lexer::plan_root_compact().lex_probe_batch(
             memory.clone(),
             0,
             next_open_input_tokens,
             next_open_context_tokens,
         )?;
-        probe_parse_stack.shift(token, archive)?;
+        let probe_state = self.stage_lexed_batches(std::iter::once(&probe_batch), archive)?;
         Ok(
             render_parse_stack_to_context_with_memory_body_and_trim_projection(
-                &probe_parse_stack,
+                probe_state.parse_stack(),
                 raw_items,
                 staged_memory_body,
                 trim_projection,
