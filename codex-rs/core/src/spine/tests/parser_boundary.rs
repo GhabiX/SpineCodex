@@ -990,7 +990,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         !prepared.contains("fn result(&self)")
             && prepared.contains("fn variable_context(&self) -> &[ResponseItem]")
             && prepared.contains(
-                "let publication_variable_history_len = self.variable_context().len();"
+                "let publication_variable_context_len = self.variable_context().len();"
             )
             && prepared.contains("#[cfg(test)]\n    pub(crate) fn clone_publication_result_for_test(&self) -> SpineRootCompactResult")
             && !prepared.contains("fn publication_result(&self) -> &SpineRootCompactResult"),
@@ -1530,7 +1530,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         .expect("apply root compact after publish section");
     assert!(
         apply_after_publish.contains(
-            "prepared.validate_published_variable_history_len(published_variable_history_len)?"
+            "prepared.validate_published_variable_context_len(published_variable_context_len)?"
         ) && !apply_after_publish.contains("runtime.current_open_index()"),
         "session must validate the prepared root compact publication length before installing live PS"
     );

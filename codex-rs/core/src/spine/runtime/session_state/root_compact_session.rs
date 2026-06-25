@@ -14,10 +14,10 @@ impl SpineSessionState {
     pub(crate) fn apply_root_compact_after_history_publish(
         &mut self,
         prepared: SpineRootCompactHostInstall,
-        published_variable_history_len: usize,
+        published_variable_context_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         self.ensure_valid()?;
-        prepared.validate_published_variable_history_len(published_variable_history_len)?;
+        prepared.validate_published_variable_context_len(published_variable_context_len)?;
         let Some(runtime) = self.runtime_mut() else {
             return Err(SpineError::InvalidStore(
                 "spine runtime missing before root compact PS install".to_string(),
@@ -29,14 +29,14 @@ impl SpineSessionState {
 
     pub(crate) fn take_pending_root_compact_after_history_publish(
         &mut self,
-        published_variable_history_len: usize,
+        published_variable_context_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         let prepared = self.pending_root_compact_install.take().ok_or_else(|| {
             SpineError::InvalidStore(
                 "spine root compact publish missing prepared install".to_string(),
             )
         })?;
-        self.apply_root_compact_after_history_publish(prepared, published_variable_history_len)
+        self.apply_root_compact_after_history_publish(prepared, published_variable_context_len)
     }
 
     pub(crate) fn prepare_root_compact_commit_with_checkpoint(

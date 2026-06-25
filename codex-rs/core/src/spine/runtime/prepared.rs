@@ -67,14 +67,14 @@ impl SpinePreparedRootCompact {
         self.result.clone()
     }
 
-    pub(crate) fn validate_published_variable_history_len(
+    pub(crate) fn validate_published_variable_context_len(
         &self,
-        published_variable_history_len: usize,
+        published_variable_context_len: usize,
     ) -> Result<(), super::SpineError> {
-        let publication_variable_history_len = self.variable_context().len();
-        if publication_variable_history_len != published_variable_history_len {
+        let publication_variable_context_len = self.variable_context().len();
+        if publication_variable_context_len != published_variable_context_len {
             return Err(super::SpineError::InvalidStore(format!(
-                "spine root compact publication variable history length {publication_variable_history_len} does not match published variable history length {published_variable_history_len}"
+                "spine root compact publication variable context length {publication_variable_context_len} does not match published variable context length {published_variable_context_len}"
             )));
         }
         Ok(())

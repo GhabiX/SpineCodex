@@ -189,11 +189,11 @@ impl SpineHostEffects {
             publish_history(native_items, false).await?;
             return Ok(None);
         };
-        let published_variable_history_len = host_publish.variable_context.len();
+        let published_variable_context_len = host_publish.variable_context.len();
         let published_history = host_publish
             .published_variable_history_from_native_items(&native_items, is_fixed_prefix_item);
         publish_history(published_history, true).await?;
-        let spine_tree_snapshot = finalize_after_publish(published_variable_history_len).await?;
+        let spine_tree_snapshot = finalize_after_publish(published_variable_context_len).await?;
         after_installed().await?;
         Ok(spine_tree_snapshot)
     }
