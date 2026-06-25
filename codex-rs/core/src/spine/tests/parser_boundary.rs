@@ -191,6 +191,30 @@ fn parse_stack_replay_is_not_a_token_consumer() {
 }
 
 #[test]
+fn parse_stack_stays_out_of_host_publication_boundary() {
+    for path in ["parse_stack.rs", "parse_stack/tree.rs"] {
+        let source = fs::read_to_string(spine_src(path)).expect("read parse stack source");
+        for forbidden in [
+            "codex_protocol::models::ResponseItem",
+            "ParserPublication",
+            "ContextManager",
+            "SpineHistoryUpdate",
+            "SpineHostEffect",
+            "build_checkpoint",
+            "materialize_variable_context",
+            "materialize_history",
+            "replacement_history",
+            "host publication",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} should remain a reducer/tree-read layer and must not depend on host publication or h(PS) materialization through {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
 fn runtime_load_checkpoint_replay_routes_through_parser_state() {
     let load = fs::read_to_string(spine_src("runtime/load.rs")).expect("read runtime load source");
     assert!(
