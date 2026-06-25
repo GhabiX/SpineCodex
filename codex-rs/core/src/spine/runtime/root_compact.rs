@@ -444,10 +444,9 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let (variable_context, pending_parser_install, parser_install) =
-            prepared_txn.into_variable_context_and_install();
+        let parser_txn = prepared_txn.into_variable_context_and_install();
         let result = SpineRootCompactResult {
-            variable_context,
+            variable_context: parser_txn.variable_context,
             raw_boundary: self.raw_len,
             token_seq_after,
         };
@@ -467,8 +466,8 @@ impl SpineRuntime {
             memory_body: body,
             compact_checkpoint,
             root_compact_event,
-            pending_parser_install,
-            parser_install,
+            pending_parser_install: parser_txn.pending_install,
+            parser_install: parser_txn.final_install,
         })
     }
 }

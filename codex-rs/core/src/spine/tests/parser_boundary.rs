@@ -1346,9 +1346,13 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
         "runtime root compact should not expose parser materialization wording at the publication/install boundary"
     );
     assert!(
-        root_compact.contains("let (variable_context, pending_parser_install, parser_install)")
-            && root_compact.contains("SpineRootCompactResult {\n            variable_context,"),
-        "runtime root compact should name the parser publication payload as variable context"
+        root_compact.contains("let parser_txn = prepared_txn.into_variable_context_and_install();")
+            && root_compact.contains("variable_context: parser_txn.variable_context,")
+            && root_compact.contains("pending_parser_install: parser_txn.pending_install,")
+            && root_compact.contains("parser_install: parser_txn.final_install,")
+            && !root_compact
+                .contains("let (variable_context, pending_parser_install, parser_install)"),
+        "runtime root compact should consume parser txn parts through named fields"
     );
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
     assert!(
@@ -1358,6 +1362,7 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         parser.contains("struct ParserRootCompactPreparedInstall")
+            && parser.contains("struct ParserRootCompactTxnParts")
             && parser.contains("prepared_install: ParserRootCompactPreparedInstall")
             && parser.contains(
                 "ParserPreparedInstallPair<ParserRootCompactPendingInstall, ParserRootCompactInstall>"

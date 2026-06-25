@@ -61,6 +61,12 @@ pub(super) struct ParserRootCompactPublication {
     current_open_index: usize,
 }
 
+pub(super) struct ParserRootCompactTxnParts {
+    pub(super) variable_context: Vec<ResponseItem>,
+    pub(super) pending_install: ParserRootCompactPendingInstall,
+    pub(super) final_install: ParserRootCompactInstall,
+}
+
 #[derive(Debug)]
 pub(super) struct ParserObserveInstall {
     final_state: ParserPreparedState,
@@ -254,19 +260,13 @@ impl ParserRootCompactPreparedTxn {
             .validate_current_open_matches_variable_context_len()
     }
 
-    pub(super) fn into_variable_context_and_install(
-        self,
-    ) -> (
-        Vec<ResponseItem>,
-        ParserRootCompactPendingInstall,
-        ParserRootCompactInstall,
-    ) {
+    pub(super) fn into_variable_context_and_install(self) -> ParserRootCompactTxnParts {
         let (pending_install, final_install) = self.prepared_install.into_parts();
-        (
-            self.publication.into_variable_context(),
+        ParserRootCompactTxnParts {
+            variable_context: self.publication.into_variable_context(),
             pending_install,
             final_install,
-        )
+        }
     }
 
     pub(super) fn build_compact_checkpoint(
