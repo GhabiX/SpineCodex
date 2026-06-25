@@ -957,12 +957,14 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     );
     assert!(
         !prepared.contains("fn result(&self)")
+            && prepared.contains("fn variable_context(&self) -> &[ResponseItem]")
             && prepared.contains("fn publication_history(&self) -> &[ResponseItem]")
-            && prepared.contains("let publication_history_len = self.publication_history().len();")
-            && !prepared.contains("does not match materialized history length")
+            && prepared.contains(
+                "let publication_variable_history_len = self.variable_context().len();"
+            )
             && prepared.contains("#[cfg(test)]\n    pub(crate) fn clone_publication_result_for_test(&self) -> SpineRootCompactResult")
             && !prepared.contains("fn publication_result(&self) -> &SpineRootCompactResult"),
-        "runtime root compact prepared carrier should expose publication intent and avoid parser materialization wording"
+        "runtime root compact prepared carrier should expose variable-context publication intent and avoid parser materialization wording"
     );
     assert!(
         prepared.contains("fn into_publication_result_and_parser_install(")
@@ -1403,29 +1405,30 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "root compact host install should keep only the host-publication boundary wrapper"
     );
     assert!(
-        state_types.contains("fn publication_history(")
+        state_types.contains("fn variable_context(")
+            && state_types.contains("fn publication_history(")
             && state_types.contains("fn publication_variable_history_len(")
             && !state_types.contains("fn materialized("),
-        "root compact host install should expose publication-oriented accessors, not parser materialization internals"
+        "root compact host install should expose variable-context publication accessors, not parser materialization internals"
     );
     assert!(
-        state_types.contains("self.prepared.publication_history()")
+        state_types.contains("self.prepared.variable_context()")
             && state_types.contains("self.prepared.clone_publication_result_for_test()")
             && !state_types.contains("self.prepared.publication_result()")
             && !state_types.contains("self.prepared.result().materialized"),
-        "root compact host install should publish through prepared publication accessors, not parser result internals"
+        "root compact host install should publish through prepared variable-context accessors, not parser result internals"
     );
     let root_compact_session =
         fs::read_to_string(spine_src("runtime/session_state/root_compact_session.rs"))
             .expect("read root compact session source");
     assert!(
-        root_compact_session.contains(".publication_history().to_vec()")
+        root_compact_session.contains(".variable_context().to_vec()")
             && !root_compact_session.contains(".materialized().to_vec()"),
-        "root compact session should publish through the host-publication wrapper accessor"
+        "root compact session should publish through the host-publication wrapper variable-context accessor"
     );
     assert!(
         root_compact_session
-            .contains("let publication_history = install.publication_history().to_vec();")
+            .contains("let publication_history = install.variable_context().to_vec();")
             && !root_compact_session
                 .contains("let materialized = install.publication_history().to_vec();"),
         "root compact host publication locals should keep publication naming instead of parser materialization naming"

@@ -75,8 +75,14 @@ impl SpineSessionState {
         &mut self,
         replay: PreparedSpineReplayRuntime,
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        self.set_replayed(replay.raw_len, replay.runtime)?;
-        Ok(replay.materialized)
+        let PreparedSpineReplayRuntime {
+            raw_len,
+            runtime,
+            variable_context,
+            live_root_compacts: _,
+        } = replay;
+        self.set_replayed(raw_len, runtime)?;
+        Ok(variable_context)
     }
 
     pub(crate) fn invalidate(&mut self, reason: impl Into<String>) {
@@ -109,7 +115,7 @@ impl SpineSessionState {
             runtime.set_jit_enabled(self.jit_enabled);
             runtime.set_trim_enabled(self.trim_enabled);
         }
-        let materialized = runtime
+        let variable_context = runtime
             .as_ref()
             .map(|runtime| runtime.materialize_variable_context(raw_items))
             .transpose()?;
@@ -121,7 +127,7 @@ impl SpineSessionState {
         Ok(PreparedSpineReplayRuntime::new(
             raw_len,
             runtime,
-            materialized,
+            variable_context,
             live_root_compacts,
         ))
     }

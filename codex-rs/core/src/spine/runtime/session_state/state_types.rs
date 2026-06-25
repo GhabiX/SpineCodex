@@ -13,7 +13,7 @@ use super::super::prepared::SpinePreparedRootCompact;
 pub(crate) struct PreparedSpineReplayRuntime {
     pub(super) raw_len: u64,
     pub(super) runtime: Option<SpineRuntime>,
-    pub(super) materialized: Option<Vec<ResponseItem>>,
+    pub(super) variable_context: Option<Vec<ResponseItem>>,
     pub(super) live_root_compacts: Vec<LiveRootCompact>,
 }
 
@@ -118,13 +118,13 @@ impl PreparedSpineReplayRuntime {
     pub(super) fn new(
         raw_len: u64,
         runtime: Option<SpineRuntime>,
-        materialized: Option<Vec<ResponseItem>>,
+        variable_context: Option<Vec<ResponseItem>>,
         live_root_compacts: Vec<LiveRootCompact>,
     ) -> Self {
         Self {
             raw_len,
             runtime,
-            materialized,
+            variable_context,
             live_root_compacts,
         }
     }
@@ -137,8 +137,16 @@ impl PreparedSpineReplayRuntime {
         &self.live_root_compacts
     }
 
+    pub(crate) fn variable_context(&self) -> Option<&[ResponseItem]> {
+        self.variable_context.as_deref()
+    }
+
+    pub(crate) fn into_variable_context(self) -> Option<Vec<ResponseItem>> {
+        self.variable_context
+    }
+
     pub(crate) fn into_materialized(self) -> Option<Vec<ResponseItem>> {
-        self.materialized
+        self.into_variable_context()
     }
 }
 
@@ -152,8 +160,12 @@ impl SpineRootCompactHostInstall {
         Self { prepared }
     }
 
+    pub(crate) fn variable_context(&self) -> &[ResponseItem] {
+        self.prepared.variable_context()
+    }
+
     pub(crate) fn publication_history(&self) -> &[ResponseItem] {
-        self.prepared.publication_history()
+        self.variable_context()
     }
 
     #[cfg(test)]

@@ -111,11 +111,11 @@ impl SpineSessionState {
         }
         let mut runtime = SpineRuntime::load_or_create_with_jit(rollout_path, raw_len, false)?;
         runtime.set_trim_enabled(true);
-        let materialized = runtime.project_raw_history_with_trim(history_items)?;
+        let variable_context = runtime.project_raw_history_with_trim(history_items)?;
         Ok(Some(PreparedSpineReplayRuntime::new(
             raw_len,
             Some(runtime),
-            Some(materialized),
+            Some(variable_context),
             Vec::new(),
         )))
     }

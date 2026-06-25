@@ -68,7 +68,7 @@ fn root_compact_checkpoint_append_failure_can_retry_without_duplicate_mem() {
             &runtime.raw_live,
             &raw,
             result.raw_boundary,
-            &result.materialized,
+            result.variable_context(),
         )
         .expect("retry checkpoint should validate against reused mem and RootCompact marker");
     assert!(!matches!(

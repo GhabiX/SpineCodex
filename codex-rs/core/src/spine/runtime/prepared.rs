@@ -59,8 +59,12 @@ impl SpinePreparedRootCompact {
         }
     }
 
+    pub(crate) fn variable_context(&self) -> &[ResponseItem] {
+        self.result.variable_context()
+    }
+
     pub(crate) fn publication_history(&self) -> &[ResponseItem] {
-        self.result.publication_history()
+        self.variable_context()
     }
 
     #[cfg(test)]
@@ -72,7 +76,7 @@ impl SpinePreparedRootCompact {
         &self,
         published_variable_history_len: usize,
     ) -> Result<(), super::SpineError> {
-        let publication_variable_history_len = self.publication_history().len();
+        let publication_variable_history_len = self.variable_context().len();
         if publication_variable_history_len != published_variable_history_len {
             return Err(super::SpineError::InvalidStore(format!(
                 "spine root compact publication variable history length {publication_variable_history_len} does not match published variable history length {published_variable_history_len}"

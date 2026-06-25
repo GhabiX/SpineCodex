@@ -24,7 +24,7 @@ fn root_compact_checkpoint_validates_against_root_compact_marker() {
             &runtime.raw_live,
             &raw,
             result.raw_boundary,
-            &result.materialized,
+            result.variable_context(),
         )
         .expect("runtime compact checkpoint should bind to RootCompact marker");
 }
