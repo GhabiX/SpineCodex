@@ -77,7 +77,6 @@ use pending::PendingTransition;
 #[cfg(test)]
 use pending::SpineControlToolReceipt;
 pub(crate) use prepared::SpineCommitKind;
-pub(crate) use prepared::SpinePreparedCommit;
 pub(crate) use prepared::SpinePreparedRootCompact;
 #[cfg(test)]
 use replay::ReplayCommitClassification;

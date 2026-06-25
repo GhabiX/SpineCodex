@@ -866,6 +866,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     );
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    let runtime = fs::read_to_string(spine_src("runtime.rs")).expect("read runtime source");
+    let spine_mod = fs::read_to_string(spine_src("mod.rs")).expect("read spine mod source");
     assert!(
         commit.contains("SpinePreparedCommitInstall")
             && !commit.contains("SpinePreparedCommitApplication")
@@ -875,6 +877,11 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !commit.contains(".as_prepared_commit()")
             && !commit.contains(".into_prepared_commit()"),
         "runtime commit should consume parser-install intent directly instead of extracting prepared carrier internals"
+    );
+    assert!(
+        !runtime.contains("pub(crate) use prepared::SpinePreparedCommit")
+            && !spine_mod.contains("pub(crate) use runtime::SpinePreparedCommit"),
+        "SpinePreparedCommit should remain runtime/prepared.rs construction detail, not a re-exported parser publication surface"
     );
     for direct_field_access in [
         "prepared.parser_install",
