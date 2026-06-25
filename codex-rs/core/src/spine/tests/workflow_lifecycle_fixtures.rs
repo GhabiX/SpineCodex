@@ -6,15 +6,13 @@ pub(crate) fn open_task(
     call_id: &str,
     summary: &str,
 ) {
-    observe_spine_request(runtime, raw, SPINE_TOOL_OPEN, call_id);
-    runtime
-        .stage_open(call_id.to_string(), summary.to_string())
-        .expect("stage open");
-
-    observe_function_output(runtime, raw, call_id);
-    runtime
-        .maybe_commit_output(call_id, None)
-        .expect("commit open");
+    open_task_with_token_baselines(
+        runtime,
+        raw,
+        call_id,
+        summary,
+        SpineTokenBaselines::default(),
+    );
 }
 
 pub(crate) fn open_task_with_token_baselines(
@@ -71,16 +69,13 @@ pub(crate) fn close_task(
     call_id: &str,
     node_id: &str,
 ) {
-    observe_spine_request(runtime, raw, SPINE_TOOL_CLOSE, call_id);
-    runtime
-        .stage_close(call_id.to_string(), "test node memory".to_string())
-        .expect("stage close");
-    let memory_assembly = close_memory_assembly_from_source_plan(runtime, raw, call_id, node_id);
-
-    observe_function_output(runtime, raw, call_id);
-    runtime
-        .maybe_commit_output(call_id, Some(memory_assembly))
-        .expect("commit close");
+    close_task_with_token_baselines(
+        runtime,
+        raw,
+        call_id,
+        node_id,
+        SpineTokenBaselines::default(),
+    );
 }
 
 pub(crate) fn close_task_with_token_baselines(
@@ -109,22 +104,14 @@ pub(crate) fn next_task(
     closing_node_id: &str,
     next_summary: &str,
 ) -> SpineCommitKind {
-    observe_spine_request(runtime, raw, SPINE_TOOL_NEXT, call_id);
-    runtime
-        .stage_next(
-            call_id.to_string(),
-            next_summary.to_string(),
-            "test node memory".to_string(),
-        )
-        .expect("stage next");
-    let memory_assembly =
-        close_memory_assembly_from_source_plan(runtime, raw, call_id, closing_node_id);
-
-    observe_function_output(runtime, raw, call_id);
-    runtime
-        .maybe_commit_output(call_id, Some(memory_assembly))
-        .expect("commit next")
-        .expect("next should commit")
+    next_task_with_token_baselines(
+        runtime,
+        raw,
+        call_id,
+        closing_node_id,
+        next_summary,
+        SpineTokenBaselines::default(),
+    )
 }
 
 pub(crate) fn next_task_with_token_baselines(
