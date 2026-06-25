@@ -213,13 +213,6 @@ pub(super) fn full_history_index_for_spine_mutable_context_boundary(
     HostHistoryLens::new(history).full_index_for_mutable_boundary(context_index)
 }
 
-pub(super) fn raw_context_item_for_spine_mutable_context_index(
-    history: &[ResponseItem],
-    context_index: usize,
-) -> Result<&ResponseItem, SpineError> {
-    HostHistoryLens::new(history).raw_item_for_mutable_index(context_index)
-}
-
 fn is_spine_runtime_contextual_user_fragment(content_item: &ContentItem) -> bool {
     matches!(content_item, ContentItem::InputText { text } if {
         TurnAborted::matches_text(text) || {
@@ -413,8 +406,9 @@ fn source_plan_entry_from_response_item(
     user_anchor: Option<u64>,
     raw_context_items: &[ResponseItem],
 ) -> Result<SpineCompactSourcePlanEntry, SpineError> {
-    let item =
-        raw_context_item_for_spine_mutable_context_index(raw_context_items, context_index)?.clone();
+    let item = HostHistoryLens::new(raw_context_items)
+        .raw_item_for_mutable_index(context_index)?
+        .clone();
     let source_hash = hash_response_items(std::slice::from_ref(&item))?;
     Ok(SpineCompactSourcePlanEntry {
         context_index,

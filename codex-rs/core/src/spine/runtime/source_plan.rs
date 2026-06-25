@@ -9,7 +9,6 @@ use super::SpineRuntime;
 use super::support::HostHistoryLens;
 use super::support::collect_source_plan_entries_from_visible_refs;
 use super::support::is_real_user_message;
-use super::support::raw_context_item_for_spine_mutable_context_index;
 use super::support::validate_source_plan_context_index;
 use crate::spine::io::hash_response_items;
 use crate::spine::model::NodeId;
@@ -178,9 +177,9 @@ fn validate_close_source_plan_entries(
             close_context_end,
             &mut previous_context_index,
         )?;
-        let host_item =
-            raw_context_item_for_spine_mutable_context_index(raw_context_items, entry.context_index)
-                .map_err(|_| {
+        let host_item = HostHistoryLens::new(raw_context_items)
+            .raw_item_for_mutable_index(entry.context_index)
+            .map_err(|_| {
             SpineError::CompactFailure(format!(
                 "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
                 entry.source_ordinal,
