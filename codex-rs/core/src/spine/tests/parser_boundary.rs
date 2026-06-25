@@ -678,6 +678,13 @@ fn parser_publication_plan_fields_are_parser_private() {
         .and_then(|tail| tail.split("struct ParserPublicationUpdate").next())
         .expect("ParserPublicationPlan definition");
     assert!(
+        parser.contains("pub(super) struct ParserPublicationPlan")
+            && parser.contains("pub(super) struct ParserPublicationUpdate")
+            && !parser.contains("pub(crate) struct ParserPublicationPlan")
+            && !parser.contains("pub(crate) struct ParserPublicationUpdate"),
+        "parser publication carriers should be visible only inside the spine module, not crate-wide"
+    );
+    assert!(
         !publication_plan.contains("pub(super) operation")
             && !publication_plan.contains("pub(super) suffix_start")
             && !publication_plan.contains("pub(super) replacement_prefix")

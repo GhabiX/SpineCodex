@@ -103,7 +103,7 @@ pub(super) struct ParserRootCompactPendingInstall {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ParserPublicationPlan {
+pub(super) struct ParserPublicationPlan {
     operation: &'static str,
     suffix_start: usize,
     replacement_prefix: Vec<ResponseItem>,
@@ -112,7 +112,7 @@ pub(crate) struct ParserPublicationPlan {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ParserPublicationUpdate {
+pub(super) struct ParserPublicationUpdate {
     operation: &'static str,
     suffix_start: usize,
     expected_history: Vec<ResponseItem>,
@@ -134,7 +134,7 @@ impl ParserPublicationUpdate {
         }
     }
 
-    pub(crate) fn into_history_update<T>(
+    pub(super) fn into_history_update<T>(
         self,
         call_id: &str,
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
