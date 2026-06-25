@@ -708,8 +708,8 @@ fn runtime_commit_routes_open_with_toolcall_publication_through_prepared_commit(
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
     assert!(
-        publication_parts.contains("prepared_commit.full_variable_context_publication_update("),
-        "open-with-toolcall publication should ask the prepared install carrier to materialize variable h(PS)"
+        publication_parts.contains("prepared_commit.full_variable_context_host_history_update("),
+        "open-with-toolcall publication should ask the prepared install carrier to build host-history updates from variable h(PS)"
     );
     assert!(
         !publication_parts.contains("parser_install.full_context_publication_update("),
@@ -735,16 +735,16 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         .nth(1)
         .and_then(|tail| tail.split("impl ParserCommitPendingInstall").next())
         .expect("ParserCommitInstall impl block");
-    let full_variable_context_publication_update = parser_commit_install
-        .split("fn full_variable_context_publication_update(")
+    let full_variable_context_host_history_update = parser_commit_install
+        .split("fn full_variable_context_host_history_update(")
         .nth(1)
-        .expect("full variable context publication update method");
+        .expect("full variable context host history update method");
     assert!(
-        full_variable_context_publication_update.contains(".materialize_variable_context("),
+        full_variable_context_host_history_update.contains(".materialize_variable_context("),
         "prepared commit publication should materialize variable context through ParserPreparedState"
     );
     assert!(
-        !full_variable_context_publication_update
+        !full_variable_context_host_history_update
             .contains("render_parse_stack_to_context_with_trim_projection("),
         "prepared commit publication must not bypass the parser-owned variable context helper"
     );
@@ -773,8 +773,8 @@ fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() 
         "runtime/commit.rs must not materialize h(PS) directly while preparing toolcall projection publication"
     );
     assert!(
-        publication_parts.contains(".full_variable_context_publication_update("),
-        "toolcall projection publication should route h(PS) materialization through ParserState"
+        publication_parts.contains(".full_variable_context_host_history_update("),
+        "toolcall projection publication should route h(PS) host-history update construction through ParserState"
     );
 }
 
@@ -804,6 +804,10 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
             && publication_parts.contains("let mut build_update = Some(build_update)")
             && publication_parts.contains("return Ok(Some(update));"),
         "runtime commit should not branch on a separate prepared-publication enum"
+    );
+    assert!(
+        !publication_parts.contains("update.into_history_update("),
+        "runtime commit fallback should not convert parser publication updates directly"
     );
     assert!(
         !publication_parts.contains("plan.replacement_prefix")
@@ -930,6 +934,10 @@ fn parser_publication_plan_fields_are_parser_private() {
     assert!(
         parser.contains("fn full_variable_context_publication_update("),
         "parser should centralize full h(PS) publication update construction in one helper"
+    );
+    assert!(
+        parser.contains("fn full_variable_context_host_history_update("),
+        "parser should expose a full variable-context host-history update facade"
     );
     assert_eq!(
         parser.matches("ParserPublicationUpdate::new(").count(),
@@ -1059,7 +1067,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         prepared.contains("fn apply_variable_context_publication_update<T, F>(")
             && !prepared.contains("fn apply_publication_history_update<T, F>(")
-            && prepared.contains("fn full_variable_context_publication_update(")
+            && prepared.contains("fn full_variable_context_host_history_update(")
             && !prepared.contains("fn parser_install(&self) -> Option<&ParserCommitInstall>")
             && prepared.contains("fn trim_candidate_inputs(")
             && prepared.contains("fn mem_for_accounting(&self)")
@@ -1101,7 +1109,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && prepared_commit_install_impl
                 .contains("fn apply_variable_context_publication_update")
             && !prepared_commit_install_impl.contains("fn apply_publication_history_update")
-            && prepared_commit_install_impl.contains("fn full_variable_context_publication_update")
+            && prepared_commit_install_impl
+                .contains("fn full_variable_context_host_history_update")
             && prepared_commit_install_impl.contains("self.prepared.publication_plan.as_ref()")
             && prepared_commit_install_impl.contains("self.prepared.parser_install.as_ref()")
             && prepared_commit_install_impl.contains("self.prepared.mem_for_accounting.as_ref()"),

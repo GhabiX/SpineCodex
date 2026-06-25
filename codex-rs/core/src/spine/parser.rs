@@ -313,13 +313,15 @@ impl ParserCommitInstall {
         self.final_state
     }
 
-    pub(super) fn full_variable_context_publication_update(
+    pub(super) fn full_variable_context_host_history_update<T>(
         &self,
+        call_id: &str,
         operation: &'static str,
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
         history_items: &[ResponseItem],
-    ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, SpineError> {
         let materialized = self
             .final_state
             .materialize_variable_context(raw_items, trim_projection)?;
@@ -328,6 +330,7 @@ impl ParserCommitInstall {
             materialized,
             history_items,
         ))
+        .map(|update| update.map(|update| update.into_history_update(call_id, build_update)))
     }
 }
 
@@ -844,19 +847,22 @@ impl ParserState {
         materialize_parse_stack_variable_context(&self.parse_stack, raw_items, trim_projection)
     }
 
-    pub(super) fn full_variable_context_publication_update(
+    pub(super) fn full_variable_context_host_history_update<T>(
         &self,
+        call_id: &str,
         operation: &'static str,
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
         history_items: &[ResponseItem],
-    ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, SpineError> {
         let materialized = self.materialize_variable_context(raw_items, trim_projection)?;
         Ok(full_variable_context_publication_update(
             operation,
             materialized,
             history_items,
         ))
+        .map(|update| update.map(|update| update.into_history_update(call_id, build_update)))
     }
 
     pub(super) fn variable_context_len(

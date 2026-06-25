@@ -9,7 +9,6 @@ use crate::spine::model::TrimProjection;
 use crate::spine::parser::ParserCommitInstall;
 use crate::spine::parser::ParserPublicationPlan;
 use crate::spine::parser::ParserPublicationToolcallSegment;
-use crate::spine::parser::ParserPublicationUpdate;
 use crate::spine::parser::ParserRootCompactInstall;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -226,21 +225,25 @@ impl SpinePreparedCommitInstall {
         Ok(update.map(|update| update.into_history_update(call_id, build_update)))
     }
 
-    pub(super) fn full_variable_context_publication_update(
+    pub(super) fn full_variable_context_host_history_update<T>(
         &self,
+        call_id: &str,
         operation: &'static str,
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
         history_items: &[ResponseItem],
-    ) -> Result<Option<ParserPublicationUpdate>, super::SpineError> {
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, super::SpineError> {
         let Some(parser_install) = self.prepared.parser_install.as_ref() else {
             return Ok(None);
         };
-        parser_install.full_variable_context_publication_update(
+        parser_install.full_variable_context_host_history_update(
+            call_id,
             operation,
             raw_items,
             trim_projection,
             history_items,
+            build_update,
         )
     }
 

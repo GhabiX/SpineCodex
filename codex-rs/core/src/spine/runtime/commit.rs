@@ -699,27 +699,30 @@ impl SpineRuntime {
             return Ok(None);
         }
         let trim_projection = self.current_trim_projection()?;
-        let update = if let Some(prepared_commit) = prepared_commit {
-            prepared_commit.full_variable_context_publication_update(
-                "spine prepared commit projection",
-                raw_items,
-                &trim_projection,
-                history_items,
-            )?
-        } else {
-            self.parser.full_variable_context_publication_update(
-                "spine toolcall projection",
-                raw_items,
-                &trim_projection,
-                history_items,
-            )?
-        };
         let build_update = build_update.ok_or_else(|| {
             SpineError::Invariant(
                 "spine publication update builder was consumed before fallback".to_string(),
             )
         })?;
-        Ok(update.map(|update| update.into_history_update(call_id, build_update)))
+        if let Some(prepared_commit) = prepared_commit {
+            prepared_commit.full_variable_context_host_history_update(
+                call_id,
+                "spine prepared commit projection",
+                raw_items,
+                &trim_projection,
+                history_items,
+                build_update,
+            )
+        } else {
+            self.parser.full_variable_context_host_history_update(
+                call_id,
+                "spine toolcall projection",
+                raw_items,
+                &trim_projection,
+                history_items,
+                build_update,
+            )
+        }
     }
 
     fn prepare_close_commit(
