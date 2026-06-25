@@ -8,7 +8,6 @@ use std::path::Path;
 use super::runtime::IntoSpineNodeMemory;
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
-use super::store::SpineCloneBoundary;
 
 pub(crate) struct HostEffects {
     inner: super::runtime::SpineHostEffects,
@@ -130,7 +129,7 @@ impl HostEffects {
         Self::from_runtime(super::runtime::SpineHostEffects::none())
     }
 
-    fn from_runtime(inner: super::runtime::SpineHostEffects) -> Self {
+    pub(crate) fn from_runtime(inner: super::runtime::SpineHostEffects) -> Self {
         Self { inner }
     }
 
@@ -515,19 +514,4 @@ pub(crate) fn install_replay(
     replay: ReplayRuntime,
 ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
     state.install_replay(replay.inner)
-}
-
-pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request(
-    state: &SpineSessionState,
-    raw_items: &[Option<ResponseItem>],
-    expected_history: Vec<ResponseItem>,
-    reference_context_item: Option<TurnContextItem>,
-) -> Result<HostEffects, SpineError> {
-    state
-        .materialized_history_host_effects_if_no_pending_tool_request(
-            raw_items,
-            expected_history,
-            reference_context_item,
-        )
-        .map(HostEffects::from_runtime)
 }
