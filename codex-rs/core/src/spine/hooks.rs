@@ -677,6 +677,32 @@ impl GroupedToolcallOutputRecordingPlan {
     }
 }
 
+impl<'a> ToolcallOutputRecordingRequest<'a> {
+    fn into_runtime(self) -> super::runtime::SpineToolcallOutputRecordingRequest<'a> {
+        match self {
+            Self::Single { call_id, raw_items } => {
+                super::runtime::SpineToolcallOutputRecordingRequest::Single { call_id, raw_items }
+            }
+            Self::Grouped { output_items } => {
+                super::runtime::SpineToolcallOutputRecordingRequest::Grouped { output_items }
+            }
+        }
+    }
+}
+
+impl ToolcallOutputRecordingPlan {
+    fn from_runtime(inner: super::runtime::SpineToolcallOutputRecordingPlan) -> Self {
+        match inner {
+            super::runtime::SpineToolcallOutputRecordingPlan::Single(plan) => {
+                Self::Single(plan.map(|inner| SingleToolcallOutputRecordingPlan { inner }))
+            }
+            super::runtime::SpineToolcallOutputRecordingPlan::Grouped(inner) => {
+                Self::Grouped(GroupedToolcallOutputRecordingPlan { inner })
+            }
+        }
+    }
+}
+
 impl ReplayRuntime {
     pub(crate) fn has_runtime(&self) -> bool {
         self.runtime.is_some()
@@ -793,20 +819,9 @@ pub(crate) fn prepare_toolcall_output_recording(
     state: &SpineSessionState,
     request: ToolcallOutputRecordingRequest<'_>,
 ) -> Result<ToolcallOutputRecordingPlan, SpineError> {
-    match request {
-        ToolcallOutputRecordingRequest::Single { call_id, raw_items } => state
-            .prepare_single_toolcall_output_recording(call_id, raw_items)
-            .map(|plan| {
-                ToolcallOutputRecordingPlan::Single(
-                    plan.map(|inner| SingleToolcallOutputRecordingPlan { inner }),
-                )
-            }),
-        ToolcallOutputRecordingRequest::Grouped { output_items } => state
-            .prepare_grouped_toolcall_output_recording(output_items)
-            .map(|inner| {
-                ToolcallOutputRecordingPlan::Grouped(GroupedToolcallOutputRecordingPlan { inner })
-            }),
-    }
+    state
+        .prepare_toolcall_output_recording(request.into_runtime())
+        .map(ToolcallOutputRecordingPlan::from_runtime)
 }
 
 pub(crate) fn prepare_jit_replay_from_rollout_items(
