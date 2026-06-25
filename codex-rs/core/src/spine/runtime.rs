@@ -391,7 +391,7 @@ impl SpineRuntime {
         self.materialize_variable_context(raw_items)
     }
 
-    pub(crate) fn materialized_history_len(
+    pub(crate) fn variable_context_len(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<usize, SpineError> {
@@ -399,6 +399,13 @@ impl SpineRuntime {
         let trim_projection = self.current_trim_projection()?;
         self.parser
             .materialized_variable_context_len(raw_items, &trim_projection)
+    }
+
+    pub(crate) fn materialized_history_len(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<usize, SpineError> {
+        self.variable_context_len(raw_items)
     }
 }
 
