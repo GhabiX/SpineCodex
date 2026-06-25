@@ -23,7 +23,6 @@ use crate::spine::hooks::CompletedToolCallOutputEvidence;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
-use crate::spine::hooks::NativeCompactEvidence;
 use crate::spine::hooks::ObservedContextItem;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
@@ -1411,9 +1410,9 @@ impl Session {
 
     pub(crate) async fn on_compact(
         &self,
-        evidence: NativeCompactEvidence<'_>,
+        compacted_history: &[ResponseItem],
     ) -> CodexResult<HostEffects> {
-        self.prepare_spine_root_compact_from_native_history(evidence)
+        self.prepare_spine_root_compact_from_native_history(compacted_history)
             .await
             .map_err(|err| CodexErr::SpineTerminalFailure {
                 operation: "install Spine root compact".to_string(),
@@ -1423,7 +1422,7 @@ impl Session {
 
     async fn prepare_spine_root_compact_from_native_history(
         &self,
-        evidence: NativeCompactEvidence<'_>,
+        compacted_history: &[ResponseItem],
     ) -> Result<HostEffects, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(HostEffects::none());
@@ -1452,7 +1451,7 @@ impl Session {
             &mut guard,
             CompactEvidence {
                 rollout_path: &rollout_path,
-                compacted_history: evidence.compacted_history,
+                compacted_history,
                 raw_items: &raw_items,
                 close_provider_input_tokens,
             },
@@ -1475,11 +1474,7 @@ impl Session {
                 fallback_spine_root_compact_source.as_slice()
             }
         };
-        let effects = self
-            .on_compact(NativeCompactEvidence {
-                compacted_history: spine_root_compact_source,
-            })
-            .await?;
+        let effects = self.on_compact(spine_root_compact_source).await?;
         let publish_reference_context_item = reference_context_item.clone();
         let spine_tree_snapshot = effects
             .apply_root_compact_history_publication(
