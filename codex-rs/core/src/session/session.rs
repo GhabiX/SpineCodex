@@ -3,7 +3,6 @@ use crate::goals::GoalRuntimeState;
 use crate::session::spine_pressure_prompt::SpinePressurePromptState;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineSessionState;
-use crate::spine::hooks;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -938,6 +937,24 @@ impl Session {
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
                     attestation_provider,
+                    config
+                        .debug_capture_requests
+                        .then(|| {
+                            rollout_path.as_ref().and_then(|rollout_path| {
+                                match crate::spine::SpineStore::debug_request_dir_for_rollout(
+                                    rollout_path,
+                                ) {
+                                    Ok(path) => Some(path),
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            "failed to resolve debug request capture directory: {err}"
+                                        );
+                                        None
+                                    }
+                                }
+                            })
+                        })
+                        .flatten(),
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
@@ -948,7 +965,7 @@ impl Session {
             let spine_enabled = config.features.enabled(Feature::SpineJit)
                 || config.features.enabled(Feature::SpineTrim);
             let spine = spine_enabled.then(|| {
-                Mutex::new(hooks::new_session_state(
+                Mutex::new(SpineSessionState::new_with_features(
                     config.features.enabled(Feature::SpineJit),
                     config.features.enabled(Feature::SpineTrim),
                 ))

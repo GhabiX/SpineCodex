@@ -111,10 +111,6 @@ pub(crate) struct ObservedContextItem<'a> {
     pub(crate) item: &'a ResponseItem,
 }
 
-pub(crate) fn new_session_state(jit_enabled: bool, trim_enabled: bool) -> SpineSessionState {
-    SpineSessionState::new_with_features(jit_enabled, trim_enabled)
-}
-
 pub(crate) fn ensure_runtime(
     state: &mut SpineSessionState,
     rollout_path: &Path,
@@ -289,13 +285,6 @@ pub(crate) fn test_seed_next_control_request<M: IntoSpineNodeMemory>(
     memory: M,
 ) -> Result<(), SpineError> {
     state.test_seed_next_control_request(call_id, summary, memory)
-}
-
-pub(crate) fn observe_provider_token_usage(
-    state: &mut SpineSessionState,
-    input_tokens: Option<i64>,
-) {
-    state.observe_provider_token_usage(input_tokens);
 }
 
 impl<'a> ToolCallEvidence<'a> {
