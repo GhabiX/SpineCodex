@@ -121,35 +121,6 @@ pub(crate) fn prepare_test_root_compact_apply_with_checkpoint(
     )
 }
 
-pub(crate) fn install_cloned_sidecar_for_fork(
-    state: &mut SpineSessionState,
-    boundary: &SpineCloneBoundary,
-    target_rollout_path: &Path,
-    raw_items: &[Option<ResponseItem>],
-) -> Result<(), SpineError> {
-    state.install_cloned_sidecar_for_fork(boundary, target_rollout_path, raw_items)
-}
-
-pub(crate) fn abort_pending_tool(
-    state: &mut SpineSessionState,
-    call_id: &str,
-) -> Result<bool, SpineError> {
-    state.abort_pending_tool(call_id)
-}
-
-pub(crate) fn abort_any_pending(
-    state: &mut SpineSessionState,
-) -> Result<Option<String>, SpineError> {
-    state.abort_any_pending()
-}
-
-pub(crate) fn is_control_output_call_id(
-    state: &SpineSessionState,
-    call_id: &str,
-) -> Result<bool, SpineError> {
-    state.is_control_output_call_id(call_id)
-}
-
 #[cfg(test)]
 pub(crate) fn test_seed_open_control_request(
     state: &mut SpineSessionState,

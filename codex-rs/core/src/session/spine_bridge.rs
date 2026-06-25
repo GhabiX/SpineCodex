@@ -386,12 +386,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        hooks::install_cloned_sidecar_for_fork(
-            &mut *guard,
-            boundary,
-            &target_rollout_path,
-            raw_items,
-        )
+        guard.install_cloned_sidecar_for_fork(boundary, &target_rollout_path, raw_items)
     }
 
     pub(super) async fn prepare_spine_replay_from_rollout_items(
@@ -588,7 +583,7 @@ impl Session {
             return false;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = hooks::abort_pending_tool(&mut guard, call_id) else {
+        let Ok(aborted) = guard.abort_pending_tool(call_id) else {
             return false;
         };
         if aborted {
@@ -608,7 +603,7 @@ impl Session {
             return None;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = hooks::abort_any_pending(&mut guard) else {
+        let Ok(aborted) = guard.abort_any_pending() else {
             return None;
         };
         if let Some(call_id) = aborted.as_deref() {
@@ -1343,7 +1338,7 @@ impl Session {
             return Ok(false);
         };
         let guard = spine_slot.lock().await;
-        hooks::is_control_output_call_id(&guard, call_id)
+        guard.is_control_output_call_id(call_id)
     }
 
     #[cfg(test)]
