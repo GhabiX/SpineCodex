@@ -79,14 +79,10 @@ pub(in crate::spine) enum ControlIntent {
 impl ControlIntent {
     pub(in crate::spine) fn token_sequence(self) -> &'static [LexedTokenKind] {
         match self {
-            Self::Ordinary => &[LexedTokenKind::ToolCall],
-            Self::Open => &[LexedTokenKind::Open, LexedTokenKind::ToolCall],
-            Self::Close => &[LexedTokenKind::Close, LexedTokenKind::ToolCall],
-            Self::Next => &[
-                LexedTokenKind::Close,
-                LexedTokenKind::Open,
-                LexedTokenKind::ToolCall,
-            ],
+            Self::Ordinary => ORDINARY_TOOLCALL_TOKENS,
+            Self::Open => OPEN_TOOLCALL_TOKENS,
+            Self::Close => CLOSE_TOOLCALL_TOKENS,
+            Self::Next => NEXT_TOOLCALL_TOKENS,
         }
     }
 
@@ -102,6 +98,16 @@ pub(in crate::spine) enum LexedTokenKind {
     Close,
     ToolCall,
 }
+
+const ORDINARY_TOOLCALL_TOKENS: &[LexedTokenKind] = &[LexedTokenKind::ToolCall];
+const OPEN_TOOLCALL_TOKENS: &[LexedTokenKind] = &[LexedTokenKind::Open, LexedTokenKind::ToolCall];
+const CLOSE_TOOLCALL_TOKENS: &[LexedTokenKind] = &[LexedTokenKind::Close, LexedTokenKind::ToolCall];
+const NEXT_TOOLCALL_TOKENS: &[LexedTokenKind] = &[
+    LexedTokenKind::Close,
+    LexedTokenKind::Open,
+    LexedTokenKind::ToolCall,
+];
+const ROOT_COMPACT_TOKENS: &[LexedTokenKind] = &[LexedTokenKind::Compact, LexedTokenKind::Open];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::spine) struct ControlToolCallPlan {
@@ -147,10 +153,7 @@ impl RootCompactPlan {
         next_open_input_tokens: Option<i64>,
         next_open_context_tokens: Option<i64>,
     ) -> Result<SpineToken, SpineError> {
-        debug_assert_eq!(
-            self.token_sequence(),
-            &[LexedTokenKind::Compact, LexedTokenKind::Open]
-        );
+        debug_assert_eq!(self.token_sequence(), ROOT_COMPACT_TOKENS);
         lex_root_compact_token(
             memory,
             next_open_index,
@@ -166,10 +169,7 @@ impl RootCompactPlan {
         next_open_input_tokens: Option<i64>,
         next_open_context_tokens: Option<i64>,
     ) -> Result<LexedTokenBatch, SpineError> {
-        debug_assert_eq!(
-            self.token_sequence(),
-            &[LexedTokenKind::Compact, LexedTokenKind::Open]
-        );
+        debug_assert_eq!(self.token_sequence(), ROOT_COMPACT_TOKENS);
         Ok(LexedTokenBatch {
             events: Vec::new(),
             tokens: vec![lex_root_compact_token(
@@ -191,10 +191,7 @@ impl RootCompactPlan {
         next_open_input_tokens: Option<i64>,
         next_open_context_tokens: Option<i64>,
     ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
-        debug_assert_eq!(
-            self.token_sequence(),
-            &[LexedTokenKind::Compact, LexedTokenKind::Open]
-        );
+        debug_assert_eq!(self.token_sequence(), ROOT_COMPACT_TOKENS);
         lex_root_compact_event_token(
             node,
             boundary,
@@ -209,7 +206,7 @@ impl RootCompactPlan {
 
 pub(in crate::spine) fn plan_root_compact() -> RootCompactPlan {
     RootCompactPlan {
-        token_sequence: &[LexedTokenKind::Compact, LexedTokenKind::Open],
+        token_sequence: ROOT_COMPACT_TOKENS,
     }
 }
 
