@@ -128,16 +128,8 @@ impl SpineRootCompactResult {
         &self.materialized
     }
 
-    pub(crate) fn publication_history(&self) -> &[ResponseItem] {
-        self.variable_context()
-    }
-
     pub(crate) fn into_variable_context(self) -> Vec<ResponseItem> {
         self.materialized
-    }
-
-    pub(crate) fn into_publication_history(self) -> Vec<ResponseItem> {
-        self.into_variable_context()
     }
 }
 
