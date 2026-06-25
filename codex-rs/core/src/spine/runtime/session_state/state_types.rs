@@ -33,10 +33,10 @@ pub(crate) struct SpineCompactEvidence<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SpineObservedContextItem<'a> {
-    pub(crate) raw_ordinal: u64,
-    pub(crate) context_index: usize,
-    pub(crate) item: &'a ResponseItem,
+pub(super) struct SpineObservedContextItem<'a> {
+    pub(super) raw_ordinal: u64,
+    pub(super) context_index: usize,
+    pub(super) item: &'a ResponseItem,
 }
 
 #[derive(Clone, Debug)]

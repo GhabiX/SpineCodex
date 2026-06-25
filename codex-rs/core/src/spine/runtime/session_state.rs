@@ -23,7 +23,6 @@ pub(in crate::spine) use state_types::SpineGroupedToolcallOutputRecordingPlan;
 pub(crate) use state_types::SpineInitEvidence;
 pub(crate) use state_types::SpineMessageEvidence;
 pub(crate) use state_types::SpineNativeCompactEvidence;
-pub(crate) use state_types::SpineObservedContextItem;
 pub(crate) use state_types::SpineRootCompactHostInstall;
 pub(in crate::spine) use state_types::SpineSingleToolcallOutputRecordingPlan;
 pub(crate) use toolcall_host_commit::SpineCompletedToolCallHostOutcome;
