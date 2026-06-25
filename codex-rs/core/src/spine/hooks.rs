@@ -87,8 +87,7 @@ pub(crate) struct MessageEvidence<'a> {
 }
 
 pub(crate) struct ToolCallEvidence<'a> {
-    kind: ToolCallEvidenceKind<'a>,
-    force_ordinary: bool,
+    inner: super::runtime::SpineToolCallEvidence<'a>,
 }
 
 pub(crate) struct ToolcallHookEvidence<'a> {
@@ -299,24 +298,10 @@ pub(crate) fn observe_provider_token_usage(
     state.observe_provider_token_usage(input_tokens);
 }
 
-enum ToolCallEvidenceKind<'a> {
-    Single {
-        item: &'a ResponseItem,
-    },
-    Grouped {
-        commit_call_id: &'a str,
-        tool_call_ids: &'a [String],
-        output_items: &'a [ResponseItem],
-    },
-    #[cfg(test)]
-    Runtime(super::runtime::SpineToolCallEvidence<'a>),
-}
-
 impl<'a> ToolCallEvidence<'a> {
     pub(crate) fn single(item: &'a ResponseItem) -> Self {
         Self {
-            kind: ToolCallEvidenceKind::Single { item },
-            force_ordinary: false,
+            inner: super::runtime::SpineToolCallEvidence::single(item),
         }
     }
 
@@ -325,7 +310,13 @@ impl<'a> ToolCallEvidence<'a> {
         tool_call_ids: &'a [String],
         output_items: &'a [ResponseItem],
     ) -> Self {
-        Self::grouped_with_policy(commit_call_id, tool_call_ids, output_items, false)
+        Self {
+            inner: super::runtime::SpineToolCallEvidence::grouped(
+                commit_call_id,
+                tool_call_ids,
+                output_items,
+            ),
+        }
     }
 
     pub(crate) fn grouped_as_ordinary(
@@ -333,58 +324,19 @@ impl<'a> ToolCallEvidence<'a> {
         tool_call_ids: &'a [String],
         output_items: &'a [ResponseItem],
     ) -> Self {
-        Self::grouped_with_policy(commit_call_id, tool_call_ids, output_items, true)
-    }
-
-    fn grouped_with_policy(
-        commit_call_id: &'a str,
-        tool_call_ids: &'a [String],
-        output_items: &'a [ResponseItem],
-        force_ordinary: bool,
-    ) -> Self {
         Self {
-            kind: ToolCallEvidenceKind::Grouped {
+            inner: super::runtime::SpineToolCallEvidence::grouped_as_ordinary(
                 commit_call_id,
                 tool_call_ids,
                 output_items,
-            },
-            force_ordinary,
+            ),
         }
     }
 
     pub(crate) fn completed_output(
         &self,
     ) -> Result<Option<CompletedToolCallOutputEvidence<'a>>, SpineError> {
-        let runtime_evidence = match &self.kind {
-            ToolCallEvidenceKind::Single { item } => {
-                super::runtime::SpineToolCallEvidence::single(item)
-            }
-            ToolCallEvidenceKind::Grouped {
-                commit_call_id,
-                tool_call_ids,
-                output_items,
-            } if self.force_ordinary => super::runtime::SpineToolCallEvidence::grouped_as_ordinary(
-                commit_call_id,
-                tool_call_ids,
-                output_items,
-            ),
-            ToolCallEvidenceKind::Grouped {
-                commit_call_id,
-                tool_call_ids,
-                output_items,
-            } => super::runtime::SpineToolCallEvidence::grouped(
-                commit_call_id,
-                tool_call_ids,
-                output_items,
-            ),
-            #[cfg(test)]
-            ToolCallEvidenceKind::Runtime(evidence) => {
-                return evidence
-                    .completed_output()
-                    .map(|output| output.map(CompletedToolCallOutputEvidence::from_runtime));
-            }
-        };
-        runtime_evidence
+        self.inner
             .completed_output()
             .map(|output| output.map(CompletedToolCallOutputEvidence::from_runtime))
     }
@@ -733,10 +685,7 @@ impl HistoryHostEffect {
 #[cfg(test)]
 impl<'a> From<super::runtime::SpineToolCallEvidence<'a>> for ToolCallEvidence<'a> {
     fn from(evidence: super::runtime::SpineToolCallEvidence<'a>) -> Self {
-        Self {
-            kind: ToolCallEvidenceKind::Runtime(evidence),
-            force_ordinary: false,
-        }
+        Self { inner: evidence }
     }
 }
 
