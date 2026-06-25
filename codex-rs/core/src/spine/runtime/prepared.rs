@@ -4,11 +4,9 @@ use super::CompletedToolCall;
 use super::SpineRootCompactResult;
 use super::support::HostHistoryLens;
 use crate::spine::model::MemRecord;
-use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimProjection;
 use crate::spine::parser::ParserCommitInstall;
 use crate::spine::parser::ParserPublicationPlan;
-use crate::spine::parser::ParserPublicationToolcallSegment;
 use crate::spine::parser::ParserRootCompactInstall;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -209,12 +207,10 @@ impl SpinePreparedCommitInstall {
             host_history.full_index_for_mutable_boundary(plan.suffix_start())?;
         let host_preserve_history_from =
             host_history.full_index_for_mutable_boundary(plan.preserve_host_history_from())?;
-        validate_publication_boundaries_do_not_split_toolcall(
-            plan.atomic_mutable_context_segments(),
-            host_suffix_start,
-            host_preserve_history_from,
-            history_items,
-        )?;
+        let mut host_index_for_mutable_index =
+            |index| host_history.full_index_for_mutable_index(index);
+        let mut host_index_for_mutable_boundary =
+            |index| host_history.full_index_for_mutable_boundary(index);
         let update = plan.history_update_with_host_boundaries(
             call_id,
             tool_resp_item,
@@ -222,6 +218,8 @@ impl SpinePreparedCommitInstall {
             host_suffix_start,
             host_preserve_history_from,
             history_items,
+            &mut host_index_for_mutable_index,
+            &mut host_index_for_mutable_boundary,
         )?;
         Ok(update.map(|update| update.into_history_update(call_id, build_update)))
     }
@@ -273,55 +271,6 @@ impl SpinePreparedCommitInstall {
     }
 }
 
-fn validate_publication_boundaries_do_not_split_toolcall(
-    atomic_mutable_context_segments: &[ParserPublicationToolcallSegment],
-    host_suffix_start: usize,
-    host_preserve_history_from: usize,
-    history_items: &[ResponseItem],
-) -> Result<(), super::SpineError> {
-    if atomic_mutable_context_segments.is_empty() {
-        return Ok(());
-    }
-    let host_history = HostHistoryLens::new(history_items);
-    let mut full_start = usize::MAX;
-    let mut full_end = 0usize;
-    for segment in atomic_mutable_context_segments {
-        match segment.kind {
-            ToolCallSegmentKind::Request => {
-                let full_index =
-                    host_history.full_index_for_mutable_index(segment.mutable_context_index)?;
-                full_start = full_start.min(full_index);
-                full_end = full_end.max(full_index.checked_add(1).ok_or_else(|| {
-                    super::SpineError::InvalidEvent("toolcall full host range overflow".to_string())
-                })?);
-            }
-            ToolCallSegmentKind::Response => {
-                let full_boundary =
-                    host_history.full_index_for_mutable_boundary(segment.mutable_context_index)?;
-                full_start = full_start.min(full_boundary);
-                let response_end = if full_boundary == history_items.len() {
-                    full_boundary
-                } else {
-                    full_boundary.checked_add(1).ok_or_else(|| {
-                        super::SpineError::InvalidEvent(
-                            "toolcall full host range overflow".to_string(),
-                        )
-                    })?
-                };
-                full_end = full_end.max(response_end);
-            }
-        }
-    }
-    for boundary in [host_suffix_start, host_preserve_history_from] {
-        if full_start < boundary && boundary < full_end {
-            return Err(super::SpineError::Invariant(format!(
-                "spine publication boundary {boundary} splits completed toolcall full host range [{full_start}..{full_end})"
-            )));
-        }
-    }
-    Ok(())
-}
-
 impl<T> SpineCommitPublication<T> {
     pub(super) fn new(
         install: Option<SpinePreparedCommitInstall>,
@@ -355,134 +304,5 @@ impl<T> SpineCommitPublication<T> {
 
     pub(super) fn into_install(self) -> Option<SpinePreparedCommitInstall> {
         self.install
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::FunctionCallOutputPayload;
-
-    fn developer_fixed_prefix_item() -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "fixed developer prefix".to_string(),
-            }],
-            phase: None,
-        }
-    }
-
-    fn function_call(call_id: &str) -> ResponseItem {
-        ResponseItem::FunctionCall {
-            id: None,
-            name: "test_tool".to_string(),
-            namespace: None,
-            arguments: "{}".to_string(),
-            call_id: call_id.to_string(),
-        }
-    }
-
-    fn function_output(call_id: &str) -> ResponseItem {
-        ResponseItem::FunctionCallOutput {
-            call_id: call_id.to_string(),
-            output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        }
-    }
-
-    fn custom_tool_call(call_id: &str) -> ResponseItem {
-        ResponseItem::CustomToolCall {
-            id: None,
-            status: None,
-            call_id: call_id.to_string(),
-            name: "custom_tool".to_string(),
-            input: "input".to_string(),
-        }
-    }
-
-    fn custom_tool_output(call_id: &str) -> ResponseItem {
-        ResponseItem::CustomToolCallOutput {
-            call_id: call_id.to_string(),
-            name: Some("custom_tool".to_string()),
-            output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        }
-    }
-
-    fn completed_toolcall_segments() -> Vec<ParserPublicationToolcallSegment> {
-        vec![
-            ParserPublicationToolcallSegment {
-                kind: ToolCallSegmentKind::Request,
-                mutable_context_index: 0,
-            },
-            ParserPublicationToolcallSegment {
-                kind: ToolCallSegmentKind::Response,
-                mutable_context_index: 1,
-            },
-        ]
-    }
-
-    #[test]
-    fn publication_rejects_boundary_inside_function_toolcall() {
-        let history_items = vec![
-            developer_fixed_prefix_item(),
-            function_call("function-call"),
-            function_output("function-call"),
-        ];
-        let err = validate_publication_boundaries_do_not_split_toolcall(
-            &completed_toolcall_segments(),
-            2,
-            history_items.len(),
-            &history_items,
-        )
-        .expect_err("boundary between request and response must be rejected");
-        assert!(
-            err.to_string().contains("splits completed toolcall"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn publication_rejects_boundary_inside_custom_toolcall() {
-        let history_items = vec![
-            developer_fixed_prefix_item(),
-            custom_tool_call("custom-call"),
-            custom_tool_output("custom-call"),
-        ];
-        let err = validate_publication_boundaries_do_not_split_toolcall(
-            &completed_toolcall_segments(),
-            2,
-            history_items.len(),
-            &history_items,
-        )
-        .expect_err("boundary between request and response must be rejected");
-        assert!(
-            err.to_string().contains("splits completed toolcall"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn publication_accepts_boundaries_at_toolcall_edges() {
-        let history_items = vec![
-            developer_fixed_prefix_item(),
-            custom_tool_call("custom-call"),
-            custom_tool_output("custom-call"),
-        ];
-        validate_publication_boundaries_do_not_split_toolcall(
-            &completed_toolcall_segments(),
-            1,
-            history_items.len(),
-            &history_items,
-        )
-        .expect("boundary at toolcall start is valid");
-        validate_publication_boundaries_do_not_split_toolcall(
-            &completed_toolcall_segments(),
-            0,
-            3,
-            &history_items,
-        )
-        .expect("boundary at toolcall end is valid");
     }
 }

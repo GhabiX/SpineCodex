@@ -859,7 +859,8 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
     assert!(
         !publication_parts.contains("plan.replacement_prefix")
             && !publication_parts.contains("plan.preserve_host_history_from")
-            && !publication_parts.contains("plan.append_current_tool_response_if_missing"),
+            && !publication_parts.contains("plan.append_current_tool_response_if_missing")
+            && !publication_parts.contains("plan.atomic_mutable_context_segments()"),
         "runtime commit publication must not interpret parser publication plan internals"
     );
     assert!(
@@ -986,6 +987,12 @@ fn parser_publication_plan_fields_are_parser_private() {
         parser.contains("fn full_variable_context_host_history_update"),
         "parser should expose a full variable-context host-history update facade"
     );
+    assert!(
+        parser.contains("fn validate_host_boundaries_do_not_split_toolcall")
+            && parser.contains("self.atomic_mutable_context_segments")
+            && !parser.contains("pub(super) fn atomic_mutable_context_segments"),
+        "parser publication plan should own completed-toolcall atomic boundary validation"
+    );
     assert_eq!(
         parser.matches("ParserPublicationUpdate::new(").count(),
         2,
@@ -1034,6 +1041,13 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         !prepared.contains("pub(super) result: SpineRootCompactResult")
             && !prepared.contains("pub(super) parser_install: ParserRootCompactInstall"),
         "runtime root compact prepared carrier fields must stay private"
+    );
+    assert!(
+        !prepared.contains("ParserPublicationToolcallSegment")
+            && !prepared.contains("ToolCallSegmentKind")
+            && !prepared.contains("validate_publication_boundaries_do_not_split_toolcall")
+            && !prepared.contains("plan.atomic_mutable_context_segments()"),
+        "runtime prepared carriers must not inspect parser publication toolcall boundary internals"
     );
     assert!(
         prepared.contains("fn new(\n        result: SpineRootCompactResult,\n        parser_install: ParserRootCompactInstall,")
