@@ -84,7 +84,7 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
         },
     );
     let history_update = install
-        .apply_publication_history_update(
+        .apply_variable_context_publication_update(
             "staged-close",
             &output_item,
             false,
@@ -211,7 +211,7 @@ fn close_publication_fixed_prefix_converts_mutable_toolcall_start_to_full_host()
     );
     let (_kind, install) = prepared.into_kind_and_install_for_test();
     let history_update = install
-        .apply_publication_history_update(
+        .apply_variable_context_publication_update(
             "fixed-prefix-close",
             &output_item,
             false,
