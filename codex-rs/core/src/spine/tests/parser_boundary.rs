@@ -883,6 +883,11 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !spine_mod.contains("pub(crate) use runtime::SpinePreparedCommit"),
         "SpinePreparedCommit should remain runtime/prepared.rs construction detail, not a re-exported parser publication surface"
     );
+    assert!(
+        !runtime.contains("pub(crate) use prepared::SpinePreparedRootCompact")
+            && !spine_mod.contains("pub(crate) use runtime::SpinePreparedRootCompact"),
+        "SpinePreparedRootCompact should remain a runtime/prepared.rs detail, not an outer parser publication surface"
+    );
     for direct_field_access in [
         "prepared.parser_install",
         "prepared.completed_toolcall",

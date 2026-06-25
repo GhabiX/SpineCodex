@@ -47,8 +47,6 @@ pub(crate) use runtime::SpineOpenNodeContextProjection;
 #[cfg(test)]
 pub(crate) use runtime::SpinePendingCommit;
 #[cfg(test)]
-pub(crate) use runtime::SpinePreparedRootCompact;
-#[cfg(test)]
 pub(crate) use runtime::SpineRootCompactHostInstall;
 #[cfg(test)]
 pub(crate) use runtime::SpineRootCompactResult;

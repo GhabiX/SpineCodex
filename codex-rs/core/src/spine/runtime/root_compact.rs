@@ -6,10 +6,10 @@ use codex_protocol::models::ResponseItem;
 use std::path::Path;
 
 use super::SpineError;
-use super::SpinePreparedRootCompact;
 use super::SpineRootCompactResult;
 use super::SpineRootCompactTokenMetadata;
 use super::SpineRuntime;
+use super::prepared::SpinePreparedRootCompact;
 use crate::spine::archive::memory_ref;
 use crate::spine::io::hash_raw_live;
 use crate::spine::io::sha1_hex;

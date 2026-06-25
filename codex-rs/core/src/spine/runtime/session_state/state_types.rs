@@ -4,11 +4,11 @@ use std::path::Path;
 
 use super::super::LiveRootCompact;
 use super::super::SpineHostEffects;
-use super::super::SpinePreparedRootCompact;
 #[cfg(test)]
 use super::super::SpineRootCompactResult;
 use super::super::SpineRuntime;
 use super::super::SpineTreeUpdateDelivery;
+use super::super::prepared::SpinePreparedRootCompact;
 
 pub(crate) struct PreparedSpineReplayRuntime {
     pub(crate) runtime: Option<SpineRuntime>,
