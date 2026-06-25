@@ -1043,9 +1043,7 @@ impl Session {
         };
         let output_raw_ordinals = {
             let guard = spine_slot.lock().await;
-            match guard.prepare_toolcall_output_recording(
-                hooks::ToolcallOutputRecordingRequest::Grouped { output_items },
-            )? {
+            match hooks::ToolcallOutputRecordingRequest::grouped(output_items).prepare(&guard)? {
                 hooks::ToolcallOutputRecordingPlan::Grouped(plan) => plan.into_raw_ordinals(),
                 hooks::ToolcallOutputRecordingPlan::Single(_) => {
                     return Err(SpineError::Invariant(
@@ -1092,12 +1090,9 @@ impl Session {
             let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
             let recording_plan = {
                 let guard = spine_slot.lock().await;
-                match guard.prepare_toolcall_output_recording(
-                    hooks::ToolcallOutputRecordingRequest::Single {
-                        call_id,
-                        raw_items: &raw_items,
-                    },
-                )? {
+                match hooks::ToolcallOutputRecordingRequest::single(call_id, &raw_items)
+                    .prepare(&guard)?
+                {
                     hooks::ToolcallOutputRecordingPlan::Single(Some(plan)) => plan,
                     hooks::ToolcallOutputRecordingPlan::Single(None) => return Ok(None),
                     hooks::ToolcallOutputRecordingPlan::Grouped(_) => {
