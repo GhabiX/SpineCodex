@@ -6,10 +6,10 @@ use super::SpineCompactSourcePlan;
 use super::SpineCompactSourcePlanEntry;
 use super::SpineError;
 use super::SpineRuntime;
+use super::support::HostHistoryLens;
 use super::support::collect_source_plan_entries_from_visible_refs;
 use super::support::is_real_user_message;
 use super::support::raw_context_item_for_spine_mutable_context_index;
-use super::support::spine_mutable_context_len;
 use super::support::validate_source_plan_context_index;
 use crate::spine::io::hash_response_items;
 use crate::spine::model::NodeId;
@@ -134,7 +134,7 @@ impl SpineRuntime {
                 "spine.close requires non-empty live suffix for node {node}"
             )));
         }
-        let mutable_context_len = spine_mutable_context_len(raw_context_items);
+        let mutable_context_len = HostHistoryLens::new(raw_context_items).mutable_len();
         if suffix_start >= mutable_context_len {
             return Err(SpineError::Operation(format!(
                 "spine.close suffix start {suffix_start} is outside history length {} for node {node}",

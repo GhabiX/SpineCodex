@@ -84,10 +84,6 @@ pub(crate) fn is_spine_context_observation_fixed_prefix_item(item: &ResponseItem
     }
 }
 
-pub(super) fn spine_mutable_context_len(history: &[ResponseItem]) -> usize {
-    HostHistoryLens::new(history).mutable_len()
-}
-
 pub(super) struct HostHistoryLens<'a> {
     history: &'a [ResponseItem],
 }
