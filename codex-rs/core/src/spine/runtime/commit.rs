@@ -96,6 +96,7 @@ impl SpineRuntime {
         .and_then(|prepared| self.install_prepared_commit_for_kind(prepared))
     }
 
+    #[cfg(test)]
     pub(crate) fn maybe_commit_output_with_toolcall(
         &mut self,
         call_id: &str,
@@ -112,6 +113,7 @@ impl SpineRuntime {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn maybe_commit_output_with_toolcall_and_raw_items(
         &mut self,
         call_id: &str,
@@ -313,6 +315,7 @@ impl SpineRuntime {
         Ok(Some(commit_kind))
     }
 
+    #[cfg(test)]
     fn install_prepared_commit_for_kind(
         &mut self,
         prepared: Option<SpinePreparedCommit>,
