@@ -1,6 +1,5 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use std::collections::BTreeSet;
 
 use super::CompletedToolCall;
 use super::CompletedToolCallSegment;
@@ -211,75 +210,6 @@ pub(super) fn tool_response_call_id(item: &ResponseItem) -> Option<&str> {
         } => Some(call_id.as_str()),
         _ => None,
     }
-}
-
-pub(super) fn validate_no_orphan_tool_outputs(
-    operation: &str,
-    call_id: &str,
-    items: &[ResponseItem],
-) -> Result<(), SpineError> {
-    let mut function_call_ids = BTreeSet::new();
-    let mut local_shell_call_ids = BTreeSet::new();
-    let mut tool_search_call_ids = BTreeSet::new();
-    let mut custom_tool_call_ids = BTreeSet::new();
-    for item in items {
-        match item {
-            ResponseItem::FunctionCall { call_id, .. } => {
-                function_call_ids.insert(call_id.as_str());
-            }
-            ResponseItem::LocalShellCall {
-                call_id: Some(call_id),
-                ..
-            } => {
-                local_shell_call_ids.insert(call_id.as_str());
-            }
-            ResponseItem::ToolSearchCall {
-                call_id: Some(call_id),
-                ..
-            } => {
-                tool_search_call_ids.insert(call_id.as_str());
-            }
-            ResponseItem::CustomToolCall { call_id, .. } => {
-                custom_tool_call_ids.insert(call_id.as_str());
-            }
-            _ => {}
-        }
-    }
-    for item in items {
-        match item {
-            ResponseItem::FunctionCallOutput {
-                call_id: output_call_id,
-                ..
-            } if !function_call_ids.contains(output_call_id.as_str())
-                && !local_shell_call_ids.contains(output_call_id.as_str()) =>
-            {
-                return Err(SpineError::Invariant(format!(
-                    "{operation} candidate history has orphan function call output for call_id={output_call_id} while publishing call_id={call_id}"
-                )));
-            }
-            ResponseItem::CustomToolCallOutput {
-                call_id: output_call_id,
-                ..
-            } if !custom_tool_call_ids.contains(output_call_id.as_str()) => {
-                return Err(SpineError::Invariant(format!(
-                    "{operation} candidate history has orphan custom tool call output for call_id={output_call_id} while publishing call_id={call_id}"
-                )));
-            }
-            ResponseItem::ToolSearchOutput {
-                call_id: Some(output_call_id),
-                execution,
-                ..
-            } if execution != "server"
-                && !tool_search_call_ids.contains(output_call_id.as_str()) =>
-            {
-                return Err(SpineError::Invariant(format!(
-                    "{operation} candidate history has orphan tool search output for call_id={output_call_id} while publishing call_id={call_id}"
-                )));
-            }
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn is_non_toolcall_msg(item: &ResponseItem) -> bool {
