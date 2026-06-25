@@ -15,7 +15,6 @@ use super::prepared::SpineCommitKind;
 use super::prepared::SpineCommitPublication;
 use super::prepared::SpinePreparedCommit;
 use super::prepared::SpinePreparedCommitInstall;
-use super::prepared::SpinePreparedPublicationUpdate;
 use super::support::close_commit_marker;
 use super::support::close_event_boundary;
 use super::support::completed_toolcall_first_segment;
@@ -651,28 +650,18 @@ impl SpineRuntime {
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
         history_items: &[ResponseItem],
-        mut build_update: impl FnOnce(
-            &str,
-            &'static str,
-            usize,
-            Vec<ResponseItem>,
-            Vec<ResponseItem>,
-        ) -> T,
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
+        let mut build_update = Some(build_update);
         if let Some(prepared) = prepared_commit {
-            match prepared.publication_history_update(
+            if let Some(update) = prepared.apply_publication_history_update(
                 call_id,
                 tool_resp_item,
                 tool_resp_already_recorded,
                 history_items,
-                build_update,
+                &mut build_update,
             )? {
-                SpinePreparedPublicationUpdate::Applied(update) => return Ok(update),
-                SpinePreparedPublicationUpdate::NoParserPublicationPlan {
-                    build_update: returned_build_update,
-                } => {
-                    build_update = returned_build_update;
-                }
+                return Ok(Some(update));
             }
         }
         if !tool_resp_already_recorded {
@@ -696,6 +685,11 @@ impl SpineRuntime {
                 history_items,
             )?
         };
+        let build_update = build_update.ok_or_else(|| {
+            SpineError::Invariant(
+                "spine publication update builder was consumed before fallback".to_string(),
+            )
+        })?;
         Ok(update.map(|update| update.into_history_update(call_id, build_update)))
     }
 

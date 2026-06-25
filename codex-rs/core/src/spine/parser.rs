@@ -872,6 +872,19 @@ impl ParserState {
         )
     }
 
+    pub(super) fn validate_checkpoint_parse_stack(
+        &self,
+        checkpoint: &SpineCheckpoint,
+    ) -> Result<(), SpineError> {
+        if self.parse_stack != checkpoint.parse_stack {
+            return Err(SpineError::Invariant(format!(
+                "spine checkpoint ParseStack mismatch for {} at raw_ordinal={} token_seq={}",
+                checkpoint.checkpoint_id, checkpoint.raw_ordinal, checkpoint.token_seq
+            )));
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn msg_leaf_count_for_test(&self) -> usize {
         parse_stack_msg_leaf_count(&self.parse_stack.symbols)

@@ -175,8 +175,13 @@ fn runtime_load_checkpoint_replay_routes_through_parser_state() {
     );
     assert!(
         !load.contains("let parse_stack = replay_from_events(")
-            && !load.contains("ParserState::from_parse_stack(parse_stack)"),
+            && !load.contains("ParserState::from_parse_stack(parse_stack)")
+            && !load.contains(".into_parse_stack()"),
         "runtime/load.rs should keep replay output as ParserState, not unwrap and rewrap ParseStack"
+    );
+    assert!(
+        load.contains(".validate_checkpoint_parse_stack(checkpoint)"),
+        "checkpoint ParseStack equivalence should be checked behind ParserState"
     );
 }
 
@@ -513,7 +518,7 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
     assert!(
-        publication_parts.contains(".publication_history_update("),
+        publication_parts.contains(".apply_publication_history_update("),
         "runtime commit publication should delegate parser publication plan application to the prepared parser carrier"
     );
     assert!(
@@ -524,10 +529,10 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
         "runtime commit publication must not borrow, query, or apply parser publication plans directly"
     );
     assert!(
-        publication_parts.contains("SpinePreparedPublicationUpdate::Applied")
-            && publication_parts
-                .contains("SpinePreparedPublicationUpdate::NoParserPublicationPlan"),
-        "runtime commit should branch only on the prepared carrier's publication update result, not parser plan internals"
+        !publication_parts.contains("SpinePreparedPublicationUpdate")
+            && publication_parts.contains("let mut build_update = Some(build_update)")
+            && publication_parts.contains("return Ok(Some(update));"),
+        "runtime commit should not branch on a separate prepared-publication enum"
     );
     assert!(
         !publication_parts.contains("plan.replacement_prefix")
@@ -734,9 +739,9 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         !prepared.contains("fn publication_plan(&self)")
             && !prepared.contains("pub(crate) fn has_publication_plan(&self)")
-            && prepared.contains("pub(crate) fn publication_history_update")
-            && prepared.contains("enum SpinePreparedPublicationUpdate"),
-        "runtime prepared carrier should apply parser publication plans without exposing borrowed plan internals or plan-presence probes"
+            && prepared.contains("pub(crate) fn apply_publication_history_update")
+            && !prepared.contains("enum SpinePreparedPublicationUpdate"),
+        "runtime prepared carrier should apply parser publication plans directly without exposing borrowed plan internals or plan-presence probes"
     );
     assert!(
         prepared.contains("struct SpinePreparedCommitInstall")

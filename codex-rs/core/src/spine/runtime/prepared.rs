@@ -36,23 +36,6 @@ pub(crate) struct SpineCommitPublication<T> {
     history_update: Option<T>,
 }
 
-pub(crate) enum SpinePreparedPublicationUpdate<T, F> {
-    Applied(Option<T>),
-    NoParserPublicationPlan { build_update: F },
-}
-
-#[cfg(test)]
-impl<T, F> SpinePreparedPublicationUpdate<T, F> {
-    pub(crate) fn into_applied_for_test(self) -> Option<T> {
-        match self {
-            Self::Applied(update) => update,
-            Self::NoParserPublicationPlan { .. } => {
-                panic!("expected parser publication plan to be applied")
-            }
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct SpinePreparedRootCompact {
     result: SpineRootCompactResult,
@@ -185,29 +168,32 @@ impl SpinePreparedCommit {
         Ok(())
     }
 
-    pub(crate) fn publication_history_update<T, F>(
+    pub(crate) fn apply_publication_history_update<T, F>(
         &self,
         call_id: &str,
         tool_resp_item: &ResponseItem,
         tool_resp_already_recorded: bool,
         history_items: &[ResponseItem],
-        build_update: F,
-    ) -> Result<SpinePreparedPublicationUpdate<T, F>, super::SpineError>
+        build_update: &mut Option<F>,
+    ) -> Result<Option<T>, super::SpineError>
     where
         F: FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     {
         let Some(plan) = self.publication_plan.as_ref() else {
-            return Ok(SpinePreparedPublicationUpdate::NoParserPublicationPlan { build_update });
+            return Ok(None);
         };
+        let build_update = build_update.take().ok_or_else(|| {
+            super::SpineError::Invariant(
+                "spine prepared publication update builder was already consumed".to_string(),
+            )
+        })?;
         let update = plan.history_update(
             call_id,
             tool_resp_item,
             tool_resp_already_recorded,
             history_items,
         )?;
-        Ok(SpinePreparedPublicationUpdate::Applied(update.map(
-            |update| update.into_history_update(call_id, build_update),
-        )))
+        Ok(update.map(|update| update.into_history_update(call_id, build_update)))
     }
 
     pub(super) fn parser_install(&self) -> Option<&ParserCommitInstall> {

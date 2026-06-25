@@ -56,24 +56,30 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
         .take(output_context)
         .filter_map(Clone::clone)
         .collect::<Vec<_>>();
+    let mut build_history_update = Some(
+        |call_id: &str,
+         operation,
+         suffix_start,
+         expected_history: Vec<ResponseItem>,
+         replacement| {
+            (
+                call_id.to_string(),
+                operation,
+                suffix_start,
+                expected_history,
+                replacement,
+            )
+        },
+    );
     let history_update = prepared
-        .publication_history_update(
+        .apply_publication_history_update(
             "staged-close",
             &output_item,
             false,
             &host_history_before_output,
-            |call_id, operation, suffix_start, expected_history, replacement| {
-                (
-                    call_id.to_string(),
-                    operation,
-                    suffix_start,
-                    expected_history,
-                    replacement,
-                )
-            },
+            &mut build_history_update,
         )
         .expect("publication update")
-        .into_applied_for_test()
         .expect("close commit should publish host history");
     assert_eq!(history_update.0, "staged-close");
     assert_eq!(history_update.1, "spine.close");
